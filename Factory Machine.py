@@ -14,8 +14,9 @@ def get_image_base64(image_path):
             return base64.b64encode(img_file.read()).decode("utf-8")
     return None
 
+# ค้นหาไฟล์โลโก้ทั้งแบบ Local และในโฟลเดอร์ของ Cloud
 logo_base64 = None
-for fname in [r"D:\Python\Logo_Pes.png", "Logo_Pes.png", "logo.png", "logo.jpg"]:
+for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]:
     if os.path.exists(fname):
         logo_base64 = get_image_base64(fname)
         break
@@ -25,7 +26,7 @@ if logo_base64:
 else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
-# Custom CSS ตกแต่ง Dashboard (เอาพื้นหลังสีขาวและกรอบของโลโก้ออก)
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
@@ -47,8 +48,6 @@ st.markdown("""
         object-fit: contain;
         background: transparent !important;
         padding: 0 !important;
-        border-radius: 0 !important;
-        box-shadow: none !important;
         border: none !important;
         flex-shrink: 0;
     }
@@ -80,7 +79,6 @@ st.markdown("""
         padding: 0 !important;
         font-size: 13px !important;
     }
-    
     .kpi-container {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
@@ -93,31 +91,12 @@ st.markdown("""
         color: white;
         box-shadow: 0 4px 12px rgba(0,0,0,0.08);
     }
-    .kpi-green {
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-    }
-    .kpi-blue {
-        background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%);
-    }
-    .kpi-orange {
-        background: linear-gradient(135deg, #f12711 0%, #f5af19 100%);
-    }
-    .kpi-purple {
-        background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%);
-    }
-    .kpi-title {
-        font-size: 13px;
-        font-weight: 600;
-        opacity: 0.9;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .kpi-value {
-        font-size: 24px;
-        font-weight: 700;
-        margin-top: 4px;
-    }
-    
+    .kpi-green { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
+    .kpi-blue { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
+    .kpi-orange { background: linear-gradient(135deg, #f12711 0%, #f5af19 100%); }
+    .kpi-purple { background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%); }
+    .kpi-title { font-size: 13px; font-weight: 600; opacity: 0.9; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kpi-value { font-size: 24px; font-weight: 700; margin-top: 4px; }
     .streamlit-expanderHeader {
         background: linear-gradient(90deg, #EEF2FF 0%, #F8FAFC 100%) !important;
         border: 1px solid #C7D2FE !important;
@@ -125,7 +104,6 @@ st.markdown("""
         font-weight: 700 !important;
         color: #1E3A8A !important;
     }
-    
     div[data-testid="stDataEditor"] {
         border: 1px solid #E2E8F0;
         border-radius: 10px;
@@ -135,9 +113,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# =========================================================
-# Header สีน้ำเงิน (โลโก้แบบโปร่งใส ไม่มีกรอบขาว)
-# =========================================================
+# Header
 header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบวางแผนผลิตและติดตามสถานะงาน CNC 9 เครื่อง</h1><p>Awea (2 เครื่อง), Hartford (3 เครื่อง), Sanco (1 เครื่อง), Bridgeport (2 เครื่อง), Mikron 5 แกน (1 เครื่อง)</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
@@ -399,10 +375,10 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
 # หน้าจอจัดการข้อมูล
 # =========================================================
 with st.expander("📝 จัดการรายการสั่งผลิต (แยกหมวด Basic Machine / รันโปรแกรม)", expanded=True):
-    if "current_version" not in st.session_state or st.session_state.current_version != "v_aug2026_transparent_logo":
+    if "current_version" not in st.session_state or st.session_state.current_version != "v_cloud_deploy":
         st.session_state.jobs_data = pd.DataFrame(DEFAULT_JOBS)
         st.session_state.machine_rates = pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES[m]} for m in MACHINE_LIST])
-        st.session_state.current_version = "v_aug2026_transparent_logo"
+        st.session_state.current_version = "v_cloud_deploy"
 
     calc_df = st.session_state.jobs_data.copy()
     calc_df["รวม (ชม.)"] = (calc_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + calc_df["Basic Machine (ชม.)"] + calc_df["รันโปรแกรม (ชม.)"]
