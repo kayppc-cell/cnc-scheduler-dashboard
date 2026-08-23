@@ -52,67 +52,99 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI (CSS)
+# 2. ตกแต่ง UI รองรับจอมือถือ (Mobile Responsive CSS)
 # =========================================================
 st.markdown("""
 <style>
+    /* ซ่อน Header เมนูด้านบนของ Streamlit */
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+    
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 2rem !important;
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
+    }
+
+    /* แบนเนอร์ด้านบน */
     .main-header {
         background: linear-gradient(135deg, #1E3C72 0%, #2A5298 100%);
-        padding: 18px 24px;
+        padding: 12px 14px;
         border-radius: 12px;
         color: white;
-        margin-bottom: 20px;
+        margin-bottom: 14px;
         display: flex;
         align-items: center;
-        gap: 20px;
+        gap: 12px;
     }
     .header-logo {
-        width: 180px;
+        width: 75px;
+        max-height: 50px;
         height: auto;
-        max-height: 75px;
         object-fit: contain;
+        flex-shrink: 0;
     }
     .header-logo-icon {
-        font-size: 38px;
+        font-size: 28px;
         background: rgba(255, 255, 255, 0.15);
-        padding: 6px 14px;
-        border-radius: 10px;
+        padding: 4px 10px;
+        border-radius: 8px;
+        flex-shrink: 0;
     }
     .header-text h1 {
         color: white !important;
-        font-size: 22px !important;
+        font-size: 15px !important;
         margin: 0 !important;
         font-weight: 700 !important;
+        line-height: 1.25 !important;
     }
     .header-text p {
         color: #E0E8F9 !important;
-        margin: 4px 0 0 0 !important;
-        font-size: 13px !important;
+        margin: 2px 0 0 0 !important;
+        font-size: 10.5px !important;
+        line-height: 1.2 !important;
     }
+
+    /* กล่องข้อมูลงานของช่าง */
+    .op-box {
+        background: white;
+        padding: 14px 16px;
+        border-radius: 12px;
+        border: 1.5px solid #E2E8F0;
+        margin-bottom: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    .op-box h3 {
+        font-size: 18px !important;
+        margin: 8px 0 4px 0 !important;
+    }
+    .op-box p {
+        font-size: 14px !important;
+        margin: 3px 0 !important;
+        line-height: 1.35 !important;
+    }
+
+    /* สรุป KPI บน Dashboard */
     .kpi-container {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 15px;
-        margin-bottom: 20px;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 10px;
+        margin-bottom: 15px;
     }
     .kpi-card {
-        padding: 16px 20px;
-        border-radius: 12px;
+        padding: 12px 14px;
+        border-radius: 10px;
         color: white;
     }
     .kpi-green { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
     .kpi-blue { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
     .kpi-orange { background: linear-gradient(135deg, #f12711 0%, #f5af19 100%); }
     .kpi-purple { background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%); }
-    .kpi-title { font-size: 13px; font-weight: 600; opacity: 0.9; }
-    .kpi-value { font-size: 24px; font-weight: 700; margin-top: 4px; }
-    .op-box {
-        background: white;
-        padding: 22px;
-        border-radius: 14px;
-        border: 2px solid #E2E8F0;
-        margin-bottom: 15px;
-    }
+    .kpi-title { font-size: 11px; font-weight: 600; opacity: 0.9; }
+    .kpi-value { font-size: 18px; font-weight: 700; margin-top: 2px; }
+
     div.stButton > button:disabled {
         background-color: #E2E8F0 !important;
         color: #94A3B8 !important;
@@ -122,13 +154,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่อง CNC</h1><p>Awea (2 เครื่อง), Hartford (3 เครื่อง), Sanco (1 เครื่อง), Bridgeport (2 เครื่อง), Mikron 5 แกน (1 เครื่อง)</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่อง CNC</h1><p>Awea (2), Hartford (3), Sanco (1), Bridgeport (2), Mikron (1)</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
 # 3. กำหนดสิทธิ์และความปลอดภัย (Admin Protection)
 # =========================================================
-# ตั้งรหัสผ่านสำหรับเปิด Dashboard ผู้บริหาร
 ADMIN_PASSWORD = "pesadmin"
 
 if "is_admin" not in st.session_state:
@@ -467,11 +498,10 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
 # =========================================================
 # 7. การจัดโครงสร้างแท็บ และระบบล็อก Dashboard
 # =========================================================
-# ตรวจสอบว่าปลดล็อก Admin หรือยัง เพื่อเลือกแสดงแท็บ
 if st.session_state.is_admin:
     tab_op, tab_dash = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "📊 แดชบอร์ดภาพรวมโรงงาน (Dashboard)"])
 else:
-    tab_op, tab_login = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "🔒 เข้าสู่ระบบผู้บริหาร (Admin Login)"])
+    tab_op, tab_login = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "🔒 เข้าสู่ระบบผู้บริหาร (Admin)"])
 
 # ---------------------------------------------------------
 # TAB: หน้าจอช่างหน้าเครื่อง
@@ -499,19 +529,21 @@ with tab_op:
         
         start_real_text = "-"
         if pd.notna(curr.get("เริ่มจริง")):
-            start_real_text = pd.to_datetime(curr["เริ่มจริง"]).strftime("%d/%m/%Y %H:%M:%S")
+            start_real_text = pd.to_datetime(curr["เริ่มจริง"]).strftime("%d/%m %H:%M:%S")
 
         st.markdown(f"""
-        <div class="op-box" style="border-left: 8px solid {status_color};">
-            <span style="background:{status_color}; color:white; padding:4px 12px; border-radius:6px; font-weight:700; font-size:14px;">
-                {'⚙️ เครื่องกำลังปฏิบัติงาน' if is_running else '⏳ งานรอคิวผลิต'}
-            </span>
-            <h3 style="margin:12px 0 6px 0; color:#1E3A8A; font-size:22px;">📌 แผนงาน: {curr.get('แผนงาน', '-')}</h3>
-            <p style="font-size:18px; margin:4px 0;"><b>📄 ชื่อ Drawing:</b> {curr.get('ชื่อ Drawing.', '-')}</p>
-            <p style="margin:4px 0; font-size:15px;"><b>⚙️ ขั้นตอน:</b> {curr.get('ขั้นตอน (Step)', '-')} | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
-            <p style="margin:4px 0; font-size:15px;"><b>⏱️ เวลารวมตามแผน:</b> {total_cyc:.2f} ชม. (Setup {int(curr.get('เวลาตั้งเครื่อง (นาที)', 0))} น. / Basic {curr.get('Basic Machine (ชม.)', 0)} ชม. / โปรแกรม {curr.get('รันโปรแกรม (ชม.)', 0)} ชม.)</p>
-            <p style="margin:4px 0; font-size:15px; color:#2563EB;"><b>🕒 เวลาที่เริ่มเดินเครื่องจริง:</b> {start_real_text}</p>
-            <p style="font-size:16px; margin:8px 0 0 0;"><b>🚦 สถานะปัจจุบัน:</b> <span style="background:#F1F5F9; padding:4px 10px; border-radius:6px; font-weight:700; color:#0F172A;">{curr_status}</span></p>
+        <div class="op-box" style="border-left: 6px solid {status_color};">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <span style="background:{status_color}; color:white; padding:3px 10px; border-radius:5px; font-weight:700; font-size:12px;">
+                    {'⚙️ เครื่องกำลังปฏิบัติงาน' if is_running else '⏳ งานรอคิวผลิต'}
+                </span>
+                <span style="background:#F1F5F9; padding:3px 8px; border-radius:5px; font-weight:700; font-size:12px; color:#0F172A;">{curr_status}</span>
+            </div>
+            <h3 style="margin:6px 0 4px 0; color:#1E3A8A; font-size:18px;">📌 แผนงาน: {curr.get('แผนงาน', '-')}</h3>
+            <p style="font-size:15px; margin:2px 0;"><b>📄 ชื่อ Drawing:</b> {curr.get('ชื่อ Drawing.', '-')}</p>
+            <p style="margin:2px 0; font-size:13.5px;"><b>⚙️ ขั้นตอน:</b> {curr.get('ขั้นตอน (Step)', '-')} | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
+            <p style="margin:2px 0; font-size:13.5px;"><b>⏱️ เวลารวมตามแผน:</b> {total_cyc:.2f} ชม. (Setup {int(curr.get('เวลาตั้งเครื่อง (นาที)', 0))} น. / Basic {curr.get('Basic Machine (ชม.)', 0)} ชม. / โปรแกรม {curr.get('รันโปรแกรม (ชม.)', 0)} ชม.)</p>
+            <p style="margin:4px 0 0 0; font-size:13.5px; color:#2563EB;"><b>🕒 เวลาที่เริ่มเดินเครื่องจริง:</b> {start_real_text}</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -668,7 +700,7 @@ else:
             avg_util = df_util["อัตราการใช้งาน (%)"].mean() if not df_util.empty else 0.0
 
             # 1. แถบสรุป KPI
-            kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานที่เสร็จสิ้นแล้ว</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:16px;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผนผลิต (Active)</div><div class="kpi-value">{active_jobs_count} <span style="font-size:16px;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาเคลียร์งานทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:16px;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 เฉลี่ยอัตราการใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
+            kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:13px;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:13px;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:13px;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
             # 2. ตารางตรวจสอบเวลาแผน vs เวลาจริง
