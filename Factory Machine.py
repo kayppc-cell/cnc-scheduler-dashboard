@@ -4,7 +4,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import os
 import base64
-from supabase import create_client, Client
+import requests
 
 st.set_page_config(
     page_title="ระบบวางแผนผลิตและติดตามสถานะงาน CNC 9 เครื่อง",
@@ -13,43 +13,73 @@ st.set_page_config(
 )
 
 # =========================================================
-# การเชื่อมต่อ Supabase Database
+# การเชื่อมต่อ Supabase ผ่าน Direct REST API
 # =========================================================
-def get_supabase() -> Client:
-    url = st.secrets["SUPABASE_URL"]
+def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+        "Cache-Control": "no-cache"
+    }
 
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
-        client = get_supabase()
-        res = client.table("cnc_jobs").select("*").order("id").execute()
-        if res.data and len(res.data) > 0:
-            df = pd.DataFrame(res.data)
-            df["ready_at"] = pd.to_datetime(df["ready_at"])
-            col_map = {
-                "id": "ID",
-                "plan_code": "แผนงาน",
-                "drawing_name": "ชื่อ Drawing.",
-                "material": "วัสดุ",
-                "job_type": "ประเภทงาน",
-                "step_name": "ขั้นตอน (Step)",
-                "machine_name": "เลือกเครื่องจักร",
-                "ready_at": "วัน-เวลาขึ้นงาน",
-                "setup_mins": "เวลาตั้งเครื่อง (นาที)",
-                "basic_hrs": "Basic Machine (ชม.)",
-                "prog_hrs": "รันโปรแกรม (ชม.)",
-                "status": "สถานะงาน"
-            }
-            return df.rename(columns=col_map)
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs?select=*&order=id.asc"
+        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=10)
+        
+        if res.status_code == 200:
+            data = res.json()
+            if isinstance(data, list) and len(data) > 0:
+                df = pd.DataFrame(data)
+                df["ready_at"] = pd.to_datetime(df["ready_at"])
+                col_map = {
+                    "id": "ID",
+                    "plan_code": "แผนงาน",
+                    "drawing_name": "ชื่อ Drawing.",
+                    "material": "วัสดุ",
+                    "job_type": "ประเภทงาน",
+                    "step_name": "ขั้นตอน (Step)",
+                    "machine_name": "เลือกเครื่องจักร",
+                    "ready_at": "วัน-เวลาขึ้นงาน",
+                    "setup_mins": "เวลาตั้งเครื่อง (นาที)",
+                    "basic_hrs": "Basic Machine (ชม.)",
+                    "prog_hrs": "รันโปรแกรม (ชม.)",
+                    "status": "สถานะงาน"
+                }
+                return df.rename(columns=col_map)
         else:
-            return pd.DataFrame()
+            st.error(f"❌ Supabase API ตอบกลับข้อผิดพลาด (Code {res.status_code}): {res.text}")
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"❌ ดึงข้อมูลจาก Supabase ไม่สำเร็จ: {e}")
+        st.error(f"❌ ไม่สามารถเชื่อมต่อ Supabase ได้: {e}")
         return pd.DataFrame()
 
+def update_supabase_job(job_id: int, payload: dict) -> bool:
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
+        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=10)
+        return res.status_code in [200, 204]
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการอัปเดต: {e}")
+        return False
+
+def insert_supabase_job(payload: dict) -> bool:
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs"
+        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=10)
+        return res.status_code in [200, 201]
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการเพิ่มข้อมูล: {e}")
+        return False
+
 # =========================================================
-# การจัดการโลโก้และสไตล์ตกแต่ง UI (CSS)
+# การจัดการโลโก้และสไตล์ UI (CSS)
 # =========================================================
 def get_image_base64(image_path):
     if os.path.exists(image_path):
@@ -413,31 +443,23 @@ with tab_op:
         c_btn1, c_btn2 = st.columns(2)
         with c_btn1:
             if st.button("⚙️ เริ่มขึ้นงาน (Start)", key=f"btn_start_{curr['ID']}", use_container_width=True, type="primary"):
-                try:
-                    client = get_supabase()
-                    target_id = int(curr["ID"])
-                    client.table("cnc_jobs").update({
-                        "status": "⚙️ กำลังผลิต",
-                        "actual_start": datetime.now().isoformat()
-                    }).eq("id", target_id).execute()
+                success = update_supabase_job(int(curr["ID"]), {
+                    "status": "⚙️ กำลังผลิต",
+                    "actual_start": datetime.now().isoformat()
+                })
+                if success:
                     st.toast("✅ บันทึก: กำลังผลิต สำเร็จ!", icon="⚙️")
                     st.rerun()
-                except Exception as e:
-                    st.error(f"เกิดข้อผิดพลาด: {e}")
                 
         with c_btn2:
             if st.button("✅ จบงาน (Finish)", key=f"btn_finish_{curr['ID']}", use_container_width=True):
-                try:
-                    client = get_supabase()
-                    target_id = int(curr["ID"])
-                    client.table("cnc_jobs").update({
-                        "status": "✅ เสร็จสิ้นแล้ว",
-                        "actual_finish": datetime.now().isoformat()
-                    }).eq("id", target_id).execute()
+                success = update_supabase_job(int(curr["ID"]), {
+                    "status": "✅ เสร็จสิ้นแล้ว",
+                    "actual_finish": datetime.now().isoformat()
+                })
+                if success:
                     st.toast("🎉 บันทึก: จบงานเรียบร้อย!", icon="✅")
                     st.rerun()
-                except Exception as e:
-                    st.error(f"เกิดข้อผิดพลาด: {e}")
                 
         if len(m_jobs_df) > 1:
             st.divider()
@@ -494,30 +516,31 @@ with tab_dash:
             c_save, c_refresh = st.columns([2, 8])
             with c_save:
                 if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary"):
-                    try:
-                        client = get_supabase()
-                        for _, row in edited_jobs.iterrows():
-                            payload = {
-                                "plan_code": str(row["แผนงาน"]),
-                                "drawing_name": str(row["ชื่อ Drawing."]),
-                                "material": str(row["วัสดุ"]),
-                                "job_type": str(row["ประเภทงาน"]),
-                                "step_name": str(row["ขั้นตอน (Step)"]),
-                                "machine_name": str(row["เลือกเครื่องจักร"]),
-                                "ready_at": pd.to_datetime(row["วัน-เวลาขึ้นงาน"]).isoformat(),
-                                "setup_mins": float(row["เวลาตั้งเครื่อง (นาที)"]),
-                                "basic_hrs": float(row["Basic Machine (ชม.)"]),
-                                "prog_hrs": float(row["รันโปรแกรม (ชม.)"]),
-                                "status": str(row["สถานะงาน"])
-                            }
-                            if pd.notna(row.get("ID")) and row["ID"] > 0:
-                                client.table("cnc_jobs").update(payload).eq("id", int(row["ID"])).execute()
-                            else:
-                                client.table("cnc_jobs").insert(payload).execute()
+                    success_all = True
+                    for _, row in edited_jobs.iterrows():
+                        payload = {
+                            "plan_code": str(row["แผนงาน"]),
+                            "drawing_name": str(row["ชื่อ Drawing."]),
+                            "material": str(row["วัสดุ"]),
+                            "job_type": str(row["ประเภทงาน"]),
+                            "step_name": str(row["ขั้นตอน (Step)"]),
+                            "machine_name": str(row["เลือกเครื่องจักร"]),
+                            "ready_at": pd.to_datetime(row["วัน-เวลาขึ้นงาน"]).isoformat(),
+                            "setup_mins": float(row["เวลาตั้งเครื่อง (นาที)"]),
+                            "basic_hrs": float(row["Basic Machine (ชม.)"]),
+                            "prog_hrs": float(row["รันโปรแกรม (ชม.)"]),
+                            "status": str(row["สถานะงาน"])
+                        }
+                        if pd.notna(row.get("ID")) and row["ID"] > 0:
+                            if not update_supabase_job(int(row["ID"]), payload):
+                                success_all = False
+                        else:
+                            if not insert_supabase_job(payload):
+                                success_all = False
+                    
+                    if success_all:
                         st.success("บันทึกข้อมูลลงฐานข้อมูลสำเร็จ!")
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"เกิดข้อผิดพลาดในการบันทึก: {e}")
 
         # คำนวณตารางเวลาผลิต
         start_time = datetime(2026, 8, 20, 8, 0)
