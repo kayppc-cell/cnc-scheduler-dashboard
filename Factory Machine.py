@@ -568,7 +568,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55),
                     },
                     num_rows="dynamic",
-                    use_container_width=True
+                    use_container_width=True,
+                    hide_index=True
                 )
                 
                 c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
