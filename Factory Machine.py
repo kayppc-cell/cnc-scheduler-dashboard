@@ -6,10 +6,12 @@ import os
 import base64
 from PIL import Image
 import requests
+import streamlit.components.v1 as components
 
 # =========================================================
 # 1. การจัดการรูปภาพ (App Icon & Header Logo)
 # =========================================================
+# ตรวจหาไฟล์รูปสำหรับทำเป็น App Icon
 icon_file = "log_ cnc_1.png"
 if not os.path.exists(icon_file):
     for alt_icon in ["log_cnc_1.png", "icon.png", "logo.png"]:
@@ -19,11 +21,12 @@ if not os.path.exists(icon_file):
 
 favicon_img = Image.open(icon_file) if os.path.exists(icon_file) else "🏭"
 
-icon_base64 = None
+icon_base64 = ""
 if os.path.exists(icon_file):
     with open(icon_file, "rb") as f:
         icon_base64 = base64.b64encode(f.read()).decode("utf-8")
 
+# ตั้งค่าหน้าเว็บ Streamlit
 st.set_page_config(
     page_title="ระบบติดตามงาน CNC 9 เครื่อง",
     page_icon=favicon_img,
@@ -31,14 +34,38 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# สคริปต์ฉีด Icon เข้า Root DOM โดยตรงเพื่อบังคับเปลี่ยน App Icon บนมือถือ (PWA)
 if icon_base64:
-    st.markdown(f"""
-        <head>
-            <link rel="apple-touch-icon" href="data:image/png;base64,{icon_base64}">
-            <link rel="icon" sizes="192x192" href="data:image/png;base64,{icon_base64}">
-        </head>
-    """, unsafe_allow_html=True)
+    components.html(f"""
+        <script>
+            const iconUrl = 'data:image/png;base64,{icon_base64}';
+            
+            // ลบ Icon เก่าของ Streamlit
+            const oldIcons = window.parent.document.querySelectorAll("link[rel*='icon'], link[rel*='apple-touch-icon']");
+            oldIcons.forEach(el => el.remove());
+            
+            // เพิ่ม Icon ใหม่สำหรับเบราว์เซอร์
+            const link1 = window.parent.document.createElement('link');
+            link1.rel = 'shortcut icon';
+            link1.href = iconUrl;
+            window.parent.document.head.appendChild(link1);
 
+            // เพิ่ม Icon สำหรับ iOS (Apple Touch Icon)
+            const link2 = window.parent.document.createElement('link');
+            link2.rel = 'apple-touch-icon';
+            link2.href = iconUrl;
+            window.parent.document.head.appendChild(link2);
+            
+            // เพิ่ม Icon สำหรับ Android Chrome (PWA)
+            const link3 = window.parent.document.createElement('link');
+            link3.rel = 'icon';
+            link3.sizes = '192x192';
+            link3.href = iconUrl;
+            window.parent.document.head.appendChild(link3);
+        </script>
+    """, height=0)
+
+# ค้นหาไฟล์โลโก้สำหรับหัว Header
 logo_base64 = None
 for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]:
     if os.path.exists(fname):
@@ -61,7 +88,7 @@ st.markdown("""
     }
     
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 0.8rem !important;
         padding-bottom: 2rem !important;
         padding-left: 0.8rem !important;
         padding-right: 0.8rem !important;
@@ -115,7 +142,7 @@ st.markdown("""
     }
     .op-box h3 {
         font-size: 18px !important;
-        margin: 8px 0 4px 0 !important;
+        margin: 6px 0 4px 0 !important;
     }
     .op-box p {
         font-size: 14px !important;
@@ -146,6 +173,7 @@ st.markdown("""
         color: #94A3B8 !important;
         border-color: #CBD5E1 !important;
         cursor: not-allowed !important;
+        opacity: 0.8 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -154,7 +182,7 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย (Admin Protection)
+# 3. กำหนดสิทธิ์และความปลอดภัย (Admin Protection & Session State)
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -198,7 +226,7 @@ DEFAULT_SEED_JOBS = [
 ]
 
 # =========================================================
-# 5. การเชื่อมต่อ Supabase Database
+# 5. การเชื่อมต่อ Supabase Database ผ่าน Direct REST API
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -506,13 +534,12 @@ selected_tab = st.radio(
     label_visibility="collapsed"
 )
 
-# อัปเดต view ที่เลือกเข้า state
 if selected_tab != st.session_state.current_view:
     st.session_state.current_view = selected_tab
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (Operator)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.subheader("📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -597,7 +624,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 # VIEW 2: แดชบอร์ดภาพรวมโรงงาน (Dashboard)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
-    # หากยังไม่ได้ล็อกอิน ให้แสดงหน้าใส่รหัสผ่าน
     if not st.session_state.is_admin:
         st.subheader("🔒 ยืนยันตัวตนสำหรับผู้บริหารและผู้วางแผน")
         st.info("ส่วนของแดชบอร์ดภาพรวมและต้นทุนค่าเครื่องจักร ถูกสงวนสิทธิ์เฉพาะผู้บริหาร")
@@ -708,7 +734,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:13px;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:13px;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:13px;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
-            # 2. ตารางตรวจสอบเวลาแผน vs เวลาจริง
+            # 2. ตารางตรวจสอบเวลาแผน vs เวลาจริง (Plan vs Actual)
             if not finished_jobs_df.empty:
                 st.subheader("⏱️ ตรวจสอบเวลาตามแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
                 
