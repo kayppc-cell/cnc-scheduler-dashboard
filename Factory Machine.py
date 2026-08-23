@@ -479,7 +479,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             s_status = str(step_row.get("สถานะงาน", "⏳ รอคิวผลิต"))
             
             with st.container():
-                st.markdown(f"<div class='step-card'>", unsafe_allow_html=True)
+                st.markdown("<div class='step-card'>", unsafe_allow_html=True)
                 c_step_name, c_step_time, c_btn_start, c_btn_finish = st.columns([3.0, 1.8, 1.6, 1.6])
                 
                 with c_step_name:
@@ -574,6 +574,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 else:
                     st.error("รหัสผ่านไม่ถูกต้อง")
     else:
+        # =====================================================
+        # 1. แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน (Management Only)
+        # =====================================================
         c_head, c_logout = st.columns([8, 2])
         with c_head:
             st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน (Management Only)")
@@ -679,11 +682,48 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
             avg_util = df_util["อัตราการใช้งาน (%)"].mean() if not df_util.empty else 0.0
 
-            # 1. แถบสรุป KPI
+            # แถบสรุป KPI
             kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
-            # 2. ตารางงานที่ Finish แล้ว พร้อมเรียง ID จากน้อยไปมากเสมอ
+            st.divider()
+
+            # =====================================================
+            # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)
+            # =====================================================
+            if not df_summary.empty:
+                st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
+
+                df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
+                display_cols = [c for c in df_display.columns if c != "เวลาเริ่มจริง" and c != "ID"]
+
+                st.dataframe(
+                    df_display[display_cols],
+                    column_config={
+                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=115),
+                        "สถานะ": st.column_config.TextColumn("สถานะ", width=105),
+                        "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=105),
+                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190),
+                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
+                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110),
+                        "เวลาเริ่ม Setup": st.column_config.TextColumn("เริ่ม Setup", width=105),
+                        "เวลาเริ่มขึ้นงาน": st.column_config.TextColumn("เริ่มขึ้นงาน", width=105),
+                        "เวลาจบงาน": st.column_config.TextColumn("จบงาน", width=105),
+                        "Setup (นาที)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
+                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.1f"),
+                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.1f"),
+                        "เวลารวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
+                    },
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                st.divider()
+
+            # =====================================================
+            # 3. รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง
+            # =====================================================
             if not finished_jobs_df.empty:
                 st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
                 perf_df = finished_jobs_df.copy()
@@ -709,7 +749,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["การประเมิน"] = status_eval_list
                 perf_df["ลบ"] = st.session_state.finish_select_all
                 
-                # เรียงลำดับ ID จากน้อยไปมาก
                 display_finish_df = perf_df.sort_values(by="ID", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
 
                 tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
@@ -760,43 +799,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
+            # =====================================================
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)
+            # =====================================================
             if not df_summary.empty:
-                # 3. กราฟ Utilization
-                st.subheader("📈 อัตราการใช้งานเครื่องจักร (% Machine Utilization)")
-                fig_bar = px.bar(
-                    df_util,
-                    x="อัตราการใช้งาน (%)",
-                    y="เครื่องจักร",
-                    orientation="h",
-                    color="อัตราการใช้งาน (%)",
-                    color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
-                    text="ข้อความแสดง",
-                    range_x=[0, 105],
-                    category_orders={"เครื่องจักร": MACHINE_LIST}
-                )
-                fig_bar.update_yaxes(autorange="reversed")
-                fig_bar.update_traces(
-                    marker_line_color="#0F172A",
-                    marker_line_width=1.2,
-                    textposition="outside",
-                    cliponaxis=False
-                )
-                fig_bar.update_layout(
-                    height=370,
-                    margin=dict(l=40, r=40, t=10, b=30),
-                    xaxis_title="อัตราการใช้งาน (%)",
-                    yaxis_title="เครื่องจักร",
-                    xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
-                    coloraxis_showscale=False,
-                    plot_bgcolor="#FFFFFF",
-                    paper_bgcolor="#FFFFFF"
-                )
-                fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
-                st.plotly_chart(fig_bar, use_container_width=True)
-
-                st.divider()
-
-                # 4. ผัง Gantt Chart Timeline
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 fig = px.timeline(
                     df_gantt,
@@ -835,35 +841,46 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # 5. ใบจ่ายคิวงานหน้าเครื่อง
-                st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
-
-                df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
-                display_cols = [c for c in df_display.columns if c != "เวลาเริ่มจริง" and c != "ID"]
-
-                st.dataframe(
-                    df_display[display_cols],
-                    column_config={
-                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=115),
-                        "สถานะ": st.column_config.TextColumn("สถานะ", width=105),
-                        "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=105),
-                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190),
-                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
-                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110),
-                        "เวลาเริ่ม Setup": st.column_config.TextColumn("เริ่ม Setup", width=105),
-                        "เวลาเริ่มขึ้นงาน": st.column_config.TextColumn("เริ่มขึ้นงาน", width=105),
-                        "เวลาจบงาน": st.column_config.TextColumn("จบงาน", width=105),
-                        "Setup (นาที)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
-                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.1f"),
-                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.1f"),
-                        "เวลารวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
-                    },
-                    use_container_width=True,
-                    hide_index=True
+                # =====================================================
+                # 5. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
+                # =====================================================
+                st.subheader("📈 อัตราการใช้งานเครื่องจักร (% Machine Utilization)")
+                fig_bar = px.bar(
+                    df_util,
+                    x="อัตราการใช้งาน (%)",
+                    y="เครื่องจักร",
+                    orientation="h",
+                    color="อัตราการใช้งาน (%)",
+                    color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
+                    text="ข้อความแสดง",
+                    range_x=[0, 105],
+                    category_orders={"เครื่องจักร": MACHINE_LIST}
                 )
+                fig_bar.update_yaxes(autorange="reversed")
+                fig_bar.update_traces(
+                    marker_line_color="#0F172A",
+                    marker_line_width=1.2,
+                    textposition="outside",
+                    cliponaxis=False
+                )
+                fig_bar.update_layout(
+                    height=370,
+                    margin=dict(l=40, r=40, t=10, b=30),
+                    xaxis_title="อัตราการใช้งาน (%)",
+                    yaxis_title="เครื่องจักร",
+                    xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
+                    coloraxis_showscale=False,
+                    plot_bgcolor="#FFFFFF",
+                    paper_bgcolor="#FFFFFF"
+                )
+                fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
+                st.plotly_chart(fig_bar, use_container_width=True)
 
-            # 6. ตารางคำนวณราคาต้นทุนค่าเครื่องจักร
+                st.divider()
+
+            # =====================================================
+            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร
+            # =====================================================
             st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
 
             if "machine_rates" not in st.session_state:
