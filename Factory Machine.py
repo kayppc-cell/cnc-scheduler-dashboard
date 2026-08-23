@@ -264,7 +264,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 6. Scheduling Engine
+# 6. Scheduling Engine (พร้อมระบบตรวจจับช่วงว่างรอรันงาน)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -326,7 +326,22 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                 (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m != "No.9 Mikron")) and j["ready_at"] > cur_time
             ]
             if future_candidates:
-                m_available[earliest_m] = min(future_candidates)
+                target_jump = min(future_candidates)
+                idle_hrs = (target_jump - cur_time).total_seconds() / 3600.0
+                if idle_hrs > 0.05:
+                    gantt_records.append({
+                        "ข้อความบนแท่งกราฟ": f"รอรันงาน ({idle_hrs:.1f} ชม.)",
+                        "แผนงาน": "-",
+                        "ชื่อ Drawing.": "รอคิวขึ้นงาน",
+                        "ขั้นตอน (Step)": "รอรันงาน",
+                        "กิจกรรม": "⚪ รอรันงาน",
+                        "เครื่องจักร": earliest_m,
+                        "วัสดุ": "-",
+                        "เวลาเริ่ม": cur_time,
+                        "เวลาเสร็จ": target_jump,
+                        "ระยะเวลา": f"{idle_hrs:.1f} ชม.",
+                    })
+                m_available[earliest_m] = target_jump
             else:
                 m_available[earliest_m] = cur_time + timedelta(minutes=15)
             continue
@@ -481,7 +496,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         st.info(f"🎉 เครื่อง {selected_m} ไม่มีงานค้างในระบบ")
 
 # ---------------------------------------------------------
-# VIEW 2: Dashboard ภาพรวมโรงงานและบริหารต้นทุน (ครบทุกฟังก์ชัน)
+# VIEW 2: Dashboard ภาพรวมโรงงานและบริหารต้นทุน (ครบถ้วนสมบูรณ์)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if not st.session_state.is_admin:
@@ -654,7 +669,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # 4. ผัง Gantt Chart Timeline
+                # 4. ผัง Gantt Chart Timeline (มีแท่งสีเทา รอรันงาน ครบถ้วน)
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 fig = px.timeline(
                     df_gantt,
@@ -669,7 +684,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
                         "⚙️ งานปกติกำลังกัดงาน": "#007AFF",
                         "🔴 งานด่วนตัดเฉือน": "#FF2D55",
-                        "⚪ รอรันงาน": "#E2E8F0"
+                        "⚪ รอรันงาน": "#CBD5E1"
                     }
                 )
                 fig.update_yaxes(autorange="reversed")
