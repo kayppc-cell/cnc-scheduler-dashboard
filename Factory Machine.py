@@ -438,7 +438,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (แสดงหน่วย ชม. ต่อท้ายช่องตัวเลขชัดเจน)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (ปรับขนาดช่อง ชม. ให้พอดีตัวเลข)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -471,7 +471,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
         st.markdown("**📋 รายการขั้นตอนและปุ่มควบคุม (Step Controller):**")
 
-        # 2. แสดง Step เรียงลงมา (แยกคอลัมน์ใส่ข้อความหน่วย ชม. ต่อท้าย)
+        # 2. แสดง Step เรียงลงมา (ปรับความกว้างช่องเวลาให้กระชับพอดีตัวเลข)
         for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
             s_id = int(step_row["ID"])
             s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
@@ -481,7 +481,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             with st.container():
                 st.markdown("<div class='step-card'>", unsafe_allow_html=True)
                 
-                # แสดงสถานะมุมบนของแต่ละการ์ด
+                # แสดงสถานะมุมบนของการ์ด
                 if s_status == "✅ เสร็จสิ้นแล้ว":
                     st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>✅ เสร็จสิ้นแล้ว (Finish)</span>", unsafe_allow_html=True)
                 elif s_status == "⚙️ กำลังผลิต":
@@ -489,7 +489,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 else:
                     st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>⏳ รอเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
 
-                c_step_name, c_step_time, c_unit_label, c_btn_start, c_btn_finish = st.columns([3.0, 1.4, 0.6, 1.5, 1.5])
+                c_step_name, c_step_time, c_unit_label, c_btn_start, c_btn_finish = st.columns([5.0, 1.2, 0.5, 1.6, 1.6])
                 
                 with c_step_name:
                     if s_status == "⏳ รอคิวผลิต":
@@ -501,7 +501,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             label_visibility="collapsed"
                         )
                     else:
-                        st.markdown(f"**{s_name}**")
+                        st.markdown(f"<div style='margin-top: 5px; font-weight: 600;'>{s_name}</div>", unsafe_allow_html=True)
                         step_val = s_name
 
                 with c_step_time:
@@ -517,11 +517,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             label_visibility="collapsed"
                         )
                     else:
-                        st.markdown(f"⏱️ **{s_prog:.2f}**")
+                        st.markdown(f"<div style='margin-top: 5px; text-align: right; font-weight: 700;'>⏱️ {s_prog:.2f}</div>", unsafe_allow_html=True)
                         prog_val = s_prog
 
                 with c_unit_label:
-                    st.markdown("<div style='margin-top: 6px; font-weight: 700; color: #475569;'>ชม.</div>", unsafe_allow_html=True)
+                    st.markdown("<div style='margin-top: 7px; font-weight: 700; color: #475569;'>ชม.</div>", unsafe_allow_html=True)
 
                 # ปุ่มที่ 1: Start
                 with c_btn_start:
