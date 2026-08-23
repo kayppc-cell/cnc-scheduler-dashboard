@@ -56,7 +56,6 @@ else:
 # =========================================================
 st.markdown("""
 <style>
-    /* ซ่อน Header เมนูด้านบนของ Streamlit */
     header[data-testid="stHeader"] {
         display: none !important;
     }
@@ -68,7 +67,6 @@ st.markdown("""
         padding-right: 0.8rem !important;
     }
 
-    /* แบนเนอร์ด้านบน */
     .main-header {
         background: linear-gradient(135deg, #1E3C72 0%, #2A5298 100%);
         padding: 12px 14px;
@@ -107,7 +105,6 @@ st.markdown("""
         line-height: 1.2 !important;
     }
 
-    /* กล่องข้อมูลงานของช่าง */
     .op-box {
         background: white;
         padding: 14px 16px;
@@ -126,7 +123,6 @@ st.markdown("""
         line-height: 1.35 !important;
     }
 
-    /* สรุป KPI บน Dashboard */
     .kpi-container {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -164,6 +160,9 @@ ADMIN_PASSWORD = "pesadmin"
 
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
+
+if "current_view" not in st.session_state:
+    st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
 
 # =========================================================
 # 4. ค่าคงที่และชุดข้อมูลตั้งต้น
@@ -496,17 +495,26 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_hrs
 
 # =========================================================
-# 7. การจัดโครงสร้างแท็บ และระบบล็อก Dashboard
+# 7. เมนูเปลี่ยนโหมด (Navigation ด้วย Session State ป้องกันเด้งกลับ)
 # =========================================================
-if st.session_state.is_admin:
-    tab_op, tab_dash = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "📊 แดชบอร์ดภาพรวมโรงงาน (Dashboard)"])
-else:
-    tab_op, tab_login = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "🔒 เข้าสู่ระบบผู้บริหาร (Admin)"])
+nav_options = ["👷 โหมดช่างหน้าเครื่อง", "📊 แดชบอร์ดภาพรวมโรงงาน"]
+selected_tab = st.radio(
+    "เลือกมุมมอง:",
+    nav_options,
+    index=nav_options.index(st.session_state.current_view),
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
+# อัปเดต view ที่เลือกเข้า state
+if selected_tab != st.session_state.current_view:
+    st.session_state.current_view = selected_tab
+    st.rerun()
 
 # ---------------------------------------------------------
-# TAB: หน้าจอช่างหน้าเครื่อง
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
-with tab_op:
+if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.subheader("📱 บันทึกสถานะงานหน้าเครื่อง CNC")
     
     df_all = fetch_jobs_from_supabase()
@@ -586,10 +594,11 @@ with tab_op:
         st.info(f"🎉 เครื่อง {selected_m} ไม่มีงานค้างในระบบ ทุกรายการผลิตเสร็จสิ้นแล้ว")
 
 # ---------------------------------------------------------
-# TAB: ล็อกอินสำหรับผู้บริหาร (กรณีที่ยังไม่ได้ล็อกอิน)
+# VIEW 2: แดชบอร์ดภาพรวมโรงงาน (Dashboard)
 # ---------------------------------------------------------
-if not st.session_state.is_admin:
-    with tab_login:
+elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
+    # หากยังไม่ได้ล็อกอิน ให้แสดงหน้าใส่รหัสผ่าน
+    if not st.session_state.is_admin:
         st.subheader("🔒 ยืนยันตัวตนสำหรับผู้บริหารและผู้วางแผน")
         st.info("ส่วนของแดชบอร์ดภาพรวมและต้นทุนค่าเครื่องจักร ถูกสงวนสิทธิ์เฉพาะผู้บริหาร")
         
@@ -606,18 +615,14 @@ if not st.session_state.is_admin:
                     st.rerun()
                 else:
                     st.error("รหัสผ่านไม่ถูกต้อง")
-
-# ---------------------------------------------------------
-# TAB: Dashboard วางแผนและต้นทุน (แสดงเฉพาะเมื่อล็อกอินแล้ว)
-# ---------------------------------------------------------
-else:
-    with tab_dash:
+    else:
         c_head, c_logout = st.columns([8, 2])
         with c_head:
             st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน (Management Only)")
         with c_logout:
             if st.button("🚪 ออกจากระบบ Admin", use_container_width=True):
                 st.session_state.is_admin = False
+                st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
                 st.rerun()
 
         df_db = fetch_jobs_from_supabase()
