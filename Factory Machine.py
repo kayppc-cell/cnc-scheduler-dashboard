@@ -9,9 +9,8 @@ import requests
 import streamlit.components.v1 as components
 
 # =========================================================
-# 1. การจัดการรูปภาพ (App Icon & Header Logo)
+# 1. การจัดการรูปภาพ (App Icon & Dynamic Web Manifest)
 # =========================================================
-# ตรวจหาไฟล์รูปสำหรับทำเป็น App Icon
 icon_file = "log_ cnc_1.png"
 if not os.path.exists(icon_file):
     for alt_icon in ["log_cnc_1.png", "icon.png", "logo.png"]:
@@ -26,7 +25,6 @@ if os.path.exists(icon_file):
     with open(icon_file, "rb") as f:
         icon_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-# ตั้งค่าหน้าเว็บ Streamlit
 st.set_page_config(
     page_title="ระบบติดตามงาน CNC 9 เครื่อง",
     page_icon=favicon_img,
@@ -34,34 +32,59 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# สคริปต์ฉีด Icon เข้า Root DOM โดยตรงเพื่อบังคับเปลี่ยน App Icon บนมือถือ (PWA)
+# บังคับฉีด Web App Manifest และ Icon เข้าสู่ Root DOM สำหรับ Android PWA
 if icon_base64:
     components.html(f"""
         <script>
-            const iconUrl = 'data:image/png;base64,{icon_base64}';
-            
-            // ลบ Icon เก่าของ Streamlit
-            const oldIcons = window.parent.document.querySelectorAll("link[rel*='icon'], link[rel*='apple-touch-icon']");
-            oldIcons.forEach(el => el.remove());
-            
-            // เพิ่ม Icon ใหม่สำหรับเบราว์เซอร์
-            const link1 = window.parent.document.createElement('link');
-            link1.rel = 'shortcut icon';
-            link1.href = iconUrl;
-            window.parent.document.head.appendChild(link1);
+            const iconDataUrl = 'data:image/png;base64,{icon_base64}';
+            const docHead = window.parent.document.head;
 
-            // เพิ่ม Icon สำหรับ iOS (Apple Touch Icon)
-            const link2 = window.parent.document.createElement('link');
-            link2.rel = 'apple-touch-icon';
-            link2.href = iconUrl;
-            window.parent.document.head.appendChild(link2);
+            // 1. ลบ Manifest และ Icon เดิมของ Streamlit
+            const oldElements = docHead.querySelectorAll("link[rel*='icon'], link[rel*='apple-touch-icon'], link[rel='manifest']");
+            oldElements.forEach(el => el.remove());
+
+            // 2. สร้าง Web App Manifest เสมือนสำหรับ Android PWA
+            const manifestObj = {{
+                "name": "ระบบติดตามงาน CNC",
+                "short_name": "PES-CNC",
+                "start_url": window.parent.location.href,
+                "display": "standalone",
+                "background_color": "#1E3C72",
+                "theme_color": "#1E3C72",
+                "icons": [
+                    {{
+                        "src": iconDataUrl,
+                        "sizes": "192x192",
+                        "type": "image/png",
+                        "purpose": "any maskable"
+                    }},
+                    {{
+                        "src": iconDataUrl,
+                        "sizes": "512x512",
+                        "type": "image/png",
+                        "purpose": "any maskable"
+                    }}
+                ]
+            }};
             
-            // เพิ่ม Icon สำหรับ Android Chrome (PWA)
-            const link3 = window.parent.document.createElement('link');
-            link3.rel = 'icon';
-            link3.sizes = '192x192';
-            link3.href = iconUrl;
-            window.parent.document.head.appendChild(link3);
+            const manifestBlob = new Blob([JSON.stringify(manifestObj)], {{type: 'application/json'}});
+            const manifestUrl = URL.createObjectURL(manifestBlob);
+
+            const manifestLink = window.parent.document.createElement('link');
+            manifestLink.rel = 'manifest';
+            manifestLink.href = manifestUrl;
+            docHead.appendChild(manifestLink);
+
+            // 3. ผูก Favicon & Apple Touch Icon
+            const appleIcon = window.parent.document.createElement('link');
+            appleIcon.rel = 'apple-touch-icon';
+            appleIcon.href = iconDataUrl;
+            docHead.appendChild(appleIcon);
+
+            const favIcon = window.parent.document.createElement('link');
+            favIcon.rel = 'shortcut icon';
+            favIcon.href = iconDataUrl;
+            docHead.appendChild(favIcon);
         </script>
     """, height=0)
 
