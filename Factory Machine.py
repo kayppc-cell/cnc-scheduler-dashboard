@@ -47,7 +47,7 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI และสั่งซ่อน Index Column ของตารางทุกตาราง
+# 2. ตกแต่ง UI
 # =========================================================
 st.markdown("""
 <style>
@@ -141,7 +141,6 @@ st.markdown("""
         cursor: not-allowed !important;
     }
 
-    /* ซ่อนแถบคอลัมน์เลขแถวด้านหน้าสุด (Index Column) ถาวร */
     [data-testid="data-grid-canvas"] {
         outline: none !important;
     }
@@ -538,11 +537,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # รีเซ็ต index ของ DataFrame เป็นลำดับ 0,1,2,... ใหม่เพื่อป้องกัน index เดิมจากฐานข้อมูล
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].copy().reset_index(drop=True)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
-            with st.expander("📝 จัดการรายการสั่งผลิต (เฉพาะงานที่ยังไม่จบ)", expanded=True):
+            with st.expander("📝 รายการสั่งผลิตในระบบ", expanded=True):
                 tool_act1, tool_act2, _ = st.columns([1.5, 1.5, 7])
                 with tool_act1:
                     if st.button("✅ เลือกทั้งหมด (ตารางสั่งผลิต)", use_container_width=True):
