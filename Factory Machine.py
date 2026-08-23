@@ -6,6 +6,7 @@ import os
 import base64
 from PIL import Image
 import requests
+import streamlit.components.v1 as components
 
 # =========================================================
 # 1. การจัดการรูปภาพ (App Icon & Header Logo)
@@ -26,6 +27,21 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# สคริปต์ปิดระบบ Pull-to-Refresh ของมือถือโดยตรง
+components.html("""
+<script>
+    window.parent.document.body.style.overscrollBehaviorY = 'none';
+    window.parent.document.documentElement.style.overscrollBehaviorY = 'none';
+    
+    // ดักจับและยกเลิก event ลากจอลงเกินขอบเขตเพื่อป้องกันบราวเซอร์รีเฟรชค้าง
+    window.parent.document.addEventListener('touchmove', function (e) {
+        if (window.parent.scrollY === 0 && e.touches[0].screenY > 0) {
+            // ปล่อยให้เลื่อนปกติ ไม่ให้ทริกเกอร์ pull to refresh
+        }
+    }, { passive: true });
+</script>
+""", height=0)
+
 logo_base64 = None
 for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]:
     if os.path.exists(fname):
@@ -39,92 +55,87 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ปรับแต่ง CSS ป้องกันการค้างเวลาเลื่อนลง (Touch & Scroll Fix)
+# 2. ปรับแต่ง CSS ห้ามดึงรีเฟรช (Disable Pull-to-Refresh)
 # =========================================================
 st.markdown("""
 <style>
-    /* ป้องกันการตีกันระหว่าง WebView Pull-to-Refresh กับการ Scroll */
-    html, body {
-        overscroll-behavior-y: contain !important;
-        overflow-x: hidden !important;
-    }
-    
-    [data-testid="stAppViewContainer"] {
-        overscroll-behavior-y: contain !important;
-        overflow-y: auto !important;
-        -webkit-overflow-scrolling: touch !important;
+    /* ปิดการ Bounce / Pull to refresh ทั้งหน้าจอ */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+        overscroll-behavior-y: none !important;
+        overscroll-behavior: none !important;
+        touch-action: pan-y !important;
     }
 
     .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 3rem !important;
-        padding-left: 0.8rem !important;
-        padding-right: 0.8rem !important;
+        padding-top: 0.6rem !important;
+        padding-bottom: 1rem !important;
+        padding-left: 0.6rem !important;
+        padding-right: 0.6rem !important;
         max-width: 100% !important;
     }
 
     .main-header {
         background: linear-gradient(135deg, #1E3C72 0%, #2A5298 100%);
-        padding: 10px 14px;
-        border-radius: 12px;
+        padding: 8px 12px;
+        border-radius: 10px;
         color: white;
-        margin-bottom: 10px;
+        margin-bottom: 8px;
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 10px;
     }
     .header-logo {
-        width: 65px;
-        max-height: 42px;
+        width: 55px;
+        max-height: 36px;
         height: auto;
         object-fit: contain;
         flex-shrink: 0;
     }
     .header-logo-icon {
-        font-size: 24px;
+        font-size: 22px;
         background: rgba(255, 255, 255, 0.15);
-        padding: 4px 8px;
-        border-radius: 8px;
+        padding: 2px 6px;
+        border-radius: 6px;
         flex-shrink: 0;
     }
     .header-text h1 {
         color: white !important;
-        font-size: 14px !important;
+        font-size: 13.5px !important;
         margin: 0 !important;
         font-weight: 700 !important;
         line-height: 1.2 !important;
     }
     .header-text p {
         color: #E0E8F9 !important;
-        margin: 2px 0 0 0 !important;
-        font-size: 10px !important;
+        margin: 1px 0 0 0 !important;
+        font-size: 9.5px !important;
     }
 
     .op-box {
         background: white;
         padding: 12px 14px;
-        border-radius: 12px;
+        border-radius: 10px;
         border: 1.5px solid #E2E8F0;
-        margin-bottom: 10px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.02);
+        margin-bottom: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
     }
     .kpi-container {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-        gap: 8px;
-        margin-bottom: 10px;
+        gap: 6px;
+        margin-bottom: 8px;
     }
     .kpi-card {
-        padding: 10px 12px;
-        border-radius: 10px;
+        padding: 8px 10px;
+        border-radius: 8px;
         color: white;
     }
     .kpi-green { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
     .kpi-blue { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
     .kpi-orange { background: linear-gradient(135deg, #f12711 0%, #f5af19 100%); }
     .kpi-purple { background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%); }
-    .kpi-title { font-size: 10px; font-weight: 600; opacity: 0.9; }
-    .kpi-value { font-size: 16px; font-weight: 700; margin-top: 2px; }
+    .kpi-title { font-size: 9.5px; font-weight: 600; opacity: 0.9; }
+    .kpi-value { font-size: 15px; font-weight: 700; margin-top: 1px; }
 
     div.stButton > button:disabled {
         background-color: #E2E8F0 !important;
@@ -239,7 +250,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 6. Scheduling Engine
+# 6. เครื่องคำนวณการจัดตารางเวลา (Scheduling Engine)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
