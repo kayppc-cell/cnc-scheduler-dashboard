@@ -527,7 +527,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # ตารางสั่งผลิตหลักแสดงเฉพาะงานที่ยังไม่จบ
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].copy()
 
             with st.expander("📝 จัดการรายการสั่งผลิต (เฉพาะงานที่ยังไม่จบ)", expanded=True):
@@ -582,7 +581,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
-            # 2. ตารางงานที่ Finish แล้ว พร้อมคอลัมน์ "จัดการ (🗑️)" ในรูปแบบตารางมาตรฐาน
+            # 2. ตารางงานที่ Finish แล้ว พร้อมคอลัมน์ "จัดการ (🗑️)"
             if not finished_jobs_df.empty:
                 st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
                 perf_df = finished_jobs_df.copy()
@@ -606,7 +605,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["เวลาจริง (ชม.)"] = actual_hrs_list
                 perf_df["ผลต่าง (ชม.)"] = diff_list
                 perf_df["การประเมิน"] = status_eval_list
-                perf_df["ลบ"] = False  # คอลัมน์จัดการรูปถังขยะสำหรับติ๊กเลือกลบ
+                perf_df["ลบ"] = False
                 
                 display_finish_df = perf_df[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy()
 
@@ -631,7 +630,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     use_container_width=True
                 )
 
-                # ปุ่มกดยืนยันการลบรายการที่ติ๊กถูกไว้ในตาราง
                 c_del_act, _ = st.columns([3, 7])
                 with c_del_act:
                     selected_rows_to_delete = edited_finish_table[edited_finish_table["ลบ"] == True]
@@ -723,20 +721,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # 5. ใบจ่ายคิวงานหน้าเครื่อง
+                # 5. ใบจ่ายคิวงานหน้าเครื่อง (แสดงคิวงานทั้งหมดตามเวลาโดยตรง)
                 st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
-                f_c1, f_c2 = st.columns([1, 1])
-                with f_c1:
-                    filter_status = st.multiselect("🔍 กรองตามสถานะงาน:", ["ทั้งหมด"] + JOB_STATUS, default=["ทั้งหมด"])
-                with f_c2:
-                    filter_machine = st.multiselect("🏭 กรองตามเครื่องจักร:", ["ทั้งหมด"] + MACHINE_LIST, default=["ทั้งหมด"])
 
                 df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
-                if "ทั้งหมด" not in filter_status and len(filter_status) > 0:
-                    df_display = df_display[df_display["สถานะ"].isin(filter_status)]
-                if "ทั้งหมด" not in filter_machine and len(filter_machine) > 0:
-                    df_display = df_display[df_display["เครื่องจักร"].isin(filter_machine)]
-
                 display_cols = [c for c in df_display.columns if c != "เวลาเริ่มจริง" and c != "ID"]
 
                 st.dataframe(
