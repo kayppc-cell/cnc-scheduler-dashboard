@@ -78,6 +78,16 @@ def insert_supabase_job(payload: dict) -> bool:
         st.error(f"เกิดข้อผิดพลาดในการเพิ่มข้อมูล: {e}")
         return False
 
+def safe_parse_datetime(series):
+    dt = pd.to_datetime(series, format='ISO8601', errors='coerce')
+    try:
+        return dt.dt.tz_localize(None)
+    except Exception:
+        try:
+            return dt.dt.tz_convert(None)
+        except Exception:
+            return dt
+
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -88,11 +98,12 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             data = res.json()
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
-                df["ready_at"] = pd.to_datetime(df["ready_at"]).dt.tz_localize(None)
+                
+                df["ready_at"] = safe_parse_datetime(df["ready_at"])
                 if "actual_start" in df.columns:
-                    df["actual_start"] = pd.to_datetime(df["actual_start"]).dt.tz_localize(None)
+                    df["actual_start"] = safe_parse_datetime(df["actual_start"])
                 if "actual_finish" in df.columns:
-                    df["actual_finish"] = pd.to_datetime(df["actual_finish"]).dt.tz_localize(None)
+                    df["actual_finish"] = safe_parse_datetime(df["actual_finish"])
                     
                 col_map = {
                     "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
@@ -256,10 +267,16 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         if pd.isna(ready_time):
             j["ready_at"] = default_start_datetime
         else:
-            dt_val = pd.to_datetime(ready_time)
-            if hasattr(dt_val, "tz") and dt_val.tz is not None:
-                dt_val = dt_val.tz_localize(None)
-            j["ready_at"] = dt_val.to_pydatetime()
+            dt_val = pd.to_datetime(ready_time, errors='coerce')
+            if pd.isna(dt_val):
+                j["ready_at"] = default_start_datetime
+            else:
+                if hasattr(dt_val, "tz") and dt_val.tz is not None:
+                    try:
+                        dt_val = dt_val.tz_localize(None)
+                    except Exception:
+                        dt_val = dt_val.tz_convert(None)
+                j["ready_at"] = dt_val.to_pydatetime()
             
         j["is_urgent"] = True if "ด่วนแทรก" in str(j.get("ประเภทงาน", "")) else False
         j["remain_cut_hrs"] = j["cut_hrs"]
@@ -571,9 +588,8 @@ with tab_dash:
                 if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary"):
                     success_all = True
                     for _, row in edited_jobs.iterrows():
-                        ready_dt = pd.to_datetime(row["วัน-เวลาขึ้นงาน"])
-                        if hasattr(ready_dt, "tz") and ready_dt.tz is not None:
-                            ready_dt = ready_dt.tz_localize(None)
+                        ready_dt = pd.to_datetime(row["วัน-เวลาขึ้นงาน"], errors='coerce')
+                        ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             
                         payload = {
                             "plan_code": str(row["แผนงาน"]),
@@ -582,7 +598,7 @@ with tab_dash:
                             "job_type": str(row["ประเภทงาน"]),
                             "step_name": str(row["ขั้นตอน (Step)"]),
                             "machine_name": str(row["เลือกเครื่องจักร"]),
-                            "ready_at": ready_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                            "ready_at": ready_str,
                             "setup_mins": float(row["เวลาตั้งเครื่อง (นาที)"]),
                             "basic_hrs": float(row["Basic Machine (ชม.)"]),
                             "prog_hrs": float(row["รันโปรแกรม (ชม.)"]),
