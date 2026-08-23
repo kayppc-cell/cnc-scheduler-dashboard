@@ -438,7 +438,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (Step 1 และทุก Step พิมพ์แก้ไขชื่อ & เวลาได้อิสระ)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -471,7 +471,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
         st.markdown("**📋 รายการขั้นตอนและปุ่มควบคุม (Step Controller):**")
 
-        # 2. แสดง Step เรียงลงมา (มีช่องให้พิมพ์ระบุ Step และแก้ไขเวลาได้ทุก Step)
+        # 2. แสดง Step เรียงลงมา (มีหน่วย ชม. ในช่องกรอกเวลา)
         for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
             s_id = int(step_row["ID"])
             s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
@@ -512,11 +512,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             max_value=100.0, 
                             value=s_prog, 
                             step=0.5, 
+                            format="%.2f ชม.",
                             key=f"input_step_prog_{s_id}",
                             label_visibility="collapsed"
                         )
                     else:
-                        st.markdown(f"⏱️ **{s_prog:.1f} ชม.**")
+                        st.markdown(f"⏱️ **{s_prog:.2f} ชม.**")
                         prog_val = s_prog
 
                 # ปุ่มที่ 1: Start
@@ -553,7 +554,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
         st.write("")
 
-        # 3. กล่องกดปุ่ม + เพิ่ม Step ต่อเนื่องได้ไม่จำกัด (Step 2, 3, 4, 5, 6...)
+        # 3. กล่องกดปุ่ม + เพิ่ม Step ต่อเนื่องได้ไม่จำกัด
         next_step_num = len(plan_steps) + 1
         default_next_step_label = f"OP{next_step_num*10}"
         
@@ -562,7 +563,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             with c_in1:
                 new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, OP30", key=f"new_step_name_input_{main_plan_code}")
             with c_in2:
-                new_prog_input = st.number_input("เวลาโปรแกรม (ชม.):", min_value=0.1, max_value=100.0, value=2.0, step=0.5, key=f"new_step_prog_input_{main_plan_code}")
+                new_prog_input = st.number_input("เวลาโปรแกรม (ชม.):", min_value=0.1, max_value=100.0, value=2.0, step=0.5, format="%.2f ชม.", key=f"new_step_prog_input_{main_plan_code}")
 
             if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num} เข้าคิว", type="secondary", use_container_width=True):
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
