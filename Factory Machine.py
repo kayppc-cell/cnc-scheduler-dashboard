@@ -4,140 +4,52 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import os
 import base64
+from PIL import Image
 import requests
 
+# =========================================================
+# 1. การจัดการรูปภาพ (App Icon & Header Logo)
+# =========================================================
+# ค้นหาไฟล์รูปภาพสำหรับทำเป็น App Icon บนจอมือถือ
+icon_file = "log_ cnc_1.png"
+if not os.path.exists(icon_file):
+    for alt_icon in ["log_cnc_1.png", "icon.png", "logo.png"]:
+        if os.path.exists(alt_icon):
+            icon_file = alt_icon
+            break
+
+favicon_img = Image.open(icon_file) if os.path.exists(icon_file) else "🏭"
+
+icon_base64 = None
+if os.path.exists(icon_file):
+    with open(icon_file, "rb") as f:
+        icon_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+# ตั้งค่าหน้าเว็บ
 st.set_page_config(
     page_title="ระบบวางแผนผลิตและติดตามสถานะงาน CNC 9 เครื่อง",
+    page_icon=favicon_img,
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# =========================================================
-# ค่าคงที่และชุดข้อมูลตั้งต้น
-# =========================================================
-MACHINE_LIST = [
-    "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
-    "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
-]
+# ส่งแท็กไปยังเบราว์เซอร์มือถือ เพื่อบังคับใช้เป็น App Icon เมื่อกด Add to Home Screen
+if icon_base64:
+    st.markdown(f"""
+        <head>
+            <!-- สำหรับ iPhone / iPad -->
+            <link rel="apple-touch-icon" href="data:image/png;base64,{icon_base64}">
+            <!-- สำหรับ Android Chrome -->
+            <link rel="icon" sizes="192x192" href="data:image/png;base64,{icon_base64}">
+        </head>
+    """, unsafe_allow_html=True)
 
-DEFAULT_RATES = {
-    "No.1 Awea": 1200, "No.2 Awea": 1000, "No.3 Hartford": 1000, "No.4 Sanco": 1000,
-    "No.5 Hartford": 1000, "No.6 Bridgeport": 600, "No.7 Bridgeport": 600, "No.8 Hartford": 600, "No.9 Mikron": 1300,
-}
-
-ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
-JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทรก"]
-JOB_STATUS = ["⏳ รอคิวผลิต", "⚙️ กำลังผลิต", "✅ เสร็จสิ้นแล้ว"]
-
-DEFAULT_SEED_JOBS = [
-    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step1", "machine_name": "No.1 Awea", "ready_at": "2026-08-20T08:00:00", "setup_mins": 15, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "✅ เสร็จสิ้นแล้ว"},
-    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step2", "machine_name": "No.1 Awea", "ready_at": "2026-08-20T14:00:00", "setup_mins": 15, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⚙️ กำลังผลิต"},
-    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step3", "machine_name": "No.1 Awea", "ready_at": "2026-08-21T08:00:00", "setup_mins": 15, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-102", "drawing_name": "P26-PES-105-007-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.4 Sanco", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 4.0, "status": "✅ เสร็จสิ้นแล้ว"},
-    {"plan_code": "26-102", "drawing_name": "P26-PES-105-008-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.9 Mikron", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 7.0, "status": "⚙️ กำลังผลิต"},
-    {"plan_code": "26-102", "drawing_name": "P26-PES-105-009-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.9 Mikron", "ready_at": "2026-08-20T17:30:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 7.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-102", "drawing_name": "P26-PES-105-010-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.2 Awea", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 4.0, "prog_hrs": 12.0, "status": "⚙️ กำลังผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-001-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.3 Hartford", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-002-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.5 Hartford", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-003-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.6 Bridgeport", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-004-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.7 Bridgeport", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-005-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.8 Hartford", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-199", "drawing_name": "P26-PES-110-001-Unit20", "material": "SS400", "job_type": "🔴 งานด่วนแทรก", "step_name": "จบใน Process", "machine_name": "No.3 Hartford", "ready_at": "2026-08-20T13:00:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "⏳ รอคิวผลิต"},
-]
-
-# =========================================================
-# การเชื่อมต่อ Supabase Database
-# =========================================================
-def get_supabase_headers():
-    key = st.secrets["SUPABASE_KEY"]
-    return {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-        "Cache-Control": "no-cache"
-    }
-
-def update_supabase_job(job_id: int, payload: dict) -> bool:
-    try:
-        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
-        endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
-        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=10)
-        return res.status_code in [200, 204]
-    except Exception as e:
-        st.error(f"เกิดข้อผิดพลาดในการอัปเดต: {e}")
-        return False
-
-def insert_supabase_job(payload: dict) -> bool:
-    try:
-        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
-        endpoint = f"{base_url}/rest/v1/cnc_jobs"
-        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=10)
-        return res.status_code in [200, 201]
-    except Exception as e:
-        st.error(f"เกิดข้อผิดพลาดในการเพิ่มข้อมูล: {e}")
-        return False
-
-def safe_parse_datetime(series):
-    dt = pd.to_datetime(series, format='ISO8601', errors='coerce')
-    try:
-        return dt.dt.tz_localize(None)
-    except Exception:
-        try:
-            return dt.dt.tz_convert(None)
-        except Exception:
-            return dt
-
-def fetch_jobs_from_supabase() -> pd.DataFrame:
-    try:
-        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
-        endpoint = f"{base_url}/rest/v1/cnc_jobs?select=*&order=id.asc"
-        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=10)
-        
-        if res.status_code == 200:
-            data = res.json()
-            if isinstance(data, list) and len(data) > 0:
-                df = pd.DataFrame(data)
-                
-                df["ready_at"] = safe_parse_datetime(df["ready_at"])
-                if "actual_start" in df.columns:
-                    df["actual_start"] = safe_parse_datetime(df["actual_start"])
-                if "actual_finish" in df.columns:
-                    df["actual_finish"] = safe_parse_datetime(df["actual_finish"])
-                    
-                col_map = {
-                    "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
-                    "material": "วัสดุ", "job_type": "ประเภทงาน", "step_name": "ขั้นตอน (Step)",
-                    "machine_name": "เลือกเครื่องจักร", "ready_at": "วัน-เวลาขึ้นงาน",
-                    "setup_mins": "เวลาตั้งเครื่อง (นาที)", "basic_hrs": "Basic Machine (ชม.)",
-                    "prog_hrs": "รันโปรแกรม (ชม.)", "status": "สถานะงาน",
-                    "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง"
-                }
-                return df.rename(columns=col_map)
-            elif isinstance(data, list) and len(data) == 0:
-                for item in DEFAULT_SEED_JOBS:
-                    insert_supabase_job(item)
-                return fetch_jobs_from_supabase()
-        else:
-            st.error(f"❌ Supabase API Error (Code {res.status_code}): {res.text}")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ ไม่สามารถเชื่อมต่อ Supabase ได้: {e}")
-        return pd.DataFrame()
-
-# =========================================================
-# การจัดการ UI และสไตล์ตกแต่ง (CSS)
-# =========================================================
-def get_image_base64(image_path):
-    if os.path.exists(image_path):
-        with open(image_path, "rb") as img_file:
-            return base64.b64encode(img_file.read()).decode("utf-8")
-    return None
-
+# ค้นหาไฟล์โลโก้สำหรับหัว Header หลัก
 logo_base64 = None
 for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]:
     if os.path.exists(fname):
-        logo_base64 = get_image_base64(fname)
+        with open(fname, "rb") as f:
+            logo_base64 = base64.b64encode(f.read()).decode("utf-8")
         break
 
 if logo_base64:
@@ -145,6 +57,9 @@ if logo_base64:
 else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
+# =========================================================
+# 2. ตกแต่ง UI (CSS)
+# =========================================================
 st.markdown("""
 <style>
     .main-header {
@@ -235,7 +150,120 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# เครื่องคำนวณการจัดตารางเวลา (Scheduling Engine)
+# 3. ค่าคงที่และชุดข้อมูลตั้งต้น
+# =========================================================
+MACHINE_LIST = [
+    "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
+    "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
+]
+
+DEFAULT_RATES = {
+    "No.1 Awea": 1200, "No.2 Awea": 1000, "No.3 Hartford": 1000, "No.4 Sanco": 1000,
+    "No.5 Hartford": 1000, "No.6 Bridgeport": 600, "No.7 Bridgeport": 600, "No.8 Hartford": 600, "No.9 Mikron": 1300,
+}
+
+ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
+JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทรก"]
+JOB_STATUS = ["⏳ รอคิวผลิต", "⚙️ กำลังผลิต", "✅ เสร็จสิ้นแล้ว"]
+
+DEFAULT_SEED_JOBS = [
+    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step1", "machine_name": "No.1 Awea", "ready_at": "2026-08-20T08:00:00", "setup_mins": 15, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "✅ เสร็จสิ้นแล้ว"},
+    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step2", "machine_name": "No.1 Awea", "ready_at": "2026-08-20T14:00:00", "setup_mins": 15, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⚙️ กำลังผลิต"},
+    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step3", "machine_name": "No.1 Awea", "ready_at": "2026-08-21T08:00:00", "setup_mins": 15, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-102", "drawing_name": "P26-PES-105-007-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.4 Sanco", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 4.0, "status": "✅ เสร็จสิ้นแล้ว"},
+    {"plan_code": "26-102", "drawing_name": "P26-PES-105-008-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.9 Mikron", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 7.0, "status": "⚙️ กำลังผลิต"},
+    {"plan_code": "26-102", "drawing_name": "P26-PES-105-009-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.9 Mikron", "ready_at": "2026-08-20T17:30:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 7.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-102", "drawing_name": "P26-PES-105-010-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.2 Awea", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 4.0, "prog_hrs": 12.0, "status": "⚙️ กำลังผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-001-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.3 Hartford", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-002-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.5 Hartford", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-003-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.6 Bridgeport", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-004-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.7 Bridgeport", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-005-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.8 Hartford", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-199", "drawing_name": "P26-PES-110-001-Unit20", "material": "SS400", "job_type": "🔴 งานด่วนแทรก", "step_name": "จบใน Process", "machine_name": "No.3 Hartford", "ready_at": "2026-08-20T13:00:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "⏳ รอคิวผลิต"},
+]
+
+# =========================================================
+# 4. การเชื่อมต่อ Supabase ผ่าน Direct REST API
+# =========================================================
+def get_supabase_headers():
+    key = st.secrets["SUPABASE_KEY"]
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+        "Cache-Control": "no-cache"
+    }
+
+def update_supabase_job(job_id: int, payload: dict) -> bool:
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
+        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=10)
+        return res.status_code in [200, 204]
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการอัปเดต: {e}")
+        return False
+
+def insert_supabase_job(payload: dict) -> bool:
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs"
+        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=10)
+        return res.status_code in [200, 201]
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการเพิ่มข้อมูล: {e}")
+        return False
+
+def safe_parse_datetime(series):
+    dt = pd.to_datetime(series, format='ISO8601', errors='coerce')
+    try:
+        return dt.dt.tz_localize(None)
+    except Exception:
+        try:
+            return dt.dt.tz_convert(None)
+        except Exception:
+            return dt
+
+def fetch_jobs_from_supabase() -> pd.DataFrame:
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs?select=*&order=id.asc"
+        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=10)
+        
+        if res.status_code == 200:
+            data = res.json()
+            if isinstance(data, list) and len(data) > 0:
+                df = pd.DataFrame(data)
+                
+                df["ready_at"] = safe_parse_datetime(df["ready_at"])
+                if "actual_start" in df.columns:
+                    df["actual_start"] = safe_parse_datetime(df["actual_start"])
+                if "actual_finish" in df.columns:
+                    df["actual_finish"] = safe_parse_datetime(df["actual_finish"])
+                    
+                col_map = {
+                    "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
+                    "material": "วัสดุ", "job_type": "ประเภทงาน", "step_name": "ขั้นตอน (Step)",
+                    "machine_name": "เลือกเครื่องจักร", "ready_at": "วัน-เวลาขึ้นงาน",
+                    "setup_mins": "เวลาตั้งเครื่อง (นาที)", "basic_hrs": "Basic Machine (ชม.)",
+                    "prog_hrs": "รันโปรแกรม (ชม.)", "status": "สถานะงาน",
+                    "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง"
+                }
+                return df.rename(columns=col_map)
+            elif isinstance(data, list) and len(data) == 0:
+                for item in DEFAULT_SEED_JOBS:
+                    insert_supabase_job(item)
+                return fetch_jobs_from_supabase()
+        else:
+            st.error(f"❌ Supabase API Error (Code {res.status_code}): {res.text}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"❌ ไม่สามารถเชื่อมต่อ Supabase ได้: {e}")
+        return pd.DataFrame()
+
+# =========================================================
+# 5. เครื่องคำนวณการจัดตารางเวลา (Scheduling Engine)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -455,12 +483,12 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_hrs
 
 # =========================================================
-# การแสดงผล: แยกแท็บ Operator และ Dashboard
+# 6. การแสดงผล UI (Tabs)
 # =========================================================
 tab_op, tab_dash = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "📊 แดชบอร์ดภาพรวมโรงงาน (Dashboard)"])
 
 # ---------------------------------------------------------
-# TAB 1: ช่างหน้าเครื่อง (แสดงเวลาจริงที่กด Start / Finish)
+# TAB 1: ช่างหน้าเครื่อง
 # ---------------------------------------------------------
 with tab_op:
     st.subheader("📱 บันทึกสถานะงานหน้าเครื่อง CNC")
