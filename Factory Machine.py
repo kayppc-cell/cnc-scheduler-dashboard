@@ -438,7 +438,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (แก้ไข format เป็น %.2f เพื่อป้องกัน Error)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (แสดงหน่วย ชม. ต่อท้ายช่องตัวเลขชัดเจน)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -471,7 +471,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
         st.markdown("**📋 รายการขั้นตอนและปุ่มควบคุม (Step Controller):**")
 
-        # 2. แสดง Step เรียงลงมา (แก้ format เป็น %.2f เพื่อความถูกต้อง)
+        # 2. แสดง Step เรียงลงมา (แยกคอลัมน์ใส่ข้อความหน่วย ชม. ต่อท้าย)
         for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
             s_id = int(step_row["ID"])
             s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
@@ -489,7 +489,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 else:
                     st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>⏳ รอเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
 
-                c_step_name, c_step_time, c_btn_start, c_btn_finish = st.columns([3.0, 1.8, 1.6, 1.6])
+                c_step_name, c_step_time, c_unit_label, c_btn_start, c_btn_finish = st.columns([3.0, 1.4, 0.6, 1.5, 1.5])
                 
                 with c_step_name:
                     if s_status == "⏳ รอคิวผลิต":
@@ -507,7 +507,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 with c_step_time:
                     if s_status == "⏳ รอคิวผลิต":
                         prog_val = st.number_input(
-                            f"เวลา (ชม.):", 
+                            f"เวลา Step {idx}:", 
                             min_value=0.1, 
                             max_value=100.0, 
                             value=s_prog, 
@@ -517,8 +517,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             label_visibility="collapsed"
                         )
                     else:
-                        st.markdown(f"⏱️ **{s_prog:.2f} ชม.**")
+                        st.markdown(f"⏱️ **{s_prog:.2f}**")
                         prog_val = s_prog
+
+                with c_unit_label:
+                    st.markdown("<div style='margin-top: 6px; font-weight: 700; color: #475569;'>ชม.</div>", unsafe_allow_html=True)
 
                 # ปุ่มที่ 1: Start
                 with c_btn_start:
