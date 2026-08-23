@@ -47,7 +47,7 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ปรับแต่ง UI (ขยายตัวหนังสือ KPI ให้อ่านง่าย ชัดเจน)
+# 2. ปรับแต่ง UI (Header เด่นสง่า & การ์ด KPI ตัวหนังสือใหญ่)
 # =========================================================
 st.markdown("""
 <style>
@@ -97,7 +97,6 @@ st.markdown("""
         font-size: 11px !important;
     }
 
-    /* ปรับแต่งการ์ด KPI ให้ตัวหนังสือใหญ่ ชัดเจน ไม่จม */
     .kpi-container {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -118,13 +117,28 @@ st.markdown("""
     .kpi-title { 
         font-size: 13.5px !important; 
         font-weight: 700 !important; 
-        letter-spacing: 0.3px;
         margin-bottom: 4px;
         opacity: 0.95;
     }
     .kpi-value { 
         font-size: 22px !important; 
         font-weight: 800 !important; 
+    }
+
+    .op-box {
+        background: #FFFFFF;
+        padding: 14px 16px;
+        border-radius: 12px;
+        border: 1.5px solid #E2E8F0;
+        margin-bottom: 10px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+    }
+
+    div.stButton > button:disabled {
+        background-color: #E2E8F0 !important;
+        color: #94A3B8 !important;
+        border-color: #CBD5E1 !important;
+        cursor: not-allowed !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -240,7 +254,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. เครื่องคำนวณการจัดตารางเวลา
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -386,7 +400,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_hrs
 
 # =========================================================
-# 6. เมนูเปลี่ยนโหมด
+# 6. เมนูเปลี่ยนโหมด (Navigation)
 # =========================================================
 nav_options = ["👷 โหมดช่างหน้าเครื่อง", "📊 แดชบอร์ดภาพรวมโรงงาน"]
 selected_tab = st.radio(
@@ -472,7 +486,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         st.info(f"🎉 เครื่อง {selected_m} ไม่มีงานค้างในระบบ")
 
 # ---------------------------------------------------------
-# VIEW 2: Dashboard ภาพรวมโรงงานและบริหารจัดการข้อมูล
+# VIEW 2: Dashboard ภาพรวมโรงงาน
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if not st.session_state.is_admin:
@@ -513,11 +527,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # กล่องจัดการและเพิ่ม/แก้ไขงาน
-            with st.expander("📝 จัดการรายการสั่งผลิต (เชื่อมต่อ Supabase Database)", expanded=True):
-                data_hash = hash(tuple(df_db["สถานะงาน"]))
+            # กรองให้ตารางสั่งผลิตหลักแสดงเฉพาะงานที่ 'รอคิว' หรือ 'กำลังผลิต' เท่านั้น
+            active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].copy()
+
+            with st.expander("📝 จัดการรายการสั่งผลิต (เฉพาะงานที่ยังไม่จบ)", expanded=True):
+                data_hash = hash(tuple(active_jobs_editor_df["สถานะงาน"]))
                 edited_jobs = st.data_editor(
-                    calc_df,
+                    active_jobs_editor_df,
                     key=f"editor_cnc_jobs_{data_hash}",
                     column_config={
                         "ID": st.column_config.NumberColumn("ID", disabled=True, width=50),
@@ -555,18 +571,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         st.success("บันทึกข้อมูลลงฐานข้อมูลสำเร็จ!")
                         st.rerun()
 
-            # กล่องเมนูลบข้อมูล (Quick Delete Tool)
-            with st.expander("🗑️ ลบรายการงานออกจากระบบ (Quick Delete Tool)", expanded=False):
-                del_options = [f"ID {r['ID']} | แผนงาน: {r['แผนงาน']} | Drawing: {r['ชื่อ Drawing.']} ({r['ขั้นตอน (Step)']})" for _, r in calc_df.iterrows()]
-                selected_del = st.selectbox("เลือกงานที่ต้องการลบ:", del_options)
-                if st.button("❌ ยืนยันการลบรายการนี้ออกจากฐานข้อมูล", type="secondary"):
-                    target_id = int(selected_del.split("|")[0].replace("ID", "").strip())
-                    if delete_supabase_job(target_id):
-                        st.success(f"ลบรายการ ID {target_id} เรียบร้อยแล้ว!")
-                        st.rerun()
-                    else:
-                        st.error("ไม่สามารถลบข้อมูลได้")
-
             start_time = datetime(2026, 8, 20, 8, 0)
             df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, start_time)
 
@@ -574,13 +578,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
             avg_util = df_util["อัตราการใช้งาน (%)"].mean() if not df_util.empty else 0.0
 
-            # 1. แถบสรุป KPI (ตัวหนังสือใหญ่ ชัดเจน)
+            # 1. แถบสรุป KPI
             kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
-            # 2. ตารางตรวจสอบเวลาแผน vs เวลาจริง (Plan vs Actual)
+            # 2. ตาราง Plan vs Actual (พร้อมระบบเลือกลบงานที่เสร็จสิ้น)
             if not finished_jobs_df.empty:
-                st.subheader("⏱️ ตรวจสอบเวลาตามแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
+                st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
                 perf_df = finished_jobs_df.copy()
                 perf_df["เวลาแผน (ชม.)"] = (perf_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + perf_df["Basic Machine (ชม.)"] + perf_df["รันโปรแกรม (ชม.)"]
                 
@@ -604,8 +608,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["การประเมิน"] = status_eval_list
                 
                 st.dataframe(
-                    perf_df[["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]],
+                    perf_df[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]],
                     column_config={
+                        "ID": st.column_config.NumberColumn("ID", width=50),
                         "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=85),
                         "ชื่อ Drawing.": st.column_config.TextColumn("📄 Drawing", width=180),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน", width=95),
@@ -620,6 +625,23 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     use_container_width=True,
                     hide_index=True
                 )
+
+                # เมนูลบข้อมูลเฉพาะรายการงานที่ Finish แล้ว
+                c_del_select, c_del_btn = st.columns([3, 1])
+                with c_del_select:
+                    finished_del_options = [f"ID {r['ID']} | แผนงาน: {r['แผนงาน']} | Drawing: {r['ชื่อ Drawing.']} ({r['ขั้นตอน (Step)']})" for _, r in perf_df.iterrows()]
+                    selected_finished_del = st.selectbox("เลือกงาน Finish ที่ต้องการลบออกจากระบบ:", finished_del_options)
+                with c_del_btn:
+                    st.write("")
+                    st.write("")
+                    if st.button("🗑️ ลบงาน Finish รายการนี้", type="secondary", use_container_width=True):
+                        target_id = int(selected_finished_del.split("|")[0].replace("ID", "").strip())
+                        if delete_supabase_job(target_id):
+                            st.success(f"ลบรายการ ID {target_id} ออกจากฐานข้อมูลสำเร็จ!")
+                            st.rerun()
+                        else:
+                            st.error("ไม่สามารถลบข้อมูลได้")
+
                 st.divider()
 
             if not df_summary.empty:
@@ -658,7 +680,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # 4. ผัง Gantt Chart Timeline (มีแท่งสีเทา รอรันงาน ครบถ้วน)
+                # 4. ผัง Gantt Chart Timeline
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 fig = px.timeline(
                     df_gantt,
@@ -697,10 +719,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # 5. ใบจ่ายคิวงานหน้าเครื่อง พร้อมระบบจัดหมวดหมู่และตัวกรอง
+                # 5. ใบจ่ายคิวงานหน้าเครื่อง
                 st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
-                
-                # ตัวกรองข้อมูลเพื่อแบ่งหมวดหมู่การดูงาน
                 f_c1, f_c2 = st.columns([1, 1])
                 with f_c1:
                     filter_status = st.multiselect("🔍 กรองตามสถานะงาน:", ["ทั้งหมด"] + JOB_STATUS, default=["ทั้งหมด"])
@@ -708,7 +728,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     filter_machine = st.multiselect("🏭 กรองตามเครื่องจักร:", ["ทั้งหมด"] + MACHINE_LIST, default=["ทั้งหมด"])
 
                 df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
-                
                 if "ทั้งหมด" not in filter_status and len(filter_status) > 0:
                     df_display = df_display[df_display["สถานะ"].isin(filter_status)]
                 if "ทั้งหมด" not in filter_machine and len(filter_machine) > 0:
