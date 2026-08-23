@@ -423,28 +423,30 @@ with tab_op:
         
         c_btn1, c_btn2 = st.columns(2)
         with c_btn1:
-            if st.button("⚙️ เริ่มขึ้นงาน (Start)", use_container_width=True, type="primary"):
+            if st.button("⚙️ เริ่มขึ้นงาน (Start)", key=f"btn_start_{curr['ID']}", use_container_width=True, type="primary"):
                 try:
+                    job_id = int(curr["ID"])
                     supabase.table("cnc_jobs").update({
                         "status": "⚙️ กำลังผลิต",
                         "actual_start": datetime.now().isoformat()
-                    }).eq("id", int(curr["ID"])).execute()
-                except Exception:
-                    pass
-                st.success("บันทึก: กำลังผลิต เรียบร้อยแล้ว!")
-                st.rerun()
+                    }).eq("id", job_id).execute()
+                    st.toast("บันทึก: กำลังผลิต เรียบร้อยแล้ว!", icon="⚙️")
+                    st.rerun()
+                except Exception as err:
+                    st.error(f"ไม่สามารถอัปเดตสถานะได้: {err}")
                 
         with c_btn2:
-            if st.button("✅ จบงาน (Finish)", use_container_width=True):
+            if st.button("✅ จบงาน (Finish)", key=f"btn_finish_{curr['ID']}", use_container_width=True):
                 try:
+                    job_id = int(curr["ID"])
                     supabase.table("cnc_jobs").update({
                         "status": "✅ เสร็จสิ้นแล้ว",
                         "actual_finish": datetime.now().isoformat()
-                    }).eq("id", int(curr["ID"])).execute()
-                except Exception:
-                    pass
-                st.success("บันทึก: จบงานเรียบร้อย! คิวถัดไปจะขึ้นมาแทนที่")
-                st.rerun()
+                    }).eq("id", job_id).execute()
+                    st.toast("บันทึก: จบงานเรียบร้อย!", icon="✅")
+                    st.rerun()
+                except Exception as err:
+                    st.error(f"ไม่สามารถอัปเดตสถานะได้: {err}")
                 
         if len(m_jobs_df) > 1:
             st.divider()
