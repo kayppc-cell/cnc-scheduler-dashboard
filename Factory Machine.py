@@ -10,7 +10,6 @@ import requests
 # =========================================================
 # 1. การจัดการรูปภาพ (App Icon & Header Logo)
 # =========================================================
-# ค้นหาไฟล์รูปภาพสำหรับทำเป็น App Icon บนจอมือถือ
 icon_file = "log_ cnc_1.png"
 if not os.path.exists(icon_file):
     for alt_icon in ["log_cnc_1.png", "icon.png", "logo.png"]:
@@ -25,26 +24,21 @@ if os.path.exists(icon_file):
     with open(icon_file, "rb") as f:
         icon_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-# ตั้งค่าหน้าเว็บ
 st.set_page_config(
-    page_title="ระบบวางแผนผลิตและติดตามสถานะงาน CNC 9 เครื่อง",
+    page_title="ระบบติดตามงาน CNC 9 เครื่อง",
     page_icon=favicon_img,
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# ส่งแท็กไปยังเบราว์เซอร์มือถือ เพื่อบังคับใช้เป็น App Icon เมื่อกด Add to Home Screen
 if icon_base64:
     st.markdown(f"""
         <head>
-            <!-- สำหรับ iPhone / iPad -->
             <link rel="apple-touch-icon" href="data:image/png;base64,{icon_base64}">
-            <!-- สำหรับ Android Chrome -->
             <link rel="icon" sizes="192x192" href="data:image/png;base64,{icon_base64}">
         </head>
     """, unsafe_allow_html=True)
 
-# ค้นหาไฟล์โลโก้สำหรับหัว Header หลัก
 logo_base64 = None
 for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]:
     if os.path.exists(fname):
@@ -64,50 +58,35 @@ st.markdown("""
 <style>
     .main-header {
         background: linear-gradient(135deg, #1E3C72 0%, #2A5298 100%);
-        padding: 20px 28px;
+        padding: 18px 24px;
         border-radius: 12px;
         color: white;
         margin-bottom: 20px;
-        box-shadow: 0 4px 15px rgba(30, 60, 114, 0.2);
         display: flex;
         align-items: center;
-        gap: 25px;
-        text-align: left;
+        gap: 20px;
     }
     .header-logo {
-        width: 200px;
+        width: 180px;
         height: auto;
-        max-height: 80px;
+        max-height: 75px;
         object-fit: contain;
-        background: transparent !important;
-        padding: 0 !important;
-        border: none !important;
-        flex-shrink: 0;
     }
     .header-logo-icon {
-        font-size: 42px;
+        font-size: 38px;
         background: rgba(255, 255, 255, 0.15);
-        border: 1.5px solid rgba(255, 255, 255, 0.3);
-        padding: 6px 16px;
+        padding: 6px 14px;
         border-radius: 10px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
     }
-    .header-text { flex: 1; }
     .header-text h1 {
         color: white !important;
-        font-size: 24px !important;
+        font-size: 22px !important;
         margin: 0 !important;
-        padding: 0 !important;
         font-weight: 700 !important;
-        line-height: 1.2 !important;
     }
     .header-text p {
         color: #E0E8F9 !important;
-        margin: 6px 0 0 0 !important;
-        padding: 0 !important;
+        margin: 4px 0 0 0 !important;
         font-size: 13px !important;
     }
     .kpi-container {
@@ -120,20 +99,18 @@ st.markdown("""
         padding: 16px 20px;
         border-radius: 12px;
         color: white;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
     }
     .kpi-green { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
     .kpi-blue { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
     .kpi-orange { background: linear-gradient(135deg, #f12711 0%, #f5af19 100%); }
     .kpi-purple { background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%); }
-    .kpi-title { font-size: 13px; font-weight: 600; opacity: 0.9; text-transform: uppercase; letter-spacing: 0.5px; }
+    .kpi-title { font-size: 13px; font-weight: 600; opacity: 0.9; }
     .kpi-value { font-size: 24px; font-weight: 700; margin-top: 4px; }
     .op-box {
         background: white;
         padding: 22px;
         border-radius: 14px;
         border: 2px solid #E2E8F0;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
         margin-bottom: 15px;
     }
     div.stButton > button:disabled {
@@ -141,16 +118,24 @@ st.markdown("""
         color: #94A3B8 !important;
         border-color: #CBD5E1 !important;
         cursor: not-allowed !important;
-        opacity: 0.8 !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบวางแผนผลิตและติดตามสถานะงาน CNC 9 เครื่อง</h1><p>Awea (2 เครื่อง), Hartford (3 เครื่อง), Sanco (1 เครื่อง), Bridgeport (2 เครื่อง), Mikron 5 แกน (1 เครื่อง)</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่อง CNC</h1><p>Awea (2 เครื่อง), Hartford (3 เครื่อง), Sanco (1 เครื่อง), Bridgeport (2 เครื่อง), Mikron 5 แกน (1 เครื่อง)</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. ค่าคงที่และชุดข้อมูลตั้งต้น
+# 3. กำหนดสิทธิ์และความปลอดภัย (Admin Protection)
+# =========================================================
+# ตั้งรหัสผ่านสำหรับเปิด Dashboard ผู้บริหาร
+ADMIN_PASSWORD = "pesadmin"
+
+if "is_admin" not in st.session_state:
+    st.session_state.is_admin = False
+
+# =========================================================
+# 4. ค่าคงที่และชุดข้อมูลตั้งต้น
 # =========================================================
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
@@ -183,7 +168,7 @@ DEFAULT_SEED_JOBS = [
 ]
 
 # =========================================================
-# 4. การเชื่อมต่อ Supabase ผ่าน Direct REST API
+# 5. การเชื่อมต่อ Supabase Database
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -235,7 +220,6 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             data = res.json()
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
-                
                 df["ready_at"] = safe_parse_datetime(df["ready_at"])
                 if "actual_start" in df.columns:
                     df["actual_start"] = safe_parse_datetime(df["actual_start"])
@@ -255,15 +239,13 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                 for item in DEFAULT_SEED_JOBS:
                     insert_supabase_job(item)
                 return fetch_jobs_from_supabase()
-        else:
-            st.error(f"❌ Supabase API Error (Code {res.status_code}): {res.text}")
         return pd.DataFrame()
     except Exception as e:
         st.error(f"❌ ไม่สามารถเชื่อมต่อ Supabase ได้: {e}")
         return pd.DataFrame()
 
 # =========================================================
-# 5. เครื่องคำนวณการจัดตารางเวลา (Scheduling Engine)
+# 6. เครื่องคำนวณการจัดตารางเวลา (Scheduling Engine)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -483,12 +465,16 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_hrs
 
 # =========================================================
-# 6. การแสดงผล UI (Tabs)
+# 7. การจัดโครงสร้างแท็บ และระบบล็อก Dashboard
 # =========================================================
-tab_op, tab_dash = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "📊 แดชบอร์ดภาพรวมโรงงาน (Dashboard)"])
+# ตรวจสอบว่าปลดล็อก Admin หรือยัง เพื่อเลือกแสดงแท็บ
+if st.session_state.is_admin:
+    tab_op, tab_dash = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "📊 แดชบอร์ดภาพรวมโรงงาน (Dashboard)"])
+else:
+    tab_op, tab_login = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "🔒 เข้าสู่ระบบผู้บริหาร (Admin Login)"])
 
 # ---------------------------------------------------------
-# TAB 1: ช่างหน้าเครื่อง
+# TAB: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 with tab_op:
     st.subheader("📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -568,298 +554,327 @@ with tab_op:
         st.info(f"🎉 เครื่อง {selected_m} ไม่มีงานค้างในระบบ ทุกรายการผลิตเสร็จสิ้นแล้ว")
 
 # ---------------------------------------------------------
-# TAB 2: Dashboard วางแผนและวิเคราะห์เปรียบเทียบเวลา
+# TAB: ล็อกอินสำหรับผู้บริหาร (กรณีที่ยังไม่ได้ล็อกอิน)
 # ---------------------------------------------------------
-with tab_dash:
-    df_db = fetch_jobs_from_supabase()
-
-    if df_db.empty:
-        st.warning("⚠️ ไม่พบข้อมูลในตาราง cnc_jobs บน Supabase กรุณารอสักครู่หรือตรวจสอบการเชื่อมต่อ")
-    else:
-        calc_df = df_db.copy()
-        calc_df["รวม (ชม.)"] = (calc_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + calc_df["Basic Machine (ชม.)"] + calc_df["รันโปรแกรม (ชม.)"]
-        calc_df["รวม (ชม.)"] = calc_df["รวม (ชม.)"].round(2)
-
-        column_order = [
-            "ID", "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
-            "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "เวลาตั้งเครื่อง (นาที)",
-            "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "สถานะงาน",
-        ]
-        calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
-
-        with st.expander("📝 จัดการรายการสั่งผลิต (เชื่อมต่อ Supabase Database)", expanded=True):
-            data_hash = hash(tuple(df_db["สถานะงาน"])) if not df_db.empty else 0
-            edited_jobs = st.data_editor(
-                calc_df,
-                key=f"editor_cnc_jobs_{data_hash}",
-                column_config={
-                    "ID": st.column_config.NumberColumn("ID", disabled=True, width=50),
-                    "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=85, required=True),
-                    "ชื่อ Drawing.": st.column_config.TextColumn("📄 ชื่อ Drawing.", width=190, required=True),
-                    "วัสดุ": st.column_config.TextColumn("🔩 วัสดุ", width=75, required=True),
-                    "ประเภทงาน": st.column_config.SelectboxColumn("🏷️ ประเภทงาน", width=125, options=JOB_TYPES, required=True),
-                    "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน (Step)", width=110, required=True),
-                    "เลือกเครื่องจักร": st.column_config.SelectboxColumn("🏭 เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, required=True),
-                    "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("📅 วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm", required=True),
-                    "เวลาตั้งเครื่อง (นาที)": st.column_config.NumberColumn("⏱️ Setup (น.)", width=95, min_value=0, max_value=720, step=5, format="%d", required=True),
-                    "Basic Machine (ชม.)": st.column_config.NumberColumn("🛠️ Basic (ชม.)", width=95, min_value=0.0, max_value=100.0, step=0.5, format="%.1f", required=True),
-                    "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("💻 โปรแกรม (ชม.)", width=105, min_value=0.0, max_value=200.0, step=0.5, format="%.1f", required=True),
-                    "รวม (ชม.)": st.column_config.NumberColumn("⏳ รวม (ชม.)", width=85, format="%.2f", disabled=True),
-                    "สถานะงาน": st.column_config.SelectboxColumn("🚦 สถานะงาน", width=130, options=JOB_STATUS, required=True),
-                },
-                num_rows="dynamic",
-                use_container_width=True
-            )
-            
-            c_save, c_refresh = st.columns([2, 8])
-            with c_save:
-                if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary"):
-                    success_all = True
-                    for _, row in edited_jobs.iterrows():
-                        ready_dt = pd.to_datetime(row["วัน-เวลาขึ้นงาน"], errors='coerce')
-                        ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            
-                        payload = {
-                            "plan_code": str(row["แผนงาน"]),
-                            "drawing_name": str(row["ชื่อ Drawing."]),
-                            "material": str(row["วัสดุ"]),
-                            "job_type": str(row["ประเภทงาน"]),
-                            "step_name": str(row["ขั้นตอน (Step)"]),
-                            "machine_name": str(row["เลือกเครื่องจักร"]),
-                            "ready_at": ready_str,
-                            "setup_mins": float(row["เวลาตั้งเครื่อง (นาที)"]),
-                            "basic_hrs": float(row["Basic Machine (ชม.)"]),
-                            "prog_hrs": float(row["รันโปรแกรม (ชม.)"]),
-                            "status": str(row["สถานะงาน"])
-                        }
-                        if pd.notna(row.get("ID")) and row["ID"] > 0:
-                            if not update_supabase_job(int(row["ID"]), payload):
-                                success_all = False
-                        else:
-                            if not insert_supabase_job(payload):
-                                success_all = False
-                    
-                    if success_all:
-                        st.success("บันทึกข้อมูลลงฐานข้อมูลสำเร็จ!")
-                        st.rerun()
-
-        start_time = datetime(2026, 8, 20, 8, 0)
-        df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, start_time)
-
-        finished_jobs_df = df_db[df_db["สถานะงาน"] == "✅ เสร็จสิ้นแล้ว"].copy()
-        active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
-        avg_util = df_util["อัตราการใช้งาน (%)"].mean() if not df_util.empty else 0.0
-
-        # 1. แถบสรุป KPI
-        kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานที่เสร็จสิ้นแล้ว</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:16px;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผนผลิต (Active)</div><div class="kpi-value">{active_jobs_count} <span style="font-size:16px;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาเคลียร์งานทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:16px;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 เฉลี่ยอัตราการใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
-        st.markdown(kpi_html, unsafe_allow_html=True)
-
-        # 2. ตารางตรวจสอบเวลาตามแผนเทียบกับเวลาจริง (Plan vs Actual Performance)
-        if not finished_jobs_df.empty:
-            st.subheader("⏱️ ตรวจสอบเวลาตามแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
-            
-            perf_df = finished_jobs_df.copy()
-            perf_df["เวลาแผน (ชม.)"] = (perf_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + perf_df["Basic Machine (ชม.)"] + perf_df["รันโปรแกรม (ชม.)"]
-            
-            actual_hrs_list = []
-            diff_list = []
-            status_eval_list = []
-            
-            for _, r in perf_df.iterrows():
-                s_real = r.get("เริ่มจริง")
-                f_real = r.get("เสร็จจริง")
-                if pd.notna(s_real) and pd.notna(f_real):
-                    diff_seconds = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
-                    act_hrs = round(diff_seconds / 3600.0, 2)
-                    plan_hrs = r["เวลาแผน (ชม.)"]
-                    variance = round(act_hrs - plan_hrs, 2)
-                    
-                    actual_hrs_list.append(act_hrs)
-                    diff_list.append(variance)
-                    if variance <= 0:
-                        status_eval_list.append(f"🟢 เร็วกว่าแผน {abs(variance):.2f} ชม.")
-                    else:
-                        status_eval_list.append(f"🔴 ช้ากว่าแผน +{variance:.2f} ชม.")
+if not st.session_state.is_admin:
+    with tab_login:
+        st.subheader("🔒 ยืนยันตัวตนสำหรับผู้บริหารและผู้วางแผน")
+        st.info("ส่วนของแดชบอร์ดภาพรวมและต้นทุนค่าเครื่องจักร ถูกสงวนสิทธิ์เฉพาะผู้บริหาร")
+        
+        col_pwd, col_btn = st.columns([3, 1])
+        with col_pwd:
+            input_pwd = st.text_input("กรุณาใส่รหัสผ่าน (Password):", type="password")
+        with col_btn:
+            st.write("")
+            st.write("")
+            if st.button("🔓 เข้าสู่ระบบ", type="primary", use_container_width=True):
+                if input_pwd == ADMIN_PASSWORD:
+                    st.session_state.is_admin = True
+                    st.success("รหัสผ่านถูกต้อง!")
+                    st.rerun()
                 else:
-                    actual_hrs_list.append(None)
-                    diff_list.append(None)
-                    status_eval_list.append("⚪ รอกดบันทึกเวลาจริง")
-                    
-            perf_df["เวลาจริง (ชม.)"] = actual_hrs_list
-            perf_df["ผลต่าง (ชม.)"] = diff_list
-            perf_df["การประเมิน"] = status_eval_list
-            
-            st.dataframe(
-                perf_df[["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]],
-                column_config={
-                    "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=85),
-                    "ชื่อ Drawing.": st.column_config.TextColumn("📄 Drawing", width=180),
-                    "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน", width=95),
-                    "เลือกเครื่องจักร": st.column_config.TextColumn("🏭 เครื่องจักร", width=115),
-                    "เริ่มจริง": st.column_config.DatetimeColumn("🕒 เริ่มจริง", width=145, format="DD/MM HH:mm"),
-                    "เสร็จจริง": st.column_config.DatetimeColumn("🏁 เสร็จจริง", width=145, format="DD/MM HH:mm"),
-                    "เวลาแผน (ชม.)": st.column_config.NumberColumn("⏱️ แผน (ชม.)", width=90, format="%.2f"),
-                    "เวลาจริง (ชม.)": st.column_config.NumberColumn("⏱️ จริง (ชม.)", width=90, format="%.2f"),
-                    "ผลต่าง (ชม.)": st.column_config.NumberColumn("📊 Diff", width=80, format="%.2f"),
-                    "การประเมิน": st.column_config.TextColumn("🚦 ผลการผลิต", width=160),
-                },
-                use_container_width=True,
-                hide_index=True
-            )
-            st.divider()
+                    st.error("รหัสผ่านไม่ถูกต้อง")
 
-        if not df_summary.empty:
-            # 3. กราฟ Utilization
-            st.subheader("📈 อัตราการใช้งานเครื่องจักร (% Machine Utilization)")
-            fig_bar = px.bar(
-                df_util,
-                x="อัตราการใช้งาน (%)",
-                y="เครื่องจักร",
-                orientation="h",
-                color="อัตราการใช้งาน (%)",
-                color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
-                text="ข้อความแสดง",
-                range_x=[0, 105],
-                category_orders={"เครื่องจักร": MACHINE_LIST}
-            )
-            fig_bar.update_yaxes(autorange="reversed")
-            fig_bar.update_traces(
-                marker_line_color="#0F172A",
-                marker_line_width=1.2,
-                textposition="outside",
-                cliponaxis=False
-            )
-            fig_bar.update_layout(
-                height=370,
-                margin=dict(l=40, r=40, t=10, b=30),
-                xaxis_title="อัตราการใช้งาน (%)",
-                yaxis_title="เครื่องจักร",
-                xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
-                coloraxis_showscale=False,
-                plot_bgcolor="#FFFFFF",
-                paper_bgcolor="#FFFFFF"
-            )
-            fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
-            st.plotly_chart(fig_bar, use_container_width=True)
+# ---------------------------------------------------------
+# TAB: Dashboard วางแผนและต้นทุน (แสดงเฉพาะเมื่อล็อกอินแล้ว)
+# ---------------------------------------------------------
+else:
+    with tab_dash:
+        c_head, c_logout = st.columns([8, 2])
+        with c_head:
+            st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน (Management Only)")
+        with c_logout:
+            if st.button("🚪 ออกจากระบบ Admin", use_container_width=True):
+                st.session_state.is_admin = False
+                st.rerun()
 
-            st.divider()
+        df_db = fetch_jobs_from_supabase()
 
-            # 4. ผัง Gantt Chart Timeline
-            st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
-            fig = px.timeline(
-                df_gantt,
-                x_start="เวลาเริ่ม",
-                x_end="เวลาเสร็จ",
-                y="เครื่องจักร",
-                color="กิจกรรม",
-                text="ข้อความบนแท่งกราฟ",
-                hover_data=["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "วัสดุ", "ระยะเวลา"],
-                category_orders={"เครื่องจักร": MACHINE_LIST},
-                color_discrete_map={
-                    "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
-                    "⚙️ งานปกติกำลังกัดงาน": "#007AFF",
-                    "🔴 งานด่วนตัดเฉือน": "#FF2D55",
-                    "⚪ รอรันงาน": "#E2E8F0"
-                }
-            )
-            fig.update_yaxes(autorange="reversed")
-            fig.update_traces(
-                textposition="inside",
-                insidetextanchor="middle",
-                marker_line_color="#FFFFFF",
-                marker_line_width=1
-            )
-            fig.update_layout(
-                height=450,
-                xaxis_title="วันและเวลา",
-                yaxis_title="เครื่องจักร",
-                uniformtext_minsize=8,
-                uniformtext_mode='hide',
-                plot_bgcolor="#FFFFFF",
-                paper_bgcolor="#FFFFFF",
-                xaxis=dict(showgrid=True, gridcolor="#F1F5F9")
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.divider()
-
-            # 5. ใบจ่ายคิวงานหน้าเครื่อง
-            st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
-            df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
-            display_cols = [c for c in df_display.columns if c != "เวลาเริ่มจริง" and c != "ID"]
-
-            st.dataframe(
-                df_display[display_cols],
-                column_config={
-                    "เครื่องจักร": st.column_config.TextColumn("🏭 เครื่องจักร", width=115),
-                    "สถานะ": st.column_config.TextColumn("🚦 สถานะ", width=105),
-                    "ประเภทงาน": st.column_config.TextColumn("🏷️ ประเภทงาน", width=105),
-                    "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=80),
-                    "ชื่อ Drawing.": st.column_config.TextColumn("📄 ชื่อ Drawing.", width=190),
-                    "วัสดุ": st.column_config.TextColumn("🔩 วัสดุ", width=75),
-                    "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน (Step)", width=110),
-                    "เวลาเริ่ม Setup": st.column_config.TextColumn("🔧 เริ่ม Setup", width=105),
-                    "เวลาเริ่มขึ้นงาน": st.column_config.TextColumn("▶️ เริ่มขึ้นงาน", width=105),
-                    "เวลาจบงาน": st.column_config.TextColumn("⏹️ จบงาน", width=105),
-                    "Setup (นาที)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
-                    "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.1f"),
-                    "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.1f"),
-                    "เวลารวม (ชม.)": st.column_config.NumberColumn("⏳ รวม (ชม.)", width=85, format="%.2f"),
-                },
-                use_container_width=True,
-                hide_index=True
-            )
+        if df_db.empty:
+            st.warning("⚠️ ไม่พบข้อมูลในตาราง cnc_jobs บน Supabase")
         else:
-            st.info("🎉 ทุกรายการผลิตเสร็จสิ้นทั้งหมดแล้ว ไม่มีงานตกค้างในแผนก")
+            calc_df = df_db.copy()
+            calc_df["รวม (ชม.)"] = (calc_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + calc_df["Basic Machine (ชม.)"] + calc_df["รันโปรแกรม (ชม.)"]
+            calc_df["รวม (ชม.)"] = calc_df["รวม (ชม.)"].round(2)
 
-        # 6. ตารางคำนวณราคาต้นทุนค่าเครื่องจักร
-        st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
+            column_order = [
+                "ID", "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "เวลาตั้งเครื่อง (นาที)",
+                "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "สถานะงาน",
+            ]
+            calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-        if "machine_rates" not in st.session_state:
-            st.session_state.machine_rates = pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES[m]} for m in MACHINE_LIST])
+            with st.expander("📝 จัดการรายการสั่งผลิต (เชื่อมต่อ Supabase Database)", expanded=True):
+                data_hash = hash(tuple(df_db["สถานะงาน"])) if not df_db.empty else 0
+                edited_jobs = st.data_editor(
+                    calc_df,
+                    key=f"editor_cnc_jobs_{data_hash}",
+                    column_config={
+                        "ID": st.column_config.NumberColumn("ID", disabled=True, width=50),
+                        "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=85, required=True),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("📄 ชื่อ Drawing.", width=190, required=True),
+                        "วัสดุ": st.column_config.TextColumn("🔩 วัสดุ", width=75, required=True),
+                        "ประเภทงาน": st.column_config.SelectboxColumn("🏷️ ประเภทงาน", width=125, options=JOB_TYPES, required=True),
+                        "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน (Step)", width=110, required=True),
+                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("🏭 เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, required=True),
+                        "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("📅 วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm", required=True),
+                        "เวลาตั้งเครื่อง (นาที)": st.column_config.NumberColumn("⏱️ Setup (น.)", width=95, min_value=0, max_value=720, step=5, format="%d", required=True),
+                        "Basic Machine (ชม.)": st.column_config.NumberColumn("🛠️ Basic (ชม.)", width=95, min_value=0.0, max_value=100.0, step=0.5, format="%.1f", required=True),
+                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("💻 โปรแกรม (ชม.)", width=105, min_value=0.0, max_value=200.0, step=0.5, format="%.1f", required=True),
+                        "รวม (ชม.)": st.column_config.NumberColumn("⏳ รวม (ชม.)", width=85, format="%.2f", disabled=True),
+                        "สถานะงาน": st.column_config.SelectboxColumn("🚦 สถานะงาน", width=130, options=JOB_STATUS, required=True),
+                    },
+                    num_rows="dynamic",
+                    use_container_width=True
+                )
+                
+                c_save, _ = st.columns([2, 8])
+                with c_save:
+                    if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary"):
+                        success_all = True
+                        for _, row in edited_jobs.iterrows():
+                            ready_dt = pd.to_datetime(row["วัน-เวลาขึ้นงาน"], errors='coerce')
+                            ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                
+                            payload = {
+                                "plan_code": str(row["แผนงาน"]),
+                                "drawing_name": str(row["ชื่อ Drawing."]),
+                                "material": str(row["วัสดุ"]),
+                                "job_type": str(row["ประเภทงาน"]),
+                                "step_name": str(row["ขั้นตอน (Step)"]),
+                                "machine_name": str(row["เลือกเครื่องจักร"]),
+                                "ready_at": ready_str,
+                                "setup_mins": float(row["เวลาตั้งเครื่อง (นาที)"]),
+                                "basic_hrs": float(row["Basic Machine (ชม.)"]),
+                                "prog_hrs": float(row["รันโปรแกรม (ชม.)"]),
+                                "status": str(row["สถานะงาน"])
+                            }
+                            if pd.notna(row.get("ID")) and row["ID"] > 0:
+                                if not update_supabase_job(int(row["ID"]), payload):
+                                    success_all = False
+                            else:
+                                if not insert_supabase_job(payload):
+                                    success_all = False
+                        
+                        if success_all:
+                            st.success("บันทึกข้อมูลลงฐานข้อมูลสำเร็จ!")
+                            st.rerun()
 
-        cost_col1, cost_col2 = st.columns([1, 3])
+            start_time = datetime(2026, 8, 20, 8, 0)
+            df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, start_time)
 
-        with cost_col1:
-            st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
-            edited_rates = st.data_editor(
-                st.session_state.machine_rates,
-                column_config={
-                    "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", disabled=True),
-                    "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
-                },
-                use_container_width=True,
-                hide_index=True
-            )
-            st.session_state.machine_rates = edited_rates
-            rate_map = dict(zip(edited_rates["เครื่องจักร"], edited_rates["เรตราคา (บาท/ชม.)"]))
+            finished_jobs_df = df_db[df_db["สถานะงาน"] == "✅ เสร็จสิ้นแล้ว"].copy()
+            active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
+            avg_util = df_util["อัตราการใช้งาน (%)"].mean() if not df_util.empty else 0.0
 
-        with cost_col2:
+            # 1. แถบสรุป KPI
+            kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานที่เสร็จสิ้นแล้ว</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:16px;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผนผลิต (Active)</div><div class="kpi-value">{active_jobs_count} <span style="font-size:16px;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาเคลียร์งานทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:16px;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 เฉลี่ยอัตราการใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
+            st.markdown(kpi_html, unsafe_allow_html=True)
+
+            # 2. ตารางตรวจสอบเวลาแผน vs เวลาจริง
             if not finished_jobs_df.empty:
-                cost_df = finished_jobs_df.copy()
-                cost_df["รวม (ชม.)"] = (cost_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + cost_df["Basic Machine (ชม.)"] + cost_df["รันโปรแกรม (ชม.)"]
-                cost_df["เรตราคา (บาท/ชม.)"] = cost_df["เลือกเครื่องจักร"].map(rate_map).fillna(1000)
-                cost_df["มูลค่ารวม (บาท)"] = cost_df["รวม (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]
+                st.subheader("⏱️ ตรวจสอบเวลาตามแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
                 
-                total_finished_cost = cost_df["มูลค่ารวม (บาท)"].sum()
-                total_finished_hrs = cost_df["รวม (ชม.)"].sum()
+                perf_df = finished_jobs_df.copy()
+                perf_df["เวลาแผน (ชม.)"] = (perf_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + perf_df["Basic Machine (ชม.)"] + perf_df["รันโปรแกรม (ชม.)"]
                 
-                st.markdown(f"**📊 รายการสรุปมูลค่างานที่เสร็จสิ้น (รวมทั้งหมด: :green[{total_finished_cost:,.2f} บาท] / {total_finished_hrs:.2f} ชม.)**")
+                actual_hrs_list = []
+                diff_list = []
+                status_eval_list = []
+                
+                for _, r in perf_df.iterrows():
+                    s_real = r.get("เริ่มจริง")
+                    f_real = r.get("เสร็จจริง")
+                    if pd.notna(s_real) and pd.notna(f_real):
+                        diff_seconds = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
+                        act_hrs = round(diff_seconds / 3600.0, 2)
+                        plan_hrs = r["เวลาแผน (ชม.)"]
+                        variance = round(act_hrs - plan_hrs, 2)
+                        
+                        actual_hrs_list.append(act_hrs)
+                        diff_list.append(variance)
+                        if variance <= 0:
+                            status_eval_list.append(f"🟢 เร็วกว่าแผน {abs(variance):.2f} ชม.")
+                        else:
+                            status_eval_list.append(f"🔴 ช้ากว่าแผน +{variance:.2f} ชม.")
+                    else:
+                        actual_hrs_list.append(None)
+                        diff_list.append(None)
+                        status_eval_list.append("⚪ รอกดบันทึกเวลาจริง")
+                        
+                perf_df["เวลาจริง (ชม.)"] = actual_hrs_list
+                perf_df["ผลต่าง (ชม.)"] = diff_list
+                perf_df["การประเมิน"] = status_eval_list
+                
                 st.dataframe(
-                    cost_df[["แผนงาน", "ขั้นตอน (Step)", "ชื่อ Drawing.", "เลือกเครื่องจักร", "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
+                    perf_df[["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]],
                     column_config={
                         "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=85),
-                        "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน", width=105),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("📄 ชื่อ Drawing.", width=180),
-                        "เลือกเครื่องจักร": st.column_config.TextColumn("🏭 เครื่องจักร", width=120),
-                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.1f"),
-                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.1f"),
-                        "รวม (ชม.)": st.column_config.NumberColumn("⏳ รวม (ชม.)", width=85, format="%.2f"),
-                        "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("💵 เรตราคา", width=110, format="%d ฿"),
-                        "มูลค่ารวม (บาท)": st.column_config.NumberColumn("💰 รวมเป็นเงิน", width=130, format="%.2f ฿"),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("📄 Drawing", width=180),
+                        "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน", width=95),
+                        "เลือกเครื่องจักร": st.column_config.TextColumn("🏭 เครื่องจักร", width=115),
+                        "เริ่มจริง": st.column_config.DatetimeColumn("🕒 เริ่มจริง", width=145, format="DD/MM HH:mm"),
+                        "เสร็จจริง": st.column_config.DatetimeColumn("🏁 เสร็จจริง", width=145, format="DD/MM HH:mm"),
+                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("⏱️ แผน (ชม.)", width=90, format="%.2f"),
+                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("⏱️ จริง (ชม.)", width=90, format="%.2f"),
+                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("📊 Diff", width=80, format="%.2f"),
+                        "การประเมิน": st.column_config.TextColumn("🚦 ผลการผลิต", width=160),
                     },
                     use_container_width=True,
                     hide_index=True
                 )
-            else:
-                st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
+                st.divider()
+
+            if not df_summary.empty:
+                # 3. กราฟ Utilization
+                st.subheader("📈 อัตราการใช้งานเครื่องจักร (% Machine Utilization)")
+                fig_bar = px.bar(
+                    df_util,
+                    x="อัตราการใช้งาน (%)",
+                    y="เครื่องจักร",
+                    orientation="h",
+                    color="อัตราการใช้งาน (%)",
+                    color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
+                    text="ข้อความแสดง",
+                    range_x=[0, 105],
+                    category_orders={"เครื่องจักร": MACHINE_LIST}
+                )
+                fig_bar.update_yaxes(autorange="reversed")
+                fig_bar.update_traces(
+                    marker_line_color="#0F172A",
+                    marker_line_width=1.2,
+                    textposition="outside",
+                    cliponaxis=False
+                )
+                fig_bar.update_layout(
+                    height=370,
+                    margin=dict(l=40, r=40, t=10, b=30),
+                    xaxis_title="อัตราการใช้งาน (%)",
+                    yaxis_title="เครื่องจักร",
+                    xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
+                    coloraxis_showscale=False,
+                    plot_bgcolor="#FFFFFF",
+                    paper_bgcolor="#FFFFFF"
+                )
+                fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+                st.divider()
+
+                # 4. ผัง Gantt Chart Timeline
+                st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
+                fig = px.timeline(
+                    df_gantt,
+                    x_start="เวลาเริ่ม",
+                    x_end="เวลาเสร็จ",
+                    y="เครื่องจักร",
+                    color="กิจกรรม",
+                    text="ข้อความบนแท่งกราฟ",
+                    hover_data=["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "วัสดุ", "ระยะเวลา"],
+                    category_orders={"เครื่องจักร": MACHINE_LIST},
+                    color_discrete_map={
+                        "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
+                        "⚙️ งานปกติกำลังกัดงาน": "#007AFF",
+                        "🔴 งานด่วนตัดเฉือน": "#FF2D55",
+                        "⚪ รอรันงาน": "#E2E8F0"
+                    }
+                )
+                fig.update_yaxes(autorange="reversed")
+                fig.update_traces(
+                    textposition="inside",
+                    insidetextanchor="middle",
+                    marker_line_color="#FFFFFF",
+                    marker_line_width=1
+                )
+                fig.update_layout(
+                    height=450,
+                    xaxis_title="วันและเวลา",
+                    yaxis_title="เครื่องจักร",
+                    uniformtext_minsize=8,
+                    uniformtext_mode='hide',
+                    plot_bgcolor="#FFFFFF",
+                    paper_bgcolor="#FFFFFF",
+                    xaxis=dict(showgrid=True, gridcolor="#F1F5F9")
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                st.divider()
+
+                # 5. ใบจ่ายคิวงานหน้าเครื่อง
+                st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
+                df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
+                display_cols = [c for c in df_display.columns if c != "เวลาเริ่มจริง" and c != "ID"]
+
+                st.dataframe(
+                    df_display[display_cols],
+                    column_config={
+                        "เครื่องจักร": st.column_config.TextColumn("🏭 เครื่องจักร", width=115),
+                        "สถานะ": st.column_config.TextColumn("🚦 สถานะ", width=105),
+                        "ประเภทงาน": st.column_config.TextColumn("🏷️ ประเภทงาน", width=105),
+                        "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=80),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("📄 ชื่อ Drawing.", width=190),
+                        "วัสดุ": st.column_config.TextColumn("🔩 วัสดุ", width=75),
+                        "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน (Step)", width=110),
+                        "เวลาเริ่ม Setup": st.column_config.TextColumn("🔧 เริ่ม Setup", width=105),
+                        "เวลาเริ่มขึ้นงาน": st.column_config.TextColumn("▶️ เริ่มขึ้นงาน", width=105),
+                        "เวลาจบงาน": st.column_config.TextColumn("⏹️ จบงาน", width=105),
+                        "Setup (นาที)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
+                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.1f"),
+                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.1f"),
+                        "เวลารวม (ชม.)": st.column_config.NumberColumn("⏳ รวม (ชม.)", width=85, format="%.2f"),
+                    },
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            # 6. ตารางคำนวณราคาต้นทุนค่าเครื่องจักร
+            st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
+
+            if "machine_rates" not in st.session_state:
+                st.session_state.machine_rates = pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES[m]} for m in MACHINE_LIST])
+
+            cost_col1, cost_col2 = st.columns([1, 3])
+
+            with cost_col1:
+                st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
+                edited_rates = st.data_editor(
+                    st.session_state.machine_rates,
+                    column_config={
+                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", disabled=True),
+                        "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
+                    },
+                    use_container_width=True,
+                    hide_index=True
+                )
+                st.session_state.machine_rates = edited_rates
+                rate_map = dict(zip(edited_rates["เครื่องจักร"], edited_rates["เรตราคา (บาท/ชม.)"]))
+
+            with cost_col2:
+                if not finished_jobs_df.empty:
+                    cost_df = finished_jobs_df.copy()
+                    cost_df["รวม (ชม.)"] = (cost_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + cost_df["Basic Machine (ชม.)"] + cost_df["รันโปรแกรม (ชม.)"]
+                    cost_df["เรตราคา (บาท/ชม.)"] = cost_df["เลือกเครื่องจักร"].map(rate_map).fillna(1000)
+                    cost_df["มูลค่ารวม (บาท)"] = cost_df["รวม (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]
+                    
+                    total_finished_cost = cost_df["มูลค่ารวม (บาท)"].sum()
+                    total_finished_hrs = cost_df["รวม (ชม.)"].sum()
+                    
+                    st.markdown(f"**📊 รายการสรุปมูลค่างานที่เสร็จสิ้น (รวมทั้งหมด: :green[{total_finished_cost:,.2f} บาท] / {total_finished_hrs:.2f} ชม.)**")
+                    st.dataframe(
+                        cost_df[["แผนงาน", "ขั้นตอน (Step)", "ชื่อ Drawing.", "เลือกเครื่องจักร", "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
+                        column_config={
+                            "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=85),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน", width=105),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("📄 ชื่อ Drawing.", width=180),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("🏭 เครื่องจักร", width=120),
+                            "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.1f"),
+                            "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.1f"),
+                            "รวม (ชม.)": st.column_config.NumberColumn("⏳ รวม (ชม.)", width=85, format="%.2f"),
+                            "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("💵 เรตราคา", width=110, format="%d ฿"),
+                            "มูลค่ารวม (บาท)": st.column_config.NumberColumn("💰 รวมเป็นเงิน", width=130, format="%.2f ฿"),
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
