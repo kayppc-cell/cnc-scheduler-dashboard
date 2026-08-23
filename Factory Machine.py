@@ -683,7 +683,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
-            # 2. ตารางงานที่ Finish แล้ว พร้อมเครื่องมือลบหลายรายการ
+            # 2. ตารางงานที่ Finish แล้ว พร้อมเรียง ID จากน้อยไปมากเสมอ
             if not finished_jobs_df.empty:
                 st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
                 perf_df = finished_jobs_df.copy()
@@ -709,7 +709,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["การประเมิน"] = status_eval_list
                 perf_df["ลบ"] = st.session_state.finish_select_all
                 
-                display_finish_df = perf_df[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
+                # เรียงลำดับ ID จากน้อยไปมาก
+                display_finish_df = perf_df.sort_values(by="ID", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
 
                 tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
                 with tool_c1:
@@ -896,7 +897,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     
                     st.markdown(f"**📊 รายการสรุปมูลค่างานที่เสร็จสิ้น (รวมทั้งหมด: :green[{total_finished_cost:,.2f} บาท] / {total_finished_hrs:.2f} ชม.)**")
                     st.dataframe(
-                        cost_df[["แผนงาน", "ขั้นตอน (Step)", "ชื่อ Drawing.", "เลือกเครื่องจักร", "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
+                        cost_df.sort_values(by="ID", ascending=True)[["แผนงาน", "ขั้นตอน (Step)", "ชื่อ Drawing.", "เลือกเครื่องจักร", "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
                         column_config={
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=105),
