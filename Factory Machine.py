@@ -438,7 +438,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (Responsive UI บนมือถือ ไม่ตกบรรทัด)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (Step Sequential Lock ควบคุมลำดับ)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -471,13 +471,23 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
         st.markdown("**📋 รายการขั้นตอนและปุ่มควบคุม (Step Controller):**")
 
-        # 2. แสดง Step เรียงลงมา (จัด 2 แถวในแต่ละการ์ดเพื่อรองรับจอมือถือ)
+        # ตรวจสอบสถานะว่ามี Step ใดกำลังรันอยู่หรือไม่
+        any_running = any(step_row.get("สถานะงาน") == "⚙️ กำลังผลิต" for _, step_row in plan_steps.iterrows())
+        next_available_start_found = False
+
+        # 2. แสดง Step เรียงลงมา พร้อมการควบคุมลำดับ (Sequential Lock)
         for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
             s_id = int(step_row["ID"])
             s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
             s_prog = float(step_row.get("รันโปรแกรม (ชม.)", 2.0) or 2.0)
             s_status = str(step_row.get("สถานะงาน", "⏳ รอคิวผลิต"))
             
+            # ตรวจสอบสิทธิ์การกด Start ตามลำดับ
+            can_start = False
+            if s_status == "⏳ รอคิวผลิต" and not any_running and not next_available_start_found:
+                can_start = True
+                next_available_start_found = True
+
             with st.container():
                 st.markdown("<div class='step-card'>", unsafe_allow_html=True)
                 
@@ -487,7 +497,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 elif s_status == "⚙️ กำลังผลิต":
                     st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800;'>⚙️ กำลังผลิต (Running...)</span>", unsafe_allow_html=True)
                 else:
-                    st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>⏳ รอเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
+                    if can_start:
+                        st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>⏳ พร้อมเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
+                    else:
+                        st.caption(f"**Step {idx}:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับขั้นตอนก่อนหน้า</span>", unsafe_allow_html=True)
 
                 # แถวบน: ช่องใส่ชื่อขั้นตอน + ช่องใส่เวลา (ชม.)
                 c_step_name, c_step_time = st.columns([7, 3])
@@ -519,12 +532,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         st.markdown(f"**เวลา:** ⏱️ {s_prog:.2f} ชม.")
                         prog_val = s_prog
 
-                # แถวล่าง: ปุ่ม Start และ Finish วางคู่กัน
+                # แถวล่าง: ปุ่ม Start และ Finish
                 c_btn_start, c_btn_finish = st.columns(2)
 
-                # ปุ่มที่ 1: Start
+                # ปุ่มที่ 1: Start (ปลดล็อกเฉพาะ Step ที่ถึงคิว)
                 with c_btn_start:
-                    if s_status == "⏳ รอคิวผลิต":
+                    if can_start:
                         if st.button("🚀 Start", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
                             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             update_payload = {
@@ -572,7 +585,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 new_payload = {
                     "plan_code": str(main_plan_code),
                     "drawing_name": str(first_step_info.get("ชื่อ Drawing.", "")),
-                    "material": str(first_step_info.get("วัสดุ", "SS400")),
+                    "material": str(first_step_info.get("วัสดu", "SS400")),
                     "job_type": str(first_step_info.get("ประเภทงาน", "🟢 งานปกติ")),
                     "step_name": new_step_input.strip() if new_step_input.strip() != "" else default_next_step_label,
                     "machine_name": selected_m,
