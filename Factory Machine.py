@@ -39,44 +39,57 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ปรับแต่ง UI ให้สะอาด ปลอดภัย ไม่ทำให้จอขาว
+# 2. ปรับแต่ง CSS ป้องกันการค้างเวลาเลื่อนลง (Touch & Scroll Fix)
 # =========================================================
 st.markdown("""
 <style>
+    /* ป้องกันการตีกันระหว่าง WebView Pull-to-Refresh กับการ Scroll */
+    html, body {
+        overscroll-behavior-y: contain !important;
+        overflow-x: hidden !important;
+    }
+    
+    [data-testid="stAppViewContainer"] {
+        overscroll-behavior-y: contain !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+
     .block-container {
-        padding-top: 1.5rem !important;
-        padding-bottom: 2rem !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
+        padding-top: 1rem !important;
+        padding-bottom: 3rem !important;
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
         max-width: 100% !important;
     }
+
     .main-header {
         background: linear-gradient(135deg, #1E3C72 0%, #2A5298 100%);
-        padding: 12px 16px;
+        padding: 10px 14px;
         border-radius: 12px;
         color: white;
-        margin-bottom: 12px;
+        margin-bottom: 10px;
         display: flex;
         align-items: center;
         gap: 12px;
     }
     .header-logo {
-        width: 70px;
-        max-height: 45px;
+        width: 65px;
+        max-height: 42px;
         height: auto;
         object-fit: contain;
         flex-shrink: 0;
     }
     .header-logo-icon {
-        font-size: 26px;
+        font-size: 24px;
         background: rgba(255, 255, 255, 0.15);
-        padding: 4px 10px;
+        padding: 4px 8px;
         border-radius: 8px;
         flex-shrink: 0;
     }
     .header-text h1 {
         color: white !important;
-        font-size: 15px !important;
+        font-size: 14px !important;
         margin: 0 !important;
         font-weight: 700 !important;
         line-height: 1.2 !important;
@@ -84,21 +97,22 @@ st.markdown("""
     .header-text p {
         color: #E0E8F9 !important;
         margin: 2px 0 0 0 !important;
-        font-size: 11px !important;
+        font-size: 10px !important;
     }
+
     .op-box {
         background: white;
-        padding: 14px 16px;
+        padding: 12px 14px;
         border-radius: 12px;
         border: 1.5px solid #E2E8F0;
-        margin-bottom: 12px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+        margin-bottom: 10px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.02);
     }
     .kpi-container {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
         gap: 8px;
-        margin-bottom: 12px;
+        margin-bottom: 10px;
     }
     .kpi-card {
         padding: 10px 12px;
@@ -109,8 +123,8 @@ st.markdown("""
     .kpi-blue { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
     .kpi-orange { background: linear-gradient(135deg, #f12711 0%, #f5af19 100%); }
     .kpi-purple { background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%); }
-    .kpi-title { font-size: 11px; font-weight: 600; opacity: 0.9; }
-    .kpi-value { font-size: 17px; font-weight: 700; margin-top: 2px; }
+    .kpi-title { font-size: 10px; font-weight: 600; opacity: 0.9; }
+    .kpi-value { font-size: 16px; font-weight: 700; margin-top: 2px; }
 
     div.stButton > button:disabled {
         background-color: #E2E8F0 !important;
@@ -168,7 +182,7 @@ def update_supabase_job(job_id: int, payload: dict) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
-        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
+        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=6)
         st.cache_data.clear()
         return res.status_code in [200, 204]
     except Exception:
@@ -178,7 +192,7 @@ def insert_supabase_job(payload: dict) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs"
-        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
+        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=6)
         st.cache_data.clear()
         return res.status_code in [200, 201]
     except Exception:
@@ -194,12 +208,12 @@ def safe_parse_datetime(series):
         except Exception:
             return dt
 
-@st.cache_data(ttl=5, show_spinner=False)
+@st.cache_data(ttl=4, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs?select=*&order=id.asc"
-        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=8)
+        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=6)
         
         if res.status_code == 200:
             data = res.json()
@@ -372,10 +386,10 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (Operator)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
-    st.subheader("📱 บันทึกสถานะงานหน้าเครื่อง CNC")
+    st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
     
     df_all = fetch_jobs_from_supabase()
     selected_m = st.selectbox("🏭 เลือกเครื่องจักร:", MACHINE_LIST, key="op_machine_select")
@@ -400,17 +414,17 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
         st.markdown(f"""
         <div class="op-box" style="border-left: 6px solid {status_color};">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <span style="background:{status_color}; color:white; padding:3px 8px; border-radius:5px; font-weight:700; font-size:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                <span style="background:{status_color}; color:white; padding:2px 8px; border-radius:4px; font-weight:700; font-size:11px;">
                     {'⚙️ เครื่องกำลังเดิน' if is_running else '⏳ งานรอคิว'}
                 </span>
-                <span style="background:#F1F5F9; padding:3px 6px; border-radius:5px; font-weight:700; font-size:11.5px; color:#0F172A;">{curr_status}</span>
+                <span style="background:#F1F5F9; padding:2px 6px; border-radius:4px; font-weight:700; font-size:11px; color:#0F172A;">{curr_status}</span>
             </div>
-            <h3 style="margin:4px 0; color:#1E3A8A; font-size:17px;">📌 แผนงาน: {curr.get('แผนงาน', '-')}</h3>
-            <p style="font-size:14px; margin:2px 0;"><b>📄 Drawing:</b> {curr.get('ชื่อ Drawing.', '-')}</p>
-            <p style="margin:2px 0; font-size:13px;"><b>⚙️ ขั้นตอน:</b> {curr.get('ขั้นตอน (Step)', '-')} | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
-            <p style="margin:2px 0; font-size:13px;"><b>⏱️ เวลารวม:</b> {total_cyc:.2f} ชม.</p>
-            <p style="margin:2px 0 0 0; font-size:13px; color:#2563EB;"><b>🕒 เริ่มจริง:</b> {start_real_text}</p>
+            <h3 style="margin:2px 0; color:#1E3A8A; font-size:16px;">📌 แผนงาน: {curr.get('แผนงาน', '-')}</h3>
+            <p style="font-size:13px; margin:2px 0;"><b>📄 Drawing:</b> {curr.get('ชื่อ Drawing.', '-')}</p>
+            <p style="margin:2px 0; font-size:12.5px;"><b>⚙️ ขั้นตอน:</b> {curr.get('ขั้นตอน (Step)', '-')} | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
+            <p style="margin:2px 0; font-size:12.5px;"><b>⏱️ เวลารวม:</b> {total_cyc:.2f} ชม.</p>
+            <p style="margin:2px 0 0 0; font-size:12.5px; color:#2563EB;"><b>🕒 เริ่มจริง:</b> {start_real_text}</p>
         </div>
         """, unsafe_allow_html=True)
         
