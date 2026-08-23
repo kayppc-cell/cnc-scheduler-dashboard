@@ -6,7 +6,6 @@ import os
 import base64
 from PIL import Image
 import requests
-import streamlit.components.v1 as components
 
 # =========================================================
 # 1. การจัดการรูปภาพ (App Icon & Header Logo)
@@ -27,21 +26,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# สคริปต์ปิดระบบ Pull-to-Refresh ของมือถือโดยตรง
-components.html("""
-<script>
-    window.parent.document.body.style.overscrollBehaviorY = 'none';
-    window.parent.document.documentElement.style.overscrollBehaviorY = 'none';
-    
-    // ดักจับและยกเลิก event ลากจอลงเกินขอบเขตเพื่อป้องกันบราวเซอร์รีเฟรชค้าง
-    window.parent.document.addEventListener('touchmove', function (e) {
-        if (window.parent.scrollY === 0 && e.touches[0].screenY > 0) {
-            // ปล่อยให้เลื่อนปกติ ไม่ให้ทริกเกอร์ pull to refresh
-        }
-    }, { passive: true });
-</script>
-""", height=0)
-
 logo_base64 = None
 for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]:
     if os.path.exists(fname):
@@ -50,92 +34,113 @@ for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]
         break
 
 if logo_base64:
-    logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>'
+    logo_html = f'<div class="logo-wrapper"><img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/></div>'
 else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ปรับแต่ง CSS ห้ามดึงรีเฟรช (Disable Pull-to-Refresh)
+# 2. ปรับแต่ง UI ให้ Header สวยเด่น เป็นสง่า (CSS Design)
 # =========================================================
 st.markdown("""
 <style>
-    /* ปิดการ Bounce / Pull to refresh ทั้งหน้าจอ */
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-        overscroll-behavior-y: none !important;
-        overscroll-behavior: none !important;
-        touch-action: pan-y !important;
+    /* ซ่อนแถบเครื่องมือด้านบนและปุ่ม Fork ของ Streamlit */
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+    #MainMenu {
+        visibility: hidden !important;
+    }
+    footer {
+        visibility: hidden !important;
     }
 
+    /* จัดระยะขอบจอ */
     .block-container {
-        padding-top: 0.6rem !important;
-        padding-bottom: 1rem !important;
-        padding-left: 0.6rem !important;
-        padding-right: 0.6rem !important;
+        padding-top: 1rem !important;
+        padding-bottom: 2.5rem !important;
+        padding-left: 0.9rem !important;
+        padding-right: 0.9rem !important;
         max-width: 100% !important;
     }
 
+    /* ปรับแต่งกล่อง Header หลัก */
     .main-header {
-        background: linear-gradient(135deg, #1E3C72 0%, #2A5298 100%);
-        padding: 8px 12px;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #0F2B5C 0%, #1E4E8C 100%);
+        padding: 16px 18px;
+        border-radius: 16px;
         color: white;
-        margin-bottom: 8px;
+        margin-bottom: 14px;
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 16px;
+        box-shadow: 0 4px 15px rgba(15, 43, 92, 0.25);
     }
-    .header-logo {
-        width: 55px;
-        max-height: 36px;
-        height: auto;
-        object-fit: contain;
+    .logo-wrapper {
+        background: #FFFFFF;
+        padding: 6px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
         flex-shrink: 0;
     }
+    .header-logo {
+        width: 85px;
+        height: auto;
+        max-height: 55px;
+        object-fit: contain;
+        display: block;
+    }
     .header-logo-icon {
-        font-size: 22px;
-        background: rgba(255, 255, 255, 0.15);
-        padding: 2px 6px;
-        border-radius: 6px;
+        font-size: 32px;
+        background: rgba(255, 255, 255, 0.2);
+        padding: 8px 12px;
+        border-radius: 12px;
         flex-shrink: 0;
     }
     .header-text h1 {
-        color: white !important;
-        font-size: 13.5px !important;
+        color: #FFFFFF !important;
+        font-size: 17px !important;
         margin: 0 !important;
-        font-weight: 700 !important;
-        line-height: 1.2 !important;
+        font-weight: 800 !important;
+        line-height: 1.3 !important;
+        letter-spacing: 0.3px;
     }
     .header-text p {
-        color: #E0E8F9 !important;
-        margin: 1px 0 0 0 !important;
-        font-size: 9.5px !important;
+        color: #D6E4FF !important;
+        margin: 4px 0 0 0 !important;
+        font-size: 11.5px !important;
+        font-weight: 500 !important;
+        line-height: 1.35 !important;
     }
 
+    /* การ์ดแสดงผลสำหรับช่างหน้าเครื่อง */
     .op-box {
-        background: white;
-        padding: 12px 14px;
-        border-radius: 10px;
+        background: #FFFFFF;
+        padding: 14px 16px;
+        border-radius: 14px;
         border: 1.5px solid #E2E8F0;
-        margin-bottom: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        margin-bottom: 12px;
+        box-shadow: 0 3px 8px rgba(0,0,0,0.04);
     }
     .kpi-container {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-        gap: 6px;
-        margin-bottom: 8px;
+        gap: 8px;
+        margin-bottom: 12px;
     }
     .kpi-card {
-        padding: 8px 10px;
-        border-radius: 8px;
+        padding: 10px 12px;
+        border-radius: 10px;
         color: white;
     }
     .kpi-green { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
     .kpi-blue { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
     .kpi-orange { background: linear-gradient(135deg, #f12711 0%, #f5af19 100%); }
     .kpi-purple { background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%); }
-    .kpi-title { font-size: 9.5px; font-weight: 600; opacity: 0.9; }
-    .kpi-value { font-size: 15px; font-weight: 700; margin-top: 1px; }
+    .kpi-title { font-size: 10.5px; font-weight: 600; opacity: 0.9; }
+    .kpi-value { font-size: 16.5px; font-weight: 700; margin-top: 2px; }
 
     div.stButton > button:disabled {
         background-color: #E2E8F0 !important;
@@ -250,7 +255,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 6. เครื่องคำนวณการจัดตารางเวลา (Scheduling Engine)
+# 6. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -425,17 +430,17 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
         st.markdown(f"""
         <div class="op-box" style="border-left: 6px solid {status_color};">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                <span style="background:{status_color}; color:white; padding:2px 8px; border-radius:4px; font-weight:700; font-size:11px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <span style="background:{status_color}; color:white; padding:3px 10px; border-radius:6px; font-weight:700; font-size:12px;">
                     {'⚙️ เครื่องกำลังเดิน' if is_running else '⏳ งานรอคิว'}
                 </span>
-                <span style="background:#F1F5F9; padding:2px 6px; border-radius:4px; font-weight:700; font-size:11px; color:#0F172A;">{curr_status}</span>
+                <span style="background:#F1F5F9; padding:3px 8px; border-radius:6px; font-weight:700; font-size:12px; color:#0F172A;">{curr_status}</span>
             </div>
-            <h3 style="margin:2px 0; color:#1E3A8A; font-size:16px;">📌 แผนงาน: {curr.get('แผนงาน', '-')}</h3>
-            <p style="font-size:13px; margin:2px 0;"><b>📄 Drawing:</b> {curr.get('ชื่อ Drawing.', '-')}</p>
-            <p style="margin:2px 0; font-size:12.5px;"><b>⚙️ ขั้นตอน:</b> {curr.get('ขั้นตอน (Step)', '-')} | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
-            <p style="margin:2px 0; font-size:12.5px;"><b>⏱️ เวลารวม:</b> {total_cyc:.2f} ชม.</p>
-            <p style="margin:2px 0 0 0; font-size:12.5px; color:#2563EB;"><b>🕒 เริ่มจริง:</b> {start_real_text}</p>
+            <h3 style="margin:4px 0; color:#1E3A8A; font-size:18px; font-weight:800;">📌 แผนงาน: {curr.get('แผนงาน', '-')}</h3>
+            <p style="font-size:14px; margin:3px 0;"><b>📄 Drawing:</b> {curr.get('ชื่อ Drawing.', '-')}</p>
+            <p style="margin:3px 0; font-size:13.5px;"><b>⚙️ ขั้นตอน:</b> {curr.get('ขั้นตอน (Step)', '-')} | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
+            <p style="margin:3px 0; font-size:13.5px;"><b>⏱️ เวลารวม:</b> {total_cyc:.2f} ชม.</p>
+            <p style="margin:3px 0 0 0; font-size:13.5px; color:#2563EB;"><b>🕒 เริ่มจริง:</b> {start_real_text}</p>
         </div>
         """, unsafe_allow_html=True)
         
