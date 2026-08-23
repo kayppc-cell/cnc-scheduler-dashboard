@@ -167,6 +167,8 @@ if "active_select_all" not in st.session_state:
 if "finish_select_all" not in st.session_state:
     st.session_state.finish_select_all = False
 
+DEFAULT_STEPS = ["จบใน Process", "OP10", "OP20", "OP30", "OP40", "OP50", "กัดฉาก/ล้างผิว", "เจาะรู/ต๊าปเกลียว"]
+
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
@@ -426,7 +428,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (จัดการ Step ได้อิสระ)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -462,12 +464,65 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             </div>
             <h3 style="margin:4px 0; color:#1E3A8A; font-size:18px; font-weight:800;">📌 แผนงาน: {curr.get('แผนงาน', '-')}</h3>
             <p style="font-size:14px; margin:3px 0;"><b>📄 Drawing:</b> {curr.get('ชื่อ Drawing.', '-')}</p>
-            <p style="margin:3px 0; font-size:13.5px;"><b>⚙️ ขั้นตอน:</b> {curr.get('ขั้นตอน (Step)', '-')} | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
-            <p style="margin:3px 0; font-size:13.5px;"><b>⏱️ เวลารวม:</b> {total_cyc:.2f} ชม.</p>
+            <p style="margin:3px 0; font-size:13.5px; color:#D97706;"><b>⚙️ ขั้นตอนปัจจุบัน:</b> <span style="font-size:15px; font-weight:700;">{curr.get('ขั้นตอน (Step)', '-')}</span> | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
+            <p style="margin:3px 0; font-size:13.5px;"><b>⏱️ เวลารวมตามแผน:</b> {total_cyc:.2f} ชม.</p>
             <p style="margin:3px 0 0 0; font-size:13.5px; color:#2563EB;"><b>🕒 เริ่มจริง:</b> {start_real_text}</p>
         </div>
         """, unsafe_allow_html=True)
+
+        # เมนูปรับแต่ง Step หน้างาน
+        with st.expander("🛠️ ปรับเปลี่ยน Step หรือเพิ่มขั้นตอนใหม่หน้าเครื่อง", expanded=False):
+            st.caption("ช่างสามารถเลือกเปลี่ยนชื่อขั้นตอนปัจจุบัน หรือสร้าง Step ถัดไปลงระบบได้ทันที:")
+            cur_step_val = str(curr.get('ขั้นตอน (Step)', 'OP10'))
+            
+            # 1. แก้ไข Step ปัจจุบัน
+            st.markdown("**1. แก้ไขชื่อขั้นตอนของงานปัจจุบัน:**")
+            col_st1, col_st2 = st.columns([2, 1])
+            with col_st1:
+                step_choice = st.selectbox("เลือกชื่อขั้นตอนมาตรฐาน:", DEFAULT_STEPS, index=DEFAULT_STEPS.index(cur_step_val) if cur_step_val in DEFAULT_STEPS else 0, key="step_select_op")
+                custom_step = st.text_input("หรือพิมพ์ระบุเอง (เช่น OP25 กัดหลบมุม):", value=cur_step_val if cur_step_val not in DEFAULT_STEPS else "", key="step_custom_op")
+                final_step_to_save = custom_step.strip() if custom_step.strip() != "" else step_choice
+            with col_st2:
+                st.write("")
+                st.write("")
+                if st.button("💾 เปลี่ยน Step", use_container_width=True):
+                    if update_supabase_job(int(curr["ID"]), {"step_name": final_step_to_save}):
+                        st.toast("บันทึกขั้นตอนใหม่สำเร็จ!", icon="✅")
+                        st.rerun()
+
+            st.divider()
+
+            # 2. เพิ่ม Step ถัดไปสำหรับ Job นี้
+            st.markdown("**2. เพิ่ม Step ใหม่สำหรับแผนงานนี้ (+ OP ถัดไป):**")
+            new_step_choice = st.selectbox("เลือกขั้นตอนที่จะเพิ่ม:", DEFAULT_STEPS, key="new_step_select")
+            new_custom_step = st.text_input("หรือพิมพ์ระบุเอง:", key="new_step_custom")
+            final_new_step = new_custom_step.strip() if new_custom_step.strip() != "" else new_step_choice
+            
+            c_prog, c_setup = st.columns(2)
+            with c_prog:
+                new_prog_hrs = st.number_input("เวลาโปรแกรม (ชม.):", min_value=0.1, max_value=100.0, value=2.0, step=0.5)
+            with c_setup:
+                new_setup_mins = st.number_input("เวลา Setup (นาที):", min_value=0, max_value=180, value=15, step=5)
+                
+            if st.button("➕ สร้าง Step ใหม่เข้าคิวผลิต", type="secondary", use_container_width=True):
+                new_payload = {
+                    "plan_code": str(curr.get("แผนงาน", "")),
+                    "drawing_name": str(curr.get("ชื่อ Drawing.", "")),
+                    "material": str(curr.get("วัสดุ", "SS400")),
+                    "job_type": str(curr.get("ประเภทงาน", "🟢 งานปกติ")),
+                    "step_name": final_new_step,
+                    "machine_name": selected_m,
+                    "ready_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "setup_mins": float(new_setup_mins),
+                    "basic_hrs": 0.0,
+                    "prog_hrs": float(new_prog_hrs),
+                    "status": "⏳ รอคิวผลิต"
+                }
+                if insert_supabase_job(new_payload):
+                    st.toast(f"เพิ่มขั้นตอน {final_new_step} เข้าคิวแล้ว!", icon="🚀")
+                    st.rerun()
         
+        # ปุ่ม Start / Finish
         c_btn1, c_btn2 = st.columns(2)
         with c_btn1:
             if is_running:
@@ -489,9 +544,9 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 
         if len(m_jobs_df) > 1:
             st.divider()
-            st.caption("📋 คิวงานถัดไป:")
+            st.caption("📋 คิวงานถัดไปบนเครื่องนี้:")
             for i, (_, nxt) in enumerate(m_jobs_df.iloc[1:].iterrows(), 1):
-                st.markdown(f"<small>{i}. <b>{nxt.get('แผนงาน', '-')}</b> | `{nxt.get('ชื่อ Drawing.', '-')}` ({nxt.get('ขั้นตอน (Step)', '-')})</small>", unsafe_allow_html=True)
+                st.markdown(f"<small>{i}. <b>{nxt.get('แผนงาน', '-')}</b> | `{nxt.get('ชื่อ Drawing.', '-')}` (<span style='color:#D97706; font-weight:600;'>{nxt.get('ขั้นตอน (Step)', '-')}</span>)</small>", unsafe_allow_html=True)
     else:
         st.info(f"🎉 เครื่อง {selected_m} ไม่มีงานค้างในระบบ")
 
