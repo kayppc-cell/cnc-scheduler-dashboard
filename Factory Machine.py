@@ -27,7 +27,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# สคริปต์ปิดระบบ Pull-to-Refresh ป้องกันการค้างบนมือถือ
 components.html("""
 <script>
     window.parent.document.body.style.overscrollBehaviorY = 'none';
@@ -48,25 +47,13 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI (Header เด่นสง่า โลโก้ใหญ่ ไร้กรอบขาว)
+# 2. ปรับแต่ง UI (ขยายตัวหนังสือ KPI ให้อ่านง่าย ชัดเจน)
 # =========================================================
 st.markdown("""
 <style>
-    /* ซ่อน Header และปุ่ม Fork ของ Streamlit */
-    header[data-testid="stHeader"] {
-        display: none !important;
-    }
-    #MainMenu {
-        visibility: hidden !important;
-    }
-    footer {
-        visibility: hidden !important;
-    }
-
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-        overscroll-behavior-y: none !important;
-        overscroll-behavior: none !important;
-    }
+    header[data-testid="stHeader"] { display: none !important; }
+    #MainMenu { visibility: hidden !important; }
+    footer { visibility: hidden !important; }
 
     .block-container {
         padding-top: 0.8rem !important;
@@ -76,7 +63,6 @@ st.markdown("""
         max-width: 100% !important;
     }
 
-    /* กล่อง Header หลัก */
     .main-header {
         background: linear-gradient(135deg, #0F2B5C 0%, #1E4E8C 100%);
         padding: 14px 18px;
@@ -88,7 +74,6 @@ st.markdown("""
         gap: 16px;
         box-shadow: 0 4px 14px rgba(15, 43, 92, 0.25);
     }
-    
     .header-logo {
         width: 110px;
         max-height: 75px;
@@ -99,63 +84,47 @@ st.markdown("""
         background: transparent !important;
         filter: drop-shadow(0 2px 5px rgba(0,0,0,0.25));
     }
-    
-    .header-logo-icon {
-        font-size: 34px;
-        background: rgba(255, 255, 255, 0.15);
-        padding: 6px 12px;
-        border-radius: 10px;
-        flex-shrink: 0;
-    }
-    
     .header-text h1 {
         color: #FFFFFF !important;
         font-size: 16.5px !important;
         margin: 0 !important;
         font-weight: 800 !important;
         line-height: 1.25 !important;
-        letter-spacing: 0.2px;
     }
     .header-text p {
         color: #D6E4FF !important;
         margin: 4px 0 0 0 !important;
         font-size: 11px !important;
-        font-weight: 500 !important;
-        line-height: 1.3 !important;
     }
 
-    .op-box {
-        background: #FFFFFF;
-        padding: 14px 16px;
-        border-radius: 12px;
-        border: 1.5px solid #E2E8F0;
-        margin-bottom: 10px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
-    }
-    
+    /* ปรับแต่งการ์ด KPI ให้ตัวหนังสือใหญ่ ชัดเจน ไม่จม */
     .kpi-container {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-        gap: 8px;
-        margin-bottom: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 10px;
+        margin-bottom: 16px;
     }
     .kpi-card {
-        padding: 10px 12px;
-        border-radius: 10px;
+        padding: 14px 16px;
+        border-radius: 12px;
         color: white;
+        box-shadow: 0 3px 8px rgba(0,0,0,0.08);
     }
     .kpi-green { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
     .kpi-blue { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
     .kpi-orange { background: linear-gradient(135deg, #f12711 0%, #f5af19 100%); }
     .kpi-purple { background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%); }
-    .kpi-title { font-size: 10.5px; font-weight: 600; opacity: 0.9; }
-    .kpi-value { font-size: 16.5px; font-weight: 700; margin-top: 2px; }
-
-    div.stButton > button:disabled {
-        background-color: #E2E8F0 !important;
-        color: #94A3B8 !important;
-        border-color: #CBD5E1 !important;
-        cursor: not-allowed !important;
+    
+    .kpi-title { 
+        font-size: 13.5px !important; 
+        font-weight: 700 !important; 
+        letter-spacing: 0.3px;
+        margin-bottom: 4px;
+        opacity: 0.95;
+    }
+    .kpi-value { 
+        font-size: 22px !important; 
+        font-weight: 800 !important; 
     }
 </style>
 """, unsafe_allow_html=True)
@@ -164,7 +133,7 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย (Session State)
+# 3. กำหนดสิทธิ์และความปลอดภัย
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -174,9 +143,6 @@ if "is_admin" not in st.session_state:
 if "current_view" not in st.session_state:
     st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
 
-# =========================================================
-# 4. ค่าคงที่
-# =========================================================
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
@@ -192,7 +158,7 @@ JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทร�
 JOB_STATUS = ["⏳ รอคิวผลิต", "⚙️ กำลังผลิต", "✅ เสร็จสิ้นแล้ว"]
 
 # =========================================================
-# 5. การเชื่อมต่อ Supabase
+# 4. ฟังก์ชันเชื่อมต่อ Supabase
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -208,6 +174,16 @@ def update_supabase_job(job_id: int, payload: dict) -> bool:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
         res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=6)
+        st.cache_data.clear()
+        return res.status_code in [200, 204]
+    except Exception:
+        return False
+
+def delete_supabase_job(job_id: int) -> bool:
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
+        res = requests.delete(endpoint, headers=get_supabase_headers(), timeout=6)
         st.cache_data.clear()
         return res.status_code in [200, 204]
     except Exception:
@@ -264,7 +240,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 6. Scheduling Engine (พร้อมระบบตรวจจับช่วงว่างรอรันงาน)
+# 5. เครื่องคำนวณการจัดตารางเวลา
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -410,7 +386,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_hrs
 
 # =========================================================
-# 7. เมนูเปลี่ยนโหมด (Navigation)
+# 6. เมนูเปลี่ยนโหมด
 # =========================================================
 nav_options = ["👷 โหมดช่างหน้าเครื่อง", "📊 แดชบอร์ดภาพรวมโรงงาน"]
 selected_tab = st.radio(
@@ -426,7 +402,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (Operator)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -496,7 +472,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         st.info(f"🎉 เครื่อง {selected_m} ไม่มีงานค้างในระบบ")
 
 # ---------------------------------------------------------
-# VIEW 2: Dashboard ภาพรวมโรงงานและบริหารต้นทุน (ครบถ้วนสมบูรณ์)
+# VIEW 2: Dashboard ภาพรวมโรงงานและบริหารจัดการข้อมูล
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if not st.session_state.is_admin:
@@ -537,6 +513,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
+            # กล่องจัดการและเพิ่ม/แก้ไขงาน
             with st.expander("📝 จัดการรายการสั่งผลิต (เชื่อมต่อ Supabase Database)", expanded=True):
                 data_hash = hash(tuple(df_db["สถานะงาน"]))
                 edited_jobs = st.data_editor(
@@ -578,6 +555,18 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         st.success("บันทึกข้อมูลลงฐานข้อมูลสำเร็จ!")
                         st.rerun()
 
+            # กล่องเมนูลบข้อมูล (Quick Delete Tool)
+            with st.expander("🗑️ ลบรายการงานออกจากระบบ (Quick Delete Tool)", expanded=False):
+                del_options = [f"ID {r['ID']} | แผนงาน: {r['แผนงาน']} | Drawing: {r['ชื่อ Drawing.']} ({r['ขั้นตอน (Step)']})" for _, r in calc_df.iterrows()]
+                selected_del = st.selectbox("เลือกงานที่ต้องการลบ:", del_options)
+                if st.button("❌ ยืนยันการลบรายการนี้ออกจากฐานข้อมูล", type="secondary"):
+                    target_id = int(selected_del.split("|")[0].replace("ID", "").strip())
+                    if delete_supabase_job(target_id):
+                        st.success(f"ลบรายการ ID {target_id} เรียบร้อยแล้ว!")
+                        st.rerun()
+                    else:
+                        st.error("ไม่สามารถลบข้อมูลได้")
+
             start_time = datetime(2026, 8, 20, 8, 0)
             df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, start_time)
 
@@ -585,8 +574,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
             avg_util = df_util["อัตราการใช้งาน (%)"].mean() if not df_util.empty else 0.0
 
-            # 1. แถบสรุป KPI
-            kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:13px;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:13px;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:13px;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
+            # 1. แถบสรุป KPI (ตัวหนังสือใหญ่ ชัดเจน)
+            kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
             # 2. ตารางตรวจสอบเวลาแผน vs เวลาจริง (Plan vs Actual)
@@ -708,9 +697,23 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # 5. ใบจ่ายคิวงานหน้าเครื่อง
+                # 5. ใบจ่ายคิวงานหน้าเครื่อง พร้อมระบบจัดหมวดหมู่และตัวกรอง
                 st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
+                
+                # ตัวกรองข้อมูลเพื่อแบ่งหมวดหมู่การดูงาน
+                f_c1, f_c2 = st.columns([1, 1])
+                with f_c1:
+                    filter_status = st.multiselect("🔍 กรองตามสถานะงาน:", ["ทั้งหมด"] + JOB_STATUS, default=["ทั้งหมด"])
+                with f_c2:
+                    filter_machine = st.multiselect("🏭 กรองตามเครื่องจักร:", ["ทั้งหมด"] + MACHINE_LIST, default=["ทั้งหมด"])
+
                 df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
+                
+                if "ทั้งหมด" not in filter_status and len(filter_status) > 0:
+                    df_display = df_display[df_display["สถานะ"].isin(filter_status)]
+                if "ทั้งหมด" not in filter_machine and len(filter_machine) > 0:
+                    df_display = df_display[df_display["เครื่องจักร"].isin(filter_machine)]
+
                 display_cols = [c for c in df_display.columns if c != "เวลาเริ่มจริง" and c != "ID"]
 
                 st.dataframe(
