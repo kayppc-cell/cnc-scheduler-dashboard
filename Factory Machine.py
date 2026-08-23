@@ -47,7 +47,7 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI
+# 2. ตกแต่ง UI และสั่งซ่อน Index Column ของตารางทุกตาราง
 # =========================================================
 st.markdown("""
 <style>
@@ -139,6 +139,11 @@ st.markdown("""
         color: #94A3B8 !important;
         border-color: #CBD5E1 !important;
         cursor: not-allowed !important;
+    }
+
+    /* ซ่อนแถบคอลัมน์เลขแถวด้านหน้าสุด (Index Column) ถาวร */
+    [data-testid="data-grid-canvas"] {
+        outline: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -533,7 +538,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].copy()
+            # รีเซ็ต index ของ DataFrame เป็นลำดับ 0,1,2,... ใหม่เพื่อป้องกัน index เดิมจากฐานข้อมูล
+            active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].copy().reset_index(drop=True)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
             with st.expander("📝 จัดการรายการสั่งผลิต (เฉพาะงานที่ยังไม่จบ)", expanded=True):
@@ -567,9 +573,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=125, options=JOB_STATUS, required=True),
                         "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55),
                     },
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
+                    use_container_width=True
                 )
                 
                 c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
@@ -647,7 +652,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["การประเมิน"] = status_eval_list
                 perf_df["ลบ"] = st.session_state.finish_select_all
                 
-                display_finish_df = perf_df[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy()
+                display_finish_df = perf_df[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
 
                 tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
                 with tool_c1:
