@@ -393,53 +393,64 @@ tab_op, tab_dash = st.tabs(["👷 โหมดช่างหน้าเคร�
 # ---------------------------------------------------------
 with tab_op:
     st.subheader("📱 บันทึกสถานะงานหน้าเครื่อง CNC")
+    
+    # 1. ดึงข้อมูลชุดหลัก
+    df_all = fetch_jobs_from_supabase()
+    
     selected_m = st.selectbox("🏭 เลือกเครื่องจักรที่ท่านปฏิบัติงาน:", MACHINE_LIST, key="op_machine_select")
     
-    try:
-        res_op = supabase.table("cnc_jobs").select("*").eq("machine_name", selected_m).in_("status", ["⚙️ กำลังผลิต", "⏳ รอคิวผลิต"]).order("id").execute()
-        m_jobs = res_op.data
-    except Exception:
-        m_jobs = []
+    # 2. กรองเฉพาะงานของเครื่องที่เลือก และยังไม่เสร็จสิ้น
+    if not df_all.empty:
+        mask_active = (df_all["เลือกเครื่องจักร"] == selected_m) & (df_all["สถานะงาน"].isin(["⚙️ กำลังผลิต", "⏳ รอคิวผลิต"]))
+        m_jobs_df = df_all[mask_active].sort_values(by="ID", ascending=True)
+    else:
+        m_jobs_df = pd.DataFrame()
 
-    if m_jobs and len(m_jobs) > 0:
-        curr = m_jobs[0]
-        total_cyc = (float(curr.get('setup_mins', 0))/60.0) + float(curr.get('basic_hrs', 0)) + float(curr.get('prog_hrs', 0))
+    if not m_jobs_df.empty:
+        curr = m_jobs_df.iloc[0]
+        total_cyc = (float(curr.get('เวลาตั้งเครื่อง (นาที)', 0))/60.0) + float(curr.get('Basic Machine (ชม.)', 0)) + float(curr.get('รันโปรแกรม (ชม.)', 0))
         
         st.markdown(f"""
         <div class="op-box">
             <span style="background:#2563EB; color:white; padding:4px 10px; border-radius:6px; font-weight:700; font-size:14px;">งานปัจจุบัน</span>
-            <h3 style="margin:10px 0 5px 0; color:#1E3A8A;">📌 แผนงาน: {curr.get('plan_code', '-')}</h3>
-            <p style="font-size:18px; margin:4px 0;"><b>📄 ชื่อ Drawing:</b> {curr.get('drawing_name', '-')}</p>
-            <p style="margin:4px 0;"><b>⚙️ ขั้นตอน:</b> {curr.get('step_name', '-')} | <b>วัสดุ:</b> {curr.get('material', '-')}</p>
-            <p style="margin:4px 0;"><b>⏱️ เวลารวม:</b> {total_cyc:.2f} ชม.</p>
-            <p style="font-size:16px; margin:6px 0 0 0;"><b>🚦 สถานะ:</b> <span style="background:#EEF2FF; padding:3px 8px; border-radius:4px; font-weight:700;">{curr.get('status', '-')}</span></p>
+            <h3 style="margin:10px 0 5px 0; color:#1E3A8A;">📌 แผนงาน: {curr.get('แผนงาน', '-')}</h3>
+            <p style="font-size:18px; margin:4px 0;"><b>📄 ชื่อ Drawing:</b> {curr.get('ชื่อ Drawing.', '-')}</p>
+            <p style="margin:4px 0;"><b>⚙️ ขั้นตอน:</b> {curr.get('ขั้นตอน (Step)', '-')} | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
+            <p style="margin:4px 0;"><b>⏱️ เวลารวม:</b> {total_cyc:.2f} ชม. (Setup {int(curr.get('เวลาตั้งเครื่อง (นาที)', 0))} น. / Basic {curr.get('Basic Machine (ชม.)', 0)} ชม. / โปรแกรม {curr.get('รันโปรแกรม (ชม.)', 0)} ชม.)</p>
+            <p style="font-size:16px; margin:6px 0 0 0;"><b>🚦 สถานะ:</b> <span style="background:#EEF2FF; padding:3px 8px; border-radius:4px; font-weight:700;">{curr.get('สถานะงาน', '-')}</span></p>
         </div>
         """, unsafe_allow_html=True)
         
         c_btn1, c_btn2 = st.columns(2)
         with c_btn1:
             if st.button("⚙️ เริ่มขึ้นงาน (Start)", use_container_width=True, type="primary"):
-                supabase.table("cnc_jobs").update({
-                    "status": "⚙️ กำลังผลิต",
-                    "actual_start": datetime.now().isoformat()
-                }).eq("id", curr["id"]).execute()
+                try:
+                    supabase.table("cnc_jobs").update({
+                        "status": "⚙️ กำลังผลิต",
+                        "actual_start": datetime.now().isoformat()
+                    }).eq("id", int(curr["ID"])).execute()
+                except Exception:
+                    pass
                 st.success("บันทึก: กำลังผลิต เรียบร้อยแล้ว!")
                 st.rerun()
                 
         with c_btn2:
             if st.button("✅ จบงาน (Finish)", use_container_width=True):
-                supabase.table("cnc_jobs").update({
-                    "status": "✅ เสร็จสิ้นแล้ว",
-                    "actual_finish": datetime.now().isoformat()
-                }).eq("id", curr["id"]).execute()
+                try:
+                    supabase.table("cnc_jobs").update({
+                        "status": "✅ เสร็จสิ้นแล้ว",
+                        "actual_finish": datetime.now().isoformat()
+                    }).eq("id", int(curr["ID"])).execute()
+                except Exception:
+                    pass
                 st.success("บันทึก: จบงานเรียบร้อย! คิวถัดไปจะขึ้นมาแทนที่")
                 st.rerun()
                 
-        if len(m_jobs) > 1:
+        if len(m_jobs_df) > 1:
             st.divider()
             st.markdown("**📋 คิวงานรอผลิตถัดไปของเครื่องนี้:**")
-            for i, nxt in enumerate(m_jobs[1:], 1):
-                st.markdown(f"{i}. แผนงาน **{nxt.get('plan_code', '-')}** | Drawing: `{nxt.get('drawing_name', '-')}` ({nxt.get('step_name', '-')})")
+            for i, (_, nxt) in enumerate(m_jobs_df.iloc[1:].iterrows(), 1):
+                st.markdown(f"{i}. แผนงาน **{nxt.get('แผนงาน', '-')}** | Drawing: `{nxt.get('ชื่อ Drawing.', '-')}` ({nxt.get('ขั้นตอน (Step)', '-')})")
     else:
         st.info(f"🎉 เครื่อง {selected_m} ไม่มีงานค้างในระบบ ทุกรายการผลิตเสร็จสิ้นแล้ว")
 
