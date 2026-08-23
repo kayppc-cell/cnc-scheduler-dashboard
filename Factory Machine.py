@@ -47,7 +47,7 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ปรับแต่ง UI (Header เด่นสง่า & การ์ด KPI ตัวหนังสือใหญ่)
+# 2. ตกแต่ง UI
 # =========================================================
 st.markdown("""
 <style>
@@ -134,11 +134,29 @@ st.markdown("""
         box-shadow: 0 2px 6px rgba(0,0,0,0.03);
     }
 
-    div.stButton > button:disabled {
-        background-color: #E2E8F0 !important;
-        color: #94A3B8 !important;
-        border-color: #CBD5E1 !important;
-        cursor: not-allowed !important;
+    /* สไตล์ตารางแบบ Custom Row Action */
+    .finish-table-header {
+        display: flex;
+        background: #F8FAFC;
+        padding: 10px 12px;
+        border-radius: 8px 8px 0 0;
+        border: 1px solid #E2E8F0;
+        font-weight: 700;
+        font-size: 12.5px;
+        color: #475569;
+    }
+    .finish-table-row {
+        display: flex;
+        align-items: center;
+        padding: 10px 12px;
+        border-left: 1px solid #E2E8F0;
+        border-right: 1px solid #E2E8F0;
+        border-bottom: 1px solid #E2E8F0;
+        background: #FFFFFF;
+        font-size: 13px;
+    }
+    .finish-table-row:nth-child(even) {
+        background: #F8FAFC;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -527,7 +545,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # กรองให้ตารางสั่งผลิตหลักแสดงเฉพาะงานที่ 'รอคิว' หรือ 'กำลังผลิต' เท่านั้น
+            # ตารางสั่งผลิตหลักแสดงเฉพาะงานที่ 'รอคิว' หรือ 'กำลังผลิต'
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].copy()
 
             with st.expander("📝 จัดการรายการสั่งผลิต (เฉพาะงานที่ยังไม่จบ)", expanded=True):
@@ -582,65 +600,58 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
-            # 2. ตาราง Plan vs Actual (พร้อมระบบเลือกลบงานที่เสร็จสิ้น)
+            # 2. ตาราง Plan vs Actual พร้อมคอลัมน์ "จัดการ" และปุ่มลบ 🗑️ รายแถว
             if not finished_jobs_df.empty:
                 st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
                 perf_df = finished_jobs_df.copy()
                 perf_df["เวลาแผน (ชม.)"] = (perf_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + perf_df["Basic Machine (ชม.)"] + perf_df["รันโปรแกรม (ชม.)"]
                 
-                actual_hrs_list, diff_list, status_eval_list = [], [], []
+                # Header ตารางพร้อมคอลัมน์จัดการ
+                cols_layout = [1.1, 2.3, 1.2, 1.4, 1.4, 1.4, 1.0, 1.0, 1.6, 0.9]
+                h_c = st.columns(cols_layout)
+                headers = ["PLAN NO.", "DRAWING NO.", "ขั้นตอน", "สถานีผลิต", "เริ่มจริง", "เวลาจบจริง", "แผน (ชม.)", "จริง (ชม.)", "ผลต่างเวลา", "จัดการ"]
+                for i, h in enumerate(headers):
+                    h_c[i].markdown(f"**{h}**")
+
+                st.divider()
+
                 for _, r in perf_df.iterrows():
                     s_real, f_real = r.get("เริ่มจริง"), r.get("เสร็จจริง")
+                    start_str, finish_str = "-", "-"
+                    variance_text = "⚪ รอเวลาจริง"
+                    act_hrs_text = "-"
+                    
                     if pd.notna(s_real) and pd.notna(f_real):
+                        start_str = pd.to_datetime(s_real).strftime("%d/%m %H:%M")
+                        finish_str = pd.to_datetime(f_real).strftime("%d/%m %H:%M")
                         diff_seconds = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
                         act_hrs = round(diff_seconds / 3600.0, 2)
+                        act_hrs_text = f"{act_hrs:.2f}"
                         variance = round(act_hrs - r["เวลาแผน (ชม.)"], 2)
-                        actual_hrs_list.append(act_hrs)
-                        diff_list.append(variance)
-                        status_eval_list.append(f"🟢 เร็วกว่าแผน {abs(variance):.2f} ชม." if variance <= 0 else f"🔴 ช้ากว่าแผน +{variance:.2f} ชม.")
-                    else:
-                        actual_hrs_list.append(None)
-                        diff_list.append(None)
-                        status_eval_list.append("⚪ รอกดบันทึกเวลาจริง")
                         
-                perf_df["เวลาจริง (ชม.)"] = actual_hrs_list
-                perf_df["ผลต่าง (ชม.)"] = diff_list
-                perf_df["การประเมิน"] = status_eval_list
-                
-                st.dataframe(
-                    perf_df[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]],
-                    column_config={
-                        "ID": st.column_config.NumberColumn("ID", width=50),
-                        "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=85),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("📄 Drawing", width=180),
-                        "ขั้นตอน (Step)": st.column_config.TextColumn("⚙️ ขั้นตอน", width=95),
-                        "เลือกเครื่องจักร": st.column_config.TextColumn("🏭 เครื่องจักร", width=115),
-                        "เริ่มจริง": st.column_config.DatetimeColumn("🕒 เริ่มจริง", width=145, format="DD/MM HH:mm"),
-                        "เสร็จจริง": st.column_config.DatetimeColumn("🏁 เสร็จจริง", width=145, format="DD/MM HH:mm"),
-                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("⏱️ แผน (ชม.)", width=90, format="%.2f"),
-                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("⏱️ จริง (ชม.)", width=90, format="%.2f"),
-                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("📊 Diff", width=80, format="%.2f"),
-                        "การประเมิน": st.column_config.TextColumn("🚦 ผลการผลิต", width=160),
-                    },
-                    use_container_width=True,
-                    hide_index=True
-                )
+                        if variance <= 0:
+                            variance_text = f"🟢 เร็ว {abs(variance):.2f} ชม."
+                        else:
+                            variance_text = f"🔴 ช้า +{variance:.2f} ชม."
 
-                # เมนูลบข้อมูลเฉพาะรายการงานที่ Finish แล้ว
-                c_del_select, c_del_btn = st.columns([3, 1])
-                with c_del_select:
-                    finished_del_options = [f"ID {r['ID']} | แผนงาน: {r['แผนงาน']} | Drawing: {r['ชื่อ Drawing.']} ({r['ขั้นตอน (Step)']})" for _, r in perf_df.iterrows()]
-                    selected_finished_del = st.selectbox("เลือกงาน Finish ที่ต้องการลบออกจากระบบ:", finished_del_options)
-                with c_del_btn:
-                    st.write("")
-                    st.write("")
-                    if st.button("🗑️ ลบงาน Finish รายการนี้", type="secondary", use_container_width=True):
-                        target_id = int(selected_finished_del.split("|")[0].replace("ID", "").strip())
-                        if delete_supabase_job(target_id):
-                            st.success(f"ลบรายการ ID {target_id} ออกจากฐานข้อมูลสำเร็จ!")
+                    row_c = st.columns(cols_layout)
+                    row_c[0].markdown(f"**{r.get('แผนงาน', '-')}**")
+                    row_c[1].write(r.get('ชื่อ Drawing.', '-'))
+                    row_c[2].write(r.get('ขั้นตอน (Step)', '-'))
+                    row_c[3].write(r.get('เลือกเครื่องจักร', '-'))
+                    row_c[4].write(start_str)
+                    row_c[5].write(finish_str)
+                    row_c[6].write(f"{r['เวลาแผน (ชม.)']:.2f}")
+                    row_c[7].write(act_hrs_text)
+                    row_c[8].write(variance_text)
+                    
+                    # ปุ่มไอคอนถังขยะสำหรับลบแถวนี้โดยตรง
+                    if row_c[9].button("🗑️", key=f"del_btn_row_{r['ID']}", help="ลบรายการนี้"):
+                        if delete_supabase_job(int(r["ID"])):
+                            st.toast(f"ลบรายการ ID {r['ID']} แล้ว", icon="🗑️")
                             st.rerun()
                         else:
-                            st.error("ไม่สามารถลบข้อมูลได้")
+                            st.error("ลบไม่สำเร็จ")
 
                 st.divider()
 
