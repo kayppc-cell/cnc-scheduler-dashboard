@@ -30,19 +30,19 @@ JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทร�
 JOB_STATUS = ["⏳ รอคิวผลิต", "⚙️ กำลังผลิต", "✅ เสร็จสิ้นแล้ว"]
 
 DEFAULT_SEED_JOBS = [
-    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step1", "machine_name": "No.1 Awea", "ready_at": "2026-08-20T08:00:00+07:00", "setup_mins": 15, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "✅ เสร็จสิ้นแล้ว"},
-    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step2", "machine_name": "No.1 Awea", "ready_at": "2026-08-20T14:00:00+07:00", "setup_mins": 15, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⚙️ กำลังผลิต"},
-    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step3", "machine_name": "No.1 Awea", "ready_at": "2026-08-21T08:00:00+07:00", "setup_mins": 15, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-102", "drawing_name": "P26-PES-105-007-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.4 Sanco", "ready_at": "2026-08-20T08:00:00+07:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 4.0, "status": "✅ เสร็จสิ้นแล้ว"},
-    {"plan_code": "26-102", "drawing_name": "P26-PES-105-008-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.9 Mikron", "ready_at": "2026-08-20T08:00:00+07:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 7.0, "status": "⚙️ กำลังผลิต"},
-    {"plan_code": "26-102", "drawing_name": "P26-PES-105-009-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.9 Mikron", "ready_at": "2026-08-20T17:30:00+07:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 7.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-102", "drawing_name": "P26-PES-105-010-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.2 Awea", "ready_at": "2026-08-20T08:00:00+07:00", "setup_mins": 10, "basic_hrs": 4.0, "prog_hrs": 12.0, "status": "⚙️ กำลังผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-001-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.3 Hartford", "ready_at": "2026-08-20T08:00:00+07:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-002-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.5 Hartford", "ready_at": "2026-08-20T08:00:00+07:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-003-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.6 Bridgeport", "ready_at": "2026-08-20T08:00:00+07:00", "setup_mins": 10, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-004-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.7 Bridgeport", "ready_at": "2026-08-20T08:00:00+07:00", "setup_mins": 10, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-105", "drawing_name": "P26-PES-105-005-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.8 Hartford", "ready_at": "2026-08-20T08:00:00+07:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
-    {"plan_code": "26-199", "drawing_name": "P26-PES-110-001-Unit20", "material": "SS400", "job_type": "🔴 งานด่วนแทรก", "step_name": "จบใน Process", "machine_name": "No.3 Hartford", "ready_at": "2026-08-20T13:00:00+07:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step1", "machine_name": "No.1 Awea", "ready_at": "2026-08-20T08:00:00", "setup_mins": 15, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "✅ เสร็จสิ้นแล้ว"},
+    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step2", "machine_name": "No.1 Awea", "ready_at": "2026-08-20T14:00:00", "setup_mins": 15, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⚙️ กำลังผลิต"},
+    {"plan_code": "26-117", "drawing_name": "P26-PES-105-004-Unit8", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "step3", "machine_name": "No.1 Awea", "ready_at": "2026-08-21T08:00:00", "setup_mins": 15, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-102", "drawing_name": "P26-PES-105-007-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.4 Sanco", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 4.0, "status": "✅ เสร็จสิ้นแล้ว"},
+    {"plan_code": "26-102", "drawing_name": "P26-PES-105-008-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.9 Mikron", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 7.0, "status": "⚙️ กำลังผลิต"},
+    {"plan_code": "26-102", "drawing_name": "P26-PES-105-009-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.9 Mikron", "ready_at": "2026-08-20T17:30:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 7.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-102", "drawing_name": "P26-PES-105-010-Unit9", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.2 Awea", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 4.0, "prog_hrs": 12.0, "status": "⚙️ กำลังผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-001-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.3 Hartford", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-002-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.5 Hartford", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-003-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.6 Bridgeport", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-004-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.7 Bridgeport", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 1.5, "prog_hrs": 4.5, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-105", "drawing_name": "P26-PES-105-005-Unit10", "material": "SS400", "job_type": "🟢 งานปกติ", "step_name": "จบใน Process", "machine_name": "No.8 Hartford", "ready_at": "2026-08-20T08:00:00", "setup_mins": 10, "basic_hrs": 2.0, "prog_hrs": 6.0, "status": "⏳ รอคิวผลิต"},
+    {"plan_code": "26-199", "drawing_name": "P26-PES-110-001-Unit20", "material": "SS400", "job_type": "🔴 งานด่วนแทรก", "step_name": "จบใน Process", "machine_name": "No.3 Hartford", "ready_at": "2026-08-20T13:00:00", "setup_mins": 10, "basic_hrs": 1.0, "prog_hrs": 3.0, "status": "⏳ รอคิวผลิต"},
 ]
 
 # =========================================================
@@ -88,7 +88,8 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             data = res.json()
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
-                df["ready_at"] = pd.to_datetime(df["ready_at"])
+                # แปลงเวลาและตัด Timezone ออกเป็น Naive Datetime
+                df["ready_at"] = pd.to_datetime(df["ready_at"]).dt.tz_localize(None)
                 col_map = {
                     "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
                     "material": "วัสดุ", "job_type": "ประเภทงาน", "step_name": "ขั้นตอน (Step)",
@@ -98,7 +99,6 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                 }
                 return df.rename(columns=col_map)
             elif isinstance(data, list) and len(data) == 0:
-                # ถ้าตารางว่างเปล่า ทำการ Seed ข้อมูล 13 รายการเริ่มต้นให้อัตโนมัติ
                 for item in DEFAULT_SEED_JOBS:
                     insert_supabase_job(item)
                 return fetch_jobs_from_supabase()
@@ -241,10 +241,13 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             j["setup_mins"] = 15.0
             
         ready_time = j.get("วัน-เวลาขึ้นงาน")
-        if pd.isna(ready_time) or not isinstance(ready_time, (datetime, pd.Timestamp)):
+        if pd.isna(ready_time):
             j["ready_at"] = default_start_datetime
         else:
-            j["ready_at"] = pd.to_datetime(ready_time).to_pydatetime()
+            dt_val = pd.to_datetime(ready_time)
+            if hasattr(dt_val, "tz") and dt_val.tz is not None:
+                dt_val = dt_val.tz_localize(None)
+            j["ready_at"] = dt_val.to_pydatetime()
             
         j["is_urgent"] = True if "ด่วนแทรก" in str(j.get("ประเภทงาน", "")) else False
         j["remain_cut_hrs"] = j["cut_hrs"]
@@ -423,12 +426,12 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_hrs
 
 # =========================================================
-# การแสดงผล: แท็บ Operator และ Dashboard
+# การแสดงผล: แยกแท็บ Operator และ Dashboard
 # =========================================================
 tab_op, tab_dash = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "📊 แดชบอร์ดภาพรวมโรงงาน (Dashboard)"])
 
 # ---------------------------------------------------------
-# TAB 1: ช่างหน้าเครื่อง
+# TAB 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 with tab_op:
     st.subheader("📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -462,7 +465,7 @@ with tab_op:
             if st.button("⚙️ เริ่มขึ้นงาน (Start)", key=f"btn_start_{curr['ID']}", use_container_width=True, type="primary"):
                 success = update_supabase_job(int(curr["ID"]), {
                     "status": "⚙️ กำลังผลิต",
-                    "actual_start": datetime.now().isoformat()
+                    "actual_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
                 if success:
                     st.toast("✅ บันทึก: กำลังผลิต สำเร็จ!", icon="⚙️")
@@ -472,7 +475,7 @@ with tab_op:
             if st.button("✅ จบงาน (Finish)", key=f"btn_finish_{curr['ID']}", use_container_width=True):
                 success = update_supabase_job(int(curr["ID"]), {
                     "status": "✅ เสร็จสิ้นแล้ว",
-                    "actual_finish": datetime.now().isoformat()
+                    "actual_finish": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
                 if success:
                     st.toast("🎉 บันทึก: จบงานเรียบร้อย!", icon="✅")
@@ -535,6 +538,10 @@ with tab_dash:
                 if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary"):
                     success_all = True
                     for _, row in edited_jobs.iterrows():
+                        ready_dt = pd.to_datetime(row["วัน-เวลาขึ้นงาน"])
+                        if hasattr(ready_dt, "tz") and ready_dt.tz is not None:
+                            ready_dt = ready_dt.tz_localize(None)
+                            
                         payload = {
                             "plan_code": str(row["แผนงาน"]),
                             "drawing_name": str(row["ชื่อ Drawing."]),
@@ -542,7 +549,7 @@ with tab_dash:
                             "job_type": str(row["ประเภทงาน"]),
                             "step_name": str(row["ขั้นตอน (Step)"]),
                             "machine_name": str(row["เลือกเครื่องจักร"]),
-                            "ready_at": pd.to_datetime(row["วัน-เวลาขึ้นงาน"]).isoformat(),
+                            "ready_at": ready_dt.strftime("%Y-%m-%d %H:%M:%S"),
                             "setup_mins": float(row["เวลาตั้งเครื่อง (นาที)"]),
                             "basic_hrs": float(row["Basic Machine (ชม.)"]),
                             "prog_hrs": float(row["รันโปรแกรม (ชม.)"]),
