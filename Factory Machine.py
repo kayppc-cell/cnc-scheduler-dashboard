@@ -142,7 +142,7 @@ st.markdown("""
         padding: 12px 14px;
         border-radius: 10px;
         border: 1.5px solid #E2E8F0;
-        margin-bottom: 10px;
+        margin-bottom: 12px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.02);
     }
 
@@ -438,7 +438,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (ปรับขนาดช่อง ชม. ให้พอดีตัวเลข)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (Responsive UI บนมือถือ ไม่ตกบรรทัด)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -471,7 +471,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
         st.markdown("**📋 รายการขั้นตอนและปุ่มควบคุม (Step Controller):**")
 
-        # 2. แสดง Step เรียงลงมา (ปรับความกว้างช่องเวลาให้กระชับพอดีตัวเลข)
+        # 2. แสดง Step เรียงลงมา (จัด 2 แถวในแต่ละการ์ดเพื่อรองรับจอมือถือ)
         for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
             s_id = int(step_row["ID"])
             s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
@@ -489,7 +489,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 else:
                     st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>⏳ รอเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
 
-                c_step_name, c_step_time, c_unit_label, c_btn_start, c_btn_finish = st.columns([5.0, 1.2, 0.5, 1.6, 1.6])
+                # แถวบน: ช่องใส่ชื่อขั้นตอน + ช่องใส่เวลา (ชม.)
+                c_step_name, c_step_time = st.columns([7, 3])
                 
                 with c_step_name:
                     if s_status == "⏳ รอคิวผลิต":
@@ -497,31 +498,29 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             f"ชื่อขั้นตอน Step {idx}:", 
                             value=s_name, 
                             placeholder="เช่น OP10, ล้างฉาก", 
-                            key=f"input_step_name_{s_id}",
-                            label_visibility="collapsed"
+                            key=f"input_step_name_{s_id}"
                         )
                     else:
-                        st.markdown(f"<div style='margin-top: 5px; font-weight: 600;'>{s_name}</div>", unsafe_allow_html=True)
+                        st.markdown(f"**ขั้นตอน:** {s_name}")
                         step_val = s_name
 
                 with c_step_time:
                     if s_status == "⏳ รอคิวผลิต":
                         prog_val = st.number_input(
-                            f"เวลา Step {idx}:", 
+                            f"เวลา (ชม.):", 
                             min_value=0.1, 
                             max_value=100.0, 
                             value=s_prog, 
                             step=0.5, 
                             format="%.2f",
-                            key=f"input_step_prog_{s_id}",
-                            label_visibility="collapsed"
+                            key=f"input_step_prog_{s_id}"
                         )
                     else:
-                        st.markdown(f"<div style='margin-top: 5px; text-align: right; font-weight: 700;'>⏱️ {s_prog:.2f}</div>", unsafe_allow_html=True)
+                        st.markdown(f"**เวลา:** ⏱️ {s_prog:.2f} ชม.")
                         prog_val = s_prog
 
-                with c_unit_label:
-                    st.markdown("<div style='margin-top: 7px; font-weight: 700; color: #475569;'>ชม.</div>", unsafe_allow_html=True)
+                # แถวล่าง: ปุ่ม Start และ Finish วางคู่กัน
+                c_btn_start, c_btn_finish = st.columns(2)
 
                 # ปุ่มที่ 1: Start
                 with c_btn_start:
@@ -562,11 +561,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         default_next_step_label = f"OP{next_step_num*10}"
         
         with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับแผนงานนี้ (Step {next_step_num})", expanded=False):
-            c_in1, c_in2 = st.columns([2.5, 1.5])
+            c_in1, c_in2 = st.columns([7, 3])
             with c_in1:
                 new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, OP30", key=f"new_step_name_input_{main_plan_code}")
             with c_in2:
-                new_prog_input = st.number_input("เวลาโปรแกรม (ชม.):", min_value=0.1, max_value=100.0, value=2.0, step=0.5, format="%.2f", key=f"new_step_prog_input_{main_plan_code}")
+                new_prog_input = st.number_input("เวลา (ชม.):", min_value=0.1, max_value=100.0, value=2.0, step=0.5, format="%.2f", key=f"new_step_prog_input_{main_plan_code}")
 
             if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num} เข้าคิว", type="secondary", use_container_width=True):
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
