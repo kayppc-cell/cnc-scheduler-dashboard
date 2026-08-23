@@ -460,6 +460,7 @@ with tab_op:
 # TAB 2: Dashboard ภาพรวม
 # ---------------------------------------------------------
 with tab_dash:
+    # 1. โหลดข้อมูลสดตรงจาก Supabase ทุกครั้งที่เปิด/รีเฟรชหน้านี้
     df_db = fetch_jobs_from_supabase()
 
     calc_df = df_db.copy()
@@ -474,8 +475,12 @@ with tab_dash:
     calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
     with st.expander("📝 จัดการรายการสั่งผลิต (เชื่อมต่อ Supabase Database)", expanded=True):
+        # บังคับ reset state ของ data_editor เมื่อข้อมูลจาก DB เปลี่ยน
+        data_hash = hash(tuple(df_db["สถานะงาน"])) if not df_db.empty else 0
+        
         edited_jobs = st.data_editor(
             calc_df,
+            key=f"editor_cnc_jobs_{data_hash}",
             column_config={
                 "ID": st.column_config.NumberColumn("ID", disabled=True, width=50),
                 "แผนงาน": st.column_config.TextColumn("📌 แผนงาน", width=85, required=True),
