@@ -88,7 +88,6 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             data = res.json()
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
-                # แปลงเวลาและตัด Timezone ออกเป็น Naive Datetime
                 df["ready_at"] = pd.to_datetime(df["ready_at"]).dt.tz_localize(None)
                 col_map = {
                     "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
@@ -204,6 +203,14 @@ st.markdown("""
         border: 2px solid #E2E8F0;
         box-shadow: 0 4px 15px rgba(0,0,0,0.05);
         margin-bottom: 15px;
+    }
+    /* ปรับแต่งปุ่มสถานะกำลังผลิต */
+    div.stButton > button:disabled {
+        background-color: #E2E8F0 !important;
+        color: #94A3B8 !important;
+        border-color: #CBD5E1 !important;
+        cursor: not-allowed !important;
+        opacity: 0.8 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -426,12 +433,12 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_hrs
 
 # =========================================================
-# การแสดงผล: แยกแท็บ Operator และ Dashboard
+# การแสดงผล: แท็บ Operator และ Dashboard
 # =========================================================
 tab_op, tab_dash = st.tabs(["👷 โหมดช่างหน้าเครื่อง (Operator)", "📊 แดชบอร์ดภาพรวมโรงงาน (Dashboard)"])
 
 # ---------------------------------------------------------
-# TAB 1: หน้าจอช่างหน้าเครื่อง
+# TAB 1: ช่างหน้าเครื่อง (ปรับปุ่มสถานะสีและป้องกันคลิกซ้ำ)
 # ---------------------------------------------------------
 with tab_op:
     st.subheader("📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -447,39 +454,53 @@ with tab_op:
 
     if not m_jobs_df.empty:
         curr = m_jobs_df.iloc[0]
+        curr_status = str(curr.get('สถานะงาน', '⏳ รอคิวผลิต'))
+        is_running = (curr_status == "⚙️ กำลังผลิต")
+        
         total_cyc = (float(curr.get('เวลาตั้งเครื่อง (นาที)', 0))/60.0) + float(curr.get('Basic Machine (ชม.)', 0)) + float(curr.get('รันโปรแกรม (ชม.)', 0))
         
+        # กล่องไฮไลต์สีตามสถานะงาน
+        status_color = "#10B981" if is_running else "#F59E0B"
         st.markdown(f"""
-        <div class="op-box">
-            <span style="background:#2563EB; color:white; padding:4px 12px; border-radius:6px; font-weight:700; font-size:14px;">งานปัจจุบัน</span>
+        <div class="op-box" style="border-left: 8px solid {status_color};">
+            <span style="background:{status_color}; color:white; padding:4px 12px; border-radius:6px; font-weight:700; font-size:14px;">
+                {'⚙️ เครื่องกำลังปฏิบัติงาน' if is_running else '⏳ งานรอคิวผลิต'}
+            </span>
             <h3 style="margin:12px 0 6px 0; color:#1E3A8A; font-size:22px;">📌 แผนงาน: {curr.get('แผนงาน', '-')}</h3>
             <p style="font-size:18px; margin:4px 0;"><b>📄 ชื่อ Drawing:</b> {curr.get('ชื่อ Drawing.', '-')}</p>
             <p style="margin:4px 0; font-size:15px;"><b>⚙️ ขั้นตอน:</b> {curr.get('ขั้นตอน (Step)', '-')} | <b>วัสดุ:</b> {curr.get('วัสดุ', '-')}</p>
             <p style="margin:4px 0; font-size:15px;"><b>⏱️ เวลารวม:</b> {total_cyc:.2f} ชม. (Setup {int(curr.get('เวลาตั้งเครื่อง (นาที)', 0))} น. / Basic {curr.get('Basic Machine (ชม.)', 0)} ชม. / โปรแกรม {curr.get('รันโปรแกรม (ชม.)', 0)} ชม.)</p>
-            <p style="font-size:16px; margin:8px 0 0 0;"><b>🚦 สถานะ:</b> <span style="background:#EEF2FF; padding:4px 10px; border-radius:6px; font-weight:700; color:#1E3A8A;">{curr.get('สถานะงาน', '-')}</span></p>
+            <p style="font-size:16px; margin:8px 0 0 0;"><b>🚦 สถานะปัจจุบัน:</b> <span style="background:#F1F5F9; padding:4px 10px; border-radius:6px; font-weight:700; color:#0F172A;">{curr_status}</span></p>
         </div>
         """, unsafe_allow_html=True)
         
         c_btn1, c_btn2 = st.columns(2)
+        
         with c_btn1:
-            if st.button("⚙️ เริ่มขึ้นงาน (Start)", key=f"btn_start_{curr['ID']}", use_container_width=True, type="primary"):
-                success = update_supabase_job(int(curr["ID"]), {
-                    "status": "⚙️ กำลังผลิต",
-                    "actual_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
-                if success:
-                    st.toast("✅ บันทึก: กำลังผลิต สำเร็จ!", icon="⚙️")
-                    st.rerun()
+            if is_running:
+                st.button("⚙️ กำลังเดินเครื่องอยู่...", key=f"btn_start_{curr['ID']}", use_container_width=True, disabled=True)
+            else:
+                if st.button("🚀 เริ่มขึ้นงาน (Start)", key=f"btn_start_{curr['ID']}", use_container_width=True, type="primary"):
+                    success = update_supabase_job(int(curr["ID"]), {
+                        "status": "⚙️ กำลังผลิต",
+                        "actual_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    if success:
+                        st.toast("✅ บันทึก: กำลังผลิต สำเร็จ!", icon="⚙️")
+                        st.rerun()
                 
         with c_btn2:
-            if st.button("✅ จบงาน (Finish)", key=f"btn_finish_{curr['ID']}", use_container_width=True):
-                success = update_supabase_job(int(curr["ID"]), {
-                    "status": "✅ เสร็จสิ้นแล้ว",
-                    "actual_finish": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
-                if success:
-                    st.toast("🎉 บันทึก: จบงานเรียบร้อย!", icon="✅")
-                    st.rerun()
+            if not is_running:
+                st.button("✅ จบงาน (Finish)", key=f"btn_finish_{curr['ID']}", use_container_width=True, disabled=True)
+            else:
+                if st.button("✅ จบงาน (Finish)", key=f"btn_finish_{curr['ID']}", use_container_width=True, type="primary"):
+                    success = update_supabase_job(int(curr["ID"]), {
+                        "status": "✅ เสร็จสิ้นแล้ว",
+                        "actual_finish": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    if success:
+                        st.toast("🎉 บันทึก: จบงานเรียบร้อย!", icon="✅")
+                        st.rerun()
                 
         if len(m_jobs_df) > 1:
             st.divider()
@@ -566,7 +587,6 @@ with tab_dash:
                         st.success("บันทึกข้อมูลลงฐานข้อมูลสำเร็จ!")
                         st.rerun()
 
-        # คำนวณตารางเวลาผลิต
         start_time = datetime(2026, 8, 20, 8, 0)
         df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, start_time)
 
