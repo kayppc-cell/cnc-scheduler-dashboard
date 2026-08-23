@@ -157,6 +157,9 @@ if "is_admin" not in st.session_state:
 if "current_view" not in st.session_state:
     st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
 
+if "finish_select_all" not in st.session_state:
+    st.session_state.finish_select_all = False
+
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
@@ -581,7 +584,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
-            # 2. ตารางงานที่ Finish แล้ว พร้อมคอลัมน์ "จัดการ (🗑️)"
+            # 2. ตารางงานที่ Finish แล้ว พร้อมเครื่องมือลบหลายรายการ
             if not finished_jobs_df.empty:
                 st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
                 perf_df = finished_jobs_df.copy()
@@ -605,13 +608,24 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["เวลาจริง (ชม.)"] = actual_hrs_list
                 perf_df["ผลต่าง (ชม.)"] = diff_list
                 perf_df["การประเมิน"] = status_eval_list
-                perf_df["ลบ"] = False
+                perf_df["ลบ"] = st.session_state.finish_select_all
                 
                 display_finish_df = perf_df[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy()
 
+                # ปุ่มลัดสำหรับเลือกทั้งหมด / ยกเลิกทั้งหมด
+                tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
+                with tool_c1:
+                    if st.button("✅ เลือกทั้งหมด", use_container_width=True):
+                        st.session_state.finish_select_all = True
+                        st.rerun()
+                with tool_c2:
+                    if st.button("❌ ยกเลิกทั้งหมด", use_container_width=True):
+                        st.session_state.finish_select_all = False
+                        st.rerun()
+
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key="editor_finish_jobs_table",
+                    key=f"editor_finish_jobs_table_{st.session_state.finish_select_all}",
                     column_config={
                         "ID": st.column_config.NumberColumn("ID", disabled=True, width=50),
                         "แผนงาน": st.column_config.TextColumn("📌 PLAN NO.", disabled=True, width=85),
@@ -624,7 +638,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "เวลาจริง (ชม.)": st.column_config.NumberColumn("⏱️ จริง (ชม.)", disabled=True, width=90, format="%.2f"),
                         "ผลต่าง (ชม.)": st.column_config.NumberColumn("📊 Diff", disabled=True, width=80, format="%.2f"),
                         "การประเมิน": st.column_config.TextColumn("🚦 ผลการผลิต", disabled=True, width=160),
-                        "ลบ": st.column_config.CheckboxColumn("🗑️ จัดการ", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", default=False, width=70),
+                        "ลบ": st.column_config.CheckboxColumn("🗑️ จัดการ", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=70),
                     },
                     hide_index=True,
                     use_container_width=True
@@ -639,6 +653,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             if not delete_supabase_job(int(row["ID"])):
                                 del_success = False
                         if del_success:
+                            st.session_state.finish_select_all = False
                             st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
                             st.rerun()
                         else:
@@ -721,7 +736,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # 5. ใบจ่ายคิวงานหน้าเครื่อง (แสดงคิวงานทั้งหมดตามเวลาโดยตรง)
+                # 5. ใบจ่ายคิวงานหน้าเครื่อง
                 st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
 
                 df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
