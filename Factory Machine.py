@@ -6,7 +6,6 @@ import os
 import base64
 from PIL import Image
 import requests
-import streamlit.components.v1 as components
 
 # =========================================================
 # 1. การจัดการรูปภาพ (App Icon & Header Logo)
@@ -19,11 +18,6 @@ if not os.path.exists(icon_file):
             break
 
 favicon_img = Image.open(icon_file) if os.path.exists(icon_file) else "🏭"
-
-icon_base64 = ""
-if os.path.exists(icon_file):
-    with open(icon_file, "rb") as f:
-        icon_base64 = base64.b64encode(f.read()).decode("utf-8")
 
 st.set_page_config(
     page_title="PES CNC Monitor",
@@ -45,32 +39,20 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ปรับแต่ง CSS เร่งความเร็ว GPU Scrolling บนมือถือ
+# 2. ปรับแต่ง UI ให้สะอาด ปลอดภัย ไม่ทำให้จอขาว
 # =========================================================
 st.markdown("""
 <style>
-    header[data-testid="stHeader"] {
-        display: none !important;
-    }
-    
-    /* Hardware acceleration สำหรับมือถือ รูดลื่น ไม่กระตุก */
-    html, body, [data-testid="stAppViewContainer"] {
-        -webkit-overflow-scrolling: touch !important;
-        scroll-behavior: smooth !important;
-        transform: translateZ(0);
-    }
-
     .block-container {
-        padding-top: 0.8rem !important;
+        padding-top: 1.5rem !important;
         padding-bottom: 2rem !important;
-        padding-left: 0.8rem !important;
-        padding-right: 0.8rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
         max-width: 100% !important;
     }
-
     .main-header {
         background: linear-gradient(135deg, #1E3C72 0%, #2A5298 100%);
-        padding: 10px 14px;
+        padding: 12px 16px;
         border-radius: 12px;
         color: white;
         margin-bottom: 12px;
@@ -94,7 +76,7 @@ st.markdown("""
     }
     .header-text h1 {
         color: white !important;
-        font-size: 14.5px !important;
+        font-size: 15px !important;
         margin: 0 !important;
         font-weight: 700 !important;
         line-height: 1.2 !important;
@@ -102,9 +84,8 @@ st.markdown("""
     .header-text p {
         color: #E0E8F9 !important;
         margin: 2px 0 0 0 !important;
-        font-size: 10.5px !important;
+        font-size: 11px !important;
     }
-
     .op-box {
         background: white;
         padding: 14px 16px;
@@ -113,15 +94,6 @@ st.markdown("""
         margin-bottom: 12px;
         box-shadow: 0 2px 6px rgba(0,0,0,0.03);
     }
-    .op-box h3 {
-        font-size: 17px !important;
-        margin: 4px 0 !important;
-    }
-    .op-box p {
-        font-size: 13.5px !important;
-        margin: 2px 0 !important;
-    }
-
     .kpi-container {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
@@ -137,7 +109,7 @@ st.markdown("""
     .kpi-blue { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
     .kpi-orange { background: linear-gradient(135deg, #f12711 0%, #f5af19 100%); }
     .kpi-purple { background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%); }
-    .kpi-title { font-size: 10.5px; font-weight: 600; opacity: 0.9; }
+    .kpi-title { font-size: 11px; font-weight: 600; opacity: 0.9; }
     .kpi-value { font-size: 17px; font-weight: 700; margin-top: 2px; }
 
     div.stButton > button:disabled {
@@ -181,7 +153,7 @@ JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทร�
 JOB_STATUS = ["⏳ รอคิวผลิต", "⚙️ กำลังผลิต", "✅ เสร็จสิ้นแล้ว"]
 
 # =========================================================
-# 5. การเชื่อมต่อ Supabase พร้อมแคชข้อมูล
+# 5. การเชื่อมต่อ Supabase
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -196,8 +168,8 @@ def update_supabase_job(job_id: int, payload: dict) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
-        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=5)
-        st.cache_data.clear() # เคลียร์แคชเพื่อให้โหลดข้อมูลใหม่ทันที
+        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
+        st.cache_data.clear()
         return res.status_code in [200, 204]
     except Exception:
         return False
@@ -206,7 +178,7 @@ def insert_supabase_job(payload: dict) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs"
-        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=5)
+        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
         st.cache_data.clear()
         return res.status_code in [200, 201]
     except Exception:
@@ -222,13 +194,12 @@ def safe_parse_datetime(series):
         except Exception:
             return dt
 
-# ทำ Caching เพื่อลดการยิงเน็ตและเพิ่มความเร็วแอป
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs?select=*&order=id.asc"
-        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=5)
+        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=8)
         
         if res.status_code == 200:
             data = res.json()
@@ -254,7 +225,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 6. Scheduling Engine (คำนวณเฉพาะเมื่อเปิด Dashboard)
+# 6. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -401,7 +372,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (โหลดเร็ว เบาสบายเครื่อง)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.subheader("📱 บันทึกสถานะงานหน้าเครื่อง CNC")
