@@ -34,16 +34,16 @@ for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]
         break
 
 if logo_base64:
-    logo_html = f'<div class="logo-wrapper"><img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/></div>'
+    logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>'
 else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ปรับแต่ง UI ให้ Header สวยเด่น เป็นสง่า (CSS Design)
+# 2. ปรับแต่ง UI ให้ Header สวยเด่น (ขยายโลโก้ โปร่งใส ไม่มีกรอบขาว)
 # =========================================================
 st.markdown("""
 <style>
-    /* ซ่อนแถบเครื่องมือด้านบนและปุ่ม Fork ของ Streamlit */
+    /* ซ่อนแถบหัว Streamlit และปุ่ม Fork */
     header[data-testid="stHeader"] {
         display: none !important;
     }
@@ -54,76 +54,72 @@ st.markdown("""
         visibility: hidden !important;
     }
 
-    /* จัดระยะขอบจอ */
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 0.8rem !important;
         padding-bottom: 2.5rem !important;
-        padding-left: 0.9rem !important;
-        padding-right: 0.9rem !important;
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
         max-width: 100% !important;
     }
 
-    /* ปรับแต่งกล่อง Header หลัก */
+    /* กล่อง Header หลัก */
     .main-header {
         background: linear-gradient(135deg, #0F2B5C 0%, #1E4E8C 100%);
-        padding: 16px 18px;
-        border-radius: 16px;
+        padding: 14px 16px;
+        border-radius: 14px;
         color: white;
-        margin-bottom: 14px;
+        margin-bottom: 12px;
         display: flex;
         align-items: center;
         gap: 16px;
-        box-shadow: 0 4px 15px rgba(15, 43, 92, 0.25);
+        box-shadow: 0 4px 12px rgba(15, 43, 92, 0.25);
     }
-    .logo-wrapper {
-        background: #FFFFFF;
-        padding: 6px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-        flex-shrink: 0;
-    }
+    
+    /* ขยายขนาดโลโก้ ไร้พื้นหลังสีขาว วางซ้อนบน Gradient ได้กลมกลืน */
     .header-logo {
-        width: 85px;
+        width: 110px;
+        max-height: 75px;
         height: auto;
-        max-height: 55px;
         object-fit: contain;
         display: block;
+        flex-shrink: 0;
+        background: transparent !important;
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));
     }
+    
     .header-logo-icon {
-        font-size: 32px;
-        background: rgba(255, 255, 255, 0.2);
-        padding: 8px 12px;
-        border-radius: 12px;
+        font-size: 34px;
+        background: rgba(255, 255, 255, 0.15);
+        padding: 6px 12px;
+        border-radius: 10px;
         flex-shrink: 0;
     }
+    
     .header-text h1 {
         color: #FFFFFF !important;
-        font-size: 17px !important;
+        font-size: 16.5px !important;
         margin: 0 !important;
         font-weight: 800 !important;
-        line-height: 1.3 !important;
-        letter-spacing: 0.3px;
+        line-height: 1.25 !important;
+        letter-spacing: 0.2px;
     }
     .header-text p {
         color: #D6E4FF !important;
         margin: 4px 0 0 0 !important;
-        font-size: 11.5px !important;
+        font-size: 11px !important;
         font-weight: 500 !important;
-        line-height: 1.35 !important;
+        line-height: 1.3 !important;
     }
 
-    /* การ์ดแสดงผลสำหรับช่างหน้าเครื่อง */
     .op-box {
         background: #FFFFFF;
         padding: 14px 16px;
-        border-radius: 14px;
+        border-radius: 12px;
         border: 1.5px solid #E2E8F0;
-        margin-bottom: 12px;
-        box-shadow: 0 3px 8px rgba(0,0,0,0.04);
+        margin-bottom: 10px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
     }
+    
     .kpi-container {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
