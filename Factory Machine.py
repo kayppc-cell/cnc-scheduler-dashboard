@@ -133,6 +133,7 @@ st.markdown("""
         border-top: 1.5px solid #E2E8F0;
         border-right: 1.5px solid #E2E8F0;
         border-bottom: 1.5px solid #E2E8F0;
+        margin-top: 16px;
         margin-bottom: 14px;
         box-shadow: 0 2px 6px rgba(0,0,0,0.03);
     }
@@ -191,7 +192,6 @@ DEFAULT_RATES = {
 
 ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
 JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทรก"]
-# กำหนดสถานะงานพร้อมแถบสีชัดเจน
 JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟩 เสร็จสิ้นแล้ว"]
 
 # =========================================================
@@ -451,7 +451,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (Step Sequential Lock ควบคุมลำดับ)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (แสดงทุกแผนงานที่อยู่ในเครื่องนั้น)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -467,172 +467,176 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         m_active_jobs = pd.DataFrame()
 
     if not m_active_jobs.empty:
-        main_plan_code = m_active_jobs.iloc[0]["แผนงาน"]
-        plan_steps = m_all_jobs[m_all_jobs["แผนงาน"] == main_plan_code]
-        first_step_info = plan_steps.iloc[0]
+        # ดึงรายชื่อแผนงานทั้งหมดที่ยังมีคิวงานในเครื่องนี้แบบไม่ซ้ำกัน เรียงตามลำดับ
+        unique_plan_codes = sorted(list(m_active_jobs["แผนงาน"].dropna().unique()))
 
-        # 1. การ์ดหัวข้อแผนงานหลัก
-        st.markdown(f"""
-        <div class="op-job-header">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <h3 style="margin:0; color:#1E3A8A; font-size:19px; font-weight:800;">📌 แผนงาน: {main_plan_code}</h3>
-                <span style="background:#EFF6FF; color:#1D4ED8; padding:3px 10px; border-radius:6px; font-weight:700; font-size:12px;">เครื่อง: {selected_m}</span>
-            </div>
-            <p style="font-size:14.5px; margin:5px 0 2px 0;"><b>📄 Drawing:</b> {first_step_info.get('ชื่อ Drawing.', '-')} | <b>🔩 วัสดุ:</b> {first_step_info.get('วัสดุ', '-')}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("**📋 รายการขั้นตอนและปุ่มควบคุม (Step Controller):**")
-
-        # ตรวจสอบสถานะว่ามี Step ใดกำลังรันอยู่หรือไม่
-        any_running = any("กำลังผลิต" in str(step_row.get("สถานะงาน", "")) for _, step_row in plan_steps.iterrows())
+        # ตรวจสอบสถานะว่าเครื่องนี้มี Step ใดกำลังรันอยู่หรือไม่ในระดับเครื่องจักร
+        machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
         next_available_start_found = False
 
-        # 2. แสดง Step เรียงลงมา พร้อมการควบคุมลำดับ (Sequential Lock)
-        for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
-            s_id = int(step_row["ID"])
-            s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
-            s_prog = float(step_row.get("รันโปรแกรม (ชม.)", 2.0) or 2.0)
-            s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
-            
-            is_step_running = "กำลังผลิต" in s_status
-            is_step_finished = "เสร็จสิ้น" in s_status
-            is_step_waiting = not is_step_running and not is_step_finished
+        # วนลูปแสดงผลทุกแผนงานที่มีในเครื่องจักรนี้
+        for plan_idx, plan_code in enumerate(unique_plan_codes, 1):
+            plan_steps = m_all_jobs[m_all_jobs["แผนงาน"] == plan_code]
+            first_step_info = plan_steps.iloc[0]
 
-            # ตรวจสอบสิทธิ์การกด Start ตามลำดับ
-            can_start = False
-            if is_step_waiting and not any_running and not next_available_start_found:
-                can_start = True
-                next_available_start_found = True
+            # 1. การ์ดหัวข้อแผนงาน
+            st.markdown(f"""
+            <div class="op-job-header">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h3 style="margin:0; color:#1E3A8A; font-size:19px; font-weight:800;">📌 แผนงาน {plan_idx}: {plan_code}</h3>
+                    <span style="background:#EFF6FF; color:#1D4ED8; padding:3px 10px; border-radius:6px; font-weight:700; font-size:12px;">เครื่อง: {selected_m}</span>
+                </div>
+                <p style="font-size:14.5px; margin:5px 0 2px 0;"><b>📄 Drawing:</b> {first_step_info.get('ชื่อ Drawing.', '-')} | <b>🔩 วัสดุ:</b> {first_step_info.get('วัสดุ', '-')}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-            with st.container():
-                st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+            st.markdown(f"**📋 รายการขั้นตอนและปุ่มควบคุม (แผนงาน: {plan_code}):**")
+
+            # 2. แสดง Step เรียงลงมาภายในแผนงานนี้
+            for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
+                s_id = int(step_row["ID"])
+                s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
+                s_prog = float(step_row.get("รันโปรแกรม (ชม.)", 2.0) or 2.0)
+                s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
                 
-                # แสดงสถานะมุมบนของการ์ด
-                if is_step_finished:
-                    st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>🟩 เสร็จสิ้นแล้ว (Finish)</span>", unsafe_allow_html=True)
-                elif is_step_running:
-                    st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800;'>🟦 กำลังผลิต (Running...)</span>", unsafe_allow_html=True)
-                else:
-                    if can_start:
-                        st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>🟧 พร้อมเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
+                is_step_running = "กำลังผลิต" in s_status
+                is_step_finished = "เสร็จสิ้น" in s_status
+                is_step_waiting = not is_step_running and not is_step_finished
+
+                # ตรวจสอบสิทธิ์การกด Start ตามลำดับ (ปลดล็อกเฉพาะ Step ถัดไปที่พร้อมทำ)
+                can_start = False
+                if is_step_waiting and not machine_any_running and not next_available_start_found:
+                    can_start = True
+                    next_available_start_found = True
+
+                with st.container():
+                    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+                    
+                    # แสดงสถานะมุมบนของการ์ด
+                    if is_step_finished:
+                        st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>🟩 เสร็จสิ้นแล้ว (Finish)</span>", unsafe_allow_html=True)
+                    elif is_step_running:
+                        st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800;'>🟦 กำลังผลิต (Running...)</span>", unsafe_allow_html=True)
                     else:
-                        st.caption(f"**Step {idx}:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับขั้นตอนก่อนหน้า</span>", unsafe_allow_html=True)
-
-                # Step ที่ยังไม่เสร็จ: ช่างพิมพ์แก้ไขชื่อ/เวลา และกดบันทึกซ้ำได้เสมอ
-                if not is_step_finished:
-                    c_step_name, c_step_time = st.columns([7, 3])
-                    with c_step_name:
-                        step_val = st.text_input(
-                            f"ชื่อขั้นตอน Step {idx}:", 
-                            value=s_name, 
-                            placeholder="เช่น OP10, ปาดผิวเจาะรู", 
-                            key=f"input_step_name_{s_id}"
-                        )
-                    with c_step_time:
-                        prog_val = st.number_input(
-                            f"เวลา (ชม.):", 
-                            min_value=0.1, 
-                            max_value=100.0, 
-                            value=s_prog, 
-                            step=0.5, 
-                            format="%.2f",
-                            key=f"input_step_prog_{s_id}"
-                        )
-
-                    # แถวปุ่มควบคุม: [💾 บันทึกแก้ไข] | [🚀 Start / 🏁 Finish]
-                    c_btn_save, c_btn_start, c_btn_finish = st.columns([1.5, 2, 2])
-
-                    with c_btn_save:
-                        if st.button("💾 บันทึกแก้ไข", key=f"btn_save_edit_{s_id}", use_container_width=True, help="กดเพื่อบันทึกชื่อขั้นตอนและเวลาใหม่"):
-                            update_payload = {
-                                "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
-                                "prog_hrs": float(prog_val)
-                            }
-                            if update_supabase_job(s_id, update_payload):
-                                st.toast(f"บันทึกข้อมูล Step {idx} เรียบร้อยแล้ว!", icon="💾")
-                                st.rerun()
-
-                    with c_btn_start:
                         if can_start:
-                            if st.button("🚀 Start", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
-                                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>🟧 พร้อมเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
+                        else:
+                            st.caption(f"**Step {idx}:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับขั้นตอนก่อนหน้า</span>", unsafe_allow_html=True)
+
+                    # Step ที่ยังไม่เสร็จ: ช่างพิมพ์แก้ไขชื่อ/เวลา และกดบันทึกซ้ำได้เสมอ
+                    if not is_step_finished:
+                        c_step_name, c_step_time = st.columns([7, 3])
+                        with c_step_name:
+                            step_val = st.text_input(
+                                f"ชื่อขั้นตอน Step {idx}:", 
+                                value=s_name, 
+                                placeholder="เช่น OP10, ปาดผิวเจาะรู", 
+                                key=f"input_step_name_{s_id}"
+                            )
+                        with c_step_time:
+                            prog_val = st.number_input(
+                                f"เวลา (ชม.):", 
+                                min_value=0.1, 
+                                max_value=100.0, 
+                                value=s_prog, 
+                                step=0.5, 
+                                format="%.2f",
+                                key=f"input_step_prog_{s_id}"
+                            )
+
+                        # แถวปุ่มควบคุม: [💾 บันทึกแก้ไข] | [🚀 Start / 🏁 Finish]
+                        c_btn_save, c_btn_start, c_btn_finish = st.columns([1.5, 2, 2])
+
+                        with c_btn_save:
+                            if st.button("💾 บันทึกแก้ไข", key=f"btn_save_edit_{s_id}", use_container_width=True, help="กดเพื่อบันทึกชื่อขั้นตอนและเวลาใหม่"):
                                 update_payload = {
                                     "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
-                                    "prog_hrs": float(prog_val),
-                                    "status": "🟦 กำลังผลิต",
-                                    "actual_start": now_str
+                                    "prog_hrs": float(prog_val)
                                 }
                                 if update_supabase_job(s_id, update_payload):
-                                    st.toast(f"เริ่มผลิต {step_val} แล้ว!", icon="🚀")
-                                    st.rerun()
-                        else:
-                            st.button("🚀 Start", key=f"btn_start_disabled_{s_id}", disabled=True, use_container_width=True)
-
-                    with c_btn_finish:
-                        if is_step_running:
-                            if st.button("🏁 Finish", key=f"btn_finish_step_{s_id}", type="primary", use_container_width=True):
-                                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                if update_supabase_job(s_id, {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str}):
-                                    st.toast(f"บันทึกจบ {s_name} เรียบร้อย!", icon="🏁")
-                                    st.rerun()
-                        else:
-                            st.button("🏁 Finish", key=f"btn_finish_disabled_{s_id}", disabled=True, use_container_width=True)
-
-                # Step ที่เสร็จสิ้นแล้ว (Finish): แสดงผลปกติ พร้อมกล่องกดแก้ไขย้อนหลัง
-                else:
-                    c_step_name, c_step_time = st.columns([7, 3])
-                    with c_step_name:
-                        st.markdown(f"**ขั้นตอน:** {s_name}")
-                    with c_step_time:
-                        st.markdown(f"**เวลา:** ⏱️ {s_prog:.2f} ชม.")
-                    
-                    c_btn_done, c_btn_edit_done = st.columns([2, 2])
-                    with c_btn_done:
-                        st.button("✅ Finish แล้ว", key=f"btn_finished_done_{s_id}", disabled=True, use_container_width=True)
-                    
-                    with c_btn_edit_done:
-                        with st.popover("✏️ แก้ไขชื่อ/เวลา"):
-                            re_step = st.text_input("แก้ชื่อขั้นตอน:", value=s_name, key=f"re_name_{s_id}")
-                            re_prog = st.number_input("แก้เวลา (ชม.):", min_value=0.1, max_value=100.0, value=s_prog, step=0.5, format="%.2f", key=f"re_prog_{s_id}")
-                            if st.button("💾 บันทึกทับข้อมูล", key=f"btn_re_save_{s_id}", type="primary", use_container_width=True):
-                                if update_supabase_job(s_id, {"step_name": re_step.strip(), "prog_hrs": float(re_prog)}):
-                                    st.toast("อัปเดตข้อมูล Step สำเร็จ!", icon="💾")
+                                    st.toast(f"บันทึกข้อมูล Step {idx} ({plan_code}) เรียบร้อยแล้ว!", icon="💾")
                                     st.rerun()
 
-                st.markdown("</div>", unsafe_allow_html=True)
+                        with c_btn_start:
+                            if can_start:
+                                if st.button("🚀 Start", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
+                                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    update_payload = {
+                                        "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
+                                        "prog_hrs": float(prog_val),
+                                        "status": "🟦 กำลังผลิต",
+                                        "actual_start": now_str
+                                    }
+                                    if update_supabase_job(s_id, update_payload):
+                                        st.toast(f"เริ่มผลิต {step_val} แล้ว!", icon="🚀")
+                                        st.rerun()
+                            else:
+                                st.button("🚀 Start", key=f"btn_start_disabled_{s_id}", disabled=True, use_container_width=True)
 
-        st.write("")
+                        with c_btn_finish:
+                            if is_step_running:
+                                if st.button("🏁 Finish", key=f"btn_finish_step_{s_id}", type="primary", use_container_width=True):
+                                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    if update_supabase_job(s_id, {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str}):
+                                        st.toast(f"บันทึกจบ {s_name} เรียบร้อย!", icon="🏁")
+                                        st.rerun()
+                            else:
+                                st.button("🏁 Finish", key=f"btn_finish_disabled_{s_id}", disabled=True, use_container_width=True)
 
-        # 3. กล่องกดปุ่ม + เพิ่ม Step ต่อเนื่องได้ไม่จำกัด
-        next_step_num = len(plan_steps) + 1
-        default_next_step_label = f"OP{next_step_num*10}"
-        
-        with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับแผนงานนี้ (Step {next_step_num})", expanded=False):
-            c_in1, c_in2 = st.columns([7, 3])
-            with c_in1:
-                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, OP30", key=f"new_step_name_input_{main_plan_code}")
-            with c_in2:
-                new_prog_input = st.number_input("เวลา (ชม.):", min_value=0.1, max_value=100.0, value=2.0, step=0.5, format="%.2f", key=f"new_step_prog_input_{main_plan_code}")
+                    # Step ที่เสร็จสิ้นแล้ว (Finish): แสดงผลปกติ พร้อมกล่องกดแก้ไขย้อนหลัง
+                    else:
+                        c_step_name, c_step_time = st.columns([7, 3])
+                        with c_step_name:
+                            st.markdown(f"**ขั้นตอน:** {s_name}")
+                        with c_step_time:
+                            st.markdown(f"**เวลา:** ⏱️ {s_prog:.2f} ชม.")
+                        
+                        c_btn_done, c_btn_edit_done = st.columns([2, 2])
+                        with c_btn_done:
+                            st.button("✅ Finish แล้ว", key=f"btn_finished_done_{s_id}", disabled=True, use_container_width=True)
+                        
+                        with c_btn_edit_done:
+                            with st.popover("✏️ แก้ไขชื่อ/เวลา"):
+                                re_step = st.text_input("แก้ชื่อขั้นตอน:", value=s_name, key=f"re_name_{s_id}")
+                                re_prog = st.number_input("แก้เวลา (ชม.):", min_value=0.1, max_value=100.0, value=s_prog, step=0.5, format="%.2f", key=f"re_prog_{s_id}")
+                                if st.button("💾 บันทึกทับข้อมูล", key=f"btn_re_save_{s_id}", type="primary", use_container_width=True):
+                                    if update_supabase_job(s_id, {"step_name": re_step.strip(), "prog_hrs": float(re_prog)}):
+                                        st.toast("อัปเดตข้อมูล Step สำเร็จ!", icon="💾")
+                                        st.rerun()
 
-            if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num} เข้าคิว", type="secondary", use_container_width=True):
-                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                new_payload = {
-                    "plan_code": str(main_plan_code),
-                    "drawing_name": str(first_step_info.get("ชื่อ Drawing.", "")),
-                    "material": str(first_step_info.get("วัสดุ", "SS400")),
-                    "job_type": str(first_step_info.get("ประเภทงาน", "🟢 งานปกติ")),
-                    "step_name": new_step_input.strip() if new_step_input.strip() != "" else default_next_step_label,
-                    "machine_name": selected_m,
-                    "ready_at": now_str,
-                    "setup_mins": 15.0,
-                    "basic_hrs": 0.0,
-                    "prog_hrs": float(new_prog_input),
-                    "status": "🟧 รอคิวผลิต"
-                }
-                if insert_supabase_job(new_payload):
-                    st.toast(f"เพิ่มขั้นตอน {new_step_input} เข้าสู่รายการแล้ว!", icon="🚀")
-                    st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+            # 3. กล่องเพิ่ม Step ประจำแผนงานนี้
+            next_step_num = len(plan_steps) + 1
+            default_next_step_label = f"OP{next_step_num*10}"
+            
+            with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับแผนงาน {plan_code} (Step {next_step_num})", expanded=False):
+                c_in1, c_in2 = st.columns([7, 3])
+                with c_in1:
+                    new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, OP30", key=f"new_step_name_input_{plan_code}_{plan_idx}")
+                with c_in2:
+                    new_prog_input = st.number_input("เวลา (ชม.):", min_value=0.1, max_value=100.0, value=2.0, step=0.5, format="%.2f", key=f"new_step_prog_input_{plan_code}_{plan_idx}")
+
+                if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num} เข้าคิวแผน {plan_code}", key=f"btn_add_step_{plan_code}_{plan_idx}", type="secondary", use_container_width=True):
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    new_payload = {
+                        "plan_code": str(plan_code),
+                        "drawing_name": str(first_step_info.get("ชื่อ Drawing.", "")),
+                        "material": str(first_step_info.get("วัสดุ", "SS400")),
+                        "job_type": str(first_step_info.get("ประเภทงาน", "🟢 งานปกติ")),
+                        "step_name": new_step_input.strip() if new_step_input.strip() != "" else default_next_step_label,
+                        "machine_name": selected_m,
+                        "ready_at": now_str,
+                        "setup_mins": 15.0,
+                        "basic_hrs": 0.0,
+                        "prog_hrs": float(new_prog_input),
+                        "status": "🟧 รอคิวผลิต"
+                    }
+                    if insert_supabase_job(new_payload):
+                        st.toast(f"เพิ่มขั้นตอน {new_step_input} เข้าสู่แผนงาน {plan_code} แล้ว!", icon="🚀")
+                        st.rerun()
+            
+            st.write("")
 
     else:
         st.info(f"🎉 เครื่อง {selected_m} ไม่มีคิวงานค้างในระบบ")
