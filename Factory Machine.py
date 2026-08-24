@@ -191,7 +191,8 @@ DEFAULT_RATES = {
 
 ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
 JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทรก"]
-JOB_STATUS = ["⏳ รอคิวผลิต", "⚙️ กำลังผลิต", "✅ เสร็จสิ้นแล้ว"]
+# กำหนดสถานะงานพร้อมแถบสีชัดเจน
+JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟩 เสร็จสิ้นแล้ว"]
 
 # =========================================================
 # 4. ฟังก์ชันเชื่อมต่อ Supabase
@@ -245,6 +246,15 @@ def safe_parse_datetime(series):
         except Exception:
             return dt
 
+def normalize_status(status_str: str) -> str:
+    s = str(status_str)
+    if "กำลังผลิต" in s:
+        return "🟦 กำลังผลิต"
+    elif "เสร็จสิ้น" in s:
+        return "🟩 เสร็จสิ้นแล้ว"
+    else:
+        return "🟧 รอคิวผลิต"
+
 @st.cache_data(ttl=4, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
@@ -261,6 +271,9 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                     df["actual_start"] = safe_parse_datetime(df["actual_start"])
                 if "actual_finish" in df.columns:
                     df["actual_finish"] = safe_parse_datetime(df["actual_finish"])
+                
+                if "status" in df.columns:
+                    df["status"] = df["status"].apply(normalize_status)
                     
                 col_map = {
                     "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
@@ -283,7 +296,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_last_mat = {m: None for m in MACHINE_LIST}
     m_busy_hrs = {m: 0.0 for m in MACHINE_LIST}
     
-    active_mask = jobs_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
+    active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
     valid_jobs = []
     for j in jobs_df[active_mask].to_dict("records"):
         try:
@@ -307,7 +320,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             
         j["is_urgent"] = "ด่วนแทรก" in str(j.get("ประเภทงาน", ""))
         j["remain_cut_hrs"] = j["cut_hrs"]
-        j["need_setup"] = j["สถานะงาน"] != "⚙️ กำลังผลิต"
+        j["need_setup"] = "กำลังผลิต" not in str(j["สถานะงาน"])
         valid_jobs.append(j)
         
     gantt_records, summary_records = [], []
@@ -448,7 +461,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     
     if not df_all.empty:
         m_all_jobs = df_all[df_all["เลือกเครื่องจักร"] == selected_m].sort_values(by="ID", ascending=True)
-        m_active_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].isin(["⚙️ กำลังผลิต", "⏳ รอคิวผลิต"])]
+        m_active_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].isin(["🟦 กำลังผลิต", "🟧 รอคิวผลิต", "⚙️ กำลังผลิต", "⏳ รอคิวผลิต"])]
     else:
         m_all_jobs = pd.DataFrame()
         m_active_jobs = pd.DataFrame()
@@ -472,7 +485,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         st.markdown("**📋 รายการขั้นตอนและปุ่มควบคุม (Step Controller):**")
 
         # ตรวจสอบสถานะว่ามี Step ใดกำลังรันอยู่หรือไม่
-        any_running = any(step_row.get("สถานะงาน") == "⚙️ กำลังผลิต" for _, step_row in plan_steps.iterrows())
+        any_running = any("กำลังผลิต" in str(step_row.get("สถานะงาน", "")) for _, step_row in plan_steps.iterrows())
         next_available_start_found = False
 
         # 2. แสดง Step เรียงลงมา พร้อมการควบคุมลำดับ (Sequential Lock)
@@ -480,11 +493,15 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             s_id = int(step_row["ID"])
             s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
             s_prog = float(step_row.get("รันโปรแกรม (ชม.)", 2.0) or 2.0)
-            s_status = str(step_row.get("สถานะงาน", "⏳ รอคิวผลิต"))
+            s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
             
+            is_step_running = "กำลังผลิต" in s_status
+            is_step_finished = "เสร็จสิ้น" in s_status
+            is_step_waiting = not is_step_running and not is_step_finished
+
             # ตรวจสอบสิทธิ์การกด Start ตามลำดับ
             can_start = False
-            if s_status == "⏳ รอคิวผลิต" and not any_running and not next_available_start_found:
+            if is_step_waiting and not any_running and not next_available_start_found:
                 can_start = True
                 next_available_start_found = True
 
@@ -492,18 +509,18 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 st.markdown("<div class='step-card'>", unsafe_allow_html=True)
                 
                 # แสดงสถานะมุมบนของการ์ด
-                if s_status == "✅ เสร็จสิ้นแล้ว":
-                    st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>✅ เสร็จสิ้นแล้ว (Finish)</span>", unsafe_allow_html=True)
-                elif s_status == "⚙️ กำลังผลิต":
-                    st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800;'>⚙️ กำลังผลิต (Running...)</span>", unsafe_allow_html=True)
+                if is_step_finished:
+                    st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>🟩 เสร็จสิ้นแล้ว (Finish)</span>", unsafe_allow_html=True)
+                elif is_step_running:
+                    st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800;'>🟦 กำลังผลิต (Running...)</span>", unsafe_allow_html=True)
                 else:
                     if can_start:
-                        st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>⏳ พร้อมเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
+                        st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>🟧 พร้อมเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
                     else:
                         st.caption(f"**Step {idx}:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับขั้นตอนก่อนหน้า</span>", unsafe_allow_html=True)
 
                 # Step ที่ยังไม่เสร็จ: ช่างพิมพ์แก้ไขชื่อ/เวลา และกดบันทึกซ้ำได้เสมอ
-                if s_status != "✅ เสร็จสิ้นแล้ว":
+                if not is_step_finished:
                     c_step_name, c_step_time = st.columns([7, 3])
                     with c_step_name:
                         step_val = st.text_input(
@@ -543,7 +560,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 update_payload = {
                                     "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
                                     "prog_hrs": float(prog_val),
-                                    "status": "⚙️ กำลังผลิต",
+                                    "status": "🟦 กำลังผลิต",
                                     "actual_start": now_str
                                 }
                                 if update_supabase_job(s_id, update_payload):
@@ -553,10 +570,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             st.button("🚀 Start", key=f"btn_start_disabled_{s_id}", disabled=True, use_container_width=True)
 
                     with c_btn_finish:
-                        if s_status == "⚙️ กำลังผลิต":
+                        if is_step_running:
                             if st.button("🏁 Finish", key=f"btn_finish_step_{s_id}", type="primary", use_container_width=True):
                                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                if update_supabase_job(s_id, {"status": "✅ เสร็จสิ้นแล้ว", "actual_finish": now_str}):
+                                if update_supabase_job(s_id, {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str}):
                                     st.toast(f"บันทึกจบ {s_name} เรียบร้อย!", icon="🏁")
                                     st.rerun()
                         else:
@@ -611,7 +628,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     "setup_mins": 15.0,
                     "basic_hrs": 0.0,
                     "prog_hrs": float(new_prog_input),
-                    "status": "⏳ รอคิวผลิต"
+                    "status": "🟧 รอคิวผลิต"
                 }
                 if insert_supabase_job(new_payload):
                     st.toast(f"เพิ่มขั้นตอน {new_step_input} เข้าสู่รายการแล้ว!", icon="🚀")
@@ -665,14 +682,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # เรียงแผนงานจากน้อยไปหามาก
-            active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].sort_values(by="แผนงาน", ascending=True).copy().reset_index(drop=True)
+            # เรียงแผนงานจากน้อยไปหามาก และกรองเฉพาะงานที่ยังไม่เสร็จ
+            active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].sort_values(by="แผนงาน", ascending=True).copy().reset_index(drop=True)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
-
-            # เพิ่มคอลัมน์แสดงแถบสีสถานะ เพื่อให้สังเกตเห็นงานที่กำลังผลิตได้ชัดเจน
-            active_jobs_editor_df["สถานะ"] = active_jobs_editor_df["สถานะงาน"].apply(
-                lambda x: "🟦 กำลังผลิต" if "กำลังผลิต" in str(x) else "🟧 รอคิวผลิต"
-            )
 
             with st.expander("📝 รายการสั่งผลิตในระบบ", expanded=True):
                 tool_act1, tool_act2, _ = st.columns([1.5, 1.5, 7])
@@ -690,13 +702,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     active_jobs_editor_df,
                     key=f"editor_cnc_jobs_{data_hash}_{st.session_state.active_select_all}",
                     column_order=[
-                        "สถานะ", "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                        "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
                         "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "เวลาตั้งเครื่อง (นาที)",
                         "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                     ],
                     column_config={
-                        "ID": None,  # ซ่อน ID ไม่ให้แสดงบนตาราง
-                        "สถานะ": st.column_config.TextColumn("สถานะ", width=95, disabled=True),
+                        "ID": None,  # ซ่อน ID
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85, required=True),
                         "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190, required=True),
                         "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, required=True),
@@ -708,7 +719,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=90, min_value=0.0, max_value=100.0, step=0.5, format="%.1f", required=True),
                         "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=100, min_value=0.0, max_value=200.0, step=0.5, format="%.1f", required=True),
                         "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=80, format="%.2f", disabled=True),
-                        "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=125, options=JOB_STATUS, required=True),
+                        "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=130, options=JOB_STATUS, required=True),
                         "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55),
                     },
                     hide_index=True,
@@ -756,8 +767,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             start_time = datetime(2026, 8, 20, 8, 0)
             df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, start_time)
 
-            finished_jobs_df = df_db[df_db["สถานะงาน"] == "✅ เสร็จสิ้นแล้ว"].copy()
-            active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
+            finished_jobs_df = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
+            active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
             avg_util = df_util["อัตราการใช้งาน (%)"].mean() if not df_util.empty else 0.0
 
             # แถบสรุป KPI
@@ -779,7 +790,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     df_display[display_cols],
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=115),
-                        "สถานะ": st.column_config.TextColumn("สถานะ", width=105),
+                        "สถานะ": st.column_config.TextColumn("สถานะ", width=110),
                         "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=105),
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
                         "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190),
