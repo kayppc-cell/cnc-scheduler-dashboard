@@ -292,8 +292,8 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                     "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
                     "material": "วัสดุ", "job_type": "ประเภทงาน", "step_name": "ขั้นตอน (Step)",
                     "machine_name": "เลือกเครื่องจักร", "ready_at": "วัน-เวลาขึ้นงาน",
-                    "setup_mins": "เวลาตั้งเครื่อง (นาที)", "basic_hrs": "Basic Machine (ชม.)",
-                    "prog_hrs": "รันโปรแกรม (ชม.)", "status": "สถานะงาน",
+                    "setup_mins": "Setup (น.)", "basic_hrs": "Basic (น.)",
+                    "prog_hrs": "โปรแกรม (น.)", "status": "สถานะงาน",
                     "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง"
                 }
                 return df.rename(columns=col_map)
@@ -302,7 +302,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine
+# 5. Scheduling Engine (คำนวณเวลาจากหน่วยนาที แปลงเป็น ชม.)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -313,16 +313,19 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     valid_jobs = []
     for j in jobs_df[active_mask].to_dict("records"):
         try:
-            basic_hrs = max(float(j.get("Basic Machine (ชม.)", 0.0)), 0.0)
-            prog_hrs = max(float(j.get("รันโปรแกรม (ชม.)", 0.0)), 0.0)
-            setup_mins = max(float(j.get("เวลาตั้งเครื่อง (นาที)", 15.0)), 0.0)
-            cut_val = basic_hrs + prog_hrs
-            j["basic_hrs"] = basic_hrs
-            j["prog_hrs"] = prog_hrs
-            j["cut_hrs"] = cut_val if cut_val > 0 else 0.01
+            basic_mins = max(float(j.get("Basic (น.)", 0.0)), 0.0)
+            prog_mins = max(float(j.get("โปรแกรม (น.)", 0.0)), 0.0)
+            setup_mins = max(float(j.get("Setup (น.)", 15.0)), 0.0)
+            
+            cut_mins = basic_mins + prog_mins
+            cut_hrs = (cut_mins / 60.0) if cut_mins > 0 else 0.01
+            
+            j["basic_mins"] = basic_mins
+            j["prog_mins"] = prog_mins
             j["setup_mins"] = setup_mins
+            j["cut_hrs"] = cut_hrs
         except (ValueError, TypeError):
-            j["basic_hrs"], j["prog_hrs"], j["cut_hrs"], j["setup_mins"] = 0.0, 0.0, 0.01, 15.0
+            j["basic_mins"], j["prog_mins"], j["setup_mins"], j["cut_hrs"] = 0.0, 0.0, 15.0, 0.01
             
         ready_time = j.get("วัน-เวลาขึ้นงาน")
         if pd.isna(ready_time):
@@ -423,8 +426,8 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             "ขั้นตอน (Step)": step_raw, "เวลาเริ่มจริง": setup_start,
             "เวลาเริ่ม Setup": setup_start.strftime("%d/%m %H:%M") if setup_mins > 0 else "-",
             "เวลาเริ่มขึ้นงาน": cut_start.strftime("%d/%m %H:%M"), "เวลาจบงาน": cut_end.strftime("%d/%m %H:%M"),
-            "Setup (นาที)": int(setup_mins), "Basic Machine (ชม.)": round(selected_job["basic_hrs"], 2),
-            "รันโปรแกรม (ชม.)": round(selected_job["prog_hrs"], 2), "เวลารวม (ชม.)": round(total_cycle, 2)
+            "Setup (น.)": int(setup_mins), "Basic (น.)": int(selected_job["basic_mins"]),
+            "โปรแกรม (น.)": int(selected_job["prog_mins"]), "รวม (ชม.)": round(total_cycle, 2)
         })
         
         m_available[earliest_m] = cut_end
@@ -572,19 +575,19 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                     now_dt = get_bangkok_now()
                                     now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
                                     
-                                    calc_prog_hrs = 0.0
+                                    calc_prog_mins = 0.0
                                     if pd.notna(s_start):
                                         st_dt = pd.to_datetime(s_start)
                                         st_dt = st_dt.tz_localize(None) if st_dt.tzinfo else st_dt
                                         cur_dt = now_dt.replace(tzinfo=None)
-                                        calc_prog_hrs = round((cur_dt - st_dt).total_seconds() / 3600.0, 2)
+                                        calc_prog_mins = round((cur_dt - st_dt).total_seconds() / 60.0, 1)
                                     
                                     finish_payload = {
                                         "status": "🟩 เสร็จสิ้นแล้ว",
                                         "actual_finish": now_str
                                     }
-                                    if calc_prog_hrs > 0:
-                                        finish_payload["prog_hrs"] = calc_prog_hrs
+                                    if calc_prog_mins > 0:
+                                        finish_payload["prog_hrs"] = calc_prog_mins  # เก็บเป็นนาที
 
                                     if update_supabase_job(s_id, finish_payload):
                                         st.toast(f"บันทึกเวลาจบจริง {s_name} เรียบร้อย!", icon="🏁")
@@ -672,7 +675,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         df_db = fetch_jobs_from_supabase()
 
-        # ส่วนเพิ่มงานใหม่เข้าระบบ (Form)
+        # ส่วนเพิ่มงานใหม่เข้าระบบ (Form นาที)
         with st.expander("➕ สั่งผลิตงานใหม่เข้าระบบ (Add New Job)", expanded=False):
             with st.form("form_add_new_job", clear_on_submit=True):
                 f_c1, f_c2, f_c3 = st.columns([1.5, 2.5, 1.2])
@@ -693,11 +696,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 f_c7, f_c8, f_c9 = st.columns([1.5, 1.5, 1.5])
                 with f_c7:
-                    new_f_setup = st.number_input("เวลาตั้งเครื่อง (นาที):", min_value=0, max_value=720, value=15, step=5)
+                    new_f_setup = st.number_input("เวลาตั้งเครื่อง Setup (นาที):", min_value=0, max_value=720, value=15, step=5)
                 with f_c8:
-                    new_f_basic = st.number_input("Basic Machine (ชม.):", min_value=0.0, max_value=100.0, value=0.0, step=0.01, format="%.2f")
+                    new_f_basic = st.number_input("Basic Machine (นาที):", min_value=0, max_value=6000, value=0, step=5)
                 with f_c9:
-                    new_f_prog = st.number_input("รันโปรแกรมตามแผน (ชม.):", min_value=0.0, max_value=200.0, value=2.0, step=0.01, format="%.2f")
+                    new_f_prog = st.number_input("รันโปรแกรมตามแผน (นาที):", min_value=0, max_value=12000, value=120, step=10)
 
                 if st.form_submit_button("🚀 บันทึกสั่งผลิตใหม่เข้าสู่ระบบ", type="primary", use_container_width=True):
                     if new_f_plan.strip() != "":
@@ -722,12 +725,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         if not df_db.empty:
             calc_df = df_db.copy()
-            calc_df["รวม (ชม.)"] = ((calc_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + calc_df["Basic Machine (ชม.)"] + calc_df["รันโปรแกรม (ชม.)"]).round(2)
+            # คำนวณเวลารวมเป็น ชม. = (Setup น. + Basic น. + โปรแกรม น.) / 60
+            calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
             column_order = [
                 "ID", "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
-                "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "เวลาตั้งเครื่อง (นาที)",
-                "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "สถานะงาน",
+                "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
+                "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน",
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
@@ -752,8 +756,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     num_rows="dynamic",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
-                        "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "เวลาตั้งเครื่อง (นาที)",
-                        "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
+                        "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
+                        "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                     ],
                     column_config={
                         "ID": None,
@@ -764,10 +768,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, required=True, default="OP10"),
                         "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, required=True, default="No.1 Awea"),
                         "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm"),
-                        "เวลาตั้งเครื่อง (นาที)": st.column_config.NumberColumn("Setup (น.)", width=90, min_value=0, max_value=720, step=5, format="%d", default=15),
-                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=90, min_value=0.0, max_value=100.0, step=0.01, format="%.2f", default=0.0),
-                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=100, min_value=0.0, max_value=200.0, step=0.01, format="%.2f", default=2.0),
-                        "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=80, format="%.2f", disabled=True),
+                        "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=90, min_value=0, max_value=720, step=5, format="%d", default=15),
+                        "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=90, min_value=0, max_value=6000, step=5, format="%d", default=0),
+                        "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=105, min_value=0, max_value=12000, step=10, format="%d", default=120),
+                        "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f", disabled=True),
                         "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=130, options=JOB_STATUS, required=True, default="🟧 รอคิวผลิต"),
                         "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55, default=False),
                     },
@@ -791,9 +795,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 "step_name": str(row.get("ขั้นตอน (Step)", "OP10")),
                                 "machine_name": str(row.get("เลือกเครื่องจักร", "No.1 Awea")),
                                 "ready_at": ready_str,
-                                "setup_mins": float(row.get("เวลาตั้งเครื่อง (นาที)", 15.0) or 15.0),
-                                "basic_hrs": float(row.get("Basic Machine (ชม.)", 0.0) or 0.0),
-                                "prog_hrs": float(row.get("รันโปรแกรม (ชม.)", 0.0) or 0.0),
+                                "setup_mins": float(row.get("Setup (น.)", 15.0) or 15.0),
+                                "basic_hrs": float(row.get("Basic (น.)", 0.0) or 0.0),
+                                "prog_hrs": float(row.get("โปรแกรม (น.)", 0.0) or 0.0),
                                 "status": str(row.get("สถานะงาน", "🟧 รอคิวผลิต"))
                             }
                             if pd.notna(row.get("ID")) and row["ID"] > 0:
@@ -853,10 +857,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "เวลาเริ่ม Setup": st.column_config.TextColumn("เริ่ม Setup", width=105),
                         "เวลาเริ่มขึ้นงาน": st.column_config.TextColumn("เริ่มขึ้นงาน", width=105),
                         "เวลาจบงาน": st.column_config.TextColumn("จบงาน", width=105),
-                        "Setup (นาที)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
-                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.2f"),
-                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.2f"),
-                        "เวลารวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
+                        "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
+                        "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
+                        "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
+                        "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
                     },
                     use_container_width=True,
                     hide_index=True
@@ -870,7 +874,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             if not finished_jobs_df.empty:
                 st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
                 perf_df = finished_jobs_df.copy()
-                perf_df["เวลาแผน (ชม.)"] = (perf_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + perf_df["Basic Machine (ชม.)"] + perf_df["รันโปรแกรม (ชม.)"]
+                perf_df["เวลาแผน (ชม.)"] = ((perf_df["Setup (น.)"] + perf_df["Basic (น.)"] + perf_df["โปรแกรม (น.)"]) / 60.0).round(2)
                 
                 actual_hrs_list, diff_list, status_eval_list = [], [], []
                 for _, r in perf_df.iterrows():
@@ -892,7 +896,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["การประเมิน"] = status_eval_list
                 perf_df["ลบ"] = st.session_state.finish_select_all
                 
-                # เรียงตาม แผนงาน (PLAN NO.) จากน้อยไปหามาก
                 display_finish_df = perf_df.sort_values(by="แผนงาน", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
 
                 tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
@@ -1054,7 +1057,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             with cost_col2:
                 if not finished_jobs_df.empty:
                     cost_df = finished_jobs_df.copy()
-                    cost_df["รวม (ชม.)"] = (cost_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + cost_df["Basic Machine (ชม.)"] + cost_df["รันโปรแกรม (ชม.)"]
+                    cost_df["รวม (ชม.)"] = ((cost_df["Setup (น.)"] + cost_df["Basic (น.)"] + cost_df["โปรแกรม (น.)"]) / 60.0).round(2)
                     cost_df["เรตราคา (บาท/ชม.)"] = cost_df["เลือกเครื่องจักร"].map(rate_map).fillna(1000)
                     cost_df["มูลค่ารวม (บาท)"] = cost_df["รวม (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]
                     
@@ -1063,14 +1066,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     
                     st.markdown(f"**📊 รายการสรุปมูลค่างานที่เสร็จสิ้น (รวมทั้งหมด: :green[{total_finished_cost:,.2f} บาท] / {total_finished_hrs:.2f} ชม.)**")
                     st.dataframe(
-                        cost_df.sort_values(by="แผนงาน", ascending=True)[["แผนงาน", "ขั้นตอน (Step)", "ชื่อ Drawing.", "เลือกเครื่องจักร", "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
+                        cost_df.sort_values(by="แผนงาน", ascending=True)[["แผนงาน", "ขั้นตอน (Step)", "ชื่อ Drawing.", "เลือกเครื่องจักร", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
                         column_config={
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=105),
                             "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=120),
-                            "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.2f"),
-                            "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.2f"),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
                             "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
                             "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา", width=110, format="%d ฿"),
                             "มูลค่ารวม (บาท)": st.column_config.NumberColumn("รวมเป็นเงิน", width=130, format="%.2f ฿"),
