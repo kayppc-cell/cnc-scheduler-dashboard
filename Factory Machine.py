@@ -319,10 +319,10 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             cut_val = basic_hrs + prog_hrs
             j["basic_hrs"] = basic_hrs
             j["prog_hrs"] = prog_hrs
-            j["cut_hrs"] = cut_val if cut_val > 0 else 0.1
+            j["cut_hrs"] = cut_val if cut_val > 0 else 0.01
             j["setup_mins"] = setup_mins
         except (ValueError, TypeError):
-            j["basic_hrs"], j["prog_hrs"], j["cut_hrs"], j["setup_mins"] = 0.0, 0.0, 0.1, 15.0
+            j["basic_hrs"], j["prog_hrs"], j["cut_hrs"], j["setup_mins"] = 0.0, 0.0, 0.01, 15.0
             
         ready_time = j.get("วัน-เวลาขึ้นงาน")
         if pd.isna(ready_time):
@@ -368,7 +368,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                 idle_hrs = (target_jump - cur_time).total_seconds() / 3600.0
                 if idle_hrs > 0.05:
                     gantt_records.append({
-                        "ข้อความบนแท่งกราฟ": f"รอรันงาน ({idle_hrs:.1f} ชม.)",
+                        "ข้อความบนแท่งกราฟ": f"รอรันงาน ({idle_hrs:.2f} ชม.)",
                         "แผนงาน": "-",
                         "ชื่อ Drawing.": "รอคิวขึ้นงาน",
                         "ขั้นตอน (Step)": "รอรันงาน",
@@ -377,7 +377,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                         "วัสดุ": "-",
                         "เวลาเริ่ม": cur_time,
                         "เวลาเสร็จ": target_jump,
-                        "ระยะเวลา": f"{idle_hrs:.1f} ชม.",
+                        "ระยะเวลา": f"{idle_hrs:.2f} ชม.",
                     })
                 m_available[earliest_m] = target_jump
             else:
@@ -412,7 +412,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         gantt_records.append({
             "ข้อความบนแท่งกราฟ": step_raw, "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name,
             "ขั้นตอน (Step)": step_raw, "กิจกรรม": "🔴 งานด่วนตัดเฉือน" if selected_job["is_urgent"] else "⚙️ งานปกติกำลังกัดงาน",
-            "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"), "เวลาเริ่ม": cut_start, "เวลาเสร็จ": cut_end, "ระยะเวลา": f"{actual_cut_hrs:.1f} ชม."
+            "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"), "เวลาเริ่ม": cut_start, "เวลาเสร็จ": cut_end, "ระยะเวลา": f"{actual_cut_hrs:.2f} ชม."
         })
         
         total_cycle = (setup_mins / 60.0) + actual_cut_hrs
@@ -423,8 +423,8 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             "ขั้นตอน (Step)": step_raw, "เวลาเริ่มจริง": setup_start,
             "เวลาเริ่ม Setup": setup_start.strftime("%d/%m %H:%M") if setup_mins > 0 else "-",
             "เวลาเริ่มขึ้นงาน": cut_start.strftime("%d/%m %H:%M"), "เวลาจบงาน": cut_end.strftime("%d/%m %H:%M"),
-            "Setup (นาที)": int(setup_mins), "Basic Machine (ชม.)": round(selected_job["basic_hrs"], 1),
-            "รันโปรแกรม (ชม.)": round(selected_job["prog_hrs"], 1), "เวลารวม (ชม.)": round(total_cycle, 2)
+            "Setup (นาที)": int(setup_mins), "Basic Machine (ชม.)": round(selected_job["basic_hrs"], 2),
+            "รันโปรแกรม (ชม.)": round(selected_job["prog_hrs"], 2), "เวลารวม (ชม.)": round(total_cycle, 2)
         })
         
         m_available[earliest_m] = cut_end
@@ -441,8 +441,8 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         busy = m_busy_hrs[m]
         util_pct = min((busy / total_horizon_hrs) * 100.0, 100.0) if total_horizon_hrs > 0 else 0.0
         util_list.append({
-            "เครื่องจักร": m, "ชั่วโมงทำงาน (ชม.)": round(busy, 1),
-            "อัตราการใช้งาน (%)": round(util_pct, 1), "ข้อความแสดง": f"{util_pct:.1f}% ({busy:.1f} ชม.)"
+            "เครื่องจักร": m, "ชั่วโมงทำงาน (ชม.)": round(busy, 2),
+            "อัตราการใช้งาน (%)": round(util_pct, 1), "ข้อความแสดง": f"{util_pct:.1f}% ({busy:.2f} ชม.)"
         })
         
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_hrs
@@ -695,9 +695,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with f_c7:
                     new_f_setup = st.number_input("เวลาตั้งเครื่อง (นาที):", min_value=0, max_value=720, value=15, step=5)
                 with f_c8:
-                    new_f_basic = st.number_input("Basic Machine (ชม.):", min_value=0.0, max_value=100.0, value=0.0, step=0.5)
+                    new_f_basic = st.number_input("Basic Machine (ชม.):", min_value=0.0, max_value=100.0, value=0.0, step=0.01, format="%.2f")
                 with f_c9:
-                    new_f_prog = st.number_input("รันโปรแกรมตามแผน (ชม.):", min_value=0.0, max_value=200.0, value=2.0, step=0.5)
+                    new_f_prog = st.number_input("รันโปรแกรมตามแผน (ชม.):", min_value=0.0, max_value=200.0, value=2.0, step=0.01, format="%.2f")
 
                 if st.form_submit_button("🚀 บันทึกสั่งผลิตใหม่เข้าสู่ระบบ", type="primary", use_container_width=True):
                     if new_f_plan.strip() != "":
@@ -749,7 +749,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
                     key=f"editor_cnc_jobs_{data_hash}_{st.session_state.active_select_all}",
-                    num_rows="dynamic",  # เปิดให้กดเพิ่มแถวใหม่ (+) ได้โดยตรงบนตาราง
+                    num_rows="dynamic",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
                         "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "เวลาตั้งเครื่อง (นาที)",
@@ -765,8 +765,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, required=True, default="No.1 Awea"),
                         "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm"),
                         "เวลาตั้งเครื่อง (นาที)": st.column_config.NumberColumn("Setup (น.)", width=90, min_value=0, max_value=720, step=5, format="%d", default=15),
-                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=90, min_value=0.0, max_value=100.0, step=0.5, format="%.1f", default=0.0),
-                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=100, min_value=0.0, max_value=200.0, step=0.5, format="%.1f", default=2.0),
+                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=90, min_value=0.0, max_value=100.0, step=0.01, format="%.2f", default=0.0),
+                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=100, min_value=0.0, max_value=200.0, step=0.01, format="%.2f", default=2.0),
                         "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=80, format="%.2f", disabled=True),
                         "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=130, options=JOB_STATUS, required=True, default="🟧 รอคิวผลิต"),
                         "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55, default=False),
@@ -854,8 +854,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "เวลาเริ่มขึ้นงาน": st.column_config.TextColumn("เริ่มขึ้นงาน", width=105),
                         "เวลาจบงาน": st.column_config.TextColumn("จบงาน", width=105),
                         "Setup (นาที)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
-                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.1f"),
-                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.1f"),
+                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.2f"),
+                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.2f"),
                         "เวลารวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
                     },
                     use_container_width=True,
@@ -892,6 +892,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["การประเมิน"] = status_eval_list
                 perf_df["ลบ"] = st.session_state.finish_select_all
                 
+                # เรียงตาม แผนงาน (PLAN NO.) จากน้อยไปหามาก
                 display_finish_df = perf_df.sort_values(by="แผนงาน", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
 
                 tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
@@ -1068,8 +1069,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=105),
                             "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=120),
-                            "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.1f"),
-                            "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.1f"),
+                            "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=85, format="%.2f"),
+                            "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=95, format="%.2f"),
                             "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
                             "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา", width=110, format="%d ฿"),
                             "มูลค่ารวม (บาท)": st.column_config.NumberColumn("รวมเป็นเงิน", width=130, format="%.2f ฿"),
