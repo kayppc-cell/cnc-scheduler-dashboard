@@ -438,7 +438,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (สามารถแก้ไขชื่อ/เวลา และบันทึกซ้ำได้)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (Step Sequential Lock ควบคุมลำดับ)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -475,7 +475,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         any_running = any(step_row.get("สถานะงาน") == "⚙️ กำลังผลิต" for _, step_row in plan_steps.iterrows())
         next_available_start_found = False
 
-        # 2. แสดง Step เรียงลงมา พร้อมฟังก์ชันแก้ไขและบันทึกซ้ำ
+        # 2. แสดง Step เรียงลงมา พร้อมการควบคุมลำดับ (Sequential Lock)
         for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
             s_id = int(step_row["ID"])
             s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
@@ -665,8 +665,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].copy().reset_index(drop=True)
+            # เรียงแผนงานจากน้อยไปหามาก
+            active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].sort_values(by="แผนงาน", ascending=True).copy().reset_index(drop=True)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
+
+            # เพิ่มคอลัมน์แสดงแถบสีสถานะ เพื่อให้สังเกตเห็นงานที่กำลังผลิตได้ชัดเจน
+            active_jobs_editor_df["สถานะ"] = active_jobs_editor_df["สถานะงาน"].apply(
+                lambda x: "🟦 กำลังผลิต" if "กำลังผลิต" in str(x) else "🟧 รอคิวผลิต"
+            )
 
             with st.expander("📝 รายการสั่งผลิตในระบบ", expanded=True):
                 tool_act1, tool_act2, _ = st.columns([1.5, 1.5, 7])
@@ -683,8 +689,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
                     key=f"editor_cnc_jobs_{data_hash}_{st.session_state.active_select_all}",
+                    column_order=[
+                        "สถานะ", "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                        "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "เวลาตั้งเครื่อง (นาที)",
+                        "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
+                    ],
                     column_config={
-                        "ID": st.column_config.NumberColumn("ID", disabled=True, width=50),
+                        "ID": None,  # ซ่อน ID ไม่ให้แสดงบนตาราง
+                        "สถานะ": st.column_config.TextColumn("สถานะ", width=95, disabled=True),
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85, required=True),
                         "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190, required=True),
                         "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, required=True),
