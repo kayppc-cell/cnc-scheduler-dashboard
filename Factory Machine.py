@@ -2,11 +2,25 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
+import zoneinfo
 import os
 import base64
 from PIL import Image
 import requests
 import streamlit.components.v1 as components
+
+# =========================================================
+# 0. Timezone Helper (เวลาประเทศไทย GMT+7)
+# =========================================================
+def get_bangkok_now():
+    try:
+        return datetime.now(zoneinfo.ZoneInfo("Asia/Bangkok"))
+    except Exception:
+        # Fallback กรณีไม่มี tzdata
+        return datetime.utcnow() + timedelta(hours=7)
+
+def get_bangkok_str():
+    return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
 # =========================================================
 # 1. การจัดการรูปภาพ (App Icon & Header Logo)
@@ -140,7 +154,7 @@ st.markdown("""
 
     .step-card {
         background: #FFFFFF;
-        padding: 14px 16px;
+        padding: 12px 14px;
         border-radius: 10px;
         border: 1.5px solid #E2E8F0;
         margin-bottom: 12px;
@@ -451,7 +465,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (เริ่มและจบเวลานับจากเวลาจริงอัตโนมัติ)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (นับเวลาประเทศไทย GMT+7 อัตโนมัติ)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -507,7 +521,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 with st.container():
                     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
                     
-                    # หัวข้อสถานะ Step
                     if is_step_finished:
                         finish_txt = pd.to_datetime(s_finish).strftime('%d/%m %H:%M') if pd.notna(s_finish) else '-'
                         st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
@@ -520,7 +533,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         else:
                             st.caption(f"**Step {idx}:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับขั้นตอนก่อนหน้า</span>", unsafe_allow_html=True)
 
-                    # Step ที่ยังไม่จบงาน: แก้ไขชื่อได้ และกดปุ่มควบคุมเวลาจริง
                     if not is_step_finished:
                         step_val = st.text_input(
                             f"ชื่อขั้นตอน Step {idx}:", 
@@ -543,7 +555,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         with c_btn_start:
                             if can_start:
                                 if st.button("🚀 Start (เริ่มจับเวลาจริง)", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
-                                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    now_str = get_bangkok_str()
                                     update_payload = {
                                         "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
                                         "status": "🟦 กำลังผลิต",
@@ -558,14 +570,16 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         with c_btn_finish:
                             if is_step_running:
                                 if st.button("🏁 Finish (จบงานจริง)", key=f"btn_finish_step_{s_id}", type="primary", use_container_width=True):
-                                    now_dt = datetime.now()
+                                    now_dt = get_bangkok_now()
                                     now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
                                     
-                                    # คำนวณชั่วโมงจริงจากเวลาเริ่มถึงเวลากดจบ
                                     calc_prog_hrs = 0.0
                                     if pd.notna(s_start):
                                         st_dt = pd.to_datetime(s_start)
-                                        calc_prog_hrs = round((now_dt - st_dt).total_seconds() / 3600.0, 2)
+                                        # ลบ timezone ออกเพื่อให้ลบเวลาได้อย่างถูกต้อง
+                                        st_dt = st_dt.tz_localize(None) if st_dt.tzinfo else st_dt
+                                        cur_dt = now_dt.replace(tzinfo=None)
+                                        calc_prog_hrs = round((cur_dt - st_dt).total_seconds() / 3600.0, 2)
                                     
                                     finish_payload = {
                                         "status": "🟩 เสร็จสิ้นแล้ว",
@@ -580,7 +594,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             else:
                                 st.button("🏁 Finish", key=f"btn_finish_disabled_{s_id}", disabled=True, use_container_width=True)
 
-                    # Step ที่เสร็จสิ้นแล้ว (Finish): แสดงผลปกติ
                     else:
                         st.markdown(f"**ขั้นตอน:** {s_name}")
                         c_btn_done, c_btn_edit_done = st.columns([2, 2])
@@ -597,7 +610,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
                     st.markdown("</div>", unsafe_allow_html=True)
 
-            # กล่องเพิ่ม Step ประจำแผนงาน (ไม่ต้องกรอกเวลา ใช้เริ่มจับเวลาจริงตอนกด Start)
             next_step_num = len(plan_steps) + 1
             default_next_step_label = f"OP{next_step_num*10}"
             
@@ -605,7 +617,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, OP30", key=f"new_step_name_input_{plan_code}_{plan_idx}")
 
                 if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num} เข้าคิวแผน {plan_code}", key=f"btn_add_step_{plan_code}_{plan_idx}", type="secondary", use_container_width=True):
-                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    now_str = get_bangkok_str()
                     new_payload = {
                         "plan_code": str(plan_code),
                         "drawing_name": str(first_step_info.get("ชื่อ Drawing.", "")),
@@ -723,7 +735,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             if pd.isna(row.get("แผนงาน")) or str(row.get("แผนงาน", "")).strip() == "":
                                 continue
                             ready_dt = pd.to_datetime(row["วัน-เวลาขึ้นงาน"], errors='coerce')
-                            ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else get_bangkok_str()
                             payload = {
                                 "plan_code": str(row["แผนงาน"]), "drawing_name": str(row["ชื่อ Drawing."]), "material": str(row["วัสดุ"]),
                                 "job_type": str(row["ประเภทงาน"]), "step_name": str(row["ขั้นตอน (Step)"]), "machine_name": str(row["เลือกเครื่องจักร"]),
@@ -828,7 +840,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["การประเมิน"] = status_eval_list
                 perf_df["ลบ"] = st.session_state.finish_select_all
                 
-                # เรียงตาม แผนงาน (PLAN NO.) จากน้อยไปหามาก
                 display_finish_df = perf_df.sort_values(by="แผนงาน", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
 
                 tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
@@ -850,7 +861,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ผลต่าง (ชม.)", "การประเมิน", "ลบ"
                     ],
                     column_config={
-                        "ID": None,  # ซ่อน ID ออกจากหน้าตาราง
+                        "ID": None,
                         "แผนงาน": st.column_config.TextColumn("PLAN NO.", disabled=True, width=85),
                         "ชื่อ Drawing.": st.column_config.TextColumn("DRAWING NO.", disabled=True, width=180),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", disabled=True, width=95),
@@ -963,13 +974,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # =====================================================
-                # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร
-                # =====================================================
-                st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
+            # =====================================================
+            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร
+            # =====================================================
+            st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
 
-                if "machine_rates" not in st.session_state:
-                    st.session_state.machine_rates = pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES[m]} for m in MACHINE_LIST])
+            if "machine_rates" not in st.session_state:
+                st.session_state.machine_rates = pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES[m]} for m in MACHINE_LIST])
 
             cost_col1, cost_col2 = st.columns([1, 3])
 
