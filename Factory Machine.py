@@ -140,7 +140,7 @@ st.markdown("""
 
     .step-card {
         background: #FFFFFF;
-        padding: 12px 14px;
+        padding: 14px 16px;
         border-radius: 10px;
         border: 1.5px solid #E2E8F0;
         margin-bottom: 12px;
@@ -451,7 +451,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (แสดงทุกแผนงานที่อยู่ในเครื่องนั้น)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (เริ่มและจบเวลานับจากเวลาจริงอัตโนมัติ)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
@@ -491,8 +491,9 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
                 s_id = int(step_row["ID"])
                 s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
-                s_prog = float(step_row.get("รันโปรแกรม (ชม.)", 2.0) or 2.0)
                 s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
+                s_start = step_row.get("เริ่มจริง")
+                s_finish = step_row.get("เสร็จจริง")
                 
                 is_step_running = "กำลังผลิต" in s_status
                 is_step_finished = "เสร็จสิ้น" in s_status
@@ -506,105 +507,102 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 with st.container():
                     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
                     
+                    # หัวข้อสถานะ Step
                     if is_step_finished:
-                        st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>🟩 เสร็จสิ้นแล้ว (Finish)</span>", unsafe_allow_html=True)
+                        finish_txt = pd.to_datetime(s_finish).strftime('%d/%m %H:%M') if pd.notna(s_finish) else '-'
+                        st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                     elif is_step_running:
-                        st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800;'>🟦 กำลังผลิต (Running...)</span>", unsafe_allow_html=True)
+                        start_txt = pd.to_datetime(s_start).strftime('%d/%m %H:%M') if pd.notna(s_start) else '-'
+                        st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800;'>🟦 กำลังผลิต (เริ่มรัน: {start_txt})</span>", unsafe_allow_html=True)
                     else:
                         if can_start:
                             st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>🟧 พร้อมเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
                         else:
                             st.caption(f"**Step {idx}:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับขั้นตอนก่อนหน้า</span>", unsafe_allow_html=True)
 
+                    # Step ที่ยังไม่จบงาน: แก้ไขชื่อได้ และกดปุ่มควบคุมเวลาจริง
                     if not is_step_finished:
-                        c_step_name, c_step_time = st.columns([7, 3])
-                        with c_step_name:
-                            step_val = st.text_input(
-                                f"ชื่อขั้นตอน Step {idx}:", 
-                                value=s_name, 
-                                placeholder="เช่น OP10, ปาดผิวเจาะรู", 
-                                key=f"input_step_name_{s_id}"
-                            )
-                        with c_step_time:
-                            prog_val = st.number_input(
-                                f"เวลา (ชม.):", 
-                                min_value=0.1, 
-                                max_value=100.0, 
-                                value=s_prog, 
-                                step=0.5, 
-                                format="%.2f",
-                                key=f"input_step_prog_{s_id}"
-                            )
+                        step_val = st.text_input(
+                            f"ชื่อขั้นตอน Step {idx}:", 
+                            value=s_name, 
+                            placeholder="เช่น OP10, ปาดผิวเจาะรู", 
+                            key=f"input_step_name_{s_id}"
+                        )
 
                         c_btn_save, c_btn_start, c_btn_finish = st.columns([1.5, 2, 2])
 
                         with c_btn_save:
-                            if st.button("💾 บันทึกแก้ไข", key=f"btn_save_edit_{s_id}", use_container_width=True, help="กดเพื่อบันทึกชื่อขั้นตอนและเวลาใหม่"):
+                            if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{s_id}", use_container_width=True, help="บันทึกชื่อขั้นตอนใหม่"):
                                 update_payload = {
-                                    "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
-                                    "prog_hrs": float(prog_val)
+                                    "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}"
                                 }
                                 if update_supabase_job(s_id, update_payload):
-                                    st.toast(f"บันทึกข้อมูล Step {idx} ({plan_code}) เรียบร้อยแล้ว!", icon="💾")
+                                    st.toast(f"บันทึกชื่อ Step {idx} เรียบร้อย!", icon="💾")
                                     st.rerun()
 
                         with c_btn_start:
                             if can_start:
-                                if st.button("🚀 Start", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
+                                if st.button("🚀 Start (เริ่มจับเวลาจริง)", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
                                     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     update_payload = {
                                         "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
-                                        "prog_hrs": float(prog_val),
                                         "status": "🟦 กำลังผลิต",
                                         "actual_start": now_str
                                     }
                                     if update_supabase_job(s_id, update_payload):
-                                        st.toast(f"เริ่มผลิต {step_val} แล้ว!", icon="🚀")
+                                        st.toast(f"เริ่มผลิตและบันทึกเวลาเริ่มจริงแล้ว!", icon="🚀")
                                         st.rerun()
                             else:
                                 st.button("🚀 Start", key=f"btn_start_disabled_{s_id}", disabled=True, use_container_width=True)
 
                         with c_btn_finish:
                             if is_step_running:
-                                if st.button("🏁 Finish", key=f"btn_finish_step_{s_id}", type="primary", use_container_width=True):
-                                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                    if update_supabase_job(s_id, {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str}):
-                                        st.toast(f"บันทึกจบ {s_name} เรียบร้อย!", icon="🏁")
+                                if st.button("🏁 Finish (จบงานจริง)", key=f"btn_finish_step_{s_id}", type="primary", use_container_width=True):
+                                    now_dt = datetime.now()
+                                    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+                                    
+                                    # คำนวณชั่วโมงจริงจากเวลาเริ่มถึงเวลากดจบ
+                                    calc_prog_hrs = 0.0
+                                    if pd.notna(s_start):
+                                        st_dt = pd.to_datetime(s_start)
+                                        calc_prog_hrs = round((now_dt - st_dt).total_seconds() / 3600.0, 2)
+                                    
+                                    finish_payload = {
+                                        "status": "🟩 เสร็จสิ้นแล้ว",
+                                        "actual_finish": now_str
+                                    }
+                                    if calc_prog_hrs > 0:
+                                        finish_payload["prog_hrs"] = calc_prog_hrs
+
+                                    if update_supabase_job(s_id, finish_payload):
+                                        st.toast(f"บันทึกเวลาจบจริง {s_name} เรียบร้อย!", icon="🏁")
                                         st.rerun()
                             else:
                                 st.button("🏁 Finish", key=f"btn_finish_disabled_{s_id}", disabled=True, use_container_width=True)
 
+                    # Step ที่เสร็จสิ้นแล้ว (Finish): แสดงผลปกติ
                     else:
-                        c_step_name, c_step_time = st.columns([7, 3])
-                        with c_step_name:
-                            st.markdown(f"**ขั้นตอน:** {s_name}")
-                        with c_step_time:
-                            st.markdown(f"**เวลา:** ⏱️ {s_prog:.2f} ชม.")
-                        
+                        st.markdown(f"**ขั้นตอน:** {s_name}")
                         c_btn_done, c_btn_edit_done = st.columns([2, 2])
                         with c_btn_done:
                             st.button("✅ Finish แล้ว", key=f"btn_finished_done_{s_id}", disabled=True, use_container_width=True)
                         
                         with c_btn_edit_done:
-                            with st.popover("✏️ แก้ไขชื่อ/เวลา"):
+                            with st.popover("✏️ แก้ไขชื่อขั้นตอน"):
                                 re_step = st.text_input("แก้ชื่อขั้นตอน:", value=s_name, key=f"re_name_{s_id}")
-                                re_prog = st.number_input("แก้เวลา (ชม.):", min_value=0.1, max_value=100.0, value=s_prog, step=0.5, format="%.2f", key=f"re_prog_{s_id}")
-                                if st.button("💾 บันทึกทับข้อมูล", key=f"btn_re_save_{s_id}", type="primary", use_container_width=True):
-                                    if update_supabase_job(s_id, {"step_name": re_step.strip(), "prog_hrs": float(re_prog)}):
-                                        st.toast("อัปเดตข้อมูล Step สำเร็จ!", icon="💾")
+                                if st.button("💾 บันทึกทับชื่อ", key=f"btn_re_save_{s_id}", type="primary", use_container_width=True):
+                                    if update_supabase_job(s_id, {"step_name": re_step.strip()}):
+                                        st.toast("อัปเดตชื่อ Step สำเร็จ!", icon="💾")
                                         st.rerun()
 
                     st.markdown("</div>", unsafe_allow_html=True)
 
+            # กล่องเพิ่ม Step ประจำแผนงาน (ไม่ต้องกรอกเวลา ใช้เริ่มจับเวลาจริงตอนกด Start)
             next_step_num = len(plan_steps) + 1
             default_next_step_label = f"OP{next_step_num*10}"
             
             with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับแผนงาน {plan_code} (Step {next_step_num})", expanded=False):
-                c_in1, c_in2 = st.columns([7, 3])
-                with c_in1:
-                    new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, OP30", key=f"new_step_name_input_{plan_code}_{plan_idx}")
-                with c_in2:
-                    new_prog_input = st.number_input("เวลา (ชม.):", min_value=0.1, max_value=100.0, value=2.0, step=0.5, format="%.2f", key=f"new_step_prog_input_{plan_code}_{plan_idx}")
+                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, OP30", key=f"new_step_name_input_{plan_code}_{plan_idx}")
 
                 if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num} เข้าคิวแผน {plan_code}", key=f"btn_add_step_{plan_code}_{plan_idx}", type="secondary", use_container_width=True):
                     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -616,9 +614,9 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         "step_name": new_step_input.strip() if new_step_input.strip() != "" else default_next_step_label,
                         "machine_name": selected_m,
                         "ready_at": now_str,
-                        "setup_mins": 15.0,
+                        "setup_mins": 0.0,
                         "basic_hrs": 0.0,
-                        "prog_hrs": float(new_prog_input),
+                        "prog_hrs": 0.0,
                         "status": "🟧 รอคิวผลิต"
                     }
                     if insert_supabase_job(new_payload):
@@ -965,13 +963,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-            # =====================================================
-            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร
-            # =====================================================
-            st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
+                # =====================================================
+                # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร
+                # =====================================================
+                st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
 
-            if "machine_rates" not in st.session_state:
-                st.session_state.machine_rates = pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES[m]} for m in MACHINE_LIST])
+                if "machine_rates" not in st.session_state:
+                    st.session_state.machine_rates = pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES[m]} for m in MACHINE_LIST])
 
             cost_col1, cost_col2 = st.columns([1, 3])
 
