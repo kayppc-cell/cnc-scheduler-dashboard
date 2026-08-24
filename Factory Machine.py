@@ -287,14 +287,17 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                 
                 if "status" in df.columns:
                     df["status"] = df["status"].apply(normalize_status)
+                
+                if "qty" not in df.columns:
+                    df["qty"] = 1
                     
                 col_map = {
                     "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
-                    "material": "วัสดุ", "job_type": "ประเภทงาน", "step_name": "ขั้นตอน (Step)",
-                    "machine_name": "เลือกเครื่องจักร", "ready_at": "วัน-เวลาขึ้นงาน",
-                    "setup_mins": "Setup (น.)", "basic_hrs": "Basic (น.)",
-                    "prog_hrs": "โปรแกรม (น.)", "status": "สถานะงาน",
-                    "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง"
+                    "qty": "จำนวน", "material": "วัสดุ", "job_type": "ประเภทงาน",
+                    "step_name": "ขั้นตอน (Step)", "machine_name": "เลือกเครื่องจักร",
+                    "ready_at": "วัน-เวลาขึ้นงาน", "setup_mins": "Setup (น.)",
+                    "basic_hrs": "Basic (น.)", "prog_hrs": "โปรแกรม (น.)",
+                    "status": "สถานะงาน", "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง"
                 }
                 return df.rename(columns=col_map)
         return pd.DataFrame()
@@ -302,7 +305,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (คำนวณจากหน่วย นาที แปลงเป็น ชม.)
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -422,8 +425,8 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         summary_records.append({
             "ID": selected_job.get("ID", ""), "เครื่องจักร": earliest_m, "สถานะ": selected_job["สถานะงาน"],
             "ประเภทงาน": "🔴 งานด่วนแทรก" if selected_job["is_urgent"] else "🟢 งานปกติ",
-            "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name, "วัสดุ": selected_job.get("วัสดุ", "-"),
-            "ขั้นตอน (Step)": step_raw, "เวลาเริ่มจริง": setup_start,
+            "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name, "จำนวน": int(selected_job.get("จำนวน", 1) or 1),
+            "วัสดุ": selected_job.get("วัสดุ", "-"), "ขั้นตอน (Step)": step_raw, "เวลาเริ่มจริง": setup_start,
             "เวลาเริ่ม Setup": setup_start.strftime("%d/%m %H:%M") if setup_mins > 0 else "-",
             "เวลาเริ่มขึ้นงาน": cut_start.strftime("%d/%m %H:%M"), "เวลาจบงาน": cut_end.strftime("%d/%m %H:%M"),
             "Setup (น.)": int(setup_mins), "Basic (น.)": int(selected_job["basic_mins"]),
@@ -498,7 +501,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     <h3 style="margin:0; color:#1E3A8A; font-size:19px; font-weight:800;">📌 แผนงาน {plan_idx}: {plan_code}</h3>
                     <span style="background:#EFF6FF; color:#1D4ED8; padding:3px 10px; border-radius:6px; font-weight:700; font-size:12px;">เครื่อง: {selected_m}</span>
                 </div>
-                <p style="font-size:14.5px; margin:5px 0 2px 0;"><b>📄 Drawing:</b> {first_step_info.get('ชื่อ Drawing.', '-')} | <b>🔩 วัสดุ:</b> {first_step_info.get('วัสดุ', '-')}</p>
+                <p style="font-size:14.5px; margin:5px 0 2px 0;"><b>📄 Drawing:</b> {first_step_info.get('ชื่อ Drawing.', '-')} | <b>🔢 จำนวน:</b> {int(first_step_info.get('จำนวน', 1) or 1)} ชิ้น | <b>🔩 วัสดุ:</b> {first_step_info.get('วัสดุ', '-')}</p>
             </div>
             """, unsafe_allow_html=True)
 
@@ -622,6 +625,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     new_payload = {
                         "plan_code": str(plan_code),
                         "drawing_name": str(first_step_info.get("ชื่อ Drawing.", "")),
+                        "qty": int(first_step_info.get("จำนวน", 1) or 1),
                         "material": str(first_step_info.get("วัสดุ", "SS400")),
                         "job_type": str(first_step_info.get("ประเภทงาน", "🟢 งานปกติ")),
                         "step_name": new_step_input.strip() if new_step_input.strip() != "" else default_next_step_label,
@@ -678,11 +682,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         # ส่วนเพิ่มงานใหม่เข้าระบบ (Form นาที)
         with st.expander("➕ สั่งผลิตงานใหม่เข้าระบบ (Add New Job)", expanded=False):
             with st.form("form_add_new_job", clear_on_submit=True):
-                f_c1, f_c2, f_c3 = st.columns([1.5, 2.5, 1.2])
+                f_c1, f_c2, f_c_qty, f_c3 = st.columns([1.5, 2.5, 1, 1.2])
                 with f_c1:
                     new_f_plan = st.text_input("รหัสแผนงาน (Plan No.):", placeholder="เช่น 26-105")
                 with f_c2:
                     new_f_draw = st.text_input("ชื่อ Drawing:", placeholder="เช่น P26-PES-105-001-Unit10")
+                with f_c_qty:
+                    new_f_qty = st.number_input("จำนวน:", min_value=1, max_value=10000, value=1, step=1)
                 with f_c3:
                     new_f_mat = st.text_input("วัสดุ:", value="SS400")
 
@@ -707,6 +713,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         payload = {
                             "plan_code": new_f_plan.strip(),
                             "drawing_name": new_f_draw.strip(),
+                            "qty": int(new_f_qty),
                             "material": new_f_mat.strip(),
                             "job_type": new_f_type,
                             "step_name": new_f_step.strip() if new_f_step.strip() != "" else "OP10",
@@ -733,7 +740,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
             column_order = [
-                "ID", "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
                 "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
                 "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน",
             ]
@@ -743,7 +750,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
             with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางแก้ไข/เพิ่มแถวข้อมูล)", expanded=True):
-                # ส่วนเครื่องมือเลือกแทรกแถวใต้รายการที่ต้องการ
                 st.markdown("**📌 เครื่องมือจัดการตาราง:**")
                 tool_col1, tool_col2, tool_col3 = st.columns([2.5, 4, 3.5])
                 
@@ -766,6 +772,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             target_row_data = active_jobs_editor_df.iloc[selected_target_idx]
                             
                             ins_step = st.text_input("ชื่อขั้นตอนใหม่:", placeholder="เช่น OP20, พลิกปาด")
+                            ins_qty = st.number_input("จำนวน:", min_value=1, value=int(target_row_data.get("จำนวน", 1) or 1), step=1)
                             ins_setup = st.number_input("Setup (น.):", value=15, step=5)
                             ins_basic = st.number_input("Basic (น.):", value=0, step=5)
                             ins_prog = st.number_input("โปรแกรม (น.):", value=120, step=10)
@@ -774,6 +781,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 ins_payload = {
                                     "plan_code": str(target_row_data["แผนงาน"]),
                                     "drawing_name": str(target_row_data["ชื่อ Drawing."]),
+                                    "qty": int(ins_qty),
                                     "material": str(target_row_data["วัสดุ"]),
                                     "job_type": str(target_row_data["ประเภทงาน"]),
                                     "step_name": ins_step.strip() if ins_step.strip() != "" else "OP20",
@@ -790,27 +798,28 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
-                    key="editor_cnc_jobs_in_minutes_v3",
+                    key="editor_cnc_jobs_in_minutes_v5",
                     num_rows="dynamic",
                     column_order=[
-                        "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
                         "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
                         "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                     ],
                     column_config={
                         "ID": None,
-                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85, required=True),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190, required=True),
-                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, required=True, default="SS400"),
-                        "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, required=True, default="🟢 งานปกติ"),
-                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, required=True, default="OP10"),
-                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, required=True, default="No.1 Awea"),
+                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                        "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, min_value=1, max_value=10000, step=1, format="%d", default=1),
+                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, default="SS400"),
+                        "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
+                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, default="OP10"),
+                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, default="No.1 Awea"),
                         "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm"),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
                         "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, min_value=0, max_value=12000, step=10, format="%d", default=120),
                         "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f", disabled=True),
-                        "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=130, options=JOB_STATUS, required=True, default="🟧 รอคิวผลิต"),
+                        "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=130, options=JOB_STATUS, default="🟧 รอคิวผลิต"),
                         "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55, default=False),
                     },
                     hide_index=True,
@@ -822,15 +831,21 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
                         save_count = 0
                         for _, row in edited_jobs.iterrows():
-                            p_code = str(row.get("แผนงาน", "")).strip()
-                            if p_code == "" or p_code == "None" or p_code == "nan":
+                            raw_plan = row.get("แผนงาน")
+                            if pd.isna(raw_plan) or str(raw_plan).strip() in ["", "None", "nan"]:
                                 continue
-                                
+                            
+                            p_code = str(raw_plan).strip()
+                            raw_draw = row.get("ชื่อ Drawing.")
+                            d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
+                            
                             ready_dt = pd.to_datetime(row.get("วัน-เวลาขึ้นงาน"), errors='coerce')
                             ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else get_bangkok_str()
+                            
                             payload = {
                                 "plan_code": p_code,
-                                "drawing_name": str(row.get("ชื่อ Drawing.", "")),
+                                "drawing_name": d_name,
+                                "qty": int(row.get("จำนวน", 1) or 1),
                                 "material": str(row.get("วัสดุ", "SS400")),
                                 "job_type": str(row.get("ประเภทงาน", "🟢 งานปกติ")),
                                 "step_name": str(row.get("ขั้นตอน (Step)", "OP10")),
@@ -843,12 +858,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             }
                             
                             row_id = row.get("ID")
-                            if pd.notna(row_id) and str(row_id).strip() != "" and str(row_id) != "None" and float(row_id) > 0:
+                            if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                 update_supabase_job(int(row_id), payload)
                             else:
                                 insert_supabase_job(payload)
                             save_count += 1
 
+                        st.cache_data.clear()
                         st.success(f"บันทึกข้อมูลเรียบร้อยแล้ว ({save_count} รายการ)")
                         st.rerun()
 
@@ -858,11 +874,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         del_success = True
                         for _, row in active_to_delete.iterrows():
                             row_id = row.get("ID")
-                            if pd.notna(row_id) and str(row_id).strip() != "" and str(row_id) != "None" and float(row_id) > 0:
+                            if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                 if not delete_supabase_job(int(row_id)):
                                     del_success = False
                         if del_success:
                             st.session_state.active_select_all = False
+                            st.cache_data.clear()
                             st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
                             st.rerun()
                         else:
@@ -897,7 +914,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "สถานะ": st.column_config.TextColumn("สถานะ", width=110),
                         "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=105),
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                        "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
                         "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110),
                         "เวลาเริ่ม Setup": st.column_config.TextColumn("เริ่ม Setup", width=105),
@@ -942,7 +960,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["การประเมิน"] = status_eval_list
                 perf_df["ลบ"] = st.session_state.finish_select_all
                 
-                display_finish_df = perf_df.sort_values(by="แผนงาน", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
+                display_finish_df = perf_df.sort_values(by="แผนงาน", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
 
                 tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
                 with tool_c1:
@@ -956,9 +974,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key="editor_finish_jobs_table_mins_v3",
+                    key="editor_finish_jobs_table_mins_v5",
                     column_order=[
-                        "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
+                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                         "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
                         "ผลต่าง (ชม.)", "การประเมิน", "ลบ"
                     ],
@@ -966,6 +984,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ID": None,
                         "แผนงาน": st.column_config.TextColumn("PLAN NO.", disabled=True, width=85),
                         "ชื่อ Drawing.": st.column_config.TextColumn("DRAWING NO.", disabled=True, width=180),
+                        "จำนวน": st.column_config.NumberColumn("จำนวน", disabled=True, width=65, format="%d"),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", disabled=True, width=95),
                         "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", disabled=True, width=115),
                         "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", disabled=True, width=145, format="DD/MM HH:mm"),
@@ -987,11 +1006,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         del_success = True
                         for _, row in selected_rows_to_delete.iterrows():
                             row_id = row.get("ID")
-                            if pd.notna(row_id) and str(row_id).strip() != "" and str(row_id) != "None" and float(row_id) > 0:
+                            if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                 if not delete_supabase_job(int(row_id)):
                                     del_success = False
                         if del_success:
                             st.session_state.finish_select_all = False
+                            st.cache_data.clear()
                             st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
                             st.rerun()
                         else:
@@ -1114,11 +1134,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     
                     st.markdown(f"**📊 รายการสรุปมูลค่างานที่เสร็จสิ้น (รวมทั้งหมด: :green[{total_finished_cost:,.2f} บาท] / {total_finished_hrs:.2f} ชม.)**")
                     st.dataframe(
-                        cost_df.sort_values(by="แผนงาน", ascending=True)[["แผนงาน", "ขั้นตอน (Step)", "ชื่อ Drawing.", "เลือกเครื่องจักร", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
+                        cost_df.sort_values(by="แผนงาน", ascending=True)[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
                         column_config={
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
-                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=105),
                             "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=105),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=120),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
