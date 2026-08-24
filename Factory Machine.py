@@ -467,19 +467,15 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         m_active_jobs = pd.DataFrame()
 
     if not m_active_jobs.empty:
-        # ดึงรายชื่อแผนงานทั้งหมดที่ยังมีคิวงานในเครื่องนี้แบบไม่ซ้ำกัน เรียงตามลำดับ
         unique_plan_codes = sorted(list(m_active_jobs["แผนงาน"].dropna().unique()))
 
-        # ตรวจสอบสถานะว่าเครื่องนี้มี Step ใดกำลังรันอยู่หรือไม่ในระดับเครื่องจักร
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
         next_available_start_found = False
 
-        # วนลูปแสดงผลทุกแผนงานที่มีในเครื่องจักรนี้
         for plan_idx, plan_code in enumerate(unique_plan_codes, 1):
             plan_steps = m_all_jobs[m_all_jobs["แผนงาน"] == plan_code]
             first_step_info = plan_steps.iloc[0]
 
-            # 1. การ์ดหัวข้อแผนงาน
             st.markdown(f"""
             <div class="op-job-header">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -492,7 +488,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
             st.markdown(f"**📋 รายการขั้นตอนและปุ่มควบคุม (แผนงาน: {plan_code}):**")
 
-            # 2. แสดง Step เรียงลงมาภายในแผนงานนี้
             for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
                 s_id = int(step_row["ID"])
                 s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
@@ -503,7 +498,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_step_finished = "เสร็จสิ้น" in s_status
                 is_step_waiting = not is_step_running and not is_step_finished
 
-                # ตรวจสอบสิทธิ์การกด Start ตามลำดับ (ปลดล็อกเฉพาะ Step ถัดไปที่พร้อมทำ)
                 can_start = False
                 if is_step_waiting and not machine_any_running and not next_available_start_found:
                     can_start = True
@@ -512,7 +506,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 with st.container():
                     st.markdown("<div class='step-card'>", unsafe_allow_html=True)
                     
-                    # แสดงสถานะมุมบนของการ์ด
                     if is_step_finished:
                         st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>🟩 เสร็จสิ้นแล้ว (Finish)</span>", unsafe_allow_html=True)
                     elif is_step_running:
@@ -523,7 +516,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         else:
                             st.caption(f"**Step {idx}:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับขั้นตอนก่อนหน้า</span>", unsafe_allow_html=True)
 
-                    # Step ที่ยังไม่เสร็จ: ช่างพิมพ์แก้ไขชื่อ/เวลา และกดบันทึกซ้ำได้เสมอ
                     if not is_step_finished:
                         c_step_name, c_step_time = st.columns([7, 3])
                         with c_step_name:
@@ -544,7 +536,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 key=f"input_step_prog_{s_id}"
                             )
 
-                        # แถวปุ่มควบคุม: [💾 บันทึกแก้ไข] | [🚀 Start / 🏁 Finish]
                         c_btn_save, c_btn_start, c_btn_finish = st.columns([1.5, 2, 2])
 
                         with c_btn_save:
@@ -583,7 +574,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             else:
                                 st.button("🏁 Finish", key=f"btn_finish_disabled_{s_id}", disabled=True, use_container_width=True)
 
-                    # Step ที่เสร็จสิ้นแล้ว (Finish): แสดงผลปกติ พร้อมกล่องกดแก้ไขย้อนหลัง
                     else:
                         c_step_name, c_step_time = st.columns([7, 3])
                         with c_step_name:
@@ -606,7 +596,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
                     st.markdown("</div>", unsafe_allow_html=True)
 
-            # 3. กล่องเพิ่ม Step ประจำแผนงานนี้
             next_step_num = len(plan_steps) + 1
             default_next_step_label = f"OP{next_step_num*10}"
             
@@ -686,7 +675,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # เรียงแผนงานจากน้อยไปหามาก และกรองเฉพาะงานที่ยังไม่เสร็จ
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].sort_values(by="แผนงาน", ascending=True).copy().reset_index(drop=True)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
@@ -711,7 +699,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                     ],
                     column_config={
-                        "ID": None,  # ซ่อน ID
+                        "ID": None,
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85, required=True),
                         "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190, required=True),
                         "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, required=True),
@@ -842,7 +830,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 perf_df["การประเมิน"] = status_eval_list
                 perf_df["ลบ"] = st.session_state.finish_select_all
                 
-                display_finish_df = perf_df.sort_values(by="ID", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
+                # เรียงตาม แผนงาน (PLAN NO.) จากน้อยไปหามาก
+                display_finish_df = perf_df.sort_values(by="แผนงาน", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
 
                 tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
                 with tool_c1:
@@ -857,8 +846,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 edited_finish_table = st.data_editor(
                     display_finish_df,
                     key=f"editor_finish_jobs_table_{st.session_state.finish_select_all}",
+                    column_order=[
+                        "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
+                        "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
+                        "ผลต่าง (ชม.)", "การประเมิน", "ลบ"
+                    ],
                     column_config={
-                        "ID": st.column_config.NumberColumn("ID", disabled=True, width=50),
+                        "ID": None,  # ซ่อน ID ออกจากหน้าตาราง
                         "แผนงาน": st.column_config.TextColumn("PLAN NO.", disabled=True, width=85),
                         "ชื่อ Drawing.": st.column_config.TextColumn("DRAWING NO.", disabled=True, width=180),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", disabled=True, width=95),
@@ -1007,7 +1001,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     
                     st.markdown(f"**📊 รายการสรุปมูลค่างานที่เสร็จสิ้น (รวมทั้งหมด: :green[{total_finished_cost:,.2f} บาท] / {total_finished_hrs:.2f} ชม.)**")
                     st.dataframe(
-                        cost_df.sort_values(by="ID", ascending=True)[["แผนงาน", "ขั้นตอน (Step)", "ชื่อ Drawing.", "เลือกเครื่องจักร", "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
+                        cost_df.sort_values(by="แผนงาน", ascending=True)[["แผนงาน", "ขั้นตอน (Step)", "ชื่อ Drawing.", "เลือกเครื่องจักร", "Basic Machine (ชม.)", "รันโปรแกรม (ชม.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
                         column_config={
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=105),
