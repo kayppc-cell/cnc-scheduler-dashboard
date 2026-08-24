@@ -268,7 +268,7 @@ def normalize_status(status_str: str) -> str:
     else:
         return "🟧 รอคิวผลิต"
 
-@st.cache_data(ttl=4, show_spinner=False)
+@st.cache_data(ttl=2, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -302,7 +302,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (คำนวณเวลาจากหน่วยนาที แปลงเป็น ชม.)
+# 5. Scheduling Engine (คำนวณจากหน่วย นาที แปลงเป็น ชม.)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -587,7 +587,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                         "actual_finish": now_str
                                     }
                                     if calc_prog_mins > 0:
-                                        finish_payload["prog_hrs"] = calc_prog_mins  # เก็บเป็นนาที
+                                        finish_payload["prog_hrs"] = calc_prog_mins
 
                                     if update_supabase_job(s_id, finish_payload):
                                         st.toast(f"บันทึกเวลาจบจริง {s_name} เรียบร้อย!", icon="🏁")
@@ -725,7 +725,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         if not df_db.empty:
             calc_df = df_db.copy()
-            # คำนวณเวลารวมเป็น ชม. = (Setup น. + Basic น. + โปรแกรม น.) / 60
+            
+            # แปลงกรณีข้อมูลเดิมเป็นทศนิยมค้างอยู่ให้เป็นนาทีที่ถูกต้อง
+            # เช่น ถ้าค่าน้อยกว่า 10 ถือว่าเป็น ชม. เดิม ให้คูณ 60 ให้เป็นนาที
+            calc_df["Setup (น.)"] = calc_df["Setup (น.)"].apply(lambda x: float(x) if pd.notna(x) else 0.0)
+            calc_df["Basic (น.)"] = calc_df["Basic (น.)"].apply(lambda x: float(x) * 60.0 if (pd.notna(x) and float(x) < 10 and float(x) > 0 and float(x) != int(float(x))) else (float(x) if pd.notna(x) else 0.0))
+            calc_df["โปรแกรม (น.)"] = calc_df["โปรแกรม (น.)"].apply(lambda x: float(x) * 60.0 if (pd.notna(x) and float(x) < 10 and float(x) > 0 and float(x) != int(float(x))) else (float(x) if pd.notna(x) else 0.0))
+            
+            # คำนวณเวลารวม (ชม.)
             calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
             column_order = [
@@ -749,10 +756,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         st.session_state.active_select_all = False
                         st.rerun()
 
-                data_hash = hash(tuple(active_jobs_editor_df["สถานะงาน"]))
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
-                    key=f"editor_cnc_jobs_{data_hash}_{st.session_state.active_select_all}",
+                    key="editor_cnc_jobs_in_minutes_v2",
                     num_rows="dynamic",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -768,9 +774,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, required=True, default="OP10"),
                         "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, required=True, default="No.1 Awea"),
                         "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm"),
-                        "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=90, min_value=0, max_value=720, step=5, format="%d", default=15),
-                        "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=90, min_value=0, max_value=6000, step=5, format="%d", default=0),
-                        "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=105, min_value=0, max_value=12000, step=10, format="%d", default=120),
+                        "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
+                        "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
+                        "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, min_value=0, max_value=12000, step=10, format="%d", default=120),
                         "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f", disabled=True),
                         "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=130, options=JOB_STATUS, required=True, default="🟧 รอคิวผลิต"),
                         "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55, default=False),
@@ -910,7 +916,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key=f"editor_finish_jobs_table_{st.session_state.finish_select_all}",
+                    key="editor_finish_jobs_table_mins_v2",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                         "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
