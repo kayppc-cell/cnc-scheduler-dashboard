@@ -16,7 +16,6 @@ def get_bangkok_now():
     try:
         return datetime.now(zoneinfo.ZoneInfo("Asia/Bangkok"))
     except Exception:
-        # Fallback กรณีไม่มี tzdata
         return datetime.utcnow() + timedelta(hours=7)
 
 def get_bangkok_str():
@@ -576,7 +575,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                     calc_prog_hrs = 0.0
                                     if pd.notna(s_start):
                                         st_dt = pd.to_datetime(s_start)
-                                        # ลบ timezone ออกเพื่อให้ลบเวลาได้อย่างถูกต้อง
                                         st_dt = st_dt.tz_localize(None) if st_dt.tzinfo else st_dt
                                         cur_dt = now_dt.replace(tzinfo=None)
                                         calc_prog_hrs = round((cur_dt - st_dt).total_seconds() / 3600.0, 2)
@@ -674,6 +672,54 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         df_db = fetch_jobs_from_supabase()
 
+        # ส่วนเพิ่มงานใหม่เข้าระบบ (Form)
+        with st.expander("➕ สั่งผลิตงานใหม่เข้าระบบ (Add New Job)", expanded=False):
+            with st.form("form_add_new_job", clear_on_submit=True):
+                f_c1, f_c2, f_c3 = st.columns([1.5, 2.5, 1.2])
+                with f_c1:
+                    new_f_plan = st.text_input("รหัสแผนงาน (Plan No.):", placeholder="เช่น 26-105")
+                with f_c2:
+                    new_f_draw = st.text_input("ชื่อ Drawing:", placeholder="เช่น P26-PES-105-001-Unit10")
+                with f_c3:
+                    new_f_mat = st.text_input("วัสดุ:", value="SS400")
+
+                f_c4, f_c5, f_c6 = st.columns([1.5, 2, 2])
+                with f_c4:
+                    new_f_type = st.selectbox("ประเภทงาน:", JOB_TYPES)
+                with f_c5:
+                    new_f_step = st.text_input("ขั้นตอน (Step):", placeholder="เช่น ล้างฉาก, OP10")
+                with f_c6:
+                    new_f_machine = st.selectbox("เลือกเครื่องจักร:", MACHINE_LIST)
+
+                f_c7, f_c8, f_c9 = st.columns([1.5, 1.5, 1.5])
+                with f_c7:
+                    new_f_setup = st.number_input("เวลาตั้งเครื่อง (นาที):", min_value=0, max_value=720, value=15, step=5)
+                with f_c8:
+                    new_f_basic = st.number_input("Basic Machine (ชม.):", min_value=0.0, max_value=100.0, value=0.0, step=0.5)
+                with f_c9:
+                    new_f_prog = st.number_input("รันโปรแกรมตามแผน (ชม.):", min_value=0.0, max_value=200.0, value=2.0, step=0.5)
+
+                if st.form_submit_button("🚀 บันทึกสั่งผลิตใหม่เข้าสู่ระบบ", type="primary", use_container_width=True):
+                    if new_f_plan.strip() != "":
+                        payload = {
+                            "plan_code": new_f_plan.strip(),
+                            "drawing_name": new_f_draw.strip(),
+                            "material": new_f_mat.strip(),
+                            "job_type": new_f_type,
+                            "step_name": new_f_step.strip() if new_f_step.strip() != "" else "OP10",
+                            "machine_name": new_f_machine,
+                            "ready_at": get_bangkok_str(),
+                            "setup_mins": float(new_f_setup),
+                            "basic_hrs": float(new_f_basic),
+                            "prog_hrs": float(new_f_prog),
+                            "status": "🟧 รอคิวผลิต"
+                        }
+                        if insert_supabase_job(payload):
+                            st.success(f"เพิ่มแผนงาน {new_f_plan} เข้าสู่ระบบสำเร็จ!")
+                            st.rerun()
+                    else:
+                        st.error("กรุณาระบุรหัสแผนงาน")
+
         if not df_db.empty:
             calc_df = df_db.copy()
             calc_df["รวม (ชม.)"] = ((calc_df["เวลาตั้งเครื่อง (นาที)"] / 60.0) + calc_df["Basic Machine (ชม.)"] + calc_df["รันโปรแกรม (ชม.)"]).round(2)
@@ -688,7 +734,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].sort_values(by="แผนงาน", ascending=True).copy().reset_index(drop=True)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
-            with st.expander("📝 รายการสั่งผลิตในระบบ", expanded=True):
+            with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางแก้ไข/เพิ่มแถวข้อมูล)", expanded=True):
                 tool_act1, tool_act2, _ = st.columns([1.5, 1.5, 7])
                 with tool_act1:
                     if st.button("✅ เลือกทั้งหมด (ตารางสั่งผลิต)", use_container_width=True):
@@ -703,6 +749,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
                     key=f"editor_cnc_jobs_{data_hash}_{st.session_state.active_select_all}",
+                    num_rows="dynamic",  # เปิดให้กดเพิ่มแถวใหม่ (+) ได้โดยตรงบนตาราง
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
                         "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "เวลาตั้งเครื่อง (นาที)",
@@ -712,17 +759,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ID": None,
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85, required=True),
                         "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190, required=True),
-                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, required=True),
-                        "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, required=True),
-                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, required=True),
-                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, required=True),
-                        "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm", required=True),
-                        "เวลาตั้งเครื่อง (นาที)": st.column_config.NumberColumn("Setup (น.)", width=90, min_value=0, max_value=720, step=5, format="%d", required=True),
-                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=90, min_value=0.0, max_value=100.0, step=0.5, format="%.1f", required=True),
-                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=100, min_value=0.0, max_value=200.0, step=0.5, format="%.1f", required=True),
+                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, required=True, default="SS400"),
+                        "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, required=True, default="🟢 งานปกติ"),
+                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, required=True, default="OP10"),
+                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, required=True, default="No.1 Awea"),
+                        "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm"),
+                        "เวลาตั้งเครื่อง (นาที)": st.column_config.NumberColumn("Setup (น.)", width=90, min_value=0, max_value=720, step=5, format="%d", default=15),
+                        "Basic Machine (ชม.)": st.column_config.NumberColumn("Basic (ชม.)", width=90, min_value=0.0, max_value=100.0, step=0.5, format="%.1f", default=0.0),
+                        "รันโปรแกรม (ชม.)": st.column_config.NumberColumn("โปรแกรม (ชม.)", width=100, min_value=0.0, max_value=200.0, step=0.5, format="%.1f", default=2.0),
                         "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=80, format="%.2f", disabled=True),
-                        "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=130, options=JOB_STATUS, required=True),
-                        "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55),
+                        "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=130, options=JOB_STATUS, required=True, default="🟧 รอคิวผลิต"),
+                        "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55, default=False),
                     },
                     hide_index=True,
                     use_container_width=True
@@ -734,15 +781,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         for _, row in edited_jobs.iterrows():
                             if pd.isna(row.get("แผนงาน")) or str(row.get("แผนงาน", "")).strip() == "":
                                 continue
-                            ready_dt = pd.to_datetime(row["วัน-เวลาขึ้นงาน"], errors='coerce')
+                            ready_dt = pd.to_datetime(row.get("วัน-เวลาขึ้นงาน"), errors='coerce')
                             ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else get_bangkok_str()
                             payload = {
-                                "plan_code": str(row["แผนงาน"]), "drawing_name": str(row["ชื่อ Drawing."]), "material": str(row["วัสดุ"]),
-                                "job_type": str(row["ประเภทงาน"]), "step_name": str(row["ขั้นตอน (Step)"]), "machine_name": str(row["เลือกเครื่องจักร"]),
-                                "ready_at": ready_str, "setup_mins": float(row.get("เวลาตั้งเครื่อง (นาที)", 15.0) or 15.0),
+                                "plan_code": str(row.get("แผนงาน", "")),
+                                "drawing_name": str(row.get("ชื่อ Drawing.", "")),
+                                "material": str(row.get("วัสดุ", "SS400")),
+                                "job_type": str(row.get("ประเภทงาน", "🟢 งานปกติ")),
+                                "step_name": str(row.get("ขั้นตอน (Step)", "OP10")),
+                                "machine_name": str(row.get("เลือกเครื่องจักร", "No.1 Awea")),
+                                "ready_at": ready_str,
+                                "setup_mins": float(row.get("เวลาตั้งเครื่อง (นาที)", 15.0) or 15.0),
                                 "basic_hrs": float(row.get("Basic Machine (ชม.)", 0.0) or 0.0),
                                 "prog_hrs": float(row.get("รันโปรแกรม (ชม.)", 0.0) or 0.0),
-                                "status": str(row["สถานะงาน"])
+                                "status": str(row.get("สถานะงาน", "🟧 รอคิวผลิต"))
                             }
                             if pd.notna(row.get("ID")) and row["ID"] > 0:
                                 update_supabase_job(int(row["ID"]), payload)
