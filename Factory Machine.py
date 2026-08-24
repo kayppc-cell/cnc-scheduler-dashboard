@@ -726,13 +726,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         if not df_db.empty:
             calc_df = df_db.copy()
             
-            # แปลงกรณีข้อมูลเดิมเป็นทศนิยมค้างอยู่ให้เป็นนาทีที่ถูกต้อง
-            # เช่น ถ้าค่าน้อยกว่า 10 ถือว่าเป็น ชม. เดิม ให้คูณ 60 ให้เป็นนาที
             calc_df["Setup (น.)"] = calc_df["Setup (น.)"].apply(lambda x: float(x) if pd.notna(x) else 0.0)
             calc_df["Basic (น.)"] = calc_df["Basic (น.)"].apply(lambda x: float(x) * 60.0 if (pd.notna(x) and float(x) < 10 and float(x) > 0 and float(x) != int(float(x))) else (float(x) if pd.notna(x) else 0.0))
             calc_df["โปรแกรม (น.)"] = calc_df["โปรแกรม (น.)"].apply(lambda x: float(x) * 60.0 if (pd.notna(x) and float(x) < 10 and float(x) > 0 and float(x) != int(float(x))) else (float(x) if pd.notna(x) else 0.0))
             
-            # คำนวณเวลารวม (ชม.)
             calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
             column_order = [
@@ -746,19 +743,54 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
             with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางแก้ไข/เพิ่มแถวข้อมูล)", expanded=True):
-                tool_act1, tool_act2, _ = st.columns([1.5, 1.5, 7])
-                with tool_act1:
-                    if st.button("✅ เลือกทั้งหมด (ตารางสั่งผลิต)", use_container_width=True):
-                        st.session_state.active_select_all = True
-                        st.rerun()
-                with tool_act2:
-                    if st.button("❌ ยกเลิกทั้งหมด (ตารางสั่งผลิต)", use_container_width=True):
-                        st.session_state.active_select_all = False
-                        st.rerun()
+                # ส่วนเครื่องมือเลือกแทรกแถวใต้รายการที่ต้องการ
+                st.markdown("**📌 เครื่องมือจัดการตาราง:**")
+                tool_col1, tool_col2, tool_col3 = st.columns([2.5, 4, 3.5])
+                
+                with tool_col1:
+                    btn_c1, btn_c2 = st.columns(2)
+                    with btn_c1:
+                        if st.button("✅ เลือกหมด", use_container_width=True):
+                            st.session_state.active_select_all = True
+                            st.rerun()
+                    with btn_c2:
+                        if st.button("❌ ยกเลิก", use_container_width=True):
+                            st.session_state.active_select_all = False
+                            st.rerun()
+
+                with tool_col2:
+                    with st.popover("➕ แทรกแถวใหม่ใต้รายการที่เลือก"):
+                        if not active_jobs_editor_df.empty:
+                            row_choices = [f"แถวที่ {i+1}: {r['แผนงาน']} - {r['ขั้นตอน (Step)']}" for i, r in active_jobs_editor_df.iterrows()]
+                            selected_target_idx = st.selectbox("เลือกแทรกใต้รายการ:", range(len(row_choices)), format_func=lambda x: row_choices[x])
+                            target_row_data = active_jobs_editor_df.iloc[selected_target_idx]
+                            
+                            ins_step = st.text_input("ชื่อขั้นตอนใหม่:", placeholder="เช่น OP20, พลิกปาด")
+                            ins_setup = st.number_input("Setup (น.):", value=15, step=5)
+                            ins_basic = st.number_input("Basic (น.):", value=0, step=5)
+                            ins_prog = st.number_input("โปรแกรม (น.):", value=120, step=10)
+                            
+                            if st.button("🚀 ยืนยันการแทรกข้อมูล", type="primary", use_container_width=True):
+                                ins_payload = {
+                                    "plan_code": str(target_row_data["แผนงาน"]),
+                                    "drawing_name": str(target_row_data["ชื่อ Drawing."]),
+                                    "material": str(target_row_data["วัสดุ"]),
+                                    "job_type": str(target_row_data["ประเภทงาน"]),
+                                    "step_name": ins_step.strip() if ins_step.strip() != "" else "OP20",
+                                    "machine_name": str(target_row_data["เลือกเครื่องจักร"]),
+                                    "ready_at": get_bangkok_str(),
+                                    "setup_mins": float(ins_setup),
+                                    "basic_hrs": float(ins_basic),
+                                    "prog_hrs": float(ins_prog),
+                                    "status": "🟧 รอคิวผลิต"
+                                }
+                                if insert_supabase_job(ins_payload):
+                                    st.toast("แทรกแถวใหม่เข้าระบบสำเร็จ!", icon="🚀")
+                                    st.rerun()
 
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
-                    key="editor_cnc_jobs_in_minutes_v2",
+                    key="editor_cnc_jobs_in_minutes_v3",
                     num_rows="dynamic",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -788,13 +820,16 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
                 with c_save:
                     if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
+                        save_count = 0
                         for _, row in edited_jobs.iterrows():
-                            if pd.isna(row.get("แผนงาน")) or str(row.get("แผนงาน", "")).strip() == "":
+                            p_code = str(row.get("แผนงาน", "")).strip()
+                            if p_code == "" or p_code == "None" or p_code == "nan":
                                 continue
+                                
                             ready_dt = pd.to_datetime(row.get("วัน-เวลาขึ้นงาน"), errors='coerce')
                             ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else get_bangkok_str()
                             payload = {
-                                "plan_code": str(row.get("แผนงาน", "")),
+                                "plan_code": p_code,
                                 "drawing_name": str(row.get("ชื่อ Drawing.", "")),
                                 "material": str(row.get("วัสดุ", "SS400")),
                                 "job_type": str(row.get("ประเภทงาน", "🟢 งานปกติ")),
@@ -806,11 +841,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 "prog_hrs": float(row.get("โปรแกรม (น.)", 0.0) or 0.0),
                                 "status": str(row.get("สถานะงาน", "🟧 รอคิวผลิต"))
                             }
-                            if pd.notna(row.get("ID")) and row["ID"] > 0:
-                                update_supabase_job(int(row["ID"]), payload)
+                            
+                            row_id = row.get("ID")
+                            if pd.notna(row_id) and str(row_id).strip() != "" and str(row_id) != "None" and float(row_id) > 0:
+                                update_supabase_job(int(row_id), payload)
                             else:
                                 insert_supabase_job(payload)
-                        st.success("บันทึกข้อมูลลงฐานข้อมูลสำเร็จ!")
+                            save_count += 1
+
+                        st.success(f"บันทึกข้อมูลเรียบร้อยแล้ว ({save_count} รายการ)")
                         st.rerun()
 
                 with c_del_top:
@@ -818,8 +857,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     if st.button(f"🗑️ ลบรายการที่เลือก ({len(active_to_delete)} รายการ)", type="secondary", disabled=(len(active_to_delete) == 0), use_container_width=True):
                         del_success = True
                         for _, row in active_to_delete.iterrows():
-                            if pd.notna(row.get("ID")) and row["ID"] > 0:
-                                if not delete_supabase_job(int(row["ID"])):
+                            row_id = row.get("ID")
+                            if pd.notna(row_id) and str(row_id).strip() != "" and str(row_id) != "None" and float(row_id) > 0:
+                                if not delete_supabase_job(int(row_id)):
                                     del_success = False
                         if del_success:
                             st.session_state.active_select_all = False
@@ -916,7 +956,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key="editor_finish_jobs_table_mins_v2",
+                    key="editor_finish_jobs_table_mins_v3",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                         "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
@@ -946,8 +986,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     if st.button(f"🗑️ ลบรายการ Finish ที่เลือก ({len(selected_rows_to_delete)} รายการ)", type="secondary", disabled=(len(selected_rows_to_delete) == 0)):
                         del_success = True
                         for _, row in selected_rows_to_delete.iterrows():
-                            if not delete_supabase_job(int(row["ID"])):
-                                del_success = False
+                            row_id = row.get("ID")
+                            if pd.notna(row_id) and str(row_id).strip() != "" and str(row_id) != "None" and float(row_id) > 0:
+                                if not delete_supabase_job(int(row_id)):
+                                    del_success = False
                         if del_success:
                             st.session_state.finish_select_all = False
                             st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
