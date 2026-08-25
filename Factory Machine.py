@@ -173,7 +173,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# แก้ไขชื่อไตเติลหลักตามที่ระบุ
 header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง) และแผนกเชื่อม (1 แผนก)</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
@@ -202,6 +201,7 @@ MACHINE_LIST = [
     "No.16 แผนกเชื่อม"
 ]
 
+# กำหนดเรตราคาเริ่มต้นสำหรับทุกเครื่องจักรและแผนก โดยมิลลิ่งทั้ง 4 เครื่องกำหนดที่ 400 บาท/ชม.
 DEFAULT_RATES = {
     "No.1 Awea": 1200, "No.2 Awea": 1000, "No.3 Hartford": 1000, "No.4 Sanco": 1000,
     "No.5 Hartford": 1000, "No.6 Bridgeport": 600, "No.7 Bridgeport": 600, "No.8 Hartford": 600, "No.9 Mikron": 1300,
@@ -810,7 +810,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
-                    key="editor_cnc_jobs_in_minutes_v8",
+                    key="editor_cnc_jobs_in_minutes_v9",
                     num_rows="dynamic",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -986,7 +986,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key="editor_finish_jobs_table_mins_v8",
+                    key="editor_finish_jobs_table_mins_v9",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                         "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
@@ -1111,19 +1111,35 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร
+            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)
             # =====================================================
             st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
 
-            if "machine_rates" not in st.session_state:
-                st.session_state.machine_rates = pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES[m]} for m in MACHINE_LIST])
+            # สร้างหรือรีเซ็ต DataFrame ให้รองรับเครื่องจักรทั้งหมดครบทั้ง 16 สถานี
+            current_rates_df = pd.DataFrame([
+                {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES.get(m, 500)}
+                for m in MACHINE_LIST
+            ])
+            
+            if "machine_rates" not in st.session_state or len(st.session_state.machine_rates) != len(MACHINE_LIST):
+                st.session_state.machine_rates = current_rates_df
+            else:
+                # ตรวจสอบความครบถ้วนของรายชื่อเครื่องจักรใน session_state
+                existing_map = dict(zip(st.session_state.machine_rates["เครื่องจักร"], st.session_state.machine_rates["เรตราคา (บาท/ชม.)"]))
+                for m in MACHINE_LIST:
+                    if m not in existing_map:
+                        existing_map[m] = DEFAULT_RATES.get(m, 500)
+                st.session_state.machine_rates = pd.DataFrame([
+                    {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": existing_map[m]} for m in MACHINE_LIST
+                ])
 
-            cost_col1, cost_col2 = st.columns([1, 3])
+            cost_col1, cost_col2 = st.columns([1.1, 2.9])
 
             with cost_col1:
                 st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
                 edited_rates = st.data_editor(
                     st.session_state.machine_rates,
+                    key="editor_machine_rates_full_16",
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                         "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
@@ -1138,7 +1154,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if not finished_jobs_df.empty:
                     cost_df = finished_jobs_df.copy()
                     cost_df["รวม (ชม.)"] = ((cost_df["Setup (น.)"] + cost_df["Basic (น.)"] + cost_df["โปรแกรม (น.)"]) / 60.0).round(2)
-                    cost_df["เรตราคา (บาท/ชม.)"] = cost_df["เลือกเครื่องจักร"].map(rate_map).fillna(1000)
+                    cost_df["เรตราคา (บาท/ชม.)"] = cost_df["เลือกเครื่องจักร"].map(rate_map).fillna(500)
                     cost_df["มูลค่ารวม (บาท)"] = cost_df["รวม (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]
                     
                     total_finished_cost = cost_df["มูลค่ารวม (บาท)"].sum()
