@@ -365,22 +365,18 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (ตัดแท่งรอรันงานออก และคำนวณตามจริง)
+# 5. Scheduling Engine (คำนวณจากเวลาจริง และแสดงครบ 17 สถานี)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
-    active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
-    active_jobs = jobs_df[active_mask].to_dict("records")
-    
-    # กำหนดเวลาเริ่มต้นอิงจากวัน-เวลาขึ้นงานของงานชิ้นแรกสุด
-    valid_dates = [pd.to_datetime(j.get("วัน-เวลาขึ้นงาน")) for j in active_jobs if pd.notna(j.get("วัน-เวลาขึ้นงาน"))]
-    effective_start = min(valid_dates).to_pydatetime() if valid_dates else default_start_datetime
-
-    m_available = {m: effective_start for m in MACHINE_LIST}
+    # กำหนดจุดเริ่มต้นให้อิงตามเวลาจริงปัจจุบัน
+    now_dt = default_start_datetime
+    m_available = {m: now_dt for m in MACHINE_LIST}
     m_last_mat = {m: None for m in MACHINE_LIST}
     m_busy_hrs = {m: 0.0 for m in MACHINE_LIST}
     
+    active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
     valid_jobs = []
-    for j in active_jobs:
+    for j in jobs_df[active_mask].to_dict("records"):
         try:
             basic_mins = max(float(j.get("Basic (น.)", 0.0)), 0.0)
             prog_mins = max(float(j.get("โปรแกรม (น.)", 0.0)), 0.0)
@@ -398,10 +394,10 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             
         ready_time = j.get("วัน-เวลาขึ้นงาน")
         if pd.isna(ready_time):
-            j["ready_at"] = effective_start
+            j["ready_at"] = now_dt
         else:
             dt_val = pd.to_datetime(ready_time, errors='coerce')
-            j["ready_at"] = effective_start if pd.isna(dt_val) else dt_val.to_pydatetime()
+            j["ready_at"] = now_dt if pd.isna(dt_val) else dt_val.to_pydatetime()
             
         j["is_urgent"] = "ด่วนแทรก" in str(j.get("ประเภทงาน", ""))
         j["remain_cut_hrs"] = j["cut_hrs"]
@@ -436,8 +432,23 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                 (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m in MACHINE_LIST[:8])) and j["ready_at"] > cur_time
             ]
             if future_candidates:
-                # ปรับเลื่อนเวลาของเครื่องไปตามเวลาของงานถัดไปทันที (ไม่สร้างแถบสีเทารอรันงาน)
-                m_available[earliest_m] = min(future_candidates)
+                target_jump = min(future_candidates)
+                idle_hrs = (target_jump - cur_time).total_seconds() / 3600.0
+                if idle_hrs > 0.05:
+                    gantt_records.append({
+                        "ข้อความบนแท่งกราฟ": f"รอรันงาน ({idle_hrs:.1f} ชม.)",
+                        "แผนงาน": "-",
+                        "ชื่อ Drawing.": "รอคิวขึ้นงาน",
+                        "จำนวน": "-",
+                        "ขั้นตอน (Step)": "รอรันงาน",
+                        "กิจกรรม": "⚪ รอรันงาน",
+                        "เครื่องจักร": earliest_m,
+                        "วัสดุ": "-",
+                        "เวลาเริ่ม": cur_time,
+                        "เวลาเสร็จ": target_jump,
+                        "ระยะเวลา": f"{idle_hrs:.1f} ชม.",
+                    })
+                m_available[earliest_m] = target_jump
             else:
                 m_available[earliest_m] = cur_time + timedelta(minutes=15)
             continue
@@ -494,10 +505,32 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         m_busy_hrs[earliest_m] += total_cycle
         valid_jobs.remove(selected_job)
             
-    start_anchor = min((j["เวลาเริ่มจริง"] for j in summary_records), default=effective_start)
-    max_finish = max(m_available.values()) if summary_records else effective_start
+    start_anchor = now_dt
+    max_finish = max(m_available.values()) if summary_records else (now_dt + timedelta(hours=8))
+    if max_finish <= start_anchor:
+        max_finish = start_anchor + timedelta(hours=8)
+        
     total_horizon_hrs = max((max_finish - start_anchor).total_seconds() / 3600.0, 1.0)
     
+    # เพิ่มแท่งรอรันงานสำหรับเครื่องที่ไม่มีคิวงาน ให้ครบทั้ง 17 สถานี
+    recorded_machines = {r["เครื่องจักร"] for r in gantt_records}
+    for m in MACHINE_LIST:
+        if m not in recorded_machines:
+            idle_hrs = (max_finish - start_anchor).total_seconds() / 3600.0
+            gantt_records.append({
+                "ข้อความบนแท่งกราฟ": f"รอรันงาน ({idle_hrs:.1f} ชม.)",
+                "แผนงาน": "-",
+                "ชื่อ Drawing.": "รอคิวขึ้นงาน",
+                "จำนวน": "-",
+                "ขั้นตอน (Step)": "รอรันงาน",
+                "กิจกรรม": "⚪ รอรันงาน",
+                "เครื่องจักร": m,
+                "วัสดุ": "-",
+                "เวลาเริ่ม": start_anchor,
+                "เวลาเสร็จ": max_finish,
+                "ระยะเวลา": f"{idle_hrs:.1f} ชม.",
+            })
+
     util_list = []
     for m in MACHINE_LIST:
         busy = m_busy_hrs[m]
@@ -980,8 +1013,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         else:
                             st.error("เกิดข้อผิดพลาดในการลบข้อมูล")
 
-            start_time = datetime(2026, 8, 20, 8, 0)
-            df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, start_time)
+            # ส่งเวลาจริงปัจจุบัน (Real-time Bangkok Now) เข้าสู่ระบบคำนวณผังงาน
+            current_real_time = get_bangkok_now().replace(tzinfo=None)
+            df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, current_real_time)
 
             finished_jobs_df = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
             active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
@@ -1131,7 +1165,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     color_discrete_map={
                         "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
                         "⚙️ งานปกติกำลังกัดงาน": "#007AFF",
-                        "🔴 งานด่วนตัดเฉือน": "#FF2D55"
+                        "🔴 งานด่วนตัดเฉือน": "#FF2D55",
+                        "⚪ รอรันงาน": "#94A3B8"
                     }
                 )
                 fig.update_yaxes(
