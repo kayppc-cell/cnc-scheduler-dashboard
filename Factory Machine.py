@@ -173,11 +173,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง) และแผนกเชื่อม (1 แผนก)</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง), เครื่องกลึง (1 เครื่อง) และแผนกเชื่อม (1 แผนก)</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก
+# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก (รวม 17 สถานี)
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -198,7 +198,7 @@ MACHINE_LIST = [
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
     "No.10 เครื่องเจียรราบ", "No.11 เครื่องเจียรกลม",
     "No.12 มิลลิ่ง 1", "No.13 มิลลิ่ง 2", "No.14 มิลลิ่ง 3", "No.15 มิลลิ่ง 4",
-    "No.16 แผนกเชื่อม"
+    "No.16 เครื่องกลึง", "No.17 แผนกเชื่อม"
 ]
 
 DEFAULT_RATES = {
@@ -206,7 +206,7 @@ DEFAULT_RATES = {
     "No.5 Hartford": 1000, "No.6 Bridgeport": 600, "No.7 Bridgeport": 600, "No.8 Hartford": 600, "No.9 Mikron": 1300,
     "No.10 เครื่องเจียรราบ": 500, "No.11 เครื่องเจียรกลม": 500,
     "No.12 มิลลิ่ง 1": 400, "No.13 มิลลิ่ง 2": 400, "No.14 มิลลิ่ง 3": 400, "No.15 มิลลิ่ง 4": 400,
-    "No.16 แผนกเชื่อม": 450
+    "No.16 เครื่องกลึง": 400, "No.17 แผนกเชื่อม": 450
 }
 
 ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
@@ -214,7 +214,7 @@ JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทร�
 JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟩 เสร็จสิ้นแล้ว"]
 
 # =========================================================
-# 4. ฟังก์ชันเชื่อมต่อ Supabase (พร้อมระบบ Auto-Fallback ป้องกัน Error ฟิลด์)
+# 4. ฟังก์ชันเชื่อมต่อ Supabase
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -234,7 +234,6 @@ def insert_supabase_job(payload: dict) -> bool:
             st.cache_data.clear()
             return True
         else:
-            # กรณีที่ตารางใน Supabase ยังไม่มีคอลัมน์ qty ให้ตัด qty ออกแล้วลองบันทึกซ้ำ
             if "qty" in payload:
                 payload_no_qty = {k: v for k, v in payload.items() if k != "qty"}
                 res2 = requests.post(endpoint, headers=get_supabase_headers(), json=payload_no_qty, timeout=6)
@@ -576,7 +575,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         step_val = st.text_input(
                             f"ชื่อขั้นตอน Step {idx}:", 
                             value=s_name, 
-                            placeholder="เช่น OP10, ปาดผิวเจาะรู, เชื่อมประกอบ, เจียร", 
+                            placeholder="เช่น OP10, ปาดผิวเจาะรู, กลึง, เชื่อมประกอบ, เจียร", 
                             key=f"input_step_name_{s_id}"
                         )
 
@@ -652,7 +651,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             default_next_step_label = f"OP{next_step_num*10}"
             
             with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับแผนงาน {plan_code} (Step {next_step_num})", expanded=False):
-                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, เจียร, เชื่อม", key=f"new_step_name_input_{plan_code}_{plan_idx}")
+                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, กลึง, เจียร, เชื่อม", key=f"new_step_name_input_{plan_code}_{plan_idx}")
 
                 if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num} เข้าคิวแผน {plan_code}", key=f"btn_add_step_{plan_code}_{plan_idx}", type="secondary", use_container_width=True):
                     now_str = get_bangkok_str()
@@ -731,7 +730,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with f_c4:
                     new_f_type = st.selectbox("ประเภทงาน:", JOB_TYPES)
                 with f_c5:
-                    new_f_step = st.text_input("ขั้นตอน (Step):", placeholder="เช่น ล้างฉาก, OP10, มิลลิ่ง, เชื่อม")
+                    new_f_step = st.text_input("ขั้นตอน (Step):", placeholder="เช่น ล้างฉาก, OP10, มิลลิ่ง, กลึง, เชื่อม")
                 with f_c6:
                     new_f_machine = st.selectbox("เลือกเครื่องจักร / แผนก:", MACHINE_LIST)
 
@@ -807,7 +806,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             selected_target_idx = st.selectbox("เลือกแทรกใต้รายการ:", range(len(row_choices)), format_func=lambda x: row_choices[x])
                             target_row_data = active_jobs_editor_df.iloc[selected_target_idx]
                             
-                            ins_step = st.text_input("ชื่อขั้นตอนใหม่:", placeholder="เช่น OP20, เจียร, เชื่อม")
+                            ins_step = st.text_input("ชื่อขั้นตอนใหม่:", placeholder="เช่น OP20, กลึง, เจียร, เชื่อม")
                             ins_qty = st.number_input("จำนวน:", min_value=1, value=int(target_row_data.get("จำนวน", 1) or 1), step=1)
                             ins_setup = st.number_input("Setup (น.):", value=15, step=5)
                             ins_basic = st.number_input("Basic (น.):", value=0, step=5)
@@ -833,7 +832,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     st.toast("แทรกแถวใหม่เข้าระบบสำเร็จ!", icon="🚀")
                                     st.rerun()
 
-                # ใช้ Dynamic Hash ผูกกับ Key เพื่อบังคับให้ Data Editor อัปเดตข้อมูลใหม่ทันที
                 grid_hash = f"{len(active_jobs_editor_df)}_{hash(tuple(active_jobs_editor_df['ID'].fillna(0)))}"
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
@@ -1013,7 +1011,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key="editor_finish_jobs_table_mins_v10",
+                    key="editor_finish_jobs_table_mins_v11",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                         "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
@@ -1087,7 +1085,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     marker_line_width=1
                 )
                 fig.update_layout(
-                    height=600,
+                    height=650,  # รองรับ 17 สถานี
                     xaxis_title="วันและเวลา",
                     yaxis_title="เครื่องจักร / แผนก",
                     uniformtext_minsize=8,
@@ -1123,7 +1121,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cliponaxis=False
                 )
                 fig_bar.update_layout(
-                    height=550,
+                    height=600,  # รองรับ 17 สถานี
                     margin=dict(l=40, r=40, t=10, b=30),
                     xaxis_title="อัตราการใช้งาน (%)",
                     yaxis_title="เครื่องจักร / แผนก",
@@ -1164,7 +1162,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
                 edited_rates = st.data_editor(
                     st.session_state.machine_rates,
-                    key="editor_machine_rates_full_16_v2",
+                    key="editor_machine_rates_full_17",
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                         "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
