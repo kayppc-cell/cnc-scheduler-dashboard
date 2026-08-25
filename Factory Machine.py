@@ -22,6 +22,12 @@ def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def get_day_working_windows(dt_date):
+    """
+    กำหนดหน้าต่างเวลาทำงานของแต่ละวัน:
+    - จันทร์-ศุกร์ (0-4): 08:00-12:00 และ 13:00-20:00 (11 ชม./วัน)
+    - เสาร์ (5): 08:00-12:00 และ 13:00-17:00 (8 ชม./วัน)
+    - อาทิตย์ (6): หยุด
+    """
     weekday = dt_date.weekday()
     if weekday == 6:  # วันอาทิตย์
         return []
@@ -37,6 +43,7 @@ def get_day_working_windows(dt_date):
         ]
 
 def get_next_valid_work_time(dt: datetime) -> datetime:
+    """หาจุดเริ่มต้นเวลาทำงานถัดไปที่ถูกต้อง"""
     cur_date = dt.date()
     for _ in range(14):
         windows = get_day_working_windows(cur_date)
@@ -50,6 +57,9 @@ def get_next_valid_work_time(dt: datetime) -> datetime:
     return dt
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
+    """
+    คำนวณช่วงเวลาทำงานตัดเบรกเที่ยง, ตัดกะเสาร์ 17:00 น., กะธรรมดา 20:00 น. และหยุดวันอาทิตย์
+    """
     segments = []
     remaining_hours = duration_hours
     current_dt = get_next_valid_work_time(start_dt)
@@ -252,7 +262,6 @@ st.markdown("""
         background: linear-gradient(145deg, #FFFFFF 0%, #F0FDF4 100%) !important;
     }
 
-    /* กล่องคำอธิบายกะทำงานใต้กราฟ */
     .schedule-info-box {
         background: #F8FAFC;
         border: 1.5px solid #E2E8F0;
@@ -288,7 +297,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง), เครื่องกลึง (1 เครื่อง) และแผนกเชื่อม (1 แผนก) | กะทำงาน 08:00 - 20:00 น.</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:00-20:00 น.) | ส. (08:00-17:00 น.) | พักเที่ยง 12:00-13:00 น. | หยุดวันอาทิตย์</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
@@ -1210,10 +1219,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline - Advanced UI)
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
+                
+                df_gantt["เริ่มแสดง"] = df_gantt["เวลาเริ่ม"].dt.strftime("%d/%m/%Y %H:%M น.")
+                df_gantt["เสร็จแสดง"] = df_gantt["เวลาเสร็จ"].dt.strftime("%d/%m/%Y %H:%M น.")
+
                 fig = px.timeline(
                     df_gantt,
                     x_start="เวลาเริ่ม",
@@ -1221,7 +1234,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     y="เครื่องจักร",
                     color="กิจกรรม",
                     text="ข้อความบนแท่งกราฟ",
-                    hover_data=["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "วัสดุ", "ระยะเวลา"],
+                    custom_data=["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "วัสดุ", "เริ่มแสดง", "เสร็จแสดง", "ระยะเวลา"],
                     category_orders={"เครื่องจักร": MACHINE_LIST},
                     color_discrete_map={
                         "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
@@ -1229,30 +1242,64 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "🔴 งานด่วนตัดเฉือน": "#FF2D55"
                     }
                 )
+                
+                fig.update_traces(
+                    textposition="inside",
+                    insidetextanchor="middle",
+                    marker_line_color="#FFFFFF",
+                    marker_line_width=1,
+                    hovertemplate="""
+                    <b>📌 %{customdata[0]}</b> | %{customdata[1]}<br>
+                    ⚙️ ขั้นตอน: %{customdata[3]} | 🔢 จำนวน: %{customdata[2]} ชิ้น (%{customdata[4]})<br>
+                    ----------------------------------<br>
+                    ⏱️ <b>เริ่ม:</b> %{customdata[5]}<br>
+                    🏁 <b>เสร็จ:</b> %{customdata[6]}<br>
+                    ⏳ <b>ระยะเวลารอบนี้:</b> %{customdata[7]}
+                    <extra></extra>
+                    """
+                )
+                
                 fig.update_yaxes(
                     autorange="reversed",
                     type="category",
                     categoryorder="array",
                     categoryarray=MACHINE_LIST,
                     showgrid=True,
-                    gridcolor="#F1F5F9"
+                    gridcolor="#E2E8F0"
                 )
-                fig.update_traces(
-                    textposition="inside",
-                    insidetextanchor="middle",
-                    marker_line_color="#FFFFFF",
-                    marker_line_width=1
+                
+                fig.update_xaxes(
+                    showgrid=True,
+                    gridcolor="#E2E8F0",
+                    dtickrange=[
+                        dict(dtick="M1", value="%b %Y"),
+                        dict(dtick="D1", value="%a %d %b"),
+                        dict(dtick=3600000 * 2, value="%H:%M")
+                    ],
+                    rangeselector=dict(
+                        buttons=list([
+                            dict(count=1, label="🔍 วันนี้", step="day", stepmode="backward"),
+                            dict(count=3, label="📅 3 วัน", step="day", stepmode="backward"),
+                            dict(count=7, label="📆 7 วัน", step="day", stepmode="backward"),
+                            dict(step="all", label="🌐 ทั้งหมด")
+                        ]),
+                        font=dict(size=12, color="#1E293B"),
+                        bgcolor="#F1F5F9",
+                        activecolor="#DBEAFE"
+                    )
                 )
+
                 fig.update_layout(
-                    height=650,
-                    xaxis_title="วันและเวลา (ตามเวลากะทำงานจริงของโรงงาน)",
+                    height=680,
+                    xaxis_title="วันและเวลาทำงาน",
                     yaxis_title="เครื่องจักร / แผนก",
                     uniformtext_minsize=8,
                     uniformtext_mode='hide',
                     plot_bgcolor="#FFFFFF",
                     paper_bgcolor="#FFFFFF",
-                    xaxis=dict(showgrid=True, gridcolor="#F1F5F9")
+                    margin=dict(l=40, r=40, t=30, b=30)
                 )
+                
                 st.plotly_chart(fig, use_container_width=True)
 
                 # กล่องอธิบายช่วงเวลากะทำงานและเบรกใต้กราฟ
