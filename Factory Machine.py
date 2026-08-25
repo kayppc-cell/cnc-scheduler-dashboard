@@ -503,7 +503,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (นับเวลาประเทศไทย GMT+7 อัตโนมัติ)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (ระบุและแก้ไขขั้นตอนได้ที่นี่)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -713,7 +713,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         df_db = fetch_jobs_from_supabase()
 
-        # ส่วนเพิ่มงานใหม่เข้าระบบ (Form นาที)
+        # ส่วนเพิ่มงานใหม่เข้าระบบ (Form นาที) -> ทำสีเทาปิดช่องขั้นตอน (Step)
         with st.expander("➕ สั่งผลิตงานใหม่เข้าระบบ (Add New Job)", expanded=False):
             with st.form("form_add_new_job_main", clear_on_submit=True):
                 f_c1, f_c2, f_c_qty, f_c3 = st.columns([1.5, 2.5, 1, 1.2])
@@ -730,7 +730,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with f_c4:
                     new_f_type = st.selectbox("ประเภทงาน:", JOB_TYPES)
                 with f_c5:
-                    new_f_step = st.text_input("ขั้นตอน (Step):", placeholder="เช่น ล้างฉาก, OP10, มิลลิ่ง, กลึง, เชื่อม")
+                    # ทำสีเทา disabled ไม่ต้องระบุขั้นตอนในฟอร์ม ให้รับจากหน้างาน
+                    st.text_input("ขั้นตอน (Step):", value="(รอช่างหน้าเครื่องระบุ)", disabled=True, help="ช่องนี้ถูกล็อกไว้ ให้ช่างหน้าเครื่องเป็นผู้ระบุชื่อขั้นตอนจริง")
                 with f_c6:
                     new_f_machine = st.selectbox("เลือกเครื่องจักร / แผนก:", MACHINE_LIST)
 
@@ -750,7 +751,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "qty": int(new_f_qty),
                             "material": new_f_mat.strip(),
                             "job_type": new_f_type,
-                            "step_name": new_f_step.strip() if new_f_step.strip() != "" else "OP10",
+                            "step_name": "OP10",
                             "machine_name": new_f_machine,
                             "ready_at": get_bangkok_str(),
                             "setup_mins": float(new_f_setup),
@@ -802,11 +803,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with tool_col2:
                     with st.popover("➕ แทรกแถวใหม่ใต้รายการที่เลือก"):
                         if not active_jobs_editor_df.empty:
-                            row_choices = [f"แถวที่ {i+1}: {r['แผนงาน']} - {r['ขั้นตอน (Step)']}" for i, r in active_jobs_editor_df.iterrows()]
+                            row_choices = [f"แถวที่ {i+1}: {r['แผนงาน']} - {r['ชื่อ Drawing.']}" for i, r in active_jobs_editor_df.iterrows()]
                             selected_target_idx = st.selectbox("เลือกแทรกใต้รายการ:", range(len(row_choices)), format_func=lambda x: row_choices[x])
                             target_row_data = active_jobs_editor_df.iloc[selected_target_idx]
                             
-                            ins_step = st.text_input("ชื่อขั้นตอนใหม่:", placeholder="เช่น OP20, กลึง, เจียร, เชื่อม")
                             ins_qty = st.number_input("จำนวน:", min_value=1, value=int(target_row_data.get("จำนวน", 1) or 1), step=1)
                             ins_setup = st.number_input("Setup (น.):", value=15, step=5)
                             ins_basic = st.number_input("Basic (น.):", value=0, step=5)
@@ -819,7 +819,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     "qty": int(ins_qty),
                                     "material": str(target_row_data["วัสดุ"]),
                                     "job_type": str(target_row_data["ประเภทงาน"]),
-                                    "step_name": ins_step.strip() if ins_step.strip() != "" else "OP20",
+                                    "step_name": "OP20",
                                     "machine_name": str(target_row_data["เลือกเครื่องจักร"]),
                                     "ready_at": get_bangkok_str(),
                                     "setup_mins": float(ins_setup),
@@ -849,7 +849,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, min_value=1, max_value=10000, step=1, format="%d", default=1),
                         "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, default="SS400"),
                         "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
-                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, default="OP10"),
+                        # ล็อกคอลัมน์ขั้นตอน (Step) เป็นสีเทา (disabled=True) รับข้อมูลจากโหมดช่างหน้าเครื่องอย่างเดียว
+                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, disabled=True, default="OP10", help="ช่องนี้ถูกล็อกไว้ ข้อมูลจะรับมาจากโหมดช่างหน้าเครื่องโดยตรง"),
                         "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
                         "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm"),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
@@ -879,13 +880,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             ready_dt = pd.to_datetime(row.get("วัน-เวลาขึ้นงาน"), errors='coerce')
                             ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else get_bangkok_str()
                             
+                            step_val = str(row.get("ขั้นตอน (Step)", "OP10"))
+                            if step_val in ["", "None", "nan"]:
+                                step_val = "OP10"
+
                             payload = {
                                 "plan_code": p_code,
                                 "drawing_name": d_name,
                                 "qty": int(row.get("จำนวน", 1) or 1),
                                 "material": str(row.get("วัสดุ", "SS400")),
                                 "job_type": str(row.get("ประเภทงาน", "🟢 งานปกติ")),
-                                "step_name": str(row.get("ขั้นตอน (Step)", "OP10")),
+                                "step_name": step_val,
                                 "machine_name": str(row.get("เลือกเครื่องจักร", "No.1 Awea")),
                                 "ready_at": ready_str,
                                 "setup_mins": float(row.get("Setup (น.)", 15.0) or 15.0),
@@ -1085,7 +1090,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     marker_line_width=1
                 )
                 fig.update_layout(
-                    height=650,  # รองรับ 17 สถานี
+                    height=600,
                     xaxis_title="วันและเวลา",
                     yaxis_title="เครื่องจักร / แผนก",
                     uniformtext_minsize=8,
@@ -1121,7 +1126,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cliponaxis=False
                 )
                 fig_bar.update_layout(
-                    height=600,  # รองรับ 17 สถานี
+                    height=550,
                     margin=dict(l=40, r=40, t=10, b=30),
                     xaxis_title="อัตราการใช้งาน (%)",
                     yaxis_title="เครื่องจักร / แผนก",
@@ -1162,7 +1167,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
                 edited_rates = st.data_editor(
                     st.session_state.machine_rates,
-                    key="editor_machine_rates_full_17",
+                    key="editor_machine_rates_full_17_v3",
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                         "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
