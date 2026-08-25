@@ -60,7 +60,7 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI
+# 2. ตกแต่ง UI สไตล์โมเดิร์น & สดใส (Modern Vibrant Design)
 # =========================================================
 st.markdown("""
 <style>
@@ -77,15 +77,15 @@ st.markdown("""
     }
 
     .main-header {
-        background: linear-gradient(135deg, #0F2B5C 0%, #1E4E8C 100%);
-        padding: 14px 18px;
-        border-radius: 14px;
+        background: linear-gradient(135deg, #0B192C 0%, #1E3E62 50%, #000000 100%);
+        padding: 14px 20px;
+        border-radius: 16px;
         color: white;
-        margin-bottom: 12px;
+        margin-bottom: 14px;
         display: flex;
         align-items: center;
         gap: 16px;
-        box-shadow: 0 4px 14px rgba(15, 43, 92, 0.25);
+        box-shadow: 0 6px 20px rgba(11, 25, 44, 0.35);
     }
     .header-logo {
         width: 110px;
@@ -95,37 +95,41 @@ st.markdown("""
         display: block;
         flex-shrink: 0;
         background: transparent !important;
-        filter: drop-shadow(0 2px 5px rgba(0,0,0,0.25));
+        filter: drop-shadow(0 2px 6px rgba(255,255,255,0.2));
     }
     .header-text h1 {
         color: #FFFFFF !important;
-        font-size: 16.5px !important;
+        font-size: 17px !important;
         margin: 0 !important;
         font-weight: 800 !important;
-        line-height: 1.25 !important;
+        letter-spacing: 0.3px;
+        line-height: 1.3 !important;
     }
     .header-text p {
-        color: #D6E4FF !important;
+        color: #93C5FD !important;
         margin: 4px 0 0 0 !important;
-        font-size: 11px !important;
+        font-size: 11.5px !important;
+        font-weight: 500;
     }
 
     .kpi-container {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 10px;
+        gap: 12px;
         margin-bottom: 16px;
     }
     .kpi-card {
-        padding: 14px 16px;
-        border-radius: 12px;
+        padding: 14px 18px;
+        border-radius: 14px;
         color: white;
-        box-shadow: 0 3px 8px rgba(0,0,0,0.08);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        transition: transform 0.2s ease;
     }
-    .kpi-green { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
-    .kpi-blue { background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%); }
-    .kpi-orange { background: linear-gradient(135deg, #f12711 0%, #f5af19 100%); }
-    .kpi-purple { background: linear-gradient(135deg, #8A2387 0%, #E94057 50%, #F27121 100%); }
+    .kpi-card:hover { transform: translateY(-2px); }
+    .kpi-green { background: linear-gradient(135deg, #059669 0%, #10B981 100%); }
+    .kpi-blue { background: linear-gradient(135deg, #2563EB 0%, #38BDF8 100%); }
+    .kpi-orange { background: linear-gradient(135deg, #EA580C 0%, #F59E0B 100%); }
+    .kpi-purple { background: linear-gradient(135deg, #7C3AED 0%, #EC4899 100%); }
     
     .kpi-title { 
         font-size: 13.5px !important; 
@@ -134,30 +138,58 @@ st.markdown("""
         opacity: 0.95;
     }
     .kpi-value { 
-        font-size: 22px !important; 
+        font-size: 23px !important; 
         font-weight: 800 !important; 
     }
 
+    /* สไตล์การ์ดหัวคิวงานหน้าเครื่อง (Modern Job Card Header) */
     .op-job-header {
-        background: #FFFFFF;
-        padding: 14px 16px;
-        border-radius: 12px;
-        border-left: 6px solid #2563EB;
-        border-top: 1.5px solid #E2E8F0;
-        border-right: 1.5px solid #E2E8F0;
-        border-bottom: 1.5px solid #E2E8F0;
-        margin-top: 16px;
+        background: linear-gradient(145deg, #FFFFFF 0%, #F8FAFC 100%);
+        padding: 16px 20px;
+        border-radius: 16px;
+        border: 1.5px solid #E2E8F0;
+        border-left: 7px solid #4F46E5;
+        margin-top: 18px;
         margin-bottom: 14px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+        box-shadow: 0 8px 24px rgba(79, 70, 229, 0.08), 0 2px 6px rgba(0, 0, 0, 0.03);
     }
 
+    .badge-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 12px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 12.5px;
+        margin-right: 8px;
+        margin-bottom: 4px;
+    }
+    .badge-station { background: #EEF2FF; color: #4338CA; border: 1px solid #C7D2FE; }
+    .badge-drawing { background: #F0F9FF; color: #0369A1; border: 1px solid #BAE6FD; }
+    .badge-qty { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; font-weight: 800; }
+    .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
+
+    /* สไตล์ขั้นตอน Step Card */
     .step-card {
         background: #FFFFFF;
-        padding: 12px 14px;
-        border-radius: 10px;
+        padding: 14px 16px;
+        border-radius: 14px;
         border: 1.5px solid #E2E8F0;
         margin-bottom: 12px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+    }
+    .step-card-running {
+        border-color: #60A5FA !important;
+        background: linear-gradient(145deg, #FFFFFF 0%, #EFF6FF 100%) !important;
+        box-shadow: 0 4px 14px rgba(37, 99, 235, 0.12) !important;
+    }
+    .step-card-ready {
+        border-color: #FCD34D !important;
+        background: linear-gradient(145deg, #FFFFFF 0%, #FFFBEB 100%) !important;
+    }
+    .step-card-finished {
+        border-color: #A7F3D0 !important;
+        background: linear-gradient(145deg, #FFFFFF 0%, #F0FDF4 100%) !important;
     }
 
     div.stButton > button:disabled {
@@ -505,7 +537,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (จัดกลุ่มแยกตาม แผนงาน + Drawing)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (จัดกลุ่มแยกตาม แผนงาน + Drawing พร้อมสไตล์โมเดิร์น)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -532,18 +564,28 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             
             plan_steps = m_all_jobs[(m_all_jobs["แผนงาน"] == plan_code) & (m_all_jobs["ชื่อ Drawing."] == drawing_code)]
             first_step_info = plan_steps.iloc[0]
+            mat_val = first_step_info.get('วัสดุ', '-')
+            qty_val = int(first_step_info.get('จำนวน', 1) or 1)
 
+            # การ์ดหัวคิวงานสไตล์โมเดิร์นพร้อมแท็กสีสดใส
             st.markdown(f"""
             <div class="op-job-header">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0; color:#1E3A8A; font-size:19px; font-weight:800;">📌 คิวงาน {group_idx}: {plan_code}</h3>
-                    <span style="background:#EFF6FF; color:#1D4ED8; padding:3px 10px; border-radius:6px; font-weight:700; font-size:12px;">สถานี: {selected_m}</span>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;">
+                        <span style="background:linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(79,70,229,0.3);">คิวที่ {group_idx}</span>
+                        <span>แผนงาน: {plan_code}</span>
+                    </div>
+                    <span class="badge-chip badge-station">🏭 {selected_m}</span>
                 </div>
-                <p style="font-size:14.5px; margin:5px 0 2px 0;"><b>📄 Drawing:</b> {drawing_code} | <b>🔢 จำนวน:</b> {int(first_step_info.get('จำนวน', 1) or 1)} ชิ้น | <b>🔩 วัสดุ:</b> {first_step_info.get('วัสดุ', '-')}</p>
+                <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+                    <span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span>
+                    <span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span>
+                    <span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span>
+                </div>
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown(f"**📋 รายการขั้นตอนและปุ่มควบคุม (แผนงาน: {plan_code} | {drawing_code}):**")
+            st.markdown(f"**📋 รายการขั้นตอนและปุ่มควบคุม ({plan_code} | {drawing_code}):**")
 
             for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
                 s_id = int(step_row["ID"])
@@ -562,18 +604,27 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     can_start = True
                     next_available_start_found = True
 
+                # กำหนดคลาสสไตล์ขอบการ์ดตามสถานะ
+                card_style_class = "step-card"
+                if is_step_running:
+                    card_style_class += " step-card-running"
+                elif can_start:
+                    card_style_class += " step-card-ready"
+                elif is_step_finished:
+                    card_style_class += " step-card-finished"
+
                 with st.container():
-                    st.markdown("<div class='step-card'>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='{card_style_class}'>", unsafe_allow_html=True)
                     
                     if is_step_finished:
                         finish_txt = pd.to_datetime(s_finish).strftime('%d/%m %H:%M') if pd.notna(s_finish) else '-'
-                        st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:700;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
+                        st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                     elif is_step_running:
                         start_txt = pd.to_datetime(s_start).strftime('%d/%m %H:%M') if pd.notna(s_start) else '-'
-                        st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800;'>🟦 กำลังผลิต (เริ่มรัน: {start_txt})</span>", unsafe_allow_html=True)
+                        st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800; font-size:13.5px;'>🟦 กำลังผลิต (เริ่มรัน: {start_txt}) ⏱️</span>", unsafe_allow_html=True)
                     else:
                         if can_start:
-                            st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:700;'>🟧 พร้อมเริ่มงาน (Ready)</span>", unsafe_allow_html=True)
+                            st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:800;'>🟧 พร้อมเริ่มงาน (Ready to Start)</span>", unsafe_allow_html=True)
                         else:
                             st.caption(f"**Step {idx}:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับขั้นตอนก่อนหน้า</span>", unsafe_allow_html=True)
 
