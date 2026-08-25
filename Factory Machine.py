@@ -383,6 +383,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                         "ข้อความบนแท่งกราฟ": f"รอรันงาน ({idle_hrs:.2f} ชม.)",
                         "แผนงาน": "-",
                         "ชื่อ Drawing.": "รอคิวขึ้นงาน",
+                        "จำนวน": "-",
                         "ขั้นตอน (Step)": "รอรันงาน",
                         "กิจกรรม": "⚪ รอรันงาน",
                         "เครื่องจักร": earliest_m,
@@ -413,18 +414,22 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         step_raw = str(selected_job.get("ขั้นตอน (Step)", "OP10"))
         job_code = str(selected_job.get('แผนงาน', '-'))
         drawing_name = str(selected_job.get("ชื่อ Drawing.", "-"))
+        qty_val = str(selected_job.get("จำนวน", 1))
         
         if setup_mins > 0:
             gantt_records.append({
                 "ข้อความบนแท่งกราฟ": "Setup", "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name,
-                "ขั้นตอน (Step)": step_raw, "กิจกรรม": "🔧 ตั้งเครื่อง / เซ็ตศูนย์", "เครื่องจักร": earliest_m,
-                "วัสดุ": selected_job.get("วัสดุ", "-"), "เวลาเริ่ม": setup_start, "เวลาเสร็จ": setup_end, "ระยะเวลา": f"{setup_mins:.0f} นาที"
+                "จำนวน": qty_val, "ขั้นตอน (Step)": step_raw, "กิจกรรม": "🔧 ตั้งเครื่อง / เซ็ตศูนย์",
+                "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"),
+                "เวลาเริ่ม": setup_start, "เวลาเสร็จ": setup_end, "ระยะเวลา": f"{setup_mins:.0f} นาที"
             })
             
         gantt_records.append({
             "ข้อความบนแท่งกราฟ": step_raw, "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name,
-            "ขั้นตอน (Step)": step_raw, "กิจกรรม": "🔴 งานด่วนตัดเฉือน" if selected_job["is_urgent"] else "⚙️ งานปกติกำลังกัดงาน",
-            "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"), "เวลาเริ่ม": cut_start, "เวลาเสร็จ": cut_end, "ระยะเวลา": f"{actual_cut_hrs:.2f} ชม."
+            "จำนวน": qty_val, "ขั้นตอน (Step)": step_raw,
+            "กิจกรรม": "🔴 งานด่วนตัดเฉือน" if selected_job["is_urgent"] else "⚙️ งานปกติกำลังกัดงาน",
+            "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"),
+            "เวลาเริ่ม": cut_start, "เวลาเสร็จ": cut_end, "ระยะเวลา": f"{actual_cut_hrs:.2f} ชม."
         })
         
         total_cycle = (setup_mins / 60.0) + actual_cut_hrs
@@ -804,7 +809,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
-                    key="editor_cnc_jobs_in_minutes_v6",
+                    key="editor_cnc_jobs_in_minutes_v7",
                     num_rows="dynamic",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -980,7 +985,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key="editor_finish_jobs_table_mins_v6",
+                    key="editor_finish_jobs_table_mins_v7",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                         "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
@@ -1028,7 +1033,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =====================================================
             # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)
             # =====================================================
-            if not df_summary.empty:
+            if not df_summary.empty and not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 fig = px.timeline(
                     df_gantt,
@@ -1054,7 +1059,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     marker_line_width=1
                 )
                 fig.update_layout(
-                    height=600,  # ขยายความสูงรองรับ 16 สถานี
+                    height=600,
                     xaxis_title="วันและเวลา",
                     yaxis_title="เครื่องจักร / แผนก",
                     uniformtext_minsize=8,
@@ -1090,7 +1095,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cliponaxis=False
                 )
                 fig_bar.update_layout(
-                    height=550,  # ขยายความสูงรองรับ 16 สถานี
+                    height=550,
                     margin=dict(l=40, r=40, t=10, b=30),
                     xaxis_title="อัตราการใช้งาน (%)",
                     yaxis_title="เครื่องจักร / แผนก",
