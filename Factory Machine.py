@@ -10,7 +10,7 @@ import requests
 import streamlit.components.v1 as components
 
 # =========================================================
-# 0. Timezone Helper (เวลาประเทศไทย GMT+7) & Shift Rules
+# 0. Timezone Helper (GMT+7) & Factory Shift Rules
 # =========================================================
 def get_bangkok_now():
     try:
@@ -21,44 +21,77 @@ def get_bangkok_now():
 def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
-# กำหนดเวลากะทำงานโรงงาน (08:00 - 20:00 น.)
-WORK_START_HOUR = 8
-WORK_END_HOUR = 20
+def get_day_working_windows(dt_date):
+    """
+    กำหนดหน้าต่างเวลาทำงานของแต่ละวัน:
+    - จันทร์-ศุกร์ (0-4): 08:00-12:00 และ 13:00-20:00
+    - เสาร์ (5): 08:00-12:00 และ 13:00-17:00
+    - อาทิตย์ (6): หยุด
+    """
+    weekday = dt_date.weekday()
+    if weekday == 6:  # วันอาทิตย์
+        return []
+    elif weekday == 5:  # วันเสาร์
+        return [
+            (datetime.combine(dt_date, time(8, 0)), datetime.combine(dt_date, time(12, 0))),
+            (datetime.combine(dt_date, time(13, 0)), datetime.combine(dt_date, time(17, 0)))
+        ]
+    else:  # จันทร์ - ศุกร์
+        return [
+            (datetime.combine(dt_date, time(8, 0)), datetime.combine(dt_date, time(12, 0))),
+            (datetime.combine(dt_date, time(13, 0)), datetime.combine(dt_date, time(20, 0)))
+        ]
 
-def normalize_to_work_hours(dt: datetime) -> datetime:
-    """ปรับเวลาให้ตกอยู่ในช่วงเวลากะทำงาน 08:00 - 20:00 น."""
-    if dt.time() < time(WORK_START_HOUR, 0):
-        return dt.replace(hour=WORK_START_HOUR, minute=0, second=0, microsecond=0)
-    elif dt.time() >= time(WORK_END_HOUR, 0):
-        next_day = dt + timedelta(days=1)
-        return next_day.replace(hour=WORK_START_HOUR, minute=0, second=0, microsecond=0)
+def get_next_valid_work_time(dt: datetime) -> datetime:
+    """หาจุดเริ่มต้นเวลาทำงานถัดไปที่ถูกต้อง"""
+    cur_date = dt.date()
+    for _ in range(14):  # วนลูปหาภายใน 14 วัน
+        windows = get_day_working_windows(cur_date)
+        for w_start, w_end in windows:
+            if dt < w_start:
+                return w_start
+            elif w_start <= dt < w_end:
+                return dt
+        # ถ้าพ้นเวลาทำงานของวันนั้นแล้ว ให้ข้ามไปวันถัดไปเวลา 08:00 น.
+        cur_date += timedelta(days=1)
+        dt = datetime.combine(cur_date, time(8, 0))
     return dt
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
     """
-    คำนวณเวลาทำงานแบบตัดกะ 08:00 - 20:00 น.
-    คืนค่าเป็น list ของ tuple [(segment_start, segment_end), ...] และ เวลาสิ้นสุดสุดท้าย
+    คำนวณช่วงเวลาทำงานตัดเบรกเที่ยง, ตัดกะเสาร์ 17:00 น., กะธรรมดา 20:00 น. และหยุดวันอาทิตย์
     """
     segments = []
     remaining_hours = duration_hours
-    current_dt = normalize_to_work_hours(start_dt)
+    current_dt = get_next_valid_work_time(start_dt)
 
     while remaining_hours > 0.0001:
-        current_dt = normalize_to_work_hours(current_dt)
-        end_of_shift = current_dt.replace(hour=WORK_END_HOUR, minute=0, second=0, microsecond=0)
-        available_hours_in_day = (end_of_shift - current_dt).total_seconds() / 3600.0
+        current_dt = get_next_valid_work_time(current_dt)
+        windows = get_day_working_windows(current_dt.date())
+        
+        # หาหน้าต่างเวลาที่ current_dt ตกอยู่
+        active_window = None
+        for w_start, w_end in windows:
+            if w_start <= current_dt < w_end:
+                active_window = (w_start, w_end)
+                break
+                
+        if not active_window:
+            current_dt = get_next_valid_work_time(current_dt + timedelta(minutes=10))
+            continue
+            
+        w_start, w_end = active_window
+        available_hours = (w_end - current_dt).total_seconds() / 3600.0
 
-        if remaining_hours <= available_hours_in_day:
-            segment_end = current_dt + timedelta(hours=remaining_hours)
-            segments.append((current_dt, segment_end))
-            current_dt = segment_end
+        if remaining_hours <= available_hours:
+            seg_end = current_dt + timedelta(hours=remaining_hours)
+            segments.append((current_dt, seg_end))
+            current_dt = seg_end
             remaining_hours = 0.0
         else:
-            segments.append((current_dt, end_of_shift))
-            remaining_hours -= available_hours_in_day
-            # ข้ามไป 08:00 น. ของวันถัดไป
-            next_day = current_dt + timedelta(days=1)
-            current_dt = next_day.replace(hour=WORK_START_HOUR, minute=0, second=0, microsecond=0)
+            segments.append((current_dt, w_end))
+            remaining_hours -= available_hours
+            current_dt = w_end
 
     return segments, current_dt
 
@@ -244,7 +277,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง), เครื่องกลึง (1 เครื่อง) และแผนกเชื่อม (1 แผนก) | กะทำงาน 08:00 - 20:00 น.</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:00-20:00 น.) | ส. (08:00-17:00 น.) | พักเที่ยง 12:00-13:00 น. | หยุดวันอาทิตย์</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
@@ -406,10 +439,10 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Shift-Aware Scheduling Engine (ตัดกะ 08:00 - 20:00 น. อัตโนมัติ)
+# 5. Scheduling Engine (ระบบคำนวณตัดเวลาทำงานแม่นยำ)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
-    now_dt = normalize_to_work_hours(default_start_datetime)
+    now_dt = get_next_valid_work_time(default_start_datetime)
     m_available = {m: now_dt for m in MACHINE_LIST}
     m_last_mat = {m: None for m in MACHINE_LIST}
     m_busy_hrs = {m: 0.0 for m in MACHINE_LIST}
@@ -437,7 +470,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             j["ready_at"] = now_dt
         else:
             dt_val = pd.to_datetime(ready_time, errors='coerce')
-            j["ready_at"] = now_dt if pd.isna(dt_val) else normalize_to_work_hours(dt_val.to_pydatetime())
+            j["ready_at"] = now_dt if pd.isna(dt_val) else get_next_valid_work_time(dt_val.to_pydatetime())
             
         j["is_urgent"] = "ด่วนแทรก" in str(j.get("ประเภทงาน", ""))
         j["remain_cut_hrs"] = j["cut_hrs"]
@@ -458,7 +491,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                         
         if not pending_machines: break
         earliest_m = min(pending_machines, key=lambda m: m_available[m])
-        cur_time = normalize_to_work_hours(m_available[earliest_m])
+        cur_time = get_next_valid_work_time(m_available[earliest_m])
         last_mat = m_last_mat[earliest_m]
         
         ready_candidates = [
@@ -472,9 +505,9 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                 (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m in MACHINE_LIST[:8])) and j["ready_at"] > cur_time
             ]
             if future_candidates:
-                m_available[earliest_m] = normalize_to_work_hours(min(future_candidates))
+                m_available[earliest_m] = get_next_valid_work_time(min(future_candidates))
             else:
-                m_available[earliest_m] = normalize_to_work_hours(cur_time + timedelta(minutes=15))
+                m_available[earliest_m] = get_next_valid_work_time(cur_time + timedelta(minutes=15))
             continue
             
         urgent_pool = [j for j in ready_candidates if j["is_urgent"]]
@@ -493,7 +526,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         drawing_name = str(selected_job.get("ชื่อ Drawing.", "-"))
         qty_val = str(selected_job.get("จำนวน", 1))
         
-        # คำนวณช่วงเวลา Setup พร้อมตัดกะ
+        # คำนวณช่วงเวลา Setup พร้อมตัดรอบกะ
         setup_start = cur_time
         if setup_hrs > 0:
             setup_segments, setup_end = add_work_time_with_shift(setup_start, setup_hrs)
@@ -509,7 +542,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             cut_start = setup_start
             setup_end = setup_start
 
-        # คำนวณช่วงเวลารันงานตัดเฉือนพร้อมตัดกะ (ข้ามคืน 20:00 - 08:00 น. อัตโนมัติ)
+        # คำนวณช่วงเวลารันงานตัดเฉือนพร้อมตัดรอบกะ
         cut_segments, cut_end = add_work_time_with_shift(cut_start, actual_cut_hrs)
         for c_st, c_en in cut_segments:
             seg_hrs = (c_en - c_st).total_seconds() / 3600.0
@@ -539,11 +572,18 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         valid_jobs.remove(selected_job)
             
     start_anchor = now_dt
-    max_finish = max(m_available.values()) if summary_records else (now_dt + timedelta(hours=12))
+    max_finish = max(m_available.values()) if summary_records else (now_dt + timedelta(hours=11))
     
-    # คำนวณกรอบเวลาทำงานรวม (เฉพาะช่วงเวลา 08:00 - 20:00 น. ในแต่ละวัน)
-    total_days = max((max_finish.date() - start_anchor.date()).days + 1, 1)
-    total_horizon_work_hrs = max(total_days * (WORK_END_HOUR - WORK_START_HOUR), 12.0)
+    # คำนวณชั่วโมงทำงานรวมตามปฏิทินกะโรงงานจริง
+    total_factory_work_hours = 0.0
+    iter_date = start_anchor.date()
+    while iter_date <= max_finish.date():
+        w_list = get_day_working_windows(iter_date)
+        for ws, we in w_list:
+            total_factory_work_hours += (we - ws).total_seconds() / 3600.0
+        iter_date += timedelta(days=1)
+        
+    total_horizon_work_hrs = max(total_factory_work_hours, 11.0)
     
     util_list = []
     for m in MACHINE_LIST:
@@ -1162,7 +1202,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - แสดงครบ 17 สถานี
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - แสดงชื่อเครื่องครบทั้ง 17 สถานี
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
@@ -1197,7 +1237,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 )
                 fig.update_layout(
                     height=650,
-                    xaxis_title="วันและเวลา (กะทำงาน 08:00 - 20:00 น.)",
+                    xaxis_title="วันและเวลา (ตามเวลากะทำงานจริงของโรงงาน)",
                     yaxis_title="เครื่องจักร / แผนก",
                     uniformtext_minsize=8,
                     uniformtext_mode='hide',
@@ -1278,7 +1318,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
                 edited_rates = st.data_editor(
                     st.session_state.machine_rates,
-                    key="editor_machine_rates_full_17_v8",
+                    key="editor_machine_rates_full_17_v9",
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                         "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
