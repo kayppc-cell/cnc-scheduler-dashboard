@@ -34,7 +34,7 @@ if not os.path.exists(icon_file):
 favicon_img = Image.open(icon_file) if os.path.exists(icon_file) else "🏭"
 
 st.set_page_config(
-    page_title="PES CNC Monitor",
+    page_title="PES CNC & Workshop Monitor",
     page_icon=favicon_img,
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -173,11 +173,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่อง CNC และเครื่องจักรแปรรูป</h1><p>CNC Machining Centers (9 เครื่อง) & Grinding Machines (2 เครื่อง)</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่อง CNC และแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง) และแผนกเชื่อม (1 แผนก)</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักร
+# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -196,13 +196,17 @@ if "finish_select_all" not in st.session_state:
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
-    "No.10 เครื่องเจียรราบ", "No.11 เครื่องเจียรกลม"
+    "No.10 เครื่องเจียรราบ", "No.11 เครื่องเจียรกลม",
+    "No.12 มิลลิ่ง 1", "No.13 มิลลิ่ง 2", "No.14 มิลลิ่ง 3", "No.15 มิลลิ่ง 4",
+    "No.16 แผนกเชื่อม"
 ]
 
 DEFAULT_RATES = {
     "No.1 Awea": 1200, "No.2 Awea": 1000, "No.3 Hartford": 1000, "No.4 Sanco": 1000,
     "No.5 Hartford": 1000, "No.6 Bridgeport": 600, "No.7 Bridgeport": 600, "No.8 Hartford": 600, "No.9 Mikron": 1300,
-    "No.10 เครื่องเจียรราบ": 500, "No.11 เครื่องเจียรกลม": 500
+    "No.10 เครื่องเจียรราบ": 500, "No.11 เครื่องเจียรกลม": 500,
+    "No.12 มิลลิ่ง 1": 400, "No.13 มิลลิ่ง 2": 400, "No.14 มิลลิ่ง 3": 400, "No.15 มิลลิ่ง 4": 400,
+    "No.16 แผนกเชื่อม": 450
 }
 
 ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
@@ -353,7 +357,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             if target in MACHINE_LIST:
                 pending_machines.add(target)
             elif target == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)":
-                for m in MACHINE_LIST[:8]:  # เฉพาะเครื่อง CNC 3 แกน No.1 - No.8
+                for m in MACHINE_LIST[:8]:  # เฉพาะ CNC 3 แกน No.1 ถึง No.8
                     pending_machines.add(m)
                         
         if not pending_machines: break
@@ -475,10 +479,10 @@ if selected_tab != st.session_state.current_view:
 # VIEW 1: หน้าจอช่างหน้าเครื่อง (นับเวลาประเทศไทย GMT+7 อัตโนมัติ)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
-    st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง")
+    st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
     
     df_all = fetch_jobs_from_supabase()
-    selected_m = st.selectbox("🏭 เลือกเครื่องจักร:", MACHINE_LIST, key="op_machine_select")
+    selected_m = st.selectbox("🏭 เลือกเครื่องจักร / แผนก:", MACHINE_LIST, key="op_machine_select")
     
     if not df_all.empty:
         m_all_jobs = df_all[df_all["เลือกเครื่องจักร"] == selected_m].sort_values(by="ID", ascending=True)
@@ -501,7 +505,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             <div class="op-job-header">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h3 style="margin:0; color:#1E3A8A; font-size:19px; font-weight:800;">📌 แผนงาน {plan_idx}: {plan_code}</h3>
-                    <span style="background:#EFF6FF; color:#1D4ED8; padding:3px 10px; border-radius:6px; font-weight:700; font-size:12px;">เครื่อง: {selected_m}</span>
+                    <span style="background:#EFF6FF; color:#1D4ED8; padding:3px 10px; border-radius:6px; font-weight:700; font-size:12px;">สถานี: {selected_m}</span>
                 </div>
                 <p style="font-size:14.5px; margin:5px 0 2px 0;"><b>📄 Drawing:</b> {first_step_info.get('ชื่อ Drawing.', '-')} | <b>🔢 จำนวน:</b> {int(first_step_info.get('จำนวน', 1) or 1)} ชิ้น | <b>🔩 วัสดุ:</b> {first_step_info.get('วัสดุ', '-')}</p>
             </div>
@@ -544,7 +548,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         step_val = st.text_input(
                             f"ชื่อขั้นตอน Step {idx}:", 
                             value=s_name, 
-                            placeholder="เช่น OP10, ปาดผิวเจาะรู, เจียรผิว", 
+                            placeholder="เช่น OP10, ปาดผิวเจาะรู, เชื่อมประกอบ, เจียร", 
                             key=f"input_step_name_{s_id}"
                         )
 
@@ -620,7 +624,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             default_next_step_label = f"OP{next_step_num*10}"
             
             with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับแผนงาน {plan_code} (Step {next_step_num})", expanded=False):
-                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, เจียรราบ", key=f"new_step_name_input_{plan_code}_{plan_idx}")
+                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, เจียร, เชื่อม", key=f"new_step_name_input_{plan_code}_{plan_idx}")
 
                 if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num} เข้าคิวแผน {plan_code}", key=f"btn_add_step_{plan_code}_{plan_idx}", type="secondary", use_container_width=True):
                     now_str = get_bangkok_str()
@@ -645,7 +649,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             st.write("")
 
     else:
-        st.info(f"🎉 เครื่อง {selected_m} ไม่มีคิวงานค้างในระบบ")
+        st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
 
 # ---------------------------------------------------------
 # VIEW 2: Dashboard ภาพรวมโรงงาน
@@ -698,9 +702,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with f_c4:
                     new_f_type = st.selectbox("ประเภทงาน:", JOB_TYPES)
                 with f_c5:
-                    new_f_step = st.text_input("ขั้นตอน (Step):", placeholder="เช่น ล้างฉาก, OP10, เจียรราบ")
+                    new_f_step = st.text_input("ขั้นตอน (Step):", placeholder="เช่น ล้างฉาก, OP10, มิลลิ่ง, เชื่อม")
                 with f_c6:
-                    new_f_machine = st.selectbox("เลือกเครื่องจักร:", MACHINE_LIST)
+                    new_f_machine = st.selectbox("เลือกเครื่องจักร / แผนก:", MACHINE_LIST)
 
                 f_c7, f_c8, f_c9 = st.columns([1.5, 1.5, 1.5])
                 with f_c7:
@@ -708,7 +712,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with f_c8:
                     new_f_basic = st.number_input("Basic Machine (นาที):", min_value=0, max_value=6000, value=0, step=5)
                 with f_c9:
-                    new_f_prog = st.number_input("รันโปรแกรมตามแผน (นาที):", min_value=0, max_value=12000, value=120, step=10)
+                    new_f_prog = st.number_input("รันโปรแกรม/เวลาทำงานตามแผน (นาที):", min_value=0, max_value=12000, value=120, step=10)
 
                 if st.form_submit_button("🚀 บันทึกสั่งผลิตใหม่เข้าสู่ระบบ", type="primary", use_container_width=True):
                     if new_f_plan.strip() != "":
@@ -773,7 +777,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             selected_target_idx = st.selectbox("เลือกแทรกใต้รายการ:", range(len(row_choices)), format_func=lambda x: row_choices[x])
                             target_row_data = active_jobs_editor_df.iloc[selected_target_idx]
                             
-                            ins_step = st.text_input("ชื่อขั้นตอนใหม่:", placeholder="เช่น OP20, เจียรราบ")
+                            ins_step = st.text_input("ชื่อขั้นตอนใหม่:", placeholder="เช่น OP20, เจียร, เชื่อม")
                             ins_qty = st.number_input("จำนวน:", min_value=1, value=int(target_row_data.get("จำนวน", 1) or 1), step=1)
                             ins_setup = st.number_input("Setup (น.):", value=15, step=5)
                             ins_basic = st.number_input("Basic (น.):", value=0, step=5)
@@ -800,7 +804,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
-                    key="editor_cnc_jobs_in_minutes_v5",
+                    key="editor_cnc_jobs_in_minutes_v6",
                     num_rows="dynamic",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -815,7 +819,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, default="SS400"),
                         "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, default="OP10"),
-                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=150, options=ASSIGN_OPTIONS, default="No.1 Awea"),
+                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
                         "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm"),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -912,7 +916,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.dataframe(
                     df_display[display_cols],
                     column_config={
-                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=140),
+                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", width=150),
                         "สถานะ": st.column_config.TextColumn("สถานะ", width=110),
                         "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=105),
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
@@ -976,7 +980,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key="editor_finish_jobs_table_mins_v5",
+                    key="editor_finish_jobs_table_mins_v6",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                         "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
@@ -988,7 +992,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ชื่อ Drawing.": st.column_config.TextColumn("DRAWING NO.", disabled=True, width=180),
                         "จำนวน": st.column_config.NumberColumn("จำนวน", disabled=True, width=65, format="%d"),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", disabled=True, width=95),
-                        "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", disabled=True, width=130),
+                        "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", disabled=True, width=140),
                         "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", disabled=True, width=145, format="DD/MM HH:mm"),
                         "เสร็จจริง": st.column_config.DatetimeColumn("เวลาจบจริง", disabled=True, width=145, format="DD/MM HH:mm"),
                         "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", disabled=True, width=90, format="%.2f"),
@@ -1033,7 +1037,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     y="เครื่องจักร",
                     color="กิจกรรม",
                     text="ข้อความบนแท่งกราฟ",
-                    hover_data=["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "วัสดุ", "ระยะเวลา"],
+                    hover_data=["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "วัสดุ", "ระยะเวลา"],
                     category_orders={"เครื่องจักร": MACHINE_LIST},
                     color_discrete_map={
                         "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
@@ -1050,9 +1054,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     marker_line_width=1
                 )
                 fig.update_layout(
-                    height=490,
+                    height=600,  # ขยายความสูงรองรับ 16 สถานี
                     xaxis_title="วันและเวลา",
-                    yaxis_title="เครื่องจักร",
+                    yaxis_title="เครื่องจักร / แผนก",
                     uniformtext_minsize=8,
                     uniformtext_mode='hide',
                     plot_bgcolor="#FFFFFF",
@@ -1066,7 +1070,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 # =====================================================
                 # 5. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
                 # =====================================================
-                st.subheader("📈 อัตราการใช้งานเครื่องจักร (% Machine Utilization)")
+                st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
                 fig_bar = px.bar(
                     df_util,
                     x="อัตราการใช้งาน (%)",
@@ -1086,10 +1090,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cliponaxis=False
                 )
                 fig_bar.update_layout(
-                    height=420,
+                    height=550,  # ขยายความสูงรองรับ 16 สถานี
                     margin=dict(l=40, r=40, t=10, b=30),
                     xaxis_title="อัตราการใช้งาน (%)",
-                    yaxis_title="เครื่องจักร",
+                    yaxis_title="เครื่องจักร / แผนก",
                     xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
                     coloraxis_showscale=False,
                     plot_bgcolor="#FFFFFF",
@@ -1115,7 +1119,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 edited_rates = st.data_editor(
                     st.session_state.machine_rates,
                     column_config={
-                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", disabled=True),
+                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                         "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
                     },
                     use_container_width=True,
@@ -1142,7 +1146,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=105),
-                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=130),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", width=140),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
