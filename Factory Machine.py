@@ -60,7 +60,7 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI สไตล์โมเดิร์น & สดใส (Modern Vibrant Design)
+# 2. ตกแต่ง UI
 # =========================================================
 st.markdown("""
 <style>
@@ -142,7 +142,6 @@ st.markdown("""
         font-weight: 800 !important; 
     }
 
-    /* สไตล์การ์ดหัวคิวงานหน้าเครื่อง (Modern Job Card Header) */
     .op-job-header {
         background: linear-gradient(145deg, #FFFFFF 0%, #F8FAFC 100%);
         padding: 16px 20px;
@@ -169,7 +168,6 @@ st.markdown("""
     .badge-qty { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; font-weight: 800; }
     .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
 
-    /* สไตล์ขั้นตอน Step Card */
     .step-card {
         background: #FFFFFF;
         padding: 14px 16px;
@@ -209,7 +207,7 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก
+# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก (รวม 17 สถานี)
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -367,7 +365,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine
+# 5. Scheduling Engine (พร้อมระบบลงทะเบียนทุกเครื่องจักรลงใน Gantt)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -509,6 +507,24 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     max_finish = max(m_available.values()) if summary_records else default_start_datetime
     total_horizon_hrs = max((max_finish - start_anchor).total_seconds() / 3600.0, 1.0)
     
+    # ดักจับเครื่องจักรที่ไม่มีคิวงาน ให้สร้างแถบ "เครื่องจักรว่าง" เพื่อให้ปรากฏชื่อในแกน Y ครบ 17 สถานี
+    busy_machines = {r["เครื่องจักร"] for r in gantt_records}
+    for m in MACHINE_LIST:
+        if m not in busy_machines:
+            gantt_records.append({
+                "ข้อความบนแท่งกราฟ": "ว่างพร้อมรับงาน",
+                "แผนงาน": "-",
+                "ชื่อ Drawing.": "-",
+                "จำนวน": "-",
+                "ขั้นตอน (Step)": "-",
+                "กิจกรรม": "⚪ เครื่องจักรว่าง (พร้อมรับงาน)",
+                "เครื่องจักร": m,
+                "วัสดุ": "-",
+                "เวลาเริ่ม": start_anchor,
+                "เวลาเสร็จ": max_finish if max_finish > start_anchor else start_anchor + timedelta(hours=1),
+                "ระยะเวลา": "พร้อมรับงาน"
+            })
+
     util_list = []
     for m in MACHINE_LIST:
         busy = m_busy_hrs[m]
@@ -537,7 +553,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (จัดกลุ่มแยกตาม แผนงาน + Drawing พร้อมสไตล์โมเดิร์น)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -567,7 +583,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             mat_val = first_step_info.get('วัสดุ', '-')
             qty_val = int(first_step_info.get('จำนวน', 1) or 1)
 
-            # การ์ดหัวคิวงานสไตล์โมเดิร์นพร้อมแท็กสีสดใส
             st.markdown(f"""
             <div class="op-job-header">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -604,7 +619,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     can_start = True
                     next_available_start_found = True
 
-                # กำหนดคลาสสไตล์ขอบการ์ดตามสถานะ
                 card_style_class = "step-card"
                 if is_step_running:
                     card_style_class += " step-card-running"
@@ -1128,9 +1142,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - แสดงครบ 17 สถานี
             # =====================================================
-            if not df_summary.empty and not df_gantt.empty:
+            if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 fig = px.timeline(
                     df_gantt,
@@ -1145,15 +1159,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
                         "⚙️ งานปกติกำลังกัดงาน": "#007AFF",
                         "🔴 งานด่วนตัดเฉือน": "#FF2D55",
-                        "⚪ รอรันงาน": "#CBD5E1"
+                        "⚪ รอรันงาน": "#94A3B8",
+                        "⚪ เครื่องจักรว่าง (พร้อมรับงาน)": "#F1F5F9"
                     }
                 )
-                fig.update_yaxes(autorange="reversed")
+                fig.update_yaxes(
+                    autorange="reversed",
+                    categoryorder="array",
+                    categoryarray=MACHINE_LIST
+                )
                 fig.update_traces(
                     textposition="inside",
                     insidetextanchor="middle",
-                    marker_line_color="#FFFFFF",
-                    marker_line_width=1
+                    marker_line_color="#CBD5E1",
+                    marker_line_width=0.8
                 )
                 fig.update_layout(
                     height=650,
@@ -1184,7 +1203,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     range_x=[0, 105],
                     category_orders={"เครื่องจักร": MACHINE_LIST}
                 )
-                fig_bar.update_yaxes(autorange="reversed")
+                fig_bar.update_yaxes(
+                    autorange="reversed",
+                    categoryorder="array",
+                    categoryarray=MACHINE_LIST
+                )
                 fig_bar.update_traces(
                     marker_line_color="#0F172A",
                     marker_line_width=1.2,
