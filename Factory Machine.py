@@ -81,7 +81,7 @@ st.markdown("""
         padding: 14px 20px;
         border-radius: 16px;
         color: white;
-        margin-bottom: 14px;
+        margin-bottom: 12px;
         display: flex;
         align-items: center;
         gap: 16px;
@@ -207,7 +207,7 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก (รวม 17 สถานี)
+# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -365,7 +365,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (พร้อมระบบลงทะเบียนทุกเครื่องจักรลงใน Gantt)
+# 5. Scheduling Engine (คำนวณ Utilization แท้จริง และคืนค่าแกน Y ครบ 17 สถานี)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -507,24 +507,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     max_finish = max(m_available.values()) if summary_records else default_start_datetime
     total_horizon_hrs = max((max_finish - start_anchor).total_seconds() / 3600.0, 1.0)
     
-    # ดักจับเครื่องจักรที่ไม่มีคิวงาน ให้สร้างแถบ "เครื่องจักรว่าง" เพื่อให้ปรากฏชื่อในแกน Y ครบ 17 สถานี
-    busy_machines = {r["เครื่องจักร"] for r in gantt_records}
-    for m in MACHINE_LIST:
-        if m not in busy_machines:
-            gantt_records.append({
-                "ข้อความบนแท่งกราฟ": "ว่างพร้อมรับงาน",
-                "แผนงาน": "-",
-                "ชื่อ Drawing.": "-",
-                "จำนวน": "-",
-                "ขั้นตอน (Step)": "-",
-                "กิจกรรม": "⚪ เครื่องจักรว่าง (พร้อมรับงาน)",
-                "เครื่องจักร": m,
-                "วัสดุ": "-",
-                "เวลาเริ่ม": start_anchor,
-                "เวลาเสร็จ": max_finish if max_finish > start_anchor else start_anchor + timedelta(hours=1),
-                "ระยะเวลา": "พร้อมรับงาน"
-            })
-
     util_list = []
     for m in MACHINE_LIST:
         busy = m_busy_hrs[m]
@@ -666,7 +648,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 if st.button("🚀 Start (เริ่มจับเวลาจริง)", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
                                     now_str = get_bangkok_str()
                                     update_payload = {
-                                        "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
+                                        "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}"
                                         "status": "🟦 กำลังผลิต",
                                         "actual_start": now_str
                                     }
@@ -1142,7 +1124,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - แสดงครบ 17 สถานี
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - แสดงชื่อครบทั้ง 17 สถานี
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
@@ -1159,14 +1141,16 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
                         "⚙️ งานปกติกำลังกัดงาน": "#007AFF",
                         "🔴 งานด่วนตัดเฉือน": "#FF2D55",
-                        "⚪ รอรันงาน": "#94A3B8",
-                        "⚪ เครื่องจักรว่าง (พร้อมรับงาน)": "#F1F5F9"
+                        "⚪ รอรันงาน": "#94A3B8"
                     }
                 )
                 fig.update_yaxes(
                     autorange="reversed",
+                    type="category",
                     categoryorder="array",
-                    categoryarray=MACHINE_LIST
+                    categoryarray=MACHINE_LIST,
+                    showgrid=True,
+                    gridcolor="#F1F5F9"
                 )
                 fig.update_traces(
                     textposition="inside",
@@ -1205,6 +1189,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 )
                 fig_bar.update_yaxes(
                     autorange="reversed",
+                    type="category",
                     categoryorder="array",
                     categoryarray=MACHINE_LIST
                 )
@@ -1256,7 +1241,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
                 edited_rates = st.data_editor(
                     st.session_state.machine_rates,
-                    key="editor_machine_rates_full_17_v5",
+                    key="editor_machine_rates_full_17_v6",
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                         "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
