@@ -22,12 +22,6 @@ def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def get_day_working_windows(dt_date):
-    """
-    กำหนดหน้าต่างเวลาทำงานของแต่ละวัน:
-    - จันทร์-ศุกร์ (0-4): 08:00-12:00 และ 13:00-20:00
-    - เสาร์ (5): 08:00-12:00 และ 13:00-17:00
-    - อาทิตย์ (6): หยุด
-    """
     weekday = dt_date.weekday()
     if weekday == 6:  # วันอาทิตย์
         return []
@@ -43,24 +37,19 @@ def get_day_working_windows(dt_date):
         ]
 
 def get_next_valid_work_time(dt: datetime) -> datetime:
-    """หาจุดเริ่มต้นเวลาทำงานถัดไปที่ถูกต้อง"""
     cur_date = dt.date()
-    for _ in range(14):  # วนลูปหาภายใน 14 วัน
+    for _ in range(14):
         windows = get_day_working_windows(cur_date)
         for w_start, w_end in windows:
             if dt < w_start:
                 return w_start
             elif w_start <= dt < w_end:
                 return dt
-        # ถ้าพ้นเวลาทำงานของวันนั้นแล้ว ให้ข้ามไปวันถัดไปเวลา 08:00 น.
         cur_date += timedelta(days=1)
         dt = datetime.combine(cur_date, time(8, 0))
     return dt
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
-    """
-    คำนวณช่วงเวลาทำงานตัดเบรกเที่ยง, ตัดกะเสาร์ 17:00 น., กะธรรมดา 20:00 น. และหยุดวันอาทิตย์
-    """
     segments = []
     remaining_hours = duration_hours
     current_dt = get_next_valid_work_time(start_dt)
@@ -69,7 +58,6 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
         current_dt = get_next_valid_work_time(current_dt)
         windows = get_day_working_windows(current_dt.date())
         
-        # หาหน้าต่างเวลาที่ current_dt ตกอยู่
         active_window = None
         for w_start, w_end in windows:
             if w_start <= current_dt < w_end:
@@ -264,6 +252,29 @@ st.markdown("""
         background: linear-gradient(145deg, #FFFFFF 0%, #F0FDF4 100%) !important;
     }
 
+    /* กล่องคำอธิบายกะทำงานใต้กราฟ */
+    .schedule-info-box {
+        background: #F8FAFC;
+        border: 1.5px solid #E2E8F0;
+        border-radius: 12px;
+        padding: 12px 18px;
+        margin-top: 6px;
+        margin-bottom: 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .schedule-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #334155;
+    }
+
     div.stButton > button:disabled {
         background-color: #F1F5F9 !important;
         color: #94A3B8 !important;
@@ -277,7 +288,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:00-20:00 น.) | ส. (08:00-17:00 น.) | พักเที่ยง 12:00-13:00 น. | หยุดวันอาทิตย์</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง), เครื่องกลึง (1 เครื่อง) และแผนกเชื่อม (1 แผนก) | กะทำงาน 08:00 - 20:00 น.</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
@@ -439,7 +450,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (ระบบคำนวณตัดเวลาทำงานแม่นยำ)
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -526,7 +537,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         drawing_name = str(selected_job.get("ชื่อ Drawing.", "-"))
         qty_val = str(selected_job.get("จำนวน", 1))
         
-        # คำนวณช่วงเวลา Setup พร้อมตัดรอบกะ
         setup_start = cur_time
         if setup_hrs > 0:
             setup_segments, setup_end = add_work_time_with_shift(setup_start, setup_hrs)
@@ -542,7 +552,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             cut_start = setup_start
             setup_end = setup_start
 
-        # คำนวณช่วงเวลารันงานตัดเฉือนพร้อมตัดรอบกะ
         cut_segments, cut_end = add_work_time_with_shift(cut_start, actual_cut_hrs)
         for c_st, c_en in cut_segments:
             seg_hrs = (c_en - c_st).total_seconds() / 3600.0
@@ -574,7 +583,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     start_anchor = now_dt
     max_finish = max(m_available.values()) if summary_records else (now_dt + timedelta(hours=11))
     
-    # คำนวณชั่วโมงทำงานรวมตามปฏิทินกะโรงงานจริง
     total_factory_work_hours = 0.0
     iter_date = start_anchor.date()
     while iter_date <= max_finish.date():
@@ -1202,7 +1210,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - แสดงชื่อเครื่องครบทั้ง 17 สถานี
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
@@ -1247,10 +1255,32 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
+                # กล่องอธิบายช่วงเวลากะทำงานและเบรกใต้กราฟ
+                st.markdown("""
+                <div class="schedule-info-box">
+                    <div class="schedule-pill">
+                        <span style="font-size:16px;">⏱️</span>
+                        <span><b>จันทร์ – ศุกร์:</b> 08:00 – 12:00 น. และ 13:00 – 20:00 น. (11 ชม./วัน)</span>
+                    </div>
+                    <div class="schedule-pill">
+                        <span style="font-size:16px;">⏱️</span>
+                        <span><b>วันเสาร์:</b> 08:00 – 12:00 น. และ 13:00 – 17:00 น. (8 ชม./วัน)</span>
+                    </div>
+                    <div class="schedule-pill">
+                        <span style="font-size:16px;">🍱</span>
+                        <span style="color:#D97706;"><b>พักเบรกเที่ยง:</b> 12:00 – 13:00 น. (หยุดพักเครื่อง)</span>
+                    </div>
+                    <div class="schedule-pill">
+                        <span style="font-size:16px;">🛑</span>
+                        <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ (ข้ามไปวันจันทร์ 08:00 น.)</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
                 st.divider()
 
                 # =====================================================
-                # 5. อัตราการใช้งานเครื่องจักร (% Machine Utilization) - แสดงครบ 17 สถานี
+                # 5. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
                 # =====================================================
                 st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
                 fig_bar = px.bar(
@@ -1318,7 +1348,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
                 edited_rates = st.data_editor(
                     st.session_state.machine_rates,
-                    key="editor_machine_rates_full_17_v9",
+                    key="editor_machine_rates_full_17_v10",
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                         "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
