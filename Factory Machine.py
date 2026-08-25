@@ -365,7 +365,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (คำนวณ Utilization แท้จริง และคืนค่าแกน Y ครบ 17 สถานี)
+# 5. Scheduling Engine (คำนวณ Utilization ตามจริงอย่างแม่นยำ)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_available = {m: default_start_datetime for m in MACHINE_LIST}
@@ -648,7 +648,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 if st.button("🚀 Start (เริ่มจับเวลาจริง)", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
                                     now_str = get_bangkok_str()
                                     update_payload = {
-                                        "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}"
+                                        "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
                                         "status": "🟦 กำลังผลิต",
                                         "actual_start": now_str
                                     }
@@ -1124,7 +1124,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - แสดงชื่อครบทั้ง 17 สถานี
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - คำนวณตามจริงและแสดงชื่อครบ 17 สถานี
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
