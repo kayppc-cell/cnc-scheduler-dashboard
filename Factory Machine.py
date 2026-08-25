@@ -34,7 +34,7 @@ if not os.path.exists(icon_file):
 favicon_img = Image.open(icon_file) if os.path.exists(icon_file) else "🏭"
 
 st.set_page_config(
-    page_title="PES CNC & Workshop Monitor",
+    page_title="PES Production Monitor",
     page_icon=favicon_img,
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -173,7 +173,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่อง CNC และแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง) และแผนกเชื่อม (1 แผนก)</p></div></div>'''
+# แก้ไขชื่อไตเติลหลักตามที่ระบุ
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง) และแผนกเชื่อม (1 แผนก)</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
@@ -357,7 +358,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             if target in MACHINE_LIST:
                 pending_machines.add(target)
             elif target == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)":
-                for m in MACHINE_LIST[:8]:  # เฉพาะ CNC 3 แกน No.1 ถึง No.8
+                for m in MACHINE_LIST[:8]:
                     pending_machines.add(m)
                         
         if not pending_machines: break
@@ -809,7 +810,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
-                    key="editor_cnc_jobs_in_minutes_v7",
+                    key="editor_cnc_jobs_in_minutes_v8",
                     num_rows="dynamic",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -985,7 +986,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key="editor_finish_jobs_table_mins_v7",
+                    key="editor_finish_jobs_table_mins_v8",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                         "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
