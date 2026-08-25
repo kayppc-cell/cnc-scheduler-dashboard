@@ -173,11 +173,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่อง CNC</h1><p>Awea (2), Hartford (3), Sanco (1), Bridgeport (2), Mikron (1)</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่อง CNC และเครื่องจักรแปรรูป</h1><p>CNC Machining Centers (9 เครื่อง) & Grinding Machines (2 เครื่อง)</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย
+# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักร
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -196,11 +196,13 @@ if "finish_select_all" not in st.session_state:
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
+    "No.10 เครื่องเจียรราบ", "No.11 เครื่องเจียรกลม"
 ]
 
 DEFAULT_RATES = {
     "No.1 Awea": 1200, "No.2 Awea": 1000, "No.3 Hartford": 1000, "No.4 Sanco": 1000,
     "No.5 Hartford": 1000, "No.6 Bridgeport": 600, "No.7 Bridgeport": 600, "No.8 Hartford": 600, "No.9 Mikron": 1300,
+    "No.10 เครื่องเจียรราบ": 500, "No.11 เครื่องเจียรกลม": 500
 }
 
 ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
@@ -351,8 +353,8 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             if target in MACHINE_LIST:
                 pending_machines.add(target)
             elif target == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)":
-                for m in MACHINE_LIST:
-                    if m != "No.9 Mikron": pending_machines.add(m)
+                for m in MACHINE_LIST[:8]:  # เฉพาะเครื่อง CNC 3 แกน No.1 - No.8
+                    pending_machines.add(m)
                         
         if not pending_machines: break
         earliest_m = min(pending_machines, key=lambda m: m_available[m])
@@ -361,13 +363,13 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         
         ready_candidates = [
             j for j in valid_jobs if (j.get("เลือกเครื่องจักร") == earliest_m or 
-            (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m != "No.9 Mikron")) and j["ready_at"] <= cur_time
+            (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m in MACHINE_LIST[:8])) and j["ready_at"] <= cur_time
         ]
                     
         if not ready_candidates:
             future_candidates = [
                 j["ready_at"] for j in valid_jobs if (j.get("เลือกเครื่องจักร") == earliest_m or 
-                (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m != "No.9 Mikron")) and j["ready_at"] > cur_time
+                (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m in MACHINE_LIST[:8])) and j["ready_at"] > cur_time
             ]
             if future_candidates:
                 target_jump = min(future_candidates)
@@ -473,7 +475,7 @@ if selected_tab != st.session_state.current_view:
 # VIEW 1: หน้าจอช่างหน้าเครื่อง (นับเวลาประเทศไทย GMT+7 อัตโนมัติ)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
-    st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง CNC")
+    st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง")
     
     df_all = fetch_jobs_from_supabase()
     selected_m = st.selectbox("🏭 เลือกเครื่องจักร:", MACHINE_LIST, key="op_machine_select")
@@ -542,7 +544,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         step_val = st.text_input(
                             f"ชื่อขั้นตอน Step {idx}:", 
                             value=s_name, 
-                            placeholder="เช่น OP10, ปาดผิวเจาะรู", 
+                            placeholder="เช่น OP10, ปาดผิวเจาะรู, เจียรผิว", 
                             key=f"input_step_name_{s_id}"
                         )
 
@@ -618,7 +620,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             default_next_step_label = f"OP{next_step_num*10}"
             
             with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับแผนงาน {plan_code} (Step {next_step_num})", expanded=False):
-                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, OP30", key=f"new_step_name_input_{plan_code}_{plan_idx}")
+                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=default_next_step_label, placeholder="เช่น OP20, เจียรราบ", key=f"new_step_name_input_{plan_code}_{plan_idx}")
 
                 if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num} เข้าคิวแผน {plan_code}", key=f"btn_add_step_{plan_code}_{plan_idx}", type="secondary", use_container_width=True):
                     now_str = get_bangkok_str()
@@ -696,7 +698,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with f_c4:
                     new_f_type = st.selectbox("ประเภทงาน:", JOB_TYPES)
                 with f_c5:
-                    new_f_step = st.text_input("ขั้นตอน (Step):", placeholder="เช่น ล้างฉาก, OP10")
+                    new_f_step = st.text_input("ขั้นตอน (Step):", placeholder="เช่น ล้างฉาก, OP10, เจียรราบ")
                 with f_c6:
                     new_f_machine = st.selectbox("เลือกเครื่องจักร:", MACHINE_LIST)
 
@@ -771,7 +773,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             selected_target_idx = st.selectbox("เลือกแทรกใต้รายการ:", range(len(row_choices)), format_func=lambda x: row_choices[x])
                             target_row_data = active_jobs_editor_df.iloc[selected_target_idx]
                             
-                            ins_step = st.text_input("ชื่อขั้นตอนใหม่:", placeholder="เช่น OP20, พลิกปาด")
+                            ins_step = st.text_input("ชื่อขั้นตอนใหม่:", placeholder="เช่น OP20, เจียรราบ")
                             ins_qty = st.number_input("จำนวน:", min_value=1, value=int(target_row_data.get("จำนวน", 1) or 1), step=1)
                             ins_setup = st.number_input("Setup (น.):", value=15, step=5)
                             ins_basic = st.number_input("Basic (น.):", value=0, step=5)
@@ -813,7 +815,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, default="SS400"),
                         "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=110, default="OP10"),
-                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=140, options=ASSIGN_OPTIONS, default="No.1 Awea"),
+                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=150, options=ASSIGN_OPTIONS, default="No.1 Awea"),
                         "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm"),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -910,7 +912,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.dataframe(
                     df_display[display_cols],
                     column_config={
-                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=115),
+                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=140),
                         "สถานะ": st.column_config.TextColumn("สถานะ", width=110),
                         "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=105),
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
@@ -986,7 +988,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ชื่อ Drawing.": st.column_config.TextColumn("DRAWING NO.", disabled=True, width=180),
                         "จำนวน": st.column_config.NumberColumn("จำนวน", disabled=True, width=65, format="%d"),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", disabled=True, width=95),
-                        "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", disabled=True, width=115),
+                        "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", disabled=True, width=130),
                         "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", disabled=True, width=145, format="DD/MM HH:mm"),
                         "เสร็จจริง": st.column_config.DatetimeColumn("เวลาจบจริง", disabled=True, width=145, format="DD/MM HH:mm"),
                         "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", disabled=True, width=90, format="%.2f"),
@@ -1048,7 +1050,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     marker_line_width=1
                 )
                 fig.update_layout(
-                    height=450,
+                    height=490,
                     xaxis_title="วันและเวลา",
                     yaxis_title="เครื่องจักร",
                     uniformtext_minsize=8,
@@ -1084,7 +1086,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cliponaxis=False
                 )
                 fig_bar.update_layout(
-                    height=370,
+                    height=420,
                     margin=dict(l=40, r=40, t=10, b=30),
                     xaxis_title="อัตราการใช้งาน (%)",
                     yaxis_title="เครื่องจักร",
@@ -1140,7 +1142,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=105),
-                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=120),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=130),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
