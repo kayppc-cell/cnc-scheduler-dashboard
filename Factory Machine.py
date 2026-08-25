@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import zoneinfo
 import os
 import base64
@@ -10,7 +10,7 @@ import requests
 import streamlit.components.v1 as components
 
 # =========================================================
-# 0. Timezone Helper (เวลาประเทศไทย GMT+7)
+# 0. Timezone Helper (เวลาประเทศไทย GMT+7) & Shift Rules
 # =========================================================
 def get_bangkok_now():
     try:
@@ -20,6 +20,47 @@ def get_bangkok_now():
 
 def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
+
+# กำหนดเวลากะทำงานโรงงาน (08:00 - 20:00 น.)
+WORK_START_HOUR = 8
+WORK_END_HOUR = 20
+
+def normalize_to_work_hours(dt: datetime) -> datetime:
+    """ปรับเวลาให้ตกอยู่ในช่วงเวลากะทำงาน 08:00 - 20:00 น."""
+    if dt.time() < time(WORK_START_HOUR, 0):
+        return dt.replace(hour=WORK_START_HOUR, minute=0, second=0, microsecond=0)
+    elif dt.time() >= time(WORK_END_HOUR, 0):
+        next_day = dt + timedelta(days=1)
+        return next_day.replace(hour=WORK_START_HOUR, minute=0, second=0, microsecond=0)
+    return dt
+
+def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
+    """
+    คำนวณเวลาทำงานแบบตัดกะ 08:00 - 20:00 น.
+    คืนค่าเป็น list ของ tuple [(segment_start, segment_end), ...] และ เวลาสิ้นสุดสุดท้าย
+    """
+    segments = []
+    remaining_hours = duration_hours
+    current_dt = normalize_to_work_hours(start_dt)
+
+    while remaining_hours > 0.0001:
+        current_dt = normalize_to_work_hours(current_dt)
+        end_of_shift = current_dt.replace(hour=WORK_END_HOUR, minute=0, second=0, microsecond=0)
+        available_hours_in_day = (end_of_shift - current_dt).total_seconds() / 3600.0
+
+        if remaining_hours <= available_hours_in_day:
+            segment_end = current_dt + timedelta(hours=remaining_hours)
+            segments.append((current_dt, segment_end))
+            current_dt = segment_end
+            remaining_hours = 0.0
+        else:
+            segments.append((current_dt, end_of_shift))
+            remaining_hours -= available_hours_in_day
+            # ข้ามไป 08:00 น. ของวันถัดไป
+            next_day = current_dt + timedelta(days=1)
+            current_dt = next_day.replace(hour=WORK_START_HOUR, minute=0, second=0, microsecond=0)
+
+    return segments, current_dt
 
 # =========================================================
 # 1. การจัดการรูปภาพ (App Icon & Header Logo)
@@ -60,7 +101,7 @@ else:
     logo_html = '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI สไตล์โมเดิร์น & สดใส (Modern Vibrant Design)
+# 2. ตกแต่ง UI
 # =========================================================
 st.markdown("""
 <style>
@@ -203,11 +244,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง), เครื่องกลึง (1 เครื่อง) และแผนกเชื่อม (1 แผนก)</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>CNC (9 เครื่อง), เครื่องเจียร (2 เครื่อง), มิลลิ่ง (4 เครื่อง), เครื่องกลึง (1 เครื่อง) และแผนกเชื่อม (1 แผนก) | กะทำงาน 08:00 - 20:00 น.</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก (17 สถานี)
+# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -365,11 +406,10 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (คำนวณจากเวลาจริง และแสดงครบ 17 สถานี)
+# 5. Shift-Aware Scheduling Engine (ตัดกะ 08:00 - 20:00 น. อัตโนมัติ)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
-    # กำหนดจุดเริ่มต้นให้อิงตามเวลาจริงปัจจุบัน
-    now_dt = default_start_datetime
+    now_dt = normalize_to_work_hours(default_start_datetime)
     m_available = {m: now_dt for m in MACHINE_LIST}
     m_last_mat = {m: None for m in MACHINE_LIST}
     m_busy_hrs = {m: 0.0 for m in MACHINE_LIST}
@@ -397,7 +437,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             j["ready_at"] = now_dt
         else:
             dt_val = pd.to_datetime(ready_time, errors='coerce')
-            j["ready_at"] = now_dt if pd.isna(dt_val) else dt_val.to_pydatetime()
+            j["ready_at"] = now_dt if pd.isna(dt_val) else normalize_to_work_hours(dt_val.to_pydatetime())
             
         j["is_urgent"] = "ด่วนแทรก" in str(j.get("ประเภทงาน", ""))
         j["remain_cut_hrs"] = j["cut_hrs"]
@@ -418,7 +458,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                         
         if not pending_machines: break
         earliest_m = min(pending_machines, key=lambda m: m_available[m])
-        cur_time = m_available[earliest_m]
+        cur_time = normalize_to_work_hours(m_available[earliest_m])
         last_mat = m_last_mat[earliest_m]
         
         ready_candidates = [
@@ -432,25 +472,9 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                 (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m in MACHINE_LIST[:8])) and j["ready_at"] > cur_time
             ]
             if future_candidates:
-                target_jump = min(future_candidates)
-                idle_hrs = (target_jump - cur_time).total_seconds() / 3600.0
-                if idle_hrs > 0.05:
-                    gantt_records.append({
-                        "ข้อความบนแท่งกราฟ": f"รอรันงาน ({idle_hrs:.1f} ชม.)",
-                        "แผนงาน": "-",
-                        "ชื่อ Drawing.": "รอคิวขึ้นงาน",
-                        "จำนวน": "-",
-                        "ขั้นตอน (Step)": "รอรันงาน",
-                        "กิจกรรม": "⚪ รอรันงาน",
-                        "เครื่องจักร": earliest_m,
-                        "วัสดุ": "-",
-                        "เวลาเริ่ม": cur_time,
-                        "เวลาเสร็จ": target_jump,
-                        "ระยะเวลา": f"{idle_hrs:.1f} ชม.",
-                    })
-                m_available[earliest_m] = target_jump
+                m_available[earliest_m] = normalize_to_work_hours(min(future_candidates))
             else:
-                m_available[earliest_m] = cur_time + timedelta(minutes=15)
+                m_available[earliest_m] = normalize_to_work_hours(cur_time + timedelta(minutes=15))
             continue
             
         urgent_pool = [j for j in ready_candidates if j["is_urgent"]]
@@ -461,34 +485,43 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             selected_job = same_mat[0] if same_mat else ready_candidates[0]
 
         setup_mins = selected_job["setup_mins"] if selected_job["need_setup"] else 0
-        setup_start = cur_time
-        setup_end = setup_start + timedelta(minutes=setup_mins)
-        cut_start = setup_end
+        setup_hrs = setup_mins / 60.0
         actual_cut_hrs = selected_job["remain_cut_hrs"]
-        cut_end = cut_start + timedelta(hours=actual_cut_hrs)
         
         step_raw = str(selected_job.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
         job_code = str(selected_job.get('แผนงาน', '-'))
         drawing_name = str(selected_job.get("ชื่อ Drawing.", "-"))
         qty_val = str(selected_job.get("จำนวน", 1))
         
-        if setup_mins > 0:
+        # คำนวณช่วงเวลา Setup พร้อมตัดกะ
+        setup_start = cur_time
+        if setup_hrs > 0:
+            setup_segments, setup_end = add_work_time_with_shift(setup_start, setup_hrs)
+            for s_st, s_en in setup_segments:
+                gantt_records.append({
+                    "ข้อความบนแท่งกราฟ": "Setup", "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name,
+                    "จำนวน": qty_val, "ขั้นตอน (Step)": step_raw, "กิจกรรม": "🔧 ตั้งเครื่อง / เซ็ตศูนย์",
+                    "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"),
+                    "เวลาเริ่ม": s_st, "เวลาเสร็จ": s_en, "ระยะเวลา": f"{setup_mins:.0f} นาที"
+                })
+            cut_start = setup_end
+        else:
+            cut_start = setup_start
+            setup_end = setup_start
+
+        # คำนวณช่วงเวลารันงานตัดเฉือนพร้อมตัดกะ (ข้ามคืน 20:00 - 08:00 น. อัตโนมัติ)
+        cut_segments, cut_end = add_work_time_with_shift(cut_start, actual_cut_hrs)
+        for c_st, c_en in cut_segments:
+            seg_hrs = (c_en - c_st).total_seconds() / 3600.0
             gantt_records.append({
-                "ข้อความบนแท่งกราฟ": "Setup", "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name,
-                "จำนวน": qty_val, "ขั้นตอน (Step)": step_raw, "กิจกรรม": "🔧 ตั้งเครื่อง / เซ็ตศูนย์",
+                "ข้อความบนแท่งกราฟ": step_raw, "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name,
+                "จำนวน": qty_val, "ขั้นตอน (Step)": step_raw,
+                "กิจกรรม": "🔴 งานด่วนตัดเฉือน" if selected_job["is_urgent"] else "⚙️ งานปกติกำลังกัดงาน",
                 "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"),
-                "เวลาเริ่ม": setup_start, "เวลาเสร็จ": setup_end, "ระยะเวลา": f"{setup_mins:.0f} นาที"
+                "เวลาเริ่ม": c_st, "เวลาเสร็จ": c_en, "ระยะเวลา": f"{seg_hrs:.2f} ชม."
             })
-            
-        gantt_records.append({
-            "ข้อความบนแท่งกราฟ": step_raw, "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name,
-            "จำนวน": qty_val, "ขั้นตอน (Step)": step_raw,
-            "กิจกรรม": "🔴 งานด่วนตัดเฉือน" if selected_job["is_urgent"] else "⚙️ งานปกติกำลังกัดงาน",
-            "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"),
-            "เวลาเริ่ม": cut_start, "เวลาเสร็จ": cut_end, "ระยะเวลา": f"{actual_cut_hrs:.2f} ชม."
-        })
         
-        total_cycle = (setup_mins / 60.0) + actual_cut_hrs
+        total_cycle = setup_hrs + actual_cut_hrs
         summary_records.append({
             "ID": selected_job.get("ID", ""), "เครื่องจักร": earliest_m, "สถานะ": selected_job["สถานะงาน"],
             "ประเภทงาน": "🔴 งานด่วนแทรก" if selected_job["is_urgent"] else "🟢 งานปกติ",
@@ -506,41 +539,22 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         valid_jobs.remove(selected_job)
             
     start_anchor = now_dt
-    max_finish = max(m_available.values()) if summary_records else (now_dt + timedelta(hours=8))
-    if max_finish <= start_anchor:
-        max_finish = start_anchor + timedelta(hours=8)
-        
-    total_horizon_hrs = max((max_finish - start_anchor).total_seconds() / 3600.0, 1.0)
+    max_finish = max(m_available.values()) if summary_records else (now_dt + timedelta(hours=12))
     
-    # เพิ่มแท่งรอรันงานสำหรับเครื่องที่ไม่มีคิวงาน ให้ครบทั้ง 17 สถานี
-    recorded_machines = {r["เครื่องจักร"] for r in gantt_records}
-    for m in MACHINE_LIST:
-        if m not in recorded_machines:
-            idle_hrs = (max_finish - start_anchor).total_seconds() / 3600.0
-            gantt_records.append({
-                "ข้อความบนแท่งกราฟ": f"รอรันงาน ({idle_hrs:.1f} ชม.)",
-                "แผนงาน": "-",
-                "ชื่อ Drawing.": "รอคิวขึ้นงาน",
-                "จำนวน": "-",
-                "ขั้นตอน (Step)": "รอรันงาน",
-                "กิจกรรม": "⚪ รอรันงาน",
-                "เครื่องจักร": m,
-                "วัสดุ": "-",
-                "เวลาเริ่ม": start_anchor,
-                "เวลาเสร็จ": max_finish,
-                "ระยะเวลา": f"{idle_hrs:.1f} ชม.",
-            })
-
+    # คำนวณกรอบเวลาทำงานรวม (เฉพาะช่วงเวลา 08:00 - 20:00 น. ในแต่ละวัน)
+    total_days = max((max_finish.date() - start_anchor.date()).days + 1, 1)
+    total_horizon_work_hrs = max(total_days * (WORK_END_HOUR - WORK_START_HOUR), 12.0)
+    
     util_list = []
     for m in MACHINE_LIST:
         busy = m_busy_hrs[m]
-        util_pct = min((busy / total_horizon_hrs) * 100.0, 100.0) if total_horizon_hrs > 0 else 0.0
+        util_pct = min((busy / total_horizon_work_hrs) * 100.0, 100.0) if total_horizon_work_hrs > 0 else 0.0
         util_list.append({
             "เครื่องจักร": m, "ชั่วโมงทำงาน (ชม.)": round(busy, 2),
             "อัตราการใช้งาน (%)": round(util_pct, 1), "ข้อความแสดง": f"{util_pct:.1f}% ({busy:.2f} ชม.)"
         })
         
-    return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_hrs
+    return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_work_hrs
 
 # =========================================================
 # 6. เมนูเปลี่ยนโหมด
@@ -1013,7 +1027,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         else:
                             st.error("เกิดข้อผิดพลาดในการลบข้อมูล")
 
-            # ส่งเวลาจริงปัจจุบัน (Real-time Bangkok Now) เข้าสู่ระบบคำนวณผังงาน
             current_real_time = get_bangkok_now().replace(tzinfo=None)
             df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, current_real_time)
 
@@ -1022,7 +1035,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             avg_util = df_util["อัตราการใช้งาน (%)"].mean() if not df_util.empty else 0.0
 
             # แถบสรุป KPI
-            kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทั้งหมด</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
+            kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทำงานรวม</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
             st.divider()
@@ -1149,7 +1162,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - แสดงชื่อเครื่องครบทั้ง 17 สถานี
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) - แสดงครบ 17 สถานี
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
@@ -1165,8 +1178,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     color_discrete_map={
                         "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
                         "⚙️ งานปกติกำลังกัดงาน": "#007AFF",
-                        "🔴 งานด่วนตัดเฉือน": "#FF2D55",
-                        "⚪ รอรันงาน": "#94A3B8"
+                        "🔴 งานด่วนตัดเฉือน": "#FF2D55"
                     }
                 )
                 fig.update_yaxes(
@@ -1185,7 +1197,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 )
                 fig.update_layout(
                     height=650,
-                    xaxis_title="วันและเวลา",
+                    xaxis_title="วันและเวลา (กะทำงาน 08:00 - 20:00 น.)",
                     yaxis_title="เครื่องจักร / แผนก",
                     uniformtext_minsize=8,
                     uniformtext_mode='hide',
@@ -1266,7 +1278,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
                 edited_rates = st.data_editor(
                     st.session_state.machine_rates,
-                    key="editor_machine_rates_full_17_v7",
+                    key="editor_machine_rates_full_17_v8",
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                         "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
