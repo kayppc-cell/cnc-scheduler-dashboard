@@ -177,7 +177,7 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก (รวม 17 สถานี)
+# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -318,6 +318,8 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                 
                 if "qty" not in df.columns:
                     df["qty"] = 1
+                else:
+                    df["qty"] = pd.to_numeric(df["qty"], errors='coerce').fillna(1).astype(int)
                     
                 col_map = {
                     "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
@@ -784,7 +786,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].sort_values(by="แผนงาน", ascending=True).copy().reset_index(drop=True)
             
-            # ปรับให้ขั้นตอนของรายการที่ "รอคิวผลิต" และยังเป็นค่าเริ่มต้น แสดงเป็น "รอหน้าเครื่องระบุ"
             for idx_row in active_jobs_editor_df.index:
                 row_status = str(active_jobs_editor_df.at[idx_row, "สถานะงาน"])
                 row_step = str(active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"])
@@ -857,7 +858,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, min_value=1, max_value=10000, step=1, format="%d", default=1),
                         "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, default="SS400"),
                         "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
-                        # กำหนด default และข้อความสีเทาล็อกไว้เป็น "รอหน้าเครื่องระบุ"
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130, disabled=True, default="รอหน้าเครื่องระบุ", help="ช่องนี้ถูกล็อกไว้ ข้อมูลจะรับมาจากโหมดช่างหน้าเครื่องโดยตรง"),
                         "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
                         "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=145, format="YYYY-MM-DD HH:mm"),
@@ -892,10 +892,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             if step_val in ["", "None", "nan"]:
                                 step_val = "รอหน้าเครื่องระบุ"
 
+                            try:
+                                qty_int = int(row.get("จำนวน", 1) or 1)
+                            except (ValueError, TypeError):
+                                qty_int = 1
+
                             payload = {
                                 "plan_code": p_code,
                                 "drawing_name": d_name,
-                                "qty": int(row.get("จำนวน", 1) or 1),
+                                "qty": qty_int,
                                 "material": str(row.get("วัสดุ", "SS400")),
                                 "job_type": str(row.get("ประเภทงาน", "🟢 งานปกติ")),
                                 "step_name": step_val,
@@ -1024,7 +1029,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 edited_finish_table = st.data_editor(
                     display_finish_df,
-                    key="editor_finish_jobs_table_mins_v11",
+                    key="editor_finish_jobs_table_mins_v12",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                         "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
@@ -1098,7 +1103,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     marker_line_width=1
                 )
                 fig.update_layout(
-                    height=600,
+                    height=650,
                     xaxis_title="วันและเวลา",
                     yaxis_title="เครื่องจักร / แผนก",
                     uniformtext_minsize=8,
@@ -1134,7 +1139,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cliponaxis=False
                 )
                 fig_bar.update_layout(
-                    height=550,
+                    height=600,
                     margin=dict(l=40, r=40, t=10, b=30),
                     xaxis_title="อัตราการใช้งาน (%)",
                     yaxis_title="เครื่องจักร / แผนก",
@@ -1148,72 +1153,72 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # =====================================================
-                # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)
-                # =====================================================
-                st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
+            # =====================================================
+            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)
+            # =====================================================
+            st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
 
-                current_rates_df = pd.DataFrame([
-                    {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES.get(m, 500)}
-                    for m in MACHINE_LIST
+            current_rates_df = pd.DataFrame([
+                {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES.get(m, 500)}
+                for m in MACHINE_LIST
+            ])
+            
+            if "machine_rates" not in st.session_state or len(st.session_state.machine_rates) != len(MACHINE_LIST):
+                st.session_state.machine_rates = current_rates_df
+            else:
+                existing_map = dict(zip(st.session_state.machine_rates["เครื่องจักร"], st.session_state.machine_rates["เรตราคา (บาท/ชม.)"]))
+                for m in MACHINE_LIST:
+                    if m not in existing_map:
+                        existing_map[m] = DEFAULT_RATES.get(m, 500)
+                st.session_state.machine_rates = pd.DataFrame([
+                    {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": existing_map[m]} for m in MACHINE_LIST
                 ])
-                
-                if "machine_rates" not in st.session_state or len(st.session_state.machine_rates) != len(MACHINE_LIST):
-                    st.session_state.machine_rates = current_rates_df
-                else:
-                    existing_map = dict(zip(st.session_state.machine_rates["เครื่องจักร"], st.session_state.machine_rates["เรตราคา (บาท/ชม.)"]))
-                    for m in MACHINE_LIST:
-                        if m not in existing_map:
-                            existing_map[m] = DEFAULT_RATES.get(m, 500)
-                    st.session_state.machine_rates = pd.DataFrame([
-                        {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": existing_map[m]} for m in MACHINE_LIST
-                    ])
 
-                cost_col1, cost_col2 = st.columns([1.1, 2.9])
+            cost_col1, cost_col2 = st.columns([1.1, 2.9])
 
-                with cost_col1:
-                    st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
-                    edited_rates = st.data_editor(
-                        st.session_state.machine_rates,
-                        key="editor_machine_rates_full_17_v4",
+            with cost_col1:
+                st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
+                edited_rates = st.data_editor(
+                    st.session_state.machine_rates,
+                    key="editor_machine_rates_full_17_v4",
+                    column_config={
+                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
+                        "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
+                    },
+                    use_container_width=True,
+                    hide_index=True
+                )
+                st.session_state.machine_rates = edited_rates
+                rate_map = dict(zip(edited_rates["เครื่องจักร"], edited_rates["เรตราคา (บาท/ชม.)"]))
+
+            with cost_col2:
+                if not finished_jobs_df.empty:
+                    cost_df = finished_jobs_df.copy()
+                    cost_df["รวม (ชม.)"] = ((cost_df["Setup (น.)"] + cost_df["Basic (น.)"] + cost_df["โปรแกรม (น.)"]) / 60.0).round(2)
+                    cost_df["เรตราคา (บาท/ชม.)"] = cost_df["เลือกเครื่องจักร"].map(rate_map).fillna(500)
+                    cost_df["มูลค่ารวม (บาท)"] = cost_df["รวม (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]
+                    
+                    total_finished_cost = cost_df["มูลค่ารวม (บาท)"].sum()
+                    total_finished_hrs = cost_df["รวม (ชม.)"].sum()
+                    
+                    st.markdown(f"**📊 รายการสรุปมูลค่างานที่เสร็จสิ้น (รวมทั้งหมด: :green[{total_finished_cost:,.2f} บาท] / {total_finished_hrs:.2f} ชม.)**")
+                    st.dataframe(
+                        cost_df.sort_values(by="แผนงาน", ascending=True)[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
                         column_config={
-                            "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
-                            "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=120),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", width=140),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
+                            "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
+                            "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา", width=110, format="%d ฿"),
+                            "มูลค่ารวม (บาท)": st.column_config.NumberColumn("รวมเป็นเงิน", width=130, format="%.2f ฿"),
                         },
                         use_container_width=True,
                         hide_index=True
                     )
-                    st.session_state.machine_rates = edited_rates
-                    rate_map = dict(zip(edited_rates["เครื่องจักร"], edited_rates["เรตราคา (บาท/ชม.)"]))
-
-                with cost_col2:
-                    if not finished_jobs_df.empty:
-                        cost_df = finished_jobs_df.copy()
-                        cost_df["รวม (ชม.)"] = ((cost_df["Setup (น.)"] + cost_df["Basic (น.)"] + cost_df["โปรแกรม (น.)"]) / 60.0).round(2)
-                        cost_df["เรตราคา (บาท/ชม.)"] = cost_df["เลือกเครื่องจักร"].map(rate_map).fillna(500)
-                        cost_df["มูลค่ารวม (บาท)"] = cost_df["รวม (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]
-                        
-                        total_finished_cost = cost_df["มูลค่ารวม (บาท)"].sum()
-                        total_finished_hrs = cost_df["รวม (ชม.)"].sum()
-                        
-                        st.markdown(f"**📊 รายการสรุปมูลค่างานที่เสร็จสิ้น (รวมทั้งหมด: :green[{total_finished_cost:,.2f} บาท] / {total_finished_hrs:.2f} ชม.)**")
-                        st.dataframe(
-                            cost_df.sort_values(by="แผนงาน", ascending=True)[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
-                            column_config={
-                                "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
-                                "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
-                                "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
-                                "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=120),
-                                "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", width=140),
-                                "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
-                                "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
-                                "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
-                                "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
-                                "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา", width=110, format="%d ฿"),
-                                "มูลค่ารวม (บาท)": st.column_config.NumberColumn("รวมเป็นเงิน", width=130, format="%.2f ฿"),
-                            },
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                    else:
-                        st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
+                else:
+                    st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
