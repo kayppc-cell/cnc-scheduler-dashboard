@@ -1219,7 +1219,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline - Advanced UI)
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
@@ -1271,11 +1271,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 fig.update_xaxes(
                     showgrid=True,
                     gridcolor="#E2E8F0",
-                    dtickrange=[
-                        dict(dtick="M1", value="%b %Y"),
-                        dict(dtick="D1", value="%a %d %b"),
-                        dict(dtick=3600000 * 2, value="%H:%M")
-                    ],
                     rangeselector=dict(
                         buttons=list([
                             dict(count=1, label="🔍 วันนี้", step="day", stepmode="backward"),
