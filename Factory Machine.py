@@ -22,12 +22,6 @@ def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def get_day_working_windows(dt_date):
-    """
-    กำหนดหน้าต่างเวลาทำงานของแต่ละวัน:
-    - จันทร์-ศุกร์ (0-4): 08:00-12:00 และ 13:00-20:00 (11 ชม./วัน)
-    - เสาร์ (5): 08:00-12:00 และ 13:00-17:00 (8 ชม./วัน)
-    - อาทิตย์ (6): หยุด
-    """
     weekday = dt_date.weekday()
     if weekday == 6:  # วันอาทิตย์
         return []
@@ -43,7 +37,6 @@ def get_day_working_windows(dt_date):
         ]
 
 def get_next_valid_work_time(dt: datetime) -> datetime:
-    """หาจุดเริ่มต้นเวลาทำงานถัดไปที่ถูกต้อง"""
     cur_date = dt.date()
     for _ in range(14):
         windows = get_day_working_windows(cur_date)
@@ -57,9 +50,6 @@ def get_next_valid_work_time(dt: datetime) -> datetime:
     return dt
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
-    """
-    คำนวณช่วงเวลาทำงานตัดเบรกเที่ยง, ตัดกะเสาร์ 17:00 น., กะธรรมดา 20:00 น. และหยุดวันอาทิตย์
-    """
     segments = []
     remaining_hours = duration_hours
     current_dt = get_next_valid_work_time(start_dt)
@@ -260,6 +250,17 @@ st.markdown("""
     .step-card-finished {
         border-color: #A7F3D0 !important;
         background: linear-gradient(145deg, #FFFFFF 0%, #F0FDF4 100%) !important;
+    }
+
+    .batch-toolbar {
+        background: #F1F5F9;
+        border: 1.5px dashed #CBD5E1;
+        border-radius: 12px;
+        padding: 12px 16px;
+        margin-bottom: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
     }
 
     .schedule-info-box {
@@ -630,14 +631,23 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (พร้อมโหมด Batch Running)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
     
     df_all = fetch_jobs_from_supabase()
-    selected_m = st.selectbox("🏭 เลือกเครื่องจักร / แผนก:", MACHINE_LIST, key="op_machine_select")
     
+    c_m_sel, c_mode_sel = st.columns([2, 2])
+    with c_m_sel:
+        selected_m = st.selectbox("🏭 เลือกเครื่องจักร / แผนก:", MACHINE_LIST, key="op_machine_select")
+    with c_mode_sel:
+        run_mode = st.radio(
+            "⚙️ รูปแบบการผลิต:",
+            ["🔹 รันทีละคิว (Piece by Piece)", "📦 รันรวมหลายงานพร้อมกัน (Batch Processing)"],
+            horizontal=True
+        )
+
     if not df_all.empty:
         m_all_jobs = df_all[df_all["เลือกเครื่องจักร"] == selected_m].sort_values(by="ID", ascending=True)
         m_active_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].isin(["🟦 กำลังผลิต", "🟧 รอคิวผลิต", "⚙️ กำลังผลิต", "⏳ รอคิวผลิต"])]
@@ -646,6 +656,45 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         m_active_jobs = pd.DataFrame()
 
     if not m_active_jobs.empty:
+        # แถบควบคุม Batch Operation ด้านบนเมื่อเปิดโหมด Batch
+        if "Batch" in run_mode:
+            st.markdown("""
+            <div class="batch-toolbar">
+                <div>
+                    <b style="color:#1E3A8A; font-size:14.5px;">📦 แผงควบคุมการรันงานแบบกลุ่ม (Batch Processing Mode)</b><br>
+                    <span style="font-size:12px; color:#64748B;">เหมาะสำหรับงานที่เซ็ตทูลครั้งเดียวแล้วรัน Step เดียวกันต่อเนื่องหลายๆ คิว</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            b_c1, b_c2 = st.columns(2)
+            waiting_jobs = m_active_jobs[m_active_jobs["สถานะงาน"].str.contains("รอคิว")]
+            running_jobs = m_active_jobs[m_active_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
+
+            with b_c1:
+                if st.button(f"🚀 Start รวมทุกงานที่รอคิว ({len(waiting_jobs)} คิว)", disabled=(len(waiting_jobs) == 0), type="primary", use_container_width=True):
+                    now_str = get_bangkok_str()
+                    for _, r in waiting_jobs.iterrows():
+                        update_supabase_job(int(r["ID"]), {"status": "🟦 กำลังผลิต", "actual_start": now_str})
+                    st.toast("เริ่มจับเวลาจริงทุกคิวพร้อมกันเรียบร้อย!", icon="🚀")
+                    st.rerun()
+
+            with b_c2:
+                if st.button(f"🏁 Finish รวมทุกงานที่กำลังรัน ({len(running_jobs)} คิว)", disabled=(len(running_jobs) == 0), type="secondary", use_container_width=True):
+                    now_dt = get_bangkok_now()
+                    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    for _, r in running_jobs.iterrows():
+                        s_start = r.get("เริ่มจริง")
+                        calc_prog = 0.0
+                        if pd.notna(s_start):
+                            st_dt = pd.to_datetime(s_start).tz_localize(None)
+                            calc_prog = round((now_dt.replace(tzinfo=None) - st_dt).total_seconds() / 60.0, 1)
+                        p = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str}
+                        if calc_prog > 0: p["prog_hrs"] = calc_prog
+                        update_supabase_job(int(r["ID"]), p)
+                    st.toast("บันทึกจบงานจริงทุกคิวเรียบร้อย!", icon="🏁")
+                    st.rerun()
+
         job_groups = m_active_jobs.groupby(["แผนงาน", "ชื่อ Drawing."], sort=False).size().reset_index()[["แผนงาน", "ชื่อ Drawing."]]
         
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
@@ -691,10 +740,14 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_step_finished = "เสร็จสิ้น" in s_status
                 is_step_waiting = not is_step_running and not is_step_finished
 
-                can_start = False
-                if is_step_waiting and not machine_any_running and not next_available_start_found:
-                    can_start = True
-                    next_available_start_found = True
+                # ถ้าเป็นโหมด Batch ยอมให้กด Start ได้ทันทีโดยไม่ต้องรอคิวอื่นจบก่อน
+                if "Batch" in run_mode:
+                    can_start = is_step_waiting
+                else:
+                    can_start = False
+                    if is_step_waiting and not machine_any_running and not next_available_start_found:
+                        can_start = True
+                        next_available_start_found = True
 
                 card_style_class = "step-card"
                 if is_step_running:
@@ -1390,7 +1443,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
                 edited_rates = st.data_editor(
                     st.session_state.machine_rates,
-                    key="editor_machine_rates_full_17_v10",
+                    key="editor_machine_rates_full_17_v11",
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                         "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
