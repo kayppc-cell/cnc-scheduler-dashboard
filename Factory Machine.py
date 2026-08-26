@@ -651,7 +651,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (แก้บั๊ก Step ที่วางแผนล่วงหน้าไม่หายหลัง Finish)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (แก้ไขการจัดลำดับคิวและปลดล็อก Start อัจฉริยะ)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -669,23 +669,36 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         )
 
     if not df_all.empty:
-        m_all_jobs = df_all[df_all["เลือกเครื่องจักร"] == selected_m].sort_values(by="ID", ascending=True)
+        m_all_jobs = df_all[df_all["เลือกเครื่องจักร"] == selected_m].copy()
     else:
         m_all_jobs = pd.DataFrame()
 
     if not m_all_jobs.empty:
-        # หาคิวงานทั้งหมด และกรองเฉพาะคิวงานที่ 'ยังมีขั้นตอนค้างอยู่ (ยังไม่ Finish หมดทุก Step)'
-        job_groups = m_all_jobs.groupby(["แผนงาน", "ชื่อ Drawing."], sort=False).size().reset_index()[["แผนงาน", "ชื่อ Drawing."]]
+        # ดึงกลุ่มงานทั้งหมดที่มีอย่างน้อย 1 Step ที่ยังไม่ Finish
+        raw_groups = m_all_jobs.groupby(["แผนงาน", "ชื่อ Drawing."], sort=False).size().reset_index()[["แผนงาน", "ชื่อ Drawing."]]
         
-        active_group_list = []
-        for _, g_row in job_groups.iterrows():
+        group_meta = []
+        for _, g_row in raw_groups.iterrows():
             p_code = g_row["แผนงาน"]
             d_code = g_row["ชื่อ Drawing."]
-            steps_in_group = m_all_jobs[(m_all_jobs["แผนงาน"] == p_code) & (m_all_jobs["ชื่อ Drawing."] == d_code)]
-            # ถ้ามีอย่างน้อย 1 Step ที่ยังไม่ Finish ให้แสดงคิวนี้
-            has_pending = any("เสร็จสิ้น" not in str(s) for s in steps_in_group["สถานะงาน"])
+            steps = m_all_jobs[(m_all_jobs["แผนงาน"] == p_code) & (m_all_jobs["ชื่อ Drawing."] == d_code)]
+            
+            # เช็คว่ามีค้างอยู่ไหม
+            has_pending = any("เสร็จสิ้น" not in str(s) for s in steps["สถานะงาน"])
             if has_pending:
-                active_group_list.append((p_code, d_code))
+                is_running = any("กำลังผลิต" in str(s) for s in steps["สถานะงาน"])
+                earliest_ready = steps["วัน-เวลาขึ้นงาน"].min()
+                min_id = steps["ID"].min()
+                group_meta.append({
+                    "plan_code": p_code,
+                    "drawing_name": d_code,
+                    "is_running": is_running,
+                    "ready_at": earliest_ready if pd.notna(earliest_ready) else pd.to_datetime("2099-01-01"),
+                    "min_id": min_id
+                })
+
+        # เรียงลำดับคิว: คิวที่กำลังผลิตอยู่ขึ้นก่อน -> เรียงตามวัน-เวลาขึ้นงาน -> เรียงตาม ID
+        sorted_groups = sorted(group_meta, key=lambda x: (not x["is_running"], x["ready_at"], x["min_id"]))
 
         if "Batch" in run_mode:
             st.markdown("""
@@ -728,10 +741,13 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
         next_available_start_found = False
 
-        if len(active_group_list) == 0:
+        if len(sorted_groups) == 0:
             st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ (ทุกงานเสร็จสิ้นครบหมดแล้ว)")
         else:
-            for group_idx, (plan_code, drawing_code) in enumerate(active_group_list, 1):
+            for group_idx, g_info in enumerate(sorted_groups, 1):
+                plan_code = g_info["plan_code"]
+                drawing_code = g_info["drawing_name"]
+                
                 plan_steps = m_all_jobs[(m_all_jobs["แผนงาน"] == plan_code) & (m_all_jobs["ชื่อ Drawing."] == drawing_code)].sort_values(by="ID", ascending=True)
                 first_step_info = plan_steps.iloc[0]
                 mat_val = first_step_info.get('วัสดุ', '-')
@@ -756,6 +772,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
                 st.markdown(f"**📋 รายการขั้นตอนและปุ่มควบคุม ({plan_code} | {drawing_code}):**")
 
+                step_within_group_started = False
+
                 for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
                     s_id = int(step_row["ID"])
                     raw_s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
@@ -768,13 +786,18 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     is_step_finished = "เสร็จสิ้น" in s_status
                     is_step_waiting = not is_step_running and not is_step_finished
 
+                    # เงื่อนไขปลดล็อกปุ่ม Start
                     if "Batch" in run_mode:
                         can_start = is_step_waiting
                     else:
                         can_start = False
-                        if is_step_waiting and not machine_any_running and not next_available_start_found:
-                            can_start = True
-                            next_available_start_found = True
+                        # ปลดล็อก Step แรกที่ยังไม่เสร็จของคิวแรกสุด หรือคิวที่กำลังผลิตอยู่
+                        if is_step_waiting and not step_within_group_started:
+                            if not machine_any_running or g_info["is_running"]:
+                                if not next_available_start_found:
+                                    can_start = True
+                                    next_available_start_found = True
+                            step_within_group_started = True
 
                     card_style_class = "step-card"
                     if is_step_running:
@@ -823,7 +846,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                     if st.button("🚀 Start (เริ่มจับเวลาจริง)", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
                                         now_str = get_bangkok_str()
                                         update_payload = {
-                                            "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
+                                            "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}" if s_name in ["", "รอหน้าเครื่องระบุ"] else s_name,
                                             "status": "🟦 กำลังผลิต",
                                             "actual_start": now_str
                                         }
