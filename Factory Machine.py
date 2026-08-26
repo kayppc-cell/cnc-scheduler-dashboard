@@ -22,6 +22,12 @@ def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def get_day_working_windows(dt_date):
+    """
+    กำหนดหน้าต่างเวลาทำงานของแต่ละวัน:
+    - จันทร์-ศุกร์ (0-4): 08:00-12:00 และ 13:00-20:00 (11 ชม./วัน)
+    - เสาร์ (5): 08:00-12:00 และ 13:00-17:00 (8 ชม./วัน)
+    - อาทิตย์ (6): หยุด
+    """
     weekday = dt_date.weekday()
     if weekday == 6:  # วันอาทิตย์
         return []
@@ -651,7 +657,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (แก้ไขการจัดลำดับคิวและปลดล็อก Start อัจฉริยะ)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (แก้เงื่อนไขล็อกปุ่ม Start ในโหมดรันทีละคิว 100%)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -683,7 +689,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             d_code = g_row["ชื่อ Drawing."]
             steps = m_all_jobs[(m_all_jobs["แผนงาน"] == p_code) & (m_all_jobs["ชื่อ Drawing."] == d_code)]
             
-            # เช็คว่ามีค้างอยู่ไหม
             has_pending = any("เสร็จสิ้น" not in str(s) for s in steps["สถานะงาน"])
             if has_pending:
                 is_running = any("กำลังผลิต" in str(s) for s in steps["สถานะงาน"])
@@ -697,7 +702,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     "min_id": min_id
                 })
 
-        # เรียงลำดับคิว: คิวที่กำลังผลิตอยู่ขึ้นก่อน -> เรียงตามวัน-เวลาขึ้นงาน -> เรียงตาม ID
+        # เรียงลำดับ: คิวที่กำลังผลิตอยู่ขึ้นก่อน -> เรียงตามเวลาขึ้นงาน -> เรียงตาม ID
         sorted_groups = sorted(group_meta, key=lambda x: (not x["is_running"], x["ready_at"], x["min_id"]))
 
         if "Batch" in run_mode:
@@ -738,6 +743,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     st.toast("บันทึกจบงานจริงทุกคิวเรียบร้อย!", icon="🏁")
                     st.rerun()
 
+        # ตรวจสอบว่าในเครื่องนี้มีงานใดกำลังรันอยู่หรือไม่
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
         next_available_start_found = False
 
@@ -772,8 +778,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
                 st.markdown(f"**📋 รายการขั้นตอนและปุ่มควบคุม ({plan_code} | {drawing_code}):**")
 
-                step_within_group_started = False
-
                 for idx, (_, step_row) in enumerate(plan_steps.iterrows(), 1):
                     s_id = int(step_row["ID"])
                     raw_s_name = str(step_row.get("ขั้นตอน (Step)", f"OP{idx*10}"))
@@ -786,18 +790,15 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     is_step_finished = "เสร็จสิ้น" in s_status
                     is_step_waiting = not is_step_running and not is_step_finished
 
-                    # เงื่อนไขปลดล็อกปุ่ม Start
+                    # แก้ไขเงื่อนไขการปลดล็อกปุ่ม Start ให้ถูกต้อง 100%
                     if "Batch" in run_mode:
                         can_start = is_step_waiting
                     else:
                         can_start = False
-                        # ปลดล็อก Step แรกที่ยังไม่เสร็จของคิวแรกสุด หรือคิวที่กำลังผลิตอยู่
-                        if is_step_waiting and not step_within_group_started:
-                            if not machine_any_running or g_info["is_running"]:
-                                if not next_available_start_found:
-                                    can_start = True
-                                    next_available_start_found = True
-                            step_within_group_started = True
+                        # ถ้าเครื่องไม่ติดงานรันอยู่เลย (machine_any_running == False) ปลดล็อกเฉพาะ Step แรกสุดที่รออยู่
+                        if is_step_waiting and not machine_any_running and not next_available_start_found:
+                            can_start = True
+                            next_available_start_found = True
 
                     card_style_class = "step-card"
                     if is_step_running:
@@ -864,8 +865,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                         
                                         calc_prog_mins = 0.0
                                         if pd.notna(s_start):
-                                            st_dt = pd.to_datetime(s_start)
-                                            st_dt = st_dt.tz_localize(None) if st_dt.tzinfo else st_dt
+                                            st_dt = pd.to_datetime(s_start).tz_localize(None)
                                             cur_dt = now_dt.replace(tzinfo=None)
                                             calc_prog_mins = round((cur_dt - st_dt).total_seconds() / 60.0, 1)
                                         
@@ -896,7 +896,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                             st.toast("อัปเดตชื่อ Step สำเร็จ!", icon="💾")
                                             st.rerun()
 
-                        st.markdown("</div>", unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                 next_step_num = len(plan_steps) + 1
                 default_next_step_label = f"OP{next_step_num*10}"
