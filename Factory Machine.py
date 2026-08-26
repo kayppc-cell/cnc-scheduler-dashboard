@@ -43,6 +43,7 @@ def get_day_working_windows(dt_date):
         ]
 
 def get_next_valid_work_time(dt: datetime) -> datetime:
+    """หาจุดเริ่มต้นเวลาทำงานถัดไปที่ถูกต้อง"""
     cur_date = dt.date()
     for _ in range(14):
         windows = get_day_working_windows(cur_date)
@@ -56,6 +57,9 @@ def get_next_valid_work_time(dt: datetime) -> datetime:
     return dt
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
+    """
+    คำนวณช่วงเวลาทำงานตัดเบรกเที่ยง, ตัดกะเสาร์ 17:00 น., กะธรรมดา 20:00 น. และหยุดวันอาทิตย์
+    """
     segments = []
     remaining_hours = duration_hours
     current_dt = get_next_valid_work_time(start_dt)
@@ -548,15 +552,17 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         setup_hrs = setup_mins / 60.0
         actual_cut_hrs = selected_job["remain_cut_hrs"]
         
-        step_raw = str(selected_job.get("ขั้นตอน (Step)", "รอระบุ"))
-        if step_raw in ["", "None", "nan", "รอหน้าเครื่องระบุ"]:
-            step_raw = "รันงาน"
+        # ปรับค่าขั้นตอนเริ่มต้นเป็น 'รอหน้าเครื่องระบุ'
+        raw_step = str(selected_job.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
+        if raw_step in ["", "None", "nan", "รันงาน"]:
+            step_raw = "รอหน้าเครื่องระบุ"
+        else:
+            step_raw = raw_step
             
         job_code = str(selected_job.get('แผนงาน', '-'))
         drawing_name = str(selected_job.get("ชื่อ Drawing.", "-"))
         qty_val = str(selected_job.get("จำนวน", 1))
         
-        # ป้ายข้อความสั้นกระชับบนแท่งกราฟ (Label สวยงาม ไม่ยาวเกิน)
         short_bar_label = f"{job_code}"
         
         setup_start = cur_time
@@ -1009,7 +1015,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             for idx_row in active_jobs_editor_df.index:
                 row_status = str(active_jobs_editor_df.at[idx_row, "สถานะงาน"])
                 row_step = str(active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"])
-                if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)"]):
+                if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
@@ -1295,12 +1301,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline - ปรับปรุงใหม่)
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 
-                # ฟิลเตอร์กรองกลุ่มเครื่องจักร
                 gantt_f1, gantt_f2 = st.columns([3, 1])
                 with gantt_f1:
                     m_filter_mode = st.radio(
@@ -1384,13 +1389,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
                 )
 
-                # แรเงาพื้นหลังวันอาทิตย์ (Non-working Day Shading)
                 if not plot_gantt_df.empty:
                     min_dt = plot_gantt_df["เวลาเริ่ม"].min()
                     max_dt = plot_gantt_df["เวลาเสร็จ"].max()
                     cur_d = min_dt.date()
                     while cur_d <= max_dt.date() + timedelta(days=1):
-                        if cur_d.weekday() == 6:  # วันอาทิตย์
+                        if cur_d.weekday() == 6:
                             sun_start = datetime.combine(cur_d, time(0, 0))
                             sun_end = datetime.combine(cur_d + timedelta(days=1), time(0, 0))
                             fig.add_vrect(
@@ -1416,7 +1420,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 
                 st.plotly_chart(fig, use_container_width=True)
 
-                # กล่องอธิบายช่วงเวลากะทำงานและเบรกใต้กราฟ
                 st.markdown("""
                 <div class="schedule-info-box">
                     <div class="schedule-pill">
