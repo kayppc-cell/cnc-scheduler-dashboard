@@ -22,10 +22,16 @@ def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def get_day_working_windows(dt_date):
+    """
+    กำหนดหน้าต่างเวลาทำงานของแต่ละวัน:
+    - จันทร์-ศุกร์ (0-4): 08:00-12:00 และ 13:00-20:00 (11 ชม./วัน)
+    - เสาร์ (5): 08:00-12:00 และ 13:00-17:00 (8 ชม./วัน)
+    - อาทิตย์ (6): หยุด
+    """
     weekday = dt_date.weekday()
-    if weekday == 6:  # อาทิตย์
+    if weekday == 6:  # วันอาทิตย์
         return []
-    elif weekday == 5:  # เสาร์
+    elif weekday == 5:  # วันเสาร์
         return [
             (datetime.combine(dt_date, time(8, 0)), datetime.combine(dt_date, time(12, 0))),
             (datetime.combine(dt_date, time(13, 0)), datetime.combine(dt_date, time(17, 0)))
@@ -354,7 +360,7 @@ JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทร�
 JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "🟩 เสร็จสิ้นแล้ว"]
 
 # =========================================================
-# 4. ฟังก์ชันเชื่อมต่อ Supabase (Optimized TTL)
+# 4. ฟังก์ชันเชื่อมต่อ Supabase
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -369,14 +375,14 @@ def insert_supabase_job(payload: dict) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs"
-        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=6)
+        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
         if res.status_code in [200, 201]:
             st.cache_data.clear()
             return True
         else:
             if "qty" in payload:
                 payload_no_qty = {k: v for k, v in payload.items() if k != "qty"}
-                res2 = requests.post(endpoint, headers=get_supabase_headers(), json=payload_no_qty, timeout=6)
+                res2 = requests.post(endpoint, headers=get_supabase_headers(), json=payload_no_qty, timeout=8)
                 if res2.status_code in [200, 201]:
                     st.cache_data.clear()
                     return True
@@ -390,14 +396,14 @@ def update_supabase_job(job_id: int, payload: dict) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
-        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=6)
+        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
         if res.status_code in [200, 204]:
             st.cache_data.clear()
             return True
         else:
             if "qty" in payload:
                 payload_no_qty = {k: v for k, v in payload.items() if k != "qty"}
-                res2 = requests.patch(endpoint, headers=get_supabase_headers(), json=payload_no_qty, timeout=6)
+                res2 = requests.patch(endpoint, headers=get_supabase_headers(), json=payload_no_qty, timeout=8)
                 if res2.status_code in [200, 204]:
                     st.cache_data.clear()
                     return True
@@ -411,11 +417,20 @@ def delete_supabase_job(job_id: int) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
-        res = requests.delete(endpoint, headers=get_supabase_headers(), timeout=6)
+        res = requests.delete(endpoint, headers=get_supabase_headers(), timeout=8)
         st.cache_data.clear()
         return res.status_code in [200, 204]
     except Exception:
         return False
+
+def safe_parse_datetime(series):
+    try:
+        dt = pd.to_datetime(series, errors='coerce')
+        if hasattr(dt.dt, 'tz') and dt.dt.tz is not None:
+            return dt.dt.tz_convert('Asia/Bangkok').dt.tz_localize(None)
+        return dt
+    except Exception:
+        return pd.to_datetime(series, errors='coerce')
 
 def normalize_status(status_str: str) -> str:
     s = str(status_str)
@@ -428,24 +443,23 @@ def normalize_status(status_str: str) -> str:
     else:
         return "🟧 รอคิวผลิต"
 
-# เพิ่ม cache ttl เป็น 10 วินาที เพื่อลดภาระ Network Request ซ้ำซ้อน
-@st.cache_data(ttl=10, show_spinner=False)
+@st.cache_data(ttl=5, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs?select=*&order=id.asc"
-        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=6)
+        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=8)
         
         if res.status_code == 200:
             data = res.json()
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                df["ready_at"] = pd.to_datetime(df["ready_at"], errors='coerce').dt.tz_localize(None)
+                df["ready_at"] = safe_parse_datetime(df.get("ready_at"))
                 if "actual_start" in df.columns:
-                    df["actual_start"] = pd.to_datetime(df["actual_start"], errors='coerce').dt.tz_localize(None)
+                    df["actual_start"] = safe_parse_datetime(df.get("actual_start"))
                 if "actual_finish" in df.columns:
-                    df["actual_finish"] = pd.to_datetime(df["actual_finish"], errors='coerce').dt.tz_localize(None)
+                    df["actual_finish"] = safe_parse_datetime(df.get("actual_finish"))
                 
                 if "status" in df.columns:
                     df["status"] = df["status"].apply(normalize_status)
@@ -696,6 +710,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_running = any("กำลังผลิต" in str(s) for s in steps["สถานะงาน"])
                 is_hold = any("พักงาน" in str(s) for s in steps["สถานะงาน"])
                 is_urgent = any("ด่วนแทรก" in str(t) for t in steps.get("ประเภทงาน", []))
+                
                 earliest_ready = steps["วัน-เวลาขึ้นงาน"].min()
                 min_id = steps["ID"].min()
                 
@@ -751,7 +766,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         s_start = r.get("เริ่มจริง")
                         calc_prog = 0.0
                         if pd.notna(s_start):
-                            st_dt = pd.to_datetime(s_start).tz_localize(None)
+                            st_dt = pd.to_datetime(s_start)
                             calc_prog = round((now_dt.replace(tzinfo=None) - st_dt).total_seconds() / 60.0, 1)
                         p = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str}
                         if calc_prog > 0: p["prog_hrs"] = calc_prog
@@ -892,9 +907,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                         now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
                                         calc_prog_mins = 0.0
                                         if pd.notna(s_start):
-                                            st_dt = pd.to_datetime(s_start).tz_localize(None)
-                                            cur_dt = now_dt.replace(tzinfo=None)
-                                            calc_prog_mins = round((cur_dt - st_dt).total_seconds() / 60.0, 1)
+                                            st_dt = pd.to_datetime(s_start)
+                                            calc_prog_mins = round((now_dt.replace(tzinfo=None) - st_dt).total_seconds() / 60.0, 1)
                                         
                                         finish_payload = {
                                             "status": "🟩 เสร็จสิ้นแล้ว",
@@ -999,9 +1013,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 else:
                     st.error("รหัสผ่านไม่ถูกต้อง")
     else:
-        # =====================================================
-        # 1. แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน (Management Only)
-        # =====================================================
         c_head, c_logout = st.columns([8, 2])
         with c_head:
             st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน (Management Only)")
@@ -1089,6 +1100,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 row_step = str(active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"])
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
+
+            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = pd.to_datetime(active_jobs_editor_df["วัน-เวลาขึ้นงาน"], errors='coerce')
 
             if "ลบ" not in active_jobs_editor_df.columns:
                 active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
