@@ -468,7 +468,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine
+# 5. Scheduling Engine (แบบที่ 2: งานที่ไม่มีวัน-เวลาขึ้นงานจะไม่ถูกรันคิว)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -478,7 +478,19 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     
     active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
     valid_jobs = []
+    
     for j in jobs_df[active_mask].to_dict("records"):
+        # กรองเฉพาะงานที่มีวัน-เวลาขึ้นงานชัดเจน (ไม่เป็นค่าว่าง)
+        ready_time = j.get("วัน-เวลาขึ้นงาน")
+        if pd.isna(ready_time) or str(ready_time).strip() in ["", "None", "nan", "-"]:
+            continue
+            
+        dt_val = pd.to_datetime(ready_time, errors='coerce')
+        if pd.isna(dt_val):
+            continue
+            
+        j["ready_at"] = get_next_valid_work_time(dt_val.to_pydatetime())
+
         try:
             basic_mins = max(float(j.get("Basic (น.)", 0.0) or 0.0), 0.0)
             prog_mins = max(float(j.get("โปรแกรม (น.)", 0.0) or 0.0), 0.0)
@@ -493,13 +505,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             j["cut_hrs"] = cut_hrs
         except (ValueError, TypeError):
             j["basic_mins"], j["prog_mins"], j["setup_mins"], j["cut_hrs"] = 0.0, 0.0, 15.0, 0.01
-            
-        ready_time = j.get("วัน-เวลาขึ้นงาน")
-        if pd.isna(ready_time):
-            j["ready_at"] = now_dt
-        else:
-            dt_val = pd.to_datetime(ready_time, errors='coerce')
-            j["ready_at"] = now_dt if pd.isna(dt_val) else get_next_valid_work_time(dt_val.to_pydatetime())
             
         j["is_urgent"] = "ด่วนแทรก" in str(j.get("ประเภทงาน", ""))
         j["remain_cut_hrs"] = j["cut_hrs"]
@@ -1086,7 +1091,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # แปลงวัน-เวลาขึ้นงานเป็น String format มาตรฐานให้แก้ไขในตารางได้ตรงๆ (ถ้าว่างให้ปล่อยเป็นค่าว่าง)
+            # แปลงวัน-เวลาขึ้นงานเป็น String format มาตรฐานให้แก้ไขในตารางได้ตรงๆ (ถ้าว่างให้ปล่อยว่าง)
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
                 lambda x: x.strftime("%Y-%m-%d %H:%M") if pd.notna(x) else ""
             )
@@ -1166,7 +1171,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
                             "วัน-เวลาขึ้นงาน", 
                             width=165,
-                            help="พิมพ์หรือแก้ไขเวลาได้ตรงๆ เช่น 2026-09-02 17:00 (ถ้าลบว่างระบบจะปล่อยว่างตามที่ต้องการ)"
+                            help="พิมพ์หรือแก้ไขเวลาได้ตรงๆ เช่น 2026-09-02 17:00 (ถ้าลบออกเป็นช่องว่าง งานนี้จะยังไม่ถูกนำไปจัดคิวตารางล่าง)"
                         ),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -1203,7 +1208,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # แปลงและทำความสะอาดเวลาตรงๆ ถ้าลบว่างให้ส่ง None เข้า Supabase ไม่ใส่เวลาปัจจุบันทับ
+                            # ถ้าลบจนว่าง ให้ส่ง None เข้า Supabase เพื่อให้ช่องว่างอย่างแท้จริง
                             raw_ready = str(row.get("วัน-เวลาขึ้นงาน", "")).strip()
                             if raw_ready and raw_ready not in ["", "None", "nan", "-"]:
                                 dt_parsed = pd.to_datetime(raw_ready, errors='coerce')
