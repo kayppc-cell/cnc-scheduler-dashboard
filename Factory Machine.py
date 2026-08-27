@@ -484,7 +484,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (แบบที่ 2: งานที่ไม่มีวัน-เวลาขึ้นงานจะไม่ถูกรันคิว)
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -676,7 +676,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (กรองเฉพาะงานที่มีวัน-เวลาขึ้นงานแล้ว)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (เรียงตามวัน-เวลาขึ้นงานอย่างแม่นยำ)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -694,7 +694,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         )
 
     if not df_all.empty:
-        # กรองเฉพาะงานของเครื่องจักรนี้ และต้องมีวัน-เวลาขึ้นงานระบุแล้ว (ไม่ว่าง) หรือเป็นงานที่กำลังรัน/พักงานอยู่
+        # กรองเฉพาะงานของเครื่องจักรนี้ และต้องมีวัน-เวลาขึ้นงานระบุแล้ว หรือกำลังรัน/พักงานอยู่
         m_all_jobs = df_all[
             (df_all["เลือกเครื่องจักร"] == selected_m) &
             (df_all["วัน-เวลาขึ้นงาน"].notna() | df_all["สถานะงาน"].isin(["🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
@@ -717,9 +717,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_hold = any("พักงาน" in str(s) for s in steps["สถานะงาน"])
                 is_urgent = any("ด่วนแทรก" in str(t) for t in steps.get("ประเภทงาน", []))
                 
-                earliest_ready = steps["วัน-เวลาขึ้นงาน"].min()
+                # หาเวลาขึ้นงานที่เร็วที่สุดของชุดนี้
+                valid_ready_times = steps["วัน-เวลาขึ้นงาน"].dropna()
+                earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else pd.to_datetime("2099-01-01")
                 min_id = steps["ID"].min()
                 
+                # ลำดับความสำคัญ: กำลังรัน (0) > งานด่วน (1) > งานปกติเรียงตามวันเวลา (2) > พักงาน (3)
                 if is_running:
                     prio = 0
                 elif is_urgent and not is_hold:
@@ -736,10 +739,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     "is_running": is_running,
                     "is_hold": is_hold,
                     "is_urgent": is_urgent,
-                    "ready_at": earliest_ready if pd.notna(earliest_ready) else pd.to_datetime("2099-01-01"),
+                    "ready_at": earliest_ready,
                     "min_id": min_id
                 })
 
+        # จัดเรียงตาม ลำดับความสำคัญ -> วันเวลาขึ้นงาน (เดือน/วัน) -> ID
         sorted_groups = sorted(group_meta, key=lambda x: (x["priority"], x["ready_at"], x["min_id"]))
 
         if "Batch" in run_mode:
