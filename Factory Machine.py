@@ -29,11 +29,10 @@ def parse_flexible_datetime(dt_str):
     if s in ["", "None", "nan", "-"]:
         return None
     
-    # ถ้าระบุแค่วัน/เดือน ให้เติมปีปัจจุบันเข้าไปอัตโนมัติ
     current_year = get_bangkok_now().year
     if "/" in s and len(s.split("/")[0]) <= 2:
         parts = s.split("/")
-        if len(parts) == 2:  # เช่น 28/08 17:30
+        if len(parts) == 2:
             s = f"{current_year}/{s}"
             
     dt_parsed = pd.to_datetime(s, errors='coerce', dayfirst=True)
@@ -458,7 +457,6 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                # อ่านค่าเวลาตรงตัวโดยตัด Offset ทิ้ง
                 for dt_col in ["ready_at", "actual_start", "actual_finish"]:
                     if dt_col in df.columns:
                         s_clean = df[dt_col].astype(str).str.replace('T', ' ', regex=False).str.split('+').str[0].str.split('Z').str[0]
@@ -498,7 +496,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     valid_jobs = []
     
     for j in jobs_df[active_mask].to_dict("records"):
-        # แปลงวันที่แบบยืดหยุ่น ถ้าไม่มีหรือไม่ผ่าน ให้ข้ามไม่นำมาจัดคิว
         ready_time = j.get("วัน-เวลาขึ้นงาน")
         dt_val = parse_flexible_datetime(ready_time)
         if dt_val is None:
@@ -679,7 +676,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (กรองเฉพาะงานที่มีวัน-เวลาขึ้นงานแล้ว)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -697,7 +694,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         )
 
     if not df_all.empty:
-        m_all_jobs = df_all[df_all["เลือกเครื่องจักร"] == selected_m].copy()
+        # กรองเฉพาะงานของเครื่องจักรนี้ และต้องมีวัน-เวลาขึ้นงานระบุแล้ว (ไม่ว่าง) หรือเป็นงานที่กำลังรัน/พักงานอยู่
+        m_all_jobs = df_all[
+            (df_all["เลือกเครื่องจักร"] == selected_m) &
+            (df_all["วัน-เวลาขึ้นงาน"].notna() | df_all["สถานะงาน"].isin(["🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
+        ].copy()
     else:
         m_all_jobs = pd.DataFrame()
 
@@ -783,7 +784,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         next_available_start_found = False
 
         if len(sorted_groups) == 0:
-            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ (ทุกงานเสร็จสิ้นครบหมดแล้ว)")
+            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
         else:
             for group_idx, g_info in enumerate(sorted_groups, 1):
                 plan_code = g_info["plan_code"]
@@ -1186,7 +1187,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
                             "วัน-เวลาขึ้นงาน", 
                             width=165,
-                            help="พิมพ์เวลาได้ทั้งแบบย่อ (เช่น 28/08 17:30) หรือเต็ม (เช่น 2026-08-28 17:30) ถ้าลบว่างจะไม่ขึ้นคิวล่าง"
+                            help="พิมพ์เวลาได้ทั้งแบบย่อ (เช่น 28/08 17:30) หรือเต็ม (เช่น 2026-08-28 17:30) ถ้าลบว่างจะไม่ขึ้นคิวล่างและไม่ขึ้นหน้าช่าง"
                         ),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
