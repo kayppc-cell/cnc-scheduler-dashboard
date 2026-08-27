@@ -21,6 +21,24 @@ def get_bangkok_now():
 def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
+def parse_flexible_datetime(dt_str):
+    """แปลงวันที่แบบยืดหยุ่น รองรับทั้ง 28/08 17:30 และ 2026-08-28 17:30"""
+    if pd.isna(dt_str):
+        return None
+    s = str(dt_str).strip()
+    if s in ["", "None", "nan", "-"]:
+        return None
+    
+    # ถ้าระบุแค่วัน/เดือน ให้เติมปีปัจจุบันเข้าไปอัตโนมัติ
+    current_year = get_bangkok_now().year
+    if "/" in s and len(s.split("/")[0]) <= 2:
+        parts = s.split("/")
+        if len(parts) == 2:  # เช่น 28/08 17:30
+            s = f"{current_year}/{s}"
+            
+    dt_parsed = pd.to_datetime(s, errors='coerce', dayfirst=True)
+    return dt_parsed if pd.notna(dt_parsed) else None
+
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
     if weekday == 6:  # วันอาทิตย์
@@ -480,13 +498,10 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     valid_jobs = []
     
     for j in jobs_df[active_mask].to_dict("records"):
-        # กรองเฉพาะงานที่มีวัน-เวลาขึ้นงานชัดเจน (ไม่เป็นค่าว่าง)
+        # แปลงวันที่แบบยืดหยุ่น ถ้าไม่มีหรือไม่ผ่าน ให้ข้ามไม่นำมาจัดคิว
         ready_time = j.get("วัน-เวลาขึ้นงาน")
-        if pd.isna(ready_time) or str(ready_time).strip() in ["", "None", "nan", "-"]:
-            continue
-            
-        dt_val = pd.to_datetime(ready_time, errors='coerce')
-        if pd.isna(dt_val):
+        dt_val = parse_flexible_datetime(ready_time)
+        if dt_val is None:
             continue
             
         j["ready_at"] = get_next_valid_work_time(dt_val.to_pydatetime())
@@ -1171,7 +1186,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
                             "วัน-เวลาขึ้นงาน", 
                             width=165,
-                            help="พิมพ์หรือแก้ไขเวลาได้ตรงๆ เช่น 2026-09-02 17:00 (ถ้าลบออกเป็นช่องว่าง งานนี้จะยังไม่ถูกนำไปจัดคิวตารางล่าง)"
+                            help="พิมพ์เวลาได้ทั้งแบบย่อ (เช่น 28/08 17:30) หรือเต็ม (เช่น 2026-08-28 17:30) ถ้าลบว่างจะไม่ขึ้นคิวล่าง"
                         ),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -1208,13 +1223,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # ถ้าลบจนว่าง ให้ส่ง None เข้า Supabase เพื่อให้ช่องว่างอย่างแท้จริง
-                            raw_ready = str(row.get("วัน-เวลาขึ้นงาน", "")).strip()
-                            if raw_ready and raw_ready not in ["", "None", "nan", "-"]:
-                                dt_parsed = pd.to_datetime(raw_ready, errors='coerce')
-                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(dt_parsed) else None
-                            else:
-                                ready_str = None
+                            # แปลงและทำความสะอาดเวลาด้วย Flexible Parser
+                            raw_ready = row.get("วัน-เวลาขึ้นงาน")
+                            dt_parsed = parse_flexible_datetime(raw_ready)
+                            ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if dt_parsed is not None else None
                             
                             step_val = str(row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
                             if step_val in ["", "None", "nan"]:
