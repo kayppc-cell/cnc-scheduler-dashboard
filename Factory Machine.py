@@ -220,6 +220,11 @@ st.markdown("""
         margin-bottom: 14px;
         box-shadow: 0 8px 24px rgba(79, 70, 229, 0.08), 0 2px 6px rgba(0, 0, 0, 0.03);
     }
+    .op-job-header-urgent {
+        border-left: 7px solid #EF4444 !important;
+        background: linear-gradient(145deg, #FFFFFF 0%, #FEF2F2 100%) !important;
+        box-shadow: 0 8px 24px rgba(239, 68, 68, 0.12), 0 2px 6px rgba(0, 0, 0, 0.03) !important;
+    }
 
     .badge-chip {
         display: inline-flex;
@@ -235,6 +240,7 @@ st.markdown("""
     .badge-drawing { background: #F0F9FF; color: #0369A1; border: 1px solid #BAE6FD; }
     .badge-qty { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; font-weight: 800; }
     .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
+    .badge-urgent { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; font-weight: 800; }
 
     .step-card {
         background: #FFFFFF;
@@ -657,7 +663,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (แก้เงื่อนไขล็อกปุ่ม Start ในโหมดรันทีละคิว 100%)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (จัดคิวงานด่วนแทรกแซงขึ้นอันดับ 1 ทันที)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -680,7 +686,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         m_all_jobs = pd.DataFrame()
 
     if not m_all_jobs.empty:
-        # ดึงกลุ่มงานทั้งหมดที่มีอย่างน้อย 1 Step ที่ยังไม่ Finish
         raw_groups = m_all_jobs.groupby(["แผนงาน", "ชื่อ Drawing."], sort=False).size().reset_index()[["แผนงาน", "ชื่อ Drawing."]]
         
         group_meta = []
@@ -692,18 +697,30 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             has_pending = any("เสร็จสิ้น" not in str(s) for s in steps["สถานะงาน"])
             if has_pending:
                 is_running = any("กำลังผลิต" in str(s) for s in steps["สถานะงาน"])
+                is_urgent = any("ด่วนแทรก" in str(t) for t in steps.get("ประเภทงาน", []))
                 earliest_ready = steps["วัน-เวลาขึ้นงาน"].min()
                 min_id = steps["ID"].min()
+                
+                # กำหนดคะแนน Priority: 0 = กำลังผลิต, 1 = งานด่วนแทรก, 2 = งานปกติ
+                if is_running:
+                    prio = 0
+                elif is_urgent:
+                    prio = 1
+                else:
+                    prio = 2
+                    
                 group_meta.append({
                     "plan_code": p_code,
                     "drawing_name": d_code,
+                    "priority": prio,
                     "is_running": is_running,
+                    "is_urgent": is_urgent,
                     "ready_at": earliest_ready if pd.notna(earliest_ready) else pd.to_datetime("2099-01-01"),
                     "min_id": min_id
                 })
 
-        # เรียงลำดับ: คิวที่กำลังผลิตอยู่ขึ้นก่อน -> เรียงตามเวลาขึ้นงาน -> เรียงตาม ID
-        sorted_groups = sorted(group_meta, key=lambda x: (not x["is_running"], x["ready_at"], x["min_id"]))
+        # เรียงลำดับคิว: กำลังรัน -> งานด่วนแทรก -> วันเวลาขึ้นงาน -> ID
+        sorted_groups = sorted(group_meta, key=lambda x: (x["priority"], x["ready_at"], x["min_id"]))
 
         if "Batch" in run_mode:
             st.markdown("""
@@ -743,7 +760,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     st.toast("บันทึกจบงานจริงทุกคิวเรียบร้อย!", icon="🏁")
                     st.rerun()
 
-        # ตรวจสอบว่าในเครื่องนี้มีงานใดกำลังรันอยู่หรือไม่
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
         next_available_start_found = False
 
@@ -753,22 +769,27 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             for group_idx, g_info in enumerate(sorted_groups, 1):
                 plan_code = g_info["plan_code"]
                 drawing_code = g_info["drawing_name"]
+                is_urgent = g_info["is_urgent"]
                 
                 plan_steps = m_all_jobs[(m_all_jobs["แผนงาน"] == plan_code) & (m_all_jobs["ชื่อ Drawing."] == drawing_code)].sort_values(by="ID", ascending=True)
                 first_step_info = plan_steps.iloc[0]
                 mat_val = first_step_info.get('วัสดุ', '-')
                 qty_val = int(first_step_info.get('จำนวน', 1) or 1)
 
+                header_box_class = "op-job-header op-job-header-urgent" if is_urgent else "op-job-header"
+                urgent_badge = '<span class="badge-chip badge-urgent">🔥 🔴 งานด่วนแทรก</span>' if is_urgent else ''
+
                 st.markdown(f"""
-                <div class="op-job-header">
+                <div class="{header_box_class}">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                         <div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;">
-                            <span style="background:linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(79,70,229,0.3);">คิวที่ {group_idx}</span>
+                            <span style="background:linear-gradient(135deg, {'#DC2626' if is_urgent else '#4F46E5'} 0%, {'#EF4444' if is_urgent else '#7C3AED'} 100%); color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {group_idx}</span>
                             <span>แผนงาน: {plan_code}</span>
                         </div>
                         <span class="badge-chip badge-station">🏭 {selected_m}</span>
                     </div>
                     <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+                        {urgent_badge}
                         <span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span>
                         <span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span>
                         <span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span>
@@ -790,12 +811,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     is_step_finished = "เสร็จสิ้น" in s_status
                     is_step_waiting = not is_step_running and not is_step_finished
 
-                    # แก้ไขเงื่อนไขการปลดล็อกปุ่ม Start ให้ถูกต้อง 100%
                     if "Batch" in run_mode:
                         can_start = is_step_waiting
                     else:
                         can_start = False
-                        # ถ้าเครื่องไม่ติดงานรันอยู่เลย (machine_any_running == False) ปลดล็อกเฉพาะ Step แรกสุดที่รออยู่
                         if is_step_waiting and not machine_any_running and not next_available_start_found:
                             can_start = True
                             next_available_start_found = True
