@@ -1181,7 +1181,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 
                 st.markdown('<div id="editor_table_bottom_mark"></div>', unsafe_allow_html=True)
 
-                active_to_delete = edited_jobs[edited_jobs["ลบ"] == True]
+                # กรองเฉพาะแถวที่ถูกติ๊กเลือกลบ และไม่ใช่แถวว่าง
+                active_to_delete = edited_jobs[
+                    (edited_jobs["ลบ"] == True) & 
+                    (edited_jobs["แผนงาน"].notna()) & 
+                    (edited_jobs["แผนงาน"].astype(str).str.strip() != "") & 
+                    (edited_jobs["แผนงาน"].astype(str).str.strip() != "None")
+                ]
                 delete_count = len(active_to_delete)
 
                 c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
@@ -1252,11 +1258,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     btn_del_label = f"🗑️ ลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ลบรายการที่เลือก (0 รายการ)"
                     if st.button(btn_del_label, type="secondary", disabled=(delete_count == 0), use_container_width=True):
                         del_success = True
-                        for idx_del, row in active_to_delete.iterrows():
+                        for _, row in active_to_delete.iterrows():
                             row_id = row.get("ID")
-                            if pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan"]:
-                                row_id = active_jobs_editor_df.iloc[idx_del].get("ID")
-                                
+                            # ดึง ID โดยตรงจากแถว ป้องกัน IndexError 100%
                             if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                 if not delete_supabase_job(int(row_id)):
                                     del_success = False
