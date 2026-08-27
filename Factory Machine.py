@@ -440,13 +440,11 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                # อ่านค่าเวลาตรงๆ และตัด offset ออกให้อยู่ในรูปแบบ Naive Datetime
+                # อ่านค่าเวลาแบบ Naive Datetime ตรงๆ ป้องกันการติด Timezone Offset
                 for dt_col in ["ready_at", "actual_start", "actual_finish"]:
                     if dt_col in df.columns:
-                        df[dt_col] = pd.to_datetime(
-                            df[dt_col].astype(str).str.replace('T', ' ').str.split('+').str[0].str.split('Z').str[0],
-                            errors='coerce'
-                        )
+                        s_clean = df[dt_col].astype(str).str.replace('T', ' ', regex=False).str.split('+').str[0].str.split('Z').str[0]
+                        df[dt_col] = pd.to_datetime(s_clean, errors='coerce')
                 
                 if "status" in df.columns:
                     df["status"] = df["status"].apply(normalize_status)
@@ -1088,11 +1086,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # ให้แปลงเป็น datetime แบบตัด timezone เพื่อให้ DatetimeColumn แสดงเวลาไทยแท้ๆ
-            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = pd.to_datetime(
-                active_jobs_editor_df["วัน-เวลาขึ้นงาน"].astype(str).str.replace('T', ' ').str.split('+').str[0].str.split('Z').str[0],
-                errors='coerce'
-            )
+            # แปลงเป็น datetime ให้เรียบร้อย
+            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = pd.to_datetime(active_jobs_editor_df["วัน-เวลาขึ้นงาน"], errors='coerce')
 
             if "ลบ" not in active_jobs_editor_df.columns:
                 active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
@@ -1166,7 +1161,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130, disabled=True, default="รอหน้าเครื่องระบุ"),
                         "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
-                        "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน", width=155, format="YYYY-MM-DD HH:mm"),
+                        "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn(
+                            "วัน-เวลาขึ้นงาน", 
+                            width=165, 
+                            format="YYYY-MM-DD HH:mm",
+                            timezone="Asia/Bangkok"
+                        ),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
                         "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, min_value=0, max_value=12000, step=10, format="%d", default=120),
@@ -1196,12 +1196,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # บันทึกวัน-เวลาขึ้นงานตามที่ระบุตรงๆ ไม่ผ่าน Timezone Offset ใดๆ
+                            # ดักจับและแปลงเวลาให้เป็นมาตรฐานเวลาไทย (GMT+7) แบบ 100%
                             raw_ready = row.get("วัน-เวลาขึ้นงาน")
                             if pd.notna(raw_ready):
-                                ready_clean_str = str(raw_ready).replace('T', ' ').split('+')[0].split('Z')[0].strip()
-                                dt_parsed = pd.to_datetime(ready_clean_str, errors='coerce')
-                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(dt_parsed) else get_bangkok_str()
+                                dt_parsed = pd.to_datetime(raw_ready)
+                                if getattr(dt_parsed, 'tzinfo', None) is not None:
+                                    ready_str = dt_parsed.tz_convert('Asia/Bangkok').strftime("%Y-%m-%d %H:%M:%S")
+                                else:
+                                    ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
                             else:
                                 ready_str = get_bangkok_str()
                             
