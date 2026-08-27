@@ -22,24 +22,45 @@ def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def parse_flexible_datetime(dt_val):
-    """แปลงวันที่แบบยืดหยุ่นให้กลายเป็น Naive Datetime แท้จริง 100%"""
+    """แปลงวันที่แบบบังคับให้ 'วัน' ขึ้นก่อนเสมอ (DD/MM/YYYY) ป้องกันเดือนสลับวัน 100%"""
     if pd.isna(dt_val):
         return None
     if isinstance(dt_val, (datetime, pd.Timestamp)):
         if getattr(dt_val, 'tzinfo', None) is not None:
             return dt_val.tz_localize(None)
         return dt_val
+        
     s = str(dt_val).strip()
     if s in ["", "None", "nan", "-"]:
         return None
     
     current_year = get_bangkok_now().year
-    # ถ้าระบุแค่วัน/เดือน (เช่น 28/08 17:30) ให้เติมปี ค.ศ. ปัจจุบันเข้าไป
-    if "/" in s and len(s.split("/")[0]) <= 2:
-        parts = s.split("/")
-        if len(parts) == 2:
-            s = f"{current_year}/{s}"
-            
+
+    # กรณีมีเครื่องหมายขีด - (เช่น 2026-09-01 10:50 หรือ 01-09-2026)
+    if "-" in s:
+        parts_dash = s.split(" ")[0].split("-")
+        if len(parts_dash) == 3 and len(parts_dash[0]) == 4: # YYYY-MM-DD
+            dt_parsed = pd.to_datetime(s, errors='coerce')
+            return dt_parsed.tz_localize(None) if (pd.notna(dt_parsed) and getattr(dt_parsed, 'tzinfo', None) is not None) else dt_parsed
+
+    # กรณีมีเครื่องหมาย / (บังคับให้วันขึ้นก่อนเสมอ Day/Month)
+    if "/" in s:
+        date_part = s.split(" ")[0]
+        time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:00:00"
+        parts = date_part.split("/")
+        
+        if len(parts) == 2: # พิมพ์เช่น 01/09 หรือ 1/9
+            d, m = parts[0].zfill(2), parts[1].zfill(2)
+            s_fixed = f"{current_year}-{m}-{d} {time_part}"
+            dt_parsed = pd.to_datetime(s_fixed, errors='coerce')
+            return dt_parsed
+        elif len(parts) == 3: # พิมพ์เช่น 01/09/2026 หรือ 01/09/26
+            d, m, y = parts[0].zfill(2), parts[1].zfill(2), parts[2]
+            if len(y) == 2: y = f"20{y}"
+            s_fixed = f"{y}-{m}-{d} {time_part}"
+            dt_parsed = pd.to_datetime(s_fixed, errors='coerce')
+            return dt_parsed
+
     dt_parsed = pd.to_datetime(s, errors='coerce', dayfirst=True)
     if pd.notna(dt_parsed):
         if getattr(dt_parsed, 'tzinfo', None) is not None:
@@ -264,7 +285,7 @@ st.markdown("""
     .badge-drawing { background: #F0F9FF; color: #0369A1; border: 1px solid #BAE6FD; }
     .badge-qty { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; font-weight: 800; }
     .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
-    .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 700; }
+    .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 800; }
     .badge-urgent { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; font-weight: 800; }
     .badge-hold { background: #FFFBEB; color: #D97706; border: 1px solid #FCD34D; font-weight: 800; }
 
@@ -689,7 +710,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (แสดงป้ายวัน-เวลาขึ้นงาน DD/MM/YYYY)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -707,7 +728,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         )
 
     if not df_all.empty:
-        # กรองเฉพาะงานของเครื่องนี้ที่มีวัน-เวลาขึ้นงาน หรือกำลังรัน/พักงาน
         m_all_jobs = df_all[
             (df_all["เลือกเครื่องจักร"] == selected_m) &
             (df_all["วัน-เวลาขึ้นงาน"].notna() | df_all["สถานะงาน"].isin(["🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
@@ -730,12 +750,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_hold = any("พักงาน" in str(s) for s in steps["สถานะงาน"])
                 is_urgent = any("ด่วนแทรก" in str(t) for t in steps.get("ประเภทงาน", []))
                 
-                # หาเวลาขึ้นงานที่เร็วที่สุดของชุดงานนี้
                 valid_ready_times = steps["วัน-เวลาขึ้นงาน"].dropna()
                 earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else None
                 min_id = steps["ID"].min()
                 
-                # ลำดับความสำคัญ: กำลังรัน (0) > ด่วน (1) > คิวปกติเรียงตามวันเวลา (2) > พักงาน (3)
                 if is_running:
                     prio = 0
                 elif is_urgent and not is_hold:
@@ -756,12 +774,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     "min_id": min_id
                 })
 
-        # เรียงตาม ความสำคัญ -> วัน-เวลาขึ้นงาน (เดือน/วัน/เวลา) -> ID
+        # เรียงตาม ความสำคัญ -> วัน-เวลาขึ้นงาน (วัน/เดือน/ปี) -> ID
         sorted_groups = sorted(
             group_meta, 
             key=lambda x: (
                 x["priority"], 
-                x["ready_at"] if pd.notna(x["ready_at"]) else pd.to_datetime("2099-01-01"), 
+                x["ready_at"] if pd.notna(x["ready_at"]) else pd.Timestamp.max, 
                 x["min_id"]
             )
         )
@@ -822,7 +840,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 mat_val = first_step_info.get('วัสดุ', '-')
                 qty_val = int(first_step_info.get('จำนวน', 1) or 1)
 
-                # จัดรูปแบบวันที่ขึ้นงานสำหรับแสดงบนหัวการ์ด
                 if pd.notna(ready_at_dt):
                     ready_display_str = ready_at_dt.strftime("%d/%m/%Y %H:%M น.")
                 else:
@@ -1138,9 +1155,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # แปลงวัน-เวลาขึ้นงานเป็น String format สากล YYYY-MM-DD HH:MM
+            # แสดงผลในตารางเป็น วัน/เดือน/ปี ชัดเจน
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
-                lambda x: x.strftime("%Y-%m-%d %H:%M") if pd.notna(x) else ""
+                lambda x: x.strftime("%d/%m/%Y %H:%M") if pd.notna(x) else ""
             )
 
             if "ลบ" not in active_jobs_editor_df.columns:
@@ -1218,7 +1235,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
                             "วัน-เวลาขึ้นงาน", 
                             width=165,
-                            help="พิมพ์เวลา เช่น 2026-08-28 17:30 หรือ 28/08 17:30 ถ้าลบว่างจะไม่ขึ้นคิว"
+                            help="พิมพ์วันขึ้นก่อนเสมอ เช่น 01/09/2026 10:50 หรือ 01/09 10:50"
                         ),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -1254,7 +1271,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # แปลงวัน-เวลาให้เป็น ISO String ชัดเจน ป้องกันการหลุด format
                             raw_ready = row.get("วัน-เวลาขึ้นงาน")
                             dt_parsed = parse_flexible_datetime(raw_ready)
                             ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if dt_parsed is not None else None
