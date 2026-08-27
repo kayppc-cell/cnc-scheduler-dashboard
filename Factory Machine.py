@@ -22,10 +22,12 @@ def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def parse_flexible_datetime(dt_val):
-    """แปลงวันที่แบบยืดหยุ่นให้กลายเป็น Datetime แท้จริง 100%"""
+    """แปลงวันที่แบบยืดหยุ่นให้กลายเป็น Naive Datetime แท้จริง 100%"""
     if pd.isna(dt_val):
         return None
     if isinstance(dt_val, (datetime, pd.Timestamp)):
+        if getattr(dt_val, 'tzinfo', None) is not None:
+            return dt_val.tz_localize(None)
         return dt_val
     s = str(dt_val).strip()
     if s in ["", "None", "nan", "-"]:
@@ -39,7 +41,11 @@ def parse_flexible_datetime(dt_val):
             s = f"{current_year}/{s}"
             
     dt_parsed = pd.to_datetime(s, errors='coerce', dayfirst=True)
-    return dt_parsed if pd.notna(dt_parsed) else None
+    if pd.notna(dt_parsed):
+        if getattr(dt_parsed, 'tzinfo', None) is not None:
+            return dt_parsed.tz_localize(None)
+        return dt_parsed
+    return None
 
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
@@ -461,7 +467,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                # แปลงวัน-เวลาขึ้นงานให้เป็น Datetime แท้ๆ เพื่อใช้ Sort และจำลองคิวได้อย่างแม่นยำ
+                # แปลงวัน-เวลาขึ้นงานให้เป็น Naive Datetime แท้ๆ 100%
                 if "ready_at" in df.columns:
                     df["ready_at"] = df["ready_at"].apply(parse_flexible_datetime)
                 if "actual_start" in df.columns:
@@ -683,7 +689,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (แสดงป้ายวัน-เวลาขึ้นงานบนหัวการ์ด)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -726,7 +732,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 
                 # หาเวลาขึ้นงานที่เร็วที่สุดของชุดงานนี้
                 valid_ready_times = steps["วัน-เวลาขึ้นงาน"].dropna()
-                earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else pd.to_datetime("2099-01-01")
+                earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else None
                 min_id = steps["ID"].min()
                 
                 # ลำดับความสำคัญ: กำลังรัน (0) > ด่วน (1) > คิวปกติเรียงตามวันเวลา (2) > พักงาน (3)
@@ -751,7 +757,14 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 })
 
         # เรียงตาม ความสำคัญ -> วัน-เวลาขึ้นงาน (เดือน/วัน/เวลา) -> ID
-        sorted_groups = sorted(group_meta, key=lambda x: (x["priority"], x["ready_at"], x["min_id"]))
+        sorted_groups = sorted(
+            group_meta, 
+            key=lambda x: (
+                x["priority"], 
+                x["ready_at"] if pd.notna(x["ready_at"]) else pd.to_datetime("2099-01-01"), 
+                x["min_id"]
+            )
+        )
 
         if "Batch" in run_mode:
             st.markdown("""
@@ -810,7 +823,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 qty_val = int(first_step_info.get('จำนวน', 1) or 1)
 
                 # จัดรูปแบบวันที่ขึ้นงานสำหรับแสดงบนหัวการ์ด
-                if pd.notna(ready_at_dt) and ready_at_dt < pd.to_datetime("2099-01-01"):
+                if pd.notna(ready_at_dt):
                     ready_display_str = ready_at_dt.strftime("%d/%m/%Y %H:%M น.")
                 else:
                     ready_display_str = "ยังไม่ระบุเวลา"
