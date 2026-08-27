@@ -440,7 +440,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                # อ่านค่าเวลาแบบ string สะอาดๆ ตรงๆ ป้องกัน timezone shift
+                # อ่านค่าเวลาตรงตัวโดยตัด Offset ทิ้ง
                 for dt_col in ["ready_at", "actual_start", "actual_finish"]:
                     if dt_col in df.columns:
                         s_clean = df[dt_col].astype(str).str.replace('T', ' ', regex=False).str.split('+').str[0].str.split('Z').str[0]
@@ -1086,7 +1086,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # แปลงวัน-เวลาขึ้นงานเป็น String format มาตรฐานให้แก้ไขในตารางได้ตรงๆ
+            # แปลงวัน-เวลาขึ้นงานเป็น String format มาตรฐานให้แก้ไขในตารางได้ตรงๆ (ถ้าว่างให้ปล่อยเป็นค่าว่าง)
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
                 lambda x: x.strftime("%Y-%m-%d %H:%M") if pd.notna(x) else ""
             )
@@ -1166,7 +1166,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
                             "วัน-เวลาขึ้นงาน", 
                             width=165,
-                            help="พิมพ์หรือแก้ไขเวลาได้ตรงๆ เช่น 2026-09-02 17:00"
+                            help="พิมพ์หรือแก้ไขเวลาได้ตรงๆ เช่น 2026-09-02 17:00 (ถ้าลบว่างระบบจะปล่อยว่างตามที่ต้องการ)"
                         ),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -1203,13 +1203,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # แปลงและทำความสะอาดเวลาตรงๆ ปลอดภัยจาก Timezone Offset
+                            # แปลงและทำความสะอาดเวลาตรงๆ ถ้าลบว่างให้ส่ง None เข้า Supabase ไม่ใส่เวลาปัจจุบันทับ
                             raw_ready = str(row.get("วัน-เวลาขึ้นงาน", "")).strip()
-                            if raw_ready and raw_ready not in ["", "None", "nan"]:
+                            if raw_ready and raw_ready not in ["", "None", "nan", "-"]:
                                 dt_parsed = pd.to_datetime(raw_ready, errors='coerce')
-                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(dt_parsed) else get_bangkok_str()
+                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(dt_parsed) else None
                             else:
-                                ready_str = get_bangkok_str()
+                                ready_str = None
                             
                             step_val = str(row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
                             if step_val in ["", "None", "nan"]:
@@ -1260,7 +1260,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         del_success = True
                         for _, row in active_to_delete.iterrows():
                             row_id = row.get("ID")
-                            # ดึง ID โดยตรงจากแถว ป้องกัน IndexError 100%
                             if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                 if not delete_supabase_job(int(row_id)):
                                     del_success = False
