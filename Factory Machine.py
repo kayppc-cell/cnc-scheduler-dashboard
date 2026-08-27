@@ -258,6 +258,7 @@ st.markdown("""
     .badge-drawing { background: #F0F9FF; color: #0369A1; border: 1px solid #BAE6FD; }
     .badge-qty { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; font-weight: 800; }
     .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
+    .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 700; }
     .badge-urgent { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; font-weight: 800; }
     .badge-hold { background: #FFFBEB; color: #D97706; border: 1px solid #FCD34D; font-weight: 800; }
 
@@ -682,7 +683,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (เรียงตามวัน-เวลาขึ้นงานแท้จริง)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (แสดงป้ายวัน-เวลาขึ้นงานบนหัวการ์ด)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -801,11 +802,18 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 drawing_code = g_info["drawing_name"]
                 is_urgent = g_info["is_urgent"]
                 is_hold = g_info["is_hold"]
+                ready_at_dt = g_info["ready_at"]
                 
                 plan_steps = m_all_jobs[(m_all_jobs["แผนงาน"] == plan_code) & (m_all_jobs["ชื่อ Drawing."] == drawing_code)].sort_values(by="ID", ascending=True)
                 first_step_info = plan_steps.iloc[0]
                 mat_val = first_step_info.get('วัสดุ', '-')
                 qty_val = int(first_step_info.get('จำนวน', 1) or 1)
+
+                # จัดรูปแบบวันที่ขึ้นงานสำหรับแสดงบนหัวการ์ด
+                if pd.notna(ready_at_dt) and ready_at_dt < pd.to_datetime("2099-01-01"):
+                    ready_display_str = ready_at_dt.strftime("%d/%m/%Y %H:%M น.")
+                else:
+                    ready_display_str = "ยังไม่ระบุเวลา"
 
                 if is_hold:
                     header_box_class = "op-job-header op-job-header-hold"
@@ -820,7 +828,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     badge_gradient = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
                     status_badge_html = ''
 
-                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {group_idx}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
+                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {group_idx}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>กำหนดขึ้นงาน:</b> {ready_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
                 st.markdown(card_header_html, unsafe_allow_html=True)
 
                 st.markdown(f"**📋 รายการขั้นตอนและปุ่มควบคุม ({plan_code} | {drawing_code}):**")
