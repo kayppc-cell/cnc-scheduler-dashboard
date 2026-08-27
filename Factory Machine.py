@@ -330,6 +330,9 @@ if "active_select_all" not in st.session_state:
 if "finish_select_all" not in st.session_state:
     st.session_state.finish_select_all = False
 
+if "scroll_to_bottom" not in st.session_state:
+    st.session_state.scroll_to_bottom = False
+
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
@@ -445,7 +448,6 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                # แปลงเวลาให้ถูกต้อง
                 df["ready_at"] = safe_parse_datetime(df["ready_at"])
                 if "actual_start" in df.columns:
                     df["actual_start"] = safe_parse_datetime(df["actual_start"])
@@ -1023,7 +1025,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         if not df_db.empty:
             calc_df = df_db.copy()
             
-            # แก้ปัญหาที่ 1: แปลงค่าตัวเลขตรงๆ ไม่ให้ถูกแปลงผิดเป็น 0
             calc_df["Setup (น.)"] = pd.to_numeric(calc_df["Setup (น.)"], errors='coerce').fillna(15.0)
             calc_df["Basic (น.)"] = pd.to_numeric(calc_df["Basic (น.)"], errors='coerce').fillna(0.0)
             calc_df["โปรแกรม (น.)"] = pd.to_numeric(calc_df["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
@@ -1037,7 +1038,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # เรียงแถวตาม ID เพื่อให้แถวล่าสุดอยู่ข้างล่างสุดเสมอ
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])].sort_values(by="ID", ascending=True).copy().reset_index(drop=True)
             
             for idx_row in active_jobs_editor_df.index:
@@ -1046,7 +1046,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # แก้ปัญหาที่ 3: แปลงวัน-เวลาขึ้นงานเป็น Text เพื่อให้ Copy/Paste วางข้ามที่ได้ง่าย
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
                 lambda x: pd.to_datetime(x).strftime("%Y-%m-%d %H:%M") if pd.notna(x) else ""
             )
@@ -1097,6 +1096,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 }
                                 if insert_supabase_job(ins_payload):
                                     st.cache_data.clear()
+                                    st.session_state.scroll_to_bottom = True
                                     st.toast("แทรกแถวใหม่เข้าระบบสำเร็จ!", icon="🚀")
                                     st.rerun()
 
@@ -1131,8 +1131,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     use_container_width=True
                 )
                 
-                # แท็ก HTML สำหรับ Scroll ตาราง (แก้ปัญหาที่ 2)
-                st.markdown('<div id="table_bottom_anchor"></div>', unsafe_allow_html=True)
+                # Element จุดอ้างอิงตำแหน่งท้ายตาราง
+                st.markdown('<div id="editor_table_bottom_mark"></div>', unsafe_allow_html=True)
 
                 c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
                 with c_save:
@@ -1147,7 +1147,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # แปลงเวลาที่ User ก๊อปปี้มาวางให้อยู่ในมาตรฐาน Database
                             raw_ready = row.get("วัน-เวลาขึ้นงาน")
                             ready_dt = pd.to_datetime(raw_ready, errors='coerce')
                             ready_str = ready_dt.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(ready_dt) else get_bangkok_str()
@@ -1161,7 +1160,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             except (ValueError, TypeError):
                                 qty_int = 1
 
-                            # แก้ปัญหาที่ 1: ดึงค่านะทีแท้จริงตรงๆ
                             try:
                                 s_val = float(row.get("Setup (น.)", 15.0) or 15.0)
                             except: s_val = 15.0
@@ -1197,15 +1195,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             save_count += 1
 
                         st.cache_data.clear()
+                        st.session_state.scroll_to_bottom = True
                         st.success(f"บันทึกข้อมูลเรียบร้อยแล้ว ({save_count} รายการ)")
-                        # แก้ปัญหาที่ 2: สั่งเลื่อนจอรอคีย์แถวด้านล่างสุด
-                        components.html("""
-                        <script>
-                            setTimeout(function(){
-                                window.parent.document.getElementById('table_bottom_anchor').scrollIntoView({behavior: 'smooth'});
-                            }, 500);
-                        </script>
-                        """, height=0)
                         st.rerun()
 
                 with c_del_top:
@@ -1220,10 +1211,27 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         if del_success:
                             st.session_state.active_select_all = False
                             st.cache_data.clear()
+                            st.session_state.scroll_to_bottom = True
                             st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
                             st.rerun()
                         else:
                             st.error("เกิดข้อผิดพลาดในการลบข้อมูล")
+
+            # กลไกเลื่อนหน้าจออัตโนมัติลงมายังบรรทัดล่างสุดของตาราง
+            if st.session_state.scroll_to_bottom:
+                components.html("""
+                <script>
+                    function scrollToTarget() {
+                        const target = window.parent.document.getElementById('editor_table_bottom_mark');
+                        if (target) {
+                            target.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        }
+                    }
+                    setTimeout(scrollToTarget, 300);
+                    setTimeout(scrollToTarget, 700);
+                </script>
+                """, height=0)
+                st.session_state.scroll_to_bottom = False
 
             current_real_time = get_bangkok_now().replace(tzinfo=None)
             df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, current_real_time)
