@@ -21,15 +21,18 @@ def get_bangkok_now():
 def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
-def parse_flexible_datetime(dt_str):
-    """แปลงวันที่แบบยืดหยุ่น รองรับทั้ง 28/08 17:30 และ 2026-08-28 17:30"""
-    if pd.isna(dt_str):
+def parse_flexible_datetime(dt_val):
+    """แปลงวันที่แบบยืดหยุ่นให้กลายเป็น Datetime แท้จริง 100%"""
+    if pd.isna(dt_val):
         return None
-    s = str(dt_str).strip()
+    if isinstance(dt_val, (datetime, pd.Timestamp)):
+        return dt_val
+    s = str(dt_val).strip()
     if s in ["", "None", "nan", "-"]:
         return None
     
     current_year = get_bangkok_now().year
+    # ถ้าระบุแค่วัน/เดือน (เช่น 28/08 17:30) ให้เติมปี ค.ศ. ปัจจุบันเข้าไป
     if "/" in s and len(s.split("/")[0]) <= 2:
         parts = s.split("/")
         if len(parts) == 2:
@@ -445,7 +448,7 @@ def normalize_status(status_str: str) -> str:
     else:
         return "🟧 รอคิวผลิต"
 
-@st.cache_data(ttl=8, show_spinner=False)
+@st.cache_data(ttl=5, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -457,10 +460,13 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                for dt_col in ["ready_at", "actual_start", "actual_finish"]:
-                    if dt_col in df.columns:
-                        s_clean = df[dt_col].astype(str).str.replace('T', ' ', regex=False).str.split('+').str[0].str.split('Z').str[0]
-                        df[dt_col] = pd.to_datetime(s_clean, errors='coerce')
+                # แปลงวัน-เวลาขึ้นงานให้เป็น Datetime แท้ๆ เพื่อใช้ Sort และจำลองคิวได้อย่างแม่นยำ
+                if "ready_at" in df.columns:
+                    df["ready_at"] = df["ready_at"].apply(parse_flexible_datetime)
+                if "actual_start" in df.columns:
+                    df["actual_start"] = pd.to_datetime(df["actual_start"].astype(str).str.replace('T', ' ').str.split('+').str[0].str.split('Z').str[0], errors='coerce')
+                if "actual_finish" in df.columns:
+                    df["actual_finish"] = pd.to_datetime(df["actual_finish"].astype(str).str.replace('T', ' ').str.split('+').str[0].str.split('Z').str[0], errors='coerce')
                 
                 if "status" in df.columns:
                     df["status"] = df["status"].apply(normalize_status)
@@ -501,7 +507,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         if dt_val is None:
             continue
             
-        j["ready_at"] = get_next_valid_work_time(dt_val.to_pydatetime())
+        j["ready_at"] = get_next_valid_work_time(dt_val.to_pydatetime() if isinstance(dt_val, pd.Timestamp) else dt_val)
 
         try:
             basic_mins = max(float(j.get("Basic (น.)", 0.0) or 0.0), 0.0)
@@ -676,7 +682,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (เรียงตามวัน-เวลาขึ้นงานอย่างแม่นยำ)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (เรียงตามวัน-เวลาขึ้นงานแท้จริง)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -694,7 +700,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         )
 
     if not df_all.empty:
-        # กรองเฉพาะงานของเครื่องจักรนี้ และต้องมีวัน-เวลาขึ้นงานระบุแล้ว หรือกำลังรัน/พักงานอยู่
+        # กรองเฉพาะงานของเครื่องนี้ที่มีวัน-เวลาขึ้นงาน หรือกำลังรัน/พักงาน
         m_all_jobs = df_all[
             (df_all["เลือกเครื่องจักร"] == selected_m) &
             (df_all["วัน-เวลาขึ้นงาน"].notna() | df_all["สถานะงาน"].isin(["🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
@@ -717,12 +723,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_hold = any("พักงาน" in str(s) for s in steps["สถานะงาน"])
                 is_urgent = any("ด่วนแทรก" in str(t) for t in steps.get("ประเภทงาน", []))
                 
-                # หาเวลาขึ้นงานที่เร็วที่สุดของชุดนี้
+                # หาเวลาขึ้นงานที่เร็วที่สุดของชุดงานนี้
                 valid_ready_times = steps["วัน-เวลาขึ้นงาน"].dropna()
                 earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else pd.to_datetime("2099-01-01")
                 min_id = steps["ID"].min()
                 
-                # ลำดับความสำคัญ: กำลังรัน (0) > งานด่วน (1) > งานปกติเรียงตามวันเวลา (2) > พักงาน (3)
+                # ลำดับความสำคัญ: กำลังรัน (0) > ด่วน (1) > คิวปกติเรียงตามวันเวลา (2) > พักงาน (3)
                 if is_running:
                     prio = 0
                 elif is_urgent and not is_hold:
@@ -743,7 +749,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     "min_id": min_id
                 })
 
-        # จัดเรียงตาม ลำดับความสำคัญ -> วันเวลาขึ้นงาน (เดือน/วัน) -> ID
+        # เรียงตาม ความสำคัญ -> วัน-เวลาขึ้นงาน (เดือน/วัน/เวลา) -> ID
         sorted_groups = sorted(group_meta, key=lambda x: (x["priority"], x["ready_at"], x["min_id"]))
 
         if "Batch" in run_mode:
@@ -788,7 +794,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         next_available_start_found = False
 
         if len(sorted_groups) == 0:
-            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
+            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ (ทุกงานเสร็จสิ้นครบหมดแล้ว หรือยังไม่มีการระบุวันขึ้นงาน)")
         else:
             for group_idx, g_info in enumerate(sorted_groups, 1):
                 plan_code = g_info["plan_code"]
@@ -1111,7 +1117,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # แปลงวัน-เวลาขึ้นงานเป็น String format มาตรฐานให้แก้ไขในตารางได้ตรงๆ (ถ้าว่างให้ปล่อยว่าง)
+            # แปลงวัน-เวลาขึ้นงานเป็น String format สากล YYYY-MM-DD HH:MM
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
                 lambda x: x.strftime("%Y-%m-%d %H:%M") if pd.notna(x) else ""
             )
@@ -1191,7 +1197,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
                             "วัน-เวลาขึ้นงาน", 
                             width=165,
-                            help="พิมพ์เวลาได้ทั้งแบบย่อ (เช่น 28/08 17:30) หรือเต็ม (เช่น 2026-08-28 17:30) ถ้าลบว่างจะไม่ขึ้นคิวล่างและไม่ขึ้นหน้าช่าง"
+                            help="พิมพ์เวลา เช่น 2026-08-28 17:30 หรือ 28/08 17:30 ถ้าลบว่างจะไม่ขึ้นคิว"
                         ),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -1206,7 +1212,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 
                 st.markdown('<div id="editor_table_bottom_mark"></div>', unsafe_allow_html=True)
 
-                # กรองเฉพาะแถวที่ถูกติ๊กเลือกลบ และไม่ใช่แถวว่าง
                 active_to_delete = edited_jobs[
                     (edited_jobs["ลบ"] == True) & 
                     (edited_jobs["แผนงาน"].notna()) & 
@@ -1228,7 +1233,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # แปลงและทำความสะอาดเวลาด้วย Flexible Parser
+                            # แปลงวัน-เวลาให้เป็น ISO String ชัดเจน ป้องกันการหลุด format
                             raw_ready = row.get("วัน-เวลาขึ้นงาน")
                             dt_parsed = parse_flexible_datetime(raw_ready)
                             ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if dt_parsed is not None else None
