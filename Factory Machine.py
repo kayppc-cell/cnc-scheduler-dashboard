@@ -360,7 +360,7 @@ JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทร�
 JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "🟩 เสร็จสิ้นแล้ว"]
 
 # =========================================================
-# 4. ฟังก์ชันเชื่อมต่อ Supabase (แก้ไขปัญหาเวลา Timezone)
+# 4. ฟังก์ชันเชื่อมต่อ Supabase (ตัดปัญหา Timezone 100%)
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -424,8 +424,11 @@ def delete_supabase_job(job_id: int) -> bool:
         return False
 
 def clean_parse_datetime(series):
-    """แปลงวันที่โดยตัด Timezone ทิ้ง 100% ป้องกันเวลาถูก -7 ชม."""
-    return pd.to_datetime(series.astype(str).str.replace('T', ' ').str.split('+').str[0].str.split('Z').str[0], errors='coerce')
+    """แปลงค่า string เข้าสู่ naive datetime โดยตัดออฟเซ็ต time zone ออก ไม่ให้โดนเลื่อนเวลา"""
+    if series is None:
+        return pd.Series(dtype='datetime64[ns]')
+    s_clean = series.astype(str).str.replace('T', ' ', regex=False).str.split('+').str[0].str.split('Z').str[0]
+    return pd.to_datetime(s_clean, errors='coerce')
 
 def normalize_status(status_str: str) -> str:
     s = str(status_str)
@@ -1097,8 +1100,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # แปลงวัน-เวลาให้เป็น Datetime แบบตัด Timezone ให้แสดงปฏิทินเป๊ะๆ
-            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = pd.to_datetime(active_jobs_editor_df["วัน-เวลาขึ้นงาน"], errors='coerce')
+            # ให้คงค่า naive datetime ไว้ ไม่ให้ปฏิทินเลื่อน time zone
+            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = clean_parse_datetime(active_jobs_editor_df["วัน-เวลาขึ้นงาน"])
 
             if "ลบ" not in active_jobs_editor_df.columns:
                 active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
@@ -1202,10 +1205,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # แปลงเวลาตรงตัวแบบ String ป้องกันการเลื่อน Timezone -7 ชม.
+                            # บันทึกวัน-เวลาตรงตัวตามที่เลือกในปฏิทิน ห้ามแปลง Timezone
                             raw_ready = row.get("วัน-เวลาขึ้นงาน")
                             if pd.notna(raw_ready):
-                                ready_str = pd.to_datetime(raw_ready).strftime("%Y-%m-%d %H:%M:%S")
+                                dt_parsed = pd.to_datetime(raw_ready)
+                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
                             else:
                                 ready_str = get_bangkok_str()
                             
