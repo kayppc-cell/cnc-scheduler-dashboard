@@ -322,7 +322,7 @@ if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
 
 if "current_view" not in st.session_state:
-    st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
+    st.session_state.current_view = "👷 โ盛りช่างหน้าเครื่อง"
 
 if "active_select_all" not in st.session_state:
     st.session_state.active_select_all = False
@@ -417,6 +417,12 @@ def delete_supabase_job(job_id: int) -> bool:
     except Exception:
         return False
 
+def clean_parse_datetime(series):
+    if series is None:
+        return pd.Series(dtype='datetime64[ns]')
+    s_clean = series.astype(str).str.replace('T', ' ', regex=False).str.split('+').str[0].str.split('Z').str[0]
+    return pd.to_datetime(s_clean, errors='coerce')
+
 def normalize_status(status_str: str) -> str:
     s = str(status_str)
     if "พักงาน" in s or "รอวัสดุ" in s:
@@ -428,7 +434,7 @@ def normalize_status(status_str: str) -> str:
     else:
         return "🟧 รอคิวผลิต"
 
-@st.cache_data(ttl=5, show_spinner=False)
+@st.cache_data(ttl=8, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -440,7 +446,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                # อ่านค่าเวลาแบบ Naive Datetime ตรงๆ ป้องกันการติด Timezone Offset
+                # อ่านค่าเวลาตรงๆ และตัด offset ออกให้อยู่ในรูปแบบ Naive Datetime
                 for dt_col in ["ready_at", "actual_start", "actual_finish"]:
                     if dt_col in df.columns:
                         s_clean = df[dt_col].astype(str).str.replace('T', ' ', regex=False).str.split('+').str[0].str.split('Z').str[0]
@@ -1086,7 +1092,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # แปลงเป็น datetime ให้เรียบร้อย
+            # แปลงเป็น datetime ตรงๆ
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = pd.to_datetime(active_jobs_editor_df["วัน-เวลาขึ้นงาน"], errors='coerce')
 
             if "ลบ" not in active_jobs_editor_df.columns:
@@ -1164,8 +1170,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn(
                             "วัน-เวลาขึ้นงาน", 
                             width=165, 
-                            format="YYYY-MM-DD HH:mm",
-                            timezone="Asia/Bangkok"
+                            format="YYYY-MM-DD HH:mm"
                         ),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -1196,14 +1201,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # ดักจับและแปลงเวลาให้เป็นมาตรฐานเวลาไทย (GMT+7) แบบ 100%
+                            # แปลงเวลาตรงตัวแบบ String ป้องกันการติด Timezone
                             raw_ready = row.get("วัน-เวลาขึ้นงาน")
                             if pd.notna(raw_ready):
-                                dt_parsed = pd.to_datetime(raw_ready)
-                                if getattr(dt_parsed, 'tzinfo', None) is not None:
-                                    ready_str = dt_parsed.tz_convert('Asia/Bangkok').strftime("%Y-%m-%d %H:%M:%S")
-                                else:
-                                    ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
+                                ready_clean_str = str(raw_ready).replace('T', ' ', regex=False).split('+')[0].split('Z')[0].strip()
+                                dt_parsed = pd.to_datetime(ready_clean_str, errors='coerce')
+                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(dt_parsed) else get_bangkok_str()
                             else:
                                 ready_str = get_bangkok_str()
                             
