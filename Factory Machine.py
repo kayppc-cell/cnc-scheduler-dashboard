@@ -663,7 +663,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (จัดคิวงานด่วนแทรกแซงขึ้นอันดับ 1 ทันที)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (แก้ไขการ Parse HTML และจัดคิวงานด่วนสมบูรณ์)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -701,7 +701,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 earliest_ready = steps["วัน-เวลาขึ้นงาน"].min()
                 min_id = steps["ID"].min()
                 
-                # กำหนดคะแนน Priority: 0 = กำลังผลิต, 1 = งานด่วนแทรก, 2 = งานปกติ
                 if is_running:
                     prio = 0
                 elif is_urgent:
@@ -719,7 +718,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     "min_id": min_id
                 })
 
-        # เรียงลำดับคิว: กำลังรัน -> งานด่วนแทรก -> วันเวลาขึ้นงาน -> ID
         sorted_groups = sorted(group_meta, key=lambda x: (x["priority"], x["ready_at"], x["min_id"]))
 
         if "Batch" in run_mode:
@@ -777,25 +775,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 qty_val = int(first_step_info.get('จำนวน', 1) or 1)
 
                 header_box_class = "op-job-header op-job-header-urgent" if is_urgent else "op-job-header"
-                urgent_badge = '<span class="badge-chip badge-urgent">🔥 🔴 งานด่วนแทรก</span>' if is_urgent else ''
+                badge_gradient = "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)" if is_urgent else "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
+                urgent_badge_html = '<span class="badge-chip badge-urgent">🔥 🔴 งานด่วนแทรก</span>' if is_urgent else ''
 
-                st.markdown(f"""
-                <div class="{header_box_class}">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                        <div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;">
-                            <span style="background:linear-gradient(135deg, {'#DC2626' if is_urgent else '#4F46E5'} 0%, {'#EF4444' if is_urgent else '#7C3AED'} 100%); color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {group_idx}</span>
-                            <span>แผนงาน: {plan_code}</span>
-                        </div>
-                        <span class="badge-chip badge-station">🏭 {selected_m}</span>
-                    </div>
-                    <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
-                        {urgent_badge}
-                        <span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span>
-                        <span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span>
-                        <span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {group_idx}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{urgent_badge_html}<span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
+                st.markdown(card_header_html, unsafe_allow_html=True)
 
                 st.markdown(f"**📋 รายการขั้นตอนและปุ่มควบคุม ({plan_code} | {drawing_code}):**")
 
