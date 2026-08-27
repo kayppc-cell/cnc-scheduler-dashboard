@@ -322,7 +322,7 @@ if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
 
 if "current_view" not in st.session_state:
-    st.session_state.current_view = "👷 โ盛りช่างหน้าเครื่อง"
+    st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
 
 if "active_select_all" not in st.session_state:
     st.session_state.active_select_all = False
@@ -417,12 +417,6 @@ def delete_supabase_job(job_id: int) -> bool:
     except Exception:
         return False
 
-def clean_parse_datetime(series):
-    if series is None:
-        return pd.Series(dtype='datetime64[ns]')
-    s_clean = series.astype(str).str.replace('T', ' ', regex=False).str.split('+').str[0].str.split('Z').str[0]
-    return pd.to_datetime(s_clean, errors='coerce')
-
 def normalize_status(status_str: str) -> str:
     s = str(status_str)
     if "พักงาน" in s or "รอวัสดุ" in s:
@@ -446,7 +440,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                # อ่านค่าเวลาตรงๆ และตัด offset ออกให้อยู่ในรูปแบบ Naive Datetime
+                # อ่านค่าเวลาแบบ string สะอาดๆ ตรงๆ ป้องกัน timezone shift
                 for dt_col in ["ready_at", "actual_start", "actual_finish"]:
                     if dt_col in df.columns:
                         s_clean = df[dt_col].astype(str).str.replace('T', ' ', regex=False).str.split('+').str[0].str.split('Z').str[0]
@@ -1043,8 +1037,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with f_c9:
                     new_f_prog = st.number_input("รันโปรแกรม/เวลาทำงานตามแผน (นาที):", min_value=0, max_value=12000, value=120, step=10)
 
+                f_date_c1, f_date_c2 = st.columns([2, 2])
+                with f_date_c1:
+                    inp_date = st.date_input("📅 กำหนดวันขึ้นงาน:", value=get_bangkok_now().date())
+                with f_date_c2:
+                    inp_time = st.time_input("⏰ กำหนดเวลาขึ้นงาน:", value=time(8, 0))
+
                 if st.form_submit_button("🚀 บันทึกสั่งผลิตใหม่เข้าสู่ระบบ", type="primary", use_container_width=True):
                     if new_f_plan.strip() != "":
+                        ready_comb = datetime.combine(inp_date, inp_time).strftime("%Y-%m-%d %H:%M:%S")
                         payload = {
                             "plan_code": new_f_plan.strip(),
                             "drawing_name": new_f_draw.strip(),
@@ -1053,7 +1054,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "job_type": new_f_type,
                             "step_name": "รอหน้าเครื่องระบุ",
                             "machine_name": new_f_machine,
-                            "ready_at": get_bangkok_str(),
+                            "ready_at": ready_comb,
                             "setup_mins": float(new_f_setup),
                             "basic_hrs": float(new_f_basic),
                             "prog_hrs": float(new_f_prog),
@@ -1092,8 +1093,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # แปลงเป็น datetime ตรงๆ
-            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = pd.to_datetime(active_jobs_editor_df["วัน-เวลาขึ้นงาน"], errors='coerce')
+            # แปลงวัน-เวลาขึ้นงานให้อยู่ในรูป String อ่านง่ายเพื่อป้องกันบั๊ก Timezone ใน Data Editor 100%
+            active_jobs_editor_df["วัน-เวลาขึ้นงาน (แสดง)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
+                lambda x: x.strftime("%Y-%m-%d %H:%M") if pd.notna(x) else "-"
+            )
 
             if "ลบ" not in active_jobs_editor_df.columns:
                 active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
@@ -1103,7 +1106,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางแก้ไข/เพิ่มแถวข้อมูล)", expanded=True):
                 st.markdown("**📌 เครื่องมือจัดการตาราง:**")
-                tool_col1, tool_col2, _ = st.columns([2.5, 4, 3.5])
+                tool_col1, tool_col2, tool_col3 = st.columns([2.5, 3.5, 4])
                 
                 with tool_col1:
                     btn_c1, btn_c2 = st.columns(2)
@@ -1149,17 +1152,43 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     st.toast("แทรกแถวใหม่เข้าระบบสำเร็จ!", icon="🚀")
                                     st.rerun()
 
+                with tool_col3:
+                    with st.popover("⏰ ปรับเปลี่ยนวัน-เวลาขึ้นงาน (ตรงเป๊ะ 100%)"):
+                        if not active_jobs_editor_df.empty:
+                            row_choices_edit = [f"แถว {i+1}: {r['แผนงาน']} ({r['ชื่อ Drawing.']}) | เวลาเดิม: {r['วัน-เวลาขึ้นงาน (แสดง)']}" for i, r in active_jobs_editor_df.iterrows()]
+                            sel_edit_idx = st.selectbox("เลือกแถวที่ต้องการแก้เวลา:", range(len(row_choices_edit)), format_func=lambda x: row_choices_edit[x])
+                            edit_row_target = active_jobs_editor_df.iloc[sel_edit_idx]
+                            
+                            current_val_dt = edit_row_target["วัน-เวลาขึ้นงาน"]
+                            def_d = current_val_dt.date() if pd.notna(current_val_dt) else get_bangkok_now().date()
+                            def_t = current_val_dt.time() if pd.notna(current_val_dt) else time(8, 0)
+                            
+                            c_d_pick, c_t_pick = st.columns(2)
+                            with c_d_pick:
+                                new_d = st.date_input("วันที่:", value=def_d, key=f"date_edit_picker_{sel_edit_idx}")
+                            with c_t_pick:
+                                new_t = st.time_input("เวลา:", value=def_t, key=f"time_edit_picker_{sel_edit_idx}")
+                                
+                            if st.button("💾 บันทึกเปลี่ยนเวลาแถวนี้", type="primary", use_container_width=True):
+                                target_id = int(edit_row_target["ID"])
+                                combined_dt_str = datetime.combine(new_d, new_t).strftime("%Y-%m-%d %H:%M:%S")
+                                if update_supabase_job(target_id, {"ready_at": combined_dt_str}):
+                                    st.cache_data.clear()
+                                    st.toast(f"อัปเดตเวลาเป็น {combined_dt_str} สำเร็จ!", icon="⏰")
+                                    st.rerun()
+
                 edited_jobs = st.data_editor(
                     active_jobs_editor_df,
                     key="editor_cnc_jobs_grid_main",
                     num_rows="dynamic",
                     column_order=[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
-                        "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
+                        "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน (แสดง)", "Setup (น.)",
                         "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                     ],
                     column_config={
-                        "ID": st.column_config.Column(required=False),
+                        "ID": None,
+                        "วัน-เวลาขึ้นงาน": None,
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
                         "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
                         "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, min_value=1, max_value=10000, step=1, format="%d", default=1),
@@ -1167,11 +1196,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
                         "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130, disabled=True, default="รอหน้าเครื่องระบุ"),
                         "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
-                        "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn(
-                            "วัน-เวลาขึ้นงาน", 
-                            width=165, 
-                            format="YYYY-MM-DD HH:mm"
-                        ),
+                        "วัน-เวลาขึ้นงาน (แสดง)": st.column_config.TextColumn("วัน-เวลาขึ้นงาน", width=155, disabled=True, help="ปรับแก้เวลาได้ที่ปุ่มเครื่องมือด้านบน"),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
                         "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, min_value=0, max_value=12000, step=10, format="%d", default=120),
@@ -1201,15 +1226,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             raw_draw = row.get("ชื่อ Drawing.")
                             d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
                             
-                            # แปลงเวลาตรงตัวแบบ String ป้องกันการติด Timezone
-                            raw_ready = row.get("วัน-เวลาขึ้นงาน")
-                            if pd.notna(raw_ready):
-                                ready_clean_str = str(raw_ready).replace('T', ' ', regex=False).split('+')[0].split('Z')[0].strip()
-                                dt_parsed = pd.to_datetime(ready_clean_str, errors='coerce')
-                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if pd.notna(dt_parsed) else get_bangkok_str()
-                            else:
-                                ready_str = get_bangkok_str()
-                            
                             step_val = str(row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
                             if step_val in ["", "None", "nan"]:
                                 step_val = "รอหน้าเครื่องระบุ"
@@ -1234,7 +1250,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 "job_type": str(row.get("ประเภทงาน", "🟢 งานปกติ")),
                                 "step_name": step_val,
                                 "machine_name": str(row.get("เลือกเครื่องจักร", "No.1 Awea")),
-                                "ready_at": ready_str,
                                 "setup_mins": s_val,
                                 "basic_hrs": b_val,
                                 "prog_hrs": p_val,
@@ -1245,6 +1260,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                 update_supabase_job(int(row_id), payload)
                             else:
+                                payload["ready_at"] = get_bangkok_str()
                                 insert_supabase_job(payload)
                             save_count += 1
 
