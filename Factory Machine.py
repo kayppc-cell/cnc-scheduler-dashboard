@@ -22,16 +22,10 @@ def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
 def get_day_working_windows(dt_date):
-    """
-    กำหนดหน้าต่างเวลาทำงานของแต่ละวัน:
-    - จันทร์-ศุกร์ (0-4): 08:00-12:00 และ 13:00-20:00 (11 ชม./วัน)
-    - เสาร์ (5): 08:00-12:00 และ 13:00-17:00 (8 ชม./วัน)
-    - อาทิตย์ (6): หยุด
-    """
     weekday = dt_date.weekday()
-    if weekday == 6:  # วันอาทิตย์
+    if weekday == 6:  # อาทิตย์
         return []
-    elif weekday == 5:  # วันเสาร์
+    elif weekday == 5:  # เสาร์
         return [
             (datetime.combine(dt_date, time(8, 0)), datetime.combine(dt_date, time(12, 0))),
             (datetime.combine(dt_date, time(13, 0)), datetime.combine(dt_date, time(17, 0)))
@@ -115,17 +109,16 @@ components.html("""
 </script>
 """, height=0)
 
-logo_base64 = None
-for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]:
-    if os.path.exists(fname):
-        with open(fname, "rb") as f:
-            logo_base64 = base64.b64encode(f.read()).decode("utf-8")
-        break
+@st.cache_data(show_spinner=False)
+def get_cached_logo():
+    for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]:
+        if os.path.exists(fname):
+            with open(fname, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+    return None
 
-if logo_base64:
-    logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>'
-else:
-    logo_html = '<div class="header-logo-icon">🏭</div>'
+logo_base64 = get_cached_logo()
+logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>' if logo_base64 else '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
 # 2. ตกแต่ง UI
@@ -314,10 +307,6 @@ st.markdown("""
         border-color: #CBD5E1 !important;
         cursor: not-allowed !important;
     }
-
-    [data-testid="data-grid-canvas"] {
-        outline: none !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -325,7 +314,7 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักรและแผนก
+# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักร
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 
@@ -365,7 +354,7 @@ JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทร�
 JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "🟩 เสร็จสิ้นแล้ว"]
 
 # =========================================================
-# 4. ฟังก์ชันเชื่อมต่อ Supabase
+# 4. ฟังก์ชันเชื่อมต่อ Supabase (Optimized TTL)
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -428,16 +417,6 @@ def delete_supabase_job(job_id: int) -> bool:
     except Exception:
         return False
 
-def safe_parse_datetime(series):
-    dt = pd.to_datetime(series, format='mixed', errors='coerce')
-    try:
-        return dt.dt.tz_localize(None)
-    except Exception:
-        try:
-            return dt.dt.tz_convert(None)
-        except Exception:
-            return dt
-
 def normalize_status(status_str: str) -> str:
     s = str(status_str)
     if "พักงาน" in s or "รอวัสดุ" in s:
@@ -449,7 +428,8 @@ def normalize_status(status_str: str) -> str:
     else:
         return "🟧 รอคิวผลิต"
 
-@st.cache_data(ttl=2, show_spinner=False)
+# เพิ่ม cache ttl เป็น 10 วินาที เพื่อลดภาระ Network Request ซ้ำซ้อน
+@st.cache_data(ttl=10, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -461,11 +441,11 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                df["ready_at"] = safe_parse_datetime(df["ready_at"])
+                df["ready_at"] = pd.to_datetime(df["ready_at"], errors='coerce').dt.tz_localize(None)
                 if "actual_start" in df.columns:
-                    df["actual_start"] = safe_parse_datetime(df["actual_start"])
+                    df["actual_start"] = pd.to_datetime(df["actual_start"], errors='coerce').dt.tz_localize(None)
                 if "actual_finish" in df.columns:
-                    df["actual_finish"] = safe_parse_datetime(df["actual_finish"])
+                    df["actual_finish"] = pd.to_datetime(df["actual_finish"], errors='coerce').dt.tz_localize(None)
                 
                 if "status" in df.columns:
                     df["status"] = df["status"].apply(normalize_status)
@@ -497,7 +477,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     m_last_mat = {m: None for m in MACHINE_LIST}
     m_busy_hrs = {m: 0.0 for m in MACHINE_LIST}
     
-    # คำนวณเฉพาะงานที่รอคิวหรือกำลังรัน (งานที่พักรอวัสดุจะไม่นำมาจองเวลาเครื่อง)
     active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
     valid_jobs = []
     for j in jobs_df[active_mask].to_dict("records"):
@@ -681,7 +660,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (เพิ่มฟังก์ชัน Stop พักงาน/รอวัสดุ)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -720,7 +699,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 earliest_ready = steps["วัน-เวลาขึ้นงาน"].min()
                 min_id = steps["ID"].min()
                 
-                # Priority: 0 = กำลังผลิต, 1 = งานด่วนแทรก, 2 = งานปกติ, 3 = งานที่พักรอวัสดุ
                 if is_running:
                     prio = 0
                 elif is_urgent and not is_hold:
@@ -781,7 +759,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     st.toast("บันทึกจบงานจริงทุกคิวเรียบร้อย!", icon="🏁")
                     st.rerun()
 
-        # ตรวจสอบว่าในเครื่องนี้มีงานใดกำลังรันอยู่จริงหรือไม่
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
         next_available_start_found = False
 
@@ -874,7 +851,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             )
 
                             if is_step_hold:
-                                # แสดงปุ่ม Resume สำหรับงานที่พักไว้
                                 c_btn_save, c_btn_resume = st.columns([1.5, 4])
                                 with c_btn_save:
                                     if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{s_id}", use_container_width=True):
@@ -894,7 +870,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                             st.toast("เริ่มรันงานต่อเรียบร้อย!", icon="🚀")
                                             st.rerun()
                             elif is_step_running:
-                                # แสดงปุ่ม Finish และปุ่ม Stop (พักงานรอวัสดุ)
                                 c_btn_save, c_btn_hold, c_btn_finish = st.columns([1.5, 2.5, 2])
                                 with c_btn_save:
                                     if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{s_id}", use_container_width=True):
@@ -903,7 +878,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                             st.toast(f"บันทึกชื่อ Step {idx} เรียบร้อย!", icon="💾")
                                             st.rerun()
                                 with c_btn_hold:
-                                    if st.button("🛑 พักงาน (รอวัสดุใหม่)", key=f"btn_hold_{s_id}", help="กดเพื่อหยุดงานนี้ชั่วคราวและเปิดให้รันงานอื่นต่อได้", use_container_width=True):
+                                    if st.button("🛑 พักงาน (รอวัสดุใหม่)", key=f"btn_hold_{s_id}", use_container_width=True):
                                         update_payload = {
                                             "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
                                             "status": "🟨 พักงาน (รอวัสดุ)"
@@ -932,7 +907,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                             st.toast(f"บันทึกเวลาจบจริง {s_name} เรียบร้อย!", icon="🏁")
                                             st.rerun()
                             else:
-                                # สถานะรอคิวปกติ
                                 c_btn_save, c_btn_start, c_btn_finish = st.columns([1.5, 2, 2])
                                 with c_btn_save:
                                     if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{s_id}", use_container_width=True):
@@ -1106,7 +1080,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # ดึงรายการสั่งผลิตที่ยังไม่เสร็จ (รอคิว, กำลังรัน, หรือพักงานรอวัสดุ)
             active_jobs_editor_df = calc_df[
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
             ].sort_values(by="ID", ascending=True).copy().reset_index(drop=True)
@@ -1309,7 +1282,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
             avg_util = df_util["อัตราการใช้งาน (%)"].mean() if not df_util.empty else 0.0
 
-            # แถบสรุป KPI
             kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทำงานรวม</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div><div class="kpi-card kpi-purple"><div class="kpi-title">📊 การใช้เครื่อง</div><div class="kpi-value">{avg_util:.1f} %</div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
