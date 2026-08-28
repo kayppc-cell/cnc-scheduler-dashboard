@@ -406,6 +406,9 @@ if "finish_select_all" not in st.session_state:
 if "scroll_to_bottom" not in st.session_state:
     st.session_state.scroll_to_bottom = False
 
+if "gantt_date_range" not in st.session_state:
+    st.session_state.gantt_date_range = None
+
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
@@ -846,7 +849,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         next_available_start_found = False
 
         if len(sorted_groups) == 0:
-            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
+            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ (ทุกงานเสร็จสิ้นครบหมดแล้ว หรือยังไม่มีการระบุวันขึ้นงาน)")
         else:
             for group_idx, g_info in enumerate(sorted_groups, 1):
                 plan_code = g_info["plan_code"]
@@ -1651,31 +1654,56 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) + ตัวเลือกปฏิทิน
-            # =====================================================
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) + ปุ่มลัดวันนี้ / 3 วัน / 7 วัน
+            # =========================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 
-                gantt_f1, gantt_f2, gantt_f3 = st.columns([2.2, 2.8, 2.0])
+                # คำนวณวันปัจจุบันและขอบเขตวันที่ทั้งหมด
+                today_date = get_bangkok_now().date()
+                gantt_min_date = df_gantt["เวลาเริ่ม"].min().date()
+                gantt_max_date = df_gantt["เวลาเสร็จ"].max().date()
+
+                # กำหนดค่าเริ่มต้นถ้ายังไม่เคยเลือก
+                if st.session_state.gantt_date_range is None:
+                    st.session_state.gantt_date_range = (today_date, max(today_date + timedelta(days=7), gantt_max_date))
+
+                gantt_f1, gantt_f2, gantt_f3 = st.columns([2.2, 3.2, 1.8])
                 with gantt_f1:
                     m_filter_mode = st.radio(
                         "🔍 กรองกลุ่มสถานีงาน:",
                         ["🌐 ทุกสถานี (17 เครื่อง)", "⚙️ CNC (No.1 - No.9)", "🔧 เจียร/มิลลิ่ง/กลึง/เชื่อม (No.10 - No.17)"],
                         horizontal=True
                     )
-                
-                # หาขอบเขตวันที่ของข้อมูลทั้งหมด
-                gantt_min_date = df_gantt["เวลาเริ่ม"].min().date()
-                gantt_max_date = df_gantt["เวลาเสร็จ"].max().date()
 
                 with gantt_f2:
+                    st.markdown("**📅 ช่วงวันที่ต้องการดูผังงาน:**")
+                    btn_q1, btn_q2, btn_q3, btn_q4 = st.columns(4)
+                    with btn_q1:
+                        if st.button("🔍 วันนี้", use_container_width=True):
+                            st.session_state.gantt_date_range = (today_date, today_date)
+                            st.rerun()
+                    with btn_q2:
+                        if st.button("📅 3 วัน", use_container_width=True):
+                            st.session_state.gantt_date_range = (today_date, today_date + timedelta(days=2))
+                            st.rerun()
+                    with btn_q3:
+                        if st.button("📆 7 วัน", use_container_width=True):
+                            st.session_state.gantt_date_range = (today_date, today_date + timedelta(days=6))
+                            st.rerun()
+                    with btn_q4:
+                        if st.button("🌐 ทั้งหมด", use_container_width=True):
+                            st.session_state.gantt_date_range = (min(today_date, gantt_min_date), max(today_date, gantt_max_date))
+                            st.rerun()
+
                     selected_date_range = st.date_input(
-                        "📅 เลือกดูวันที่เริ่มต้น - สิ้นสุด:",
-                        value=(gantt_min_date, min(gantt_max_date, gantt_min_date + timedelta(days=7))),
-                        min_value=gantt_min_date - timedelta(days=30),
-                        max_value=gantt_max_date + timedelta(days=30),
-                        help="คลิกเพื่อเลือกวันเริ่มต้นและวันสิ้นสุดของแผนงานที่ต้องการซูมดู"
+                        "เลือกช่วงวันที่กำหนดเอง:",
+                        value=st.session_state.gantt_date_range,
+                        min_value=min(today_date, gantt_min_date) - timedelta(days=60),
+                        max_value=max(today_date, gantt_max_date) + timedelta(days=60),
+                        label_visibility="collapsed"
                     )
+                    st.session_state.gantt_date_range = selected_date_range
 
                 with gantt_f3:
                     color_by_option = st.selectbox("🎨 แยกสีตาม:", ["แผนงาน (Plan Code)", "กิจกรรม (Setup/ตัดเฉือน)"])
@@ -1737,32 +1765,21 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     gridcolor="#E2E8F0"
                 )
                 
-                # กำหนดช่วงแกน X ตามปฏิทินที่ผู้ใช้เลือก
+                # คำนวณช่วงเวลาแกน X ให้ตรงกับวันที่เลือกอย่างแม่นยำ
                 if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
-                    start_view = datetime.combine(selected_date_range[0], time(0, 0))
-                    end_view = datetime.combine(selected_date_range[1], time(23, 59, 59))
+                    start_view = datetime.combine(selected_date_range[0], time(7, 30))
+                    end_view = datetime.combine(selected_date_range[1], time(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
-                    start_view = datetime.combine(selected_date_range[0], time(0, 0))
-                    end_view = datetime.combine(selected_date_range[0] + timedelta(days=3), time(23, 59, 59))
+                    start_view = datetime.combine(selected_date_range[0], time(7, 30))
+                    end_view = datetime.combine(selected_date_range[0], time(20, 30))
                 else:
-                    start_view = datetime.combine(gantt_min_date, time(0, 0))
-                    end_view = datetime.combine(gantt_max_date + timedelta(days=1), time(0, 0))
+                    start_view = datetime.combine(gantt_min_date, time(7, 30))
+                    end_view = datetime.combine(gantt_max_date, time(20, 30))
 
                 fig.update_xaxes(
                     range=[start_view, end_view],
                     showgrid=True,
-                    gridcolor="#E2E8F0",
-                    rangeselector=dict(
-                        buttons=list([
-                            dict(count=1, label="🔍 วันนี้", step="day", stepmode="backward"),
-                            dict(count=3, label="📅 3 วัน", step="day", stepmode="backward"),
-                            dict(count=7, label="📆 7 วัน", step="day", stepmode="backward"),
-                            dict(step="all", label="🌐 ทั้งหมด")
-                        ]),
-                        font=dict(size=12, color="#1E293B"),
-                        bgcolor="#F1F5F9",
-                        activecolor="#DBEAFE"
-                    )
+                    gridcolor="#E2E8F0"
                 )
 
                 if not plot_gantt_df.empty:
