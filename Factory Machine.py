@@ -389,9 +389,10 @@ st.markdown(header_content, unsafe_allow_html=True)
 # 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักร
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
+VIEWER_PASSWORD = "pes1234"
 
-if "is_admin" not in st.session_state:
-    st.session_state.is_admin = False
+if "user_role" not in st.session_state:
+    st.session_state.user_role = None  # None, "admin", "viewer"
 
 if "current_view" not in st.session_state:
     st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
@@ -1070,9 +1071,9 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 # VIEW 2: Dashboard ภาพรวมโรงงาน
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
-    if not st.session_state.is_admin:
-        st.subheader("🔒 ยืนยันตัวตนสำหรับผู้บริหารและผู้วางแผน")
-        st.info("ส่วนของแดชบอร์ดภาพรวมและต้นทุนค่าเครื่องจักร ถูกสงวนสิทธิ์เฉพาะผู้บริหาร")
+    if st.session_state.user_role is None:
+        st.subheader("🔒 ยืนยันตัวตนสำหรับเข้าใช้งานแดชบอร์ดภาพรวมโรงงาน")
+        st.info("กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน:\n* **ผู้บริหาร/วางแผน (แก้ไขได้):** รหัสผ่านระดับ Admin\n* **เข้าชมทั่วไป (ดูอย่างเดียว):** รหัสผ่าน `pes1234`")
         col_pwd, col_btn = st.columns([3, 1])
         with col_pwd:
             input_pwd = st.text_input("รหัสผ่าน (Password):", type="password")
@@ -1081,72 +1082,81 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.write("")
             if st.button("🔓 เข้าสู่ระบบ", type="primary", use_container_width=True):
                 if input_pwd == ADMIN_PASSWORD:
-                    st.session_state.is_admin = True
+                    st.session_state.user_role = "admin"
+                    st.rerun()
+                elif input_pwd == VIEWER_PASSWORD:
+                    st.session_state.user_role = "viewer"
                     st.rerun()
                 else:
                     st.error("รหัสผ่านไม่ถูกต้อง")
     else:
+        is_admin = (st.session_state.user_role == "admin")
+
         c_head, c_logout = st.columns([8, 2])
         with c_head:
-            st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน (Management Only)")
+            if is_admin:
+                st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน 👑 (โหมดผู้บริหาร - แก้ไขได้)")
+            else:
+                st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน 👁️ (โหมดเข้าชมทั่วไป - ดูอย่างเดียว)")
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True):
-                st.session_state.is_admin = False
+                st.session_state.user_role = None
                 st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
                 st.rerun()
 
         df_db = fetch_jobs_from_supabase()
 
-        with st.expander("➕ สั่งผลิตงานใหม่เข้าระบบ (Add New Job)", expanded=False):
-            with st.form("form_add_new_job_main", clear_on_submit=True):
-                f_c1, f_c2, f_c_qty, f_c3 = st.columns([1.5, 2.5, 1, 1.2])
-                with f_c1:
-                    new_f_plan = st.text_input("รหัสแผนงาน (Plan No.):", placeholder="เช่น 26-105")
-                with f_c2:
-                    new_f_draw = st.text_input("ชื่อ Drawing:", placeholder="เช่น P26-PES-105-001-Unit10")
-                with f_c_qty:
-                    new_f_qty = st.number_input("จำนวน:", min_value=1, max_value=10000, value=1, step=1)
-                with f_c3:
-                    new_f_mat = st.text_input("วัสดุ:", value="SS400")
+        if is_admin:
+            with st.expander("➕ สั่งผลิตงานใหม่เข้าระบบ (Add New Job)", expanded=False):
+                with st.form("form_add_new_job_main", clear_on_submit=True):
+                    f_c1, f_c2, f_c_qty, f_c3 = st.columns([1.5, 2.5, 1, 1.2])
+                    with f_c1:
+                        new_f_plan = st.text_input("รหัสแผนงาน (Plan No.):", placeholder="เช่น 26-105")
+                    with f_c2:
+                        new_f_draw = st.text_input("ชื่อ Drawing:", placeholder="เช่น P26-PES-105-001-Unit10")
+                    with f_c_qty:
+                        new_f_qty = st.number_input("จำนวน:", min_value=1, max_value=10000, value=1, step=1)
+                    with f_c3:
+                        new_f_mat = st.text_input("วัสดุ:", value="SS400")
 
-                f_c4, f_c5, f_c6 = st.columns([1.5, 2, 2])
-                with f_c4:
-                    new_f_type = st.selectbox("ประเภทงาน:", JOB_TYPES)
-                with f_c5:
-                    st.text_input("ขั้นตอน (Step):", value="รอหน้าเครื่องระบุ", disabled=True, help="ช่องนี้ถูกล็อกไว้ ให้ช่างหน้าเครื่องเป็นผู้ระบุชื่อขั้นตอนจริง")
-                with f_c6:
-                    new_f_machine = st.selectbox("เลือกเครื่องจักร / แผนก:", MACHINE_LIST)
+                    f_c4, f_c5, f_c6 = st.columns([1.5, 2, 2])
+                    with f_c4:
+                        new_f_type = st.selectbox("ประเภทงาน:", JOB_TYPES)
+                    with f_c5:
+                        st.text_input("ขั้นตอน (Step):", value="รอหน้าเครื่องระบุ", disabled=True, help="ช่องนี้ถูกล็อกไว้ ให้ช่างหน้าเครื่องเป็นผู้ระบุชื่อขั้นตอนจริง")
+                    with f_c6:
+                        new_f_machine = st.selectbox("เลือกเครื่องจักร / แผนก:", MACHINE_LIST)
 
-                f_c7, f_c8, f_c9 = st.columns([1.5, 1.5, 1.5])
-                with f_c7:
-                    new_f_setup = st.number_input("เวลาตั้งเครื่อง Setup (นาที):", min_value=0, max_value=720, value=15, step=5)
-                with f_c8:
-                    new_f_basic = st.number_input("Basic Machine (นาที):", min_value=0, max_value=6000, value=0, step=5)
-                with f_c9:
-                    new_f_prog = st.number_input("รันโปรแกรม/เวลาทำงานตามแผน (นาที):", min_value=0, max_value=12000, value=120, step=10)
+                    f_c7, f_c8, f_c9 = st.columns([1.5, 1.5, 1.5])
+                    with f_c7:
+                        new_f_setup = st.number_input("เวลาตั้งเครื่อง Setup (นาที):", min_value=0, max_value=720, value=15, step=5)
+                    with f_c8:
+                        new_f_basic = st.number_input("Basic Machine (นาที):", min_value=0, max_value=6000, value=0, step=5)
+                    with f_c9:
+                        new_f_prog = st.number_input("รันโปรแกรม/เวลาทำงานตามแผน (นาที):", min_value=0, max_value=12000, value=120, step=10)
 
-                if st.form_submit_button("🚀 บันทึกสั่งผลิตใหม่เข้าสู่ระบบ", type="primary", use_container_width=True):
-                    if new_f_plan.strip() != "":
-                        payload = {
-                            "plan_code": new_f_plan.strip(),
-                            "drawing_name": new_f_draw.strip(),
-                            "qty": int(new_f_qty),
-                            "material": new_f_mat.strip(),
-                            "job_type": new_f_type,
-                            "step_name": "รอหน้าเครื่องระบุ",
-                            "machine_name": new_f_machine,
-                            "ready_at": get_bangkok_str(),
-                            "setup_mins": float(new_f_setup),
-                            "basic_hrs": float(new_f_basic),
-                            "prog_hrs": float(new_f_prog),
-                            "status": "🟧 รอคิวผลิต"
-                        }
-                        if insert_supabase_job(payload):
-                            st.cache_data.clear()
-                            st.success(f"เพิ่มแผนงาน {new_f_plan} เข้าสู่ระบบสำเร็จ!")
-                            st.rerun()
-                    else:
-                        st.error("กรุณาระบุรหัสแผนงาน")
+                    if st.form_submit_button("🚀 บันทึกสั่งผลิตใหม่เข้าสู่ระบบ", type="primary", use_container_width=True):
+                        if new_f_plan.strip() != "":
+                            payload = {
+                                "plan_code": new_f_plan.strip(),
+                                "drawing_name": new_f_draw.strip(),
+                                "qty": int(new_f_qty),
+                                "material": new_f_mat.strip(),
+                                "job_type": new_f_type,
+                                "step_name": "รอหน้าเครื่องระบุ",
+                                "machine_name": new_f_machine,
+                                "ready_at": get_bangkok_str(),
+                                "setup_mins": float(new_f_setup),
+                                "basic_hrs": float(new_f_basic),
+                                "prog_hrs": float(new_f_prog),
+                                "status": "🟧 รอคิวผลิต"
+                            }
+                            if insert_supabase_job(payload):
+                                st.cache_data.clear()
+                                st.success(f"เพิ่มแผนงาน {new_f_plan} เข้าสู่ระบบสำเร็จ!")
+                                st.rerun()
+                        else:
+                            st.error("กรุณาระบุรหัสแผนงาน")
 
         if not df_db.empty:
             calc_df = df_db.copy()
@@ -1174,7 +1184,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # แสดงผลในตารางเป็น วัน/เดือน/ปี ชัดเจน
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
                 lambda x: x.strftime("%d/%m/%Y %H:%M") if pd.notna(x) else ""
             )
@@ -1185,62 +1194,68 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if st.session_state.active_select_all:
                     active_jobs_editor_df["ลบ"] = True
 
-            with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางแก้ไข/เพิ่มแถวข้อมูล)", expanded=True):
-                st.markdown("**📌 เครื่องมือจัดการตาราง:**")
-                tool_col1, tool_col2, tool_search = st.columns([2.5, 3.5, 4])
-                
-                with tool_col1:
-                    btn_c1, btn_c2 = st.columns(2)
-                    with btn_c1:
-                        if st.button("✅ เลือกหมด", use_container_width=True):
-                            st.session_state.active_select_all = True
-                            st.rerun()
-                    with btn_c2:
-                        if st.button("❌ ยกเลิก", use_container_width=True):
-                            st.session_state.active_select_all = False
-                            st.rerun()
+            with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางแก้ไข/เพิ่มแถวข้อมูล)" if is_admin else "📝 รายการสั่งผลิตในระบบ (ตารางแสดงข้อมูล)", expanded=True):
+                if is_admin:
+                    st.markdown("**📌 เครื่องมือจัดการตาราง:**")
+                    tool_col1, tool_col2, tool_search = st.columns([2.5, 3.5, 4])
+                    
+                    with tool_col1:
+                        btn_c1, btn_c2 = st.columns(2)
+                        with btn_c1:
+                            if st.button("✅ เลือกหมด", use_container_width=True):
+                                st.session_state.active_select_all = True
+                                st.rerun()
+                        with btn_c2:
+                            if st.button("❌ ยกเลิก", use_container_width=True):
+                                st.session_state.active_select_all = False
+                                st.rerun()
 
-                with tool_col2:
-                    with st.popover("➕ แทรกแถวใหม่ใต้รายการที่เลือก"):
-                        if not active_jobs_editor_df.empty:
-                            row_choices = [f"แถวที่ {i+1}: {r['แผนงาน']} - {r['ชื่อ Drawing.']}" for i, r in active_jobs_editor_df.iterrows()]
-                            selected_target_idx = st.selectbox("เลือกแทรกใต้รายการ:", range(len(row_choices)), format_func=lambda x: row_choices[x])
-                            target_row_data = active_jobs_editor_df.iloc[selected_target_idx]
-                            
-                            ins_qty = st.number_input("จำนวน:", min_value=1, value=int(target_row_data.get("จำนวน", 1) or 1), step=1)
-                            ins_setup = st.number_input("Setup (น.):", value=15, step=5)
-                            ins_basic = st.number_input("Basic (น.):", value=0, step=5)
-                            ins_prog = st.number_input("โปรแกรม (น.):", value=120, step=10)
-                            
-                            if st.button("🚀 ยืนยันการแทรกข้อมูล", type="primary", use_container_width=True):
-                                ins_payload = {
-                                    "plan_code": str(target_row_data["แผนงาน"]),
-                                    "drawing_name": str(target_row_data["ชื่อ Drawing."]),
-                                    "qty": int(ins_qty),
-                                    "material": str(target_row_data["วัสดุ"]),
-                                    "job_type": str(target_row_data["ประเภทงาน"]),
-                                    "step_name": "รอหน้าเครื่องระบุ",
-                                    "machine_name": str(target_row_data["เลือกเครื่องจักร"]),
-                                    "ready_at": get_bangkok_str(),
-                                    "setup_mins": float(ins_setup),
-                                    "basic_hrs": float(ins_basic),
-                                    "prog_hrs": float(ins_prog),
-                                    "status": "🟧 รอคิวผลิต"
-                                }
-                                if insert_supabase_job(ins_payload):
-                                    st.cache_data.clear()
-                                    st.session_state.scroll_to_bottom = True
-                                    st.toast("แทรกแถวใหม่เข้าระบบสำเร็จ!", icon="🚀")
-                                    st.rerun()
+                    with tool_col2:
+                        with st.popover("➕ แทรกแถวใหม่ใต้รายการที่เลือก"):
+                            if not active_jobs_editor_df.empty:
+                                row_choices = [f"แถวที่ {i+1}: {r['แผนงาน']} - {r['ชื่อ Drawing.']}" for i, r in active_jobs_editor_df.iterrows()]
+                                selected_target_idx = st.selectbox("เลือกแทรกใต้รายการ:", range(len(row_choices)), format_func=lambda x: row_choices[x])
+                                target_row_data = active_jobs_editor_df.iloc[selected_target_idx]
+                                
+                                ins_qty = st.number_input("จำนวน:", min_value=1, value=int(target_row_data.get("จำนวน", 1) or 1), step=1)
+                                ins_setup = st.number_input("Setup (น.):", value=15, step=5)
+                                ins_basic = st.number_input("Basic (น.):", value=0, step=5)
+                                ins_prog = st.number_input("โปรแกรม (น.):", value=120, step=10)
+                                
+                                if st.button("🚀 ยืนยันการแทรกข้อมูล", type="primary", use_container_width=True):
+                                    ins_payload = {
+                                        "plan_code": str(target_row_data["แผนงาน"]),
+                                        "drawing_name": str(target_row_data["ชื่อ Drawing."]),
+                                        "qty": int(ins_qty),
+                                        "material": str(target_row_data["วัสดุ"]),
+                                        "job_type": str(target_row_data["ประเภทงาน"]),
+                                        "step_name": "รอหน้าเครื่องระบุ",
+                                        "machine_name": str(target_row_data["เลือกเครื่องจักร"]),
+                                        "ready_at": get_bangkok_str(),
+                                        "setup_mins": float(ins_setup),
+                                        "basic_hrs": float(ins_basic),
+                                        "prog_hrs": float(ins_prog),
+                                        "status": "🟧 รอคิวผลิต"
+                                    }
+                                    if insert_supabase_job(ins_payload):
+                                        st.cache_data.clear()
+                                        st.session_state.scroll_to_bottom = True
+                                        st.toast("แทรกแถวใหม่เข้าระบบสำเร็จ!", icon="🚀")
+                                        st.rerun()
 
-                with tool_search:
+                    with tool_search:
+                        search_query_editor = st.text_input(
+                            "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร):",
+                            placeholder="พิมพ์เพื่อกรองข้อมูล...",
+                            key="search_active_editor_input"
+                        )
+                else:
                     search_query_editor = st.text_input(
                         "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร):",
                         placeholder="พิมพ์เพื่อกรองข้อมูล...",
-                        key="search_active_editor_input"
+                        key="search_active_editor_input_viewer"
                     )
 
-                # ทำการกรองข้อมูลตามคำค้นหา
                 if search_query_editor.strip() != "":
                     q = search_query_editor.strip().lower()
                     display_editor_df = active_jobs_editor_df[
@@ -1252,174 +1267,196 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 else:
                     display_editor_df = active_jobs_editor_df.copy().reset_index(drop=True)
 
-                edited_jobs = st.data_editor(
-                    display_editor_df,
-                    key="editor_cnc_jobs_grid_main",
-                    num_rows="dynamic",
-                    column_order=[
-                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
-                        "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
-                        "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
-                    ],
-                    column_config={
-                        "ID": None,
-                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
-                        "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, min_value=1, max_value=10000, step=1, format="%d", default=1),
-                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, default="SS400"),
-                        "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
-                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130, disabled=True, default="รอหน้าเครื่องระบุ"),
-                        "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
-                        "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
-                            "วัน-เวลาขึ้นงาน", 
-                            width=165,
-                            help="พิมพ์วันขึ้นก่อนเสมอ เช่น 01/09/2026 10:50 หรือ 01/09 10:50"
-                        ),
-                        "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
-                        "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
-                        "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, min_value=0, max_value=12000, step=10, format="%d", default=120),
-                        "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f", disabled=True),
-                        "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=145, options=JOB_STATUS, default="🟧 รอคิวผลิต"),
-                        "ลบ": st.column_config.CheckboxColumn("🗑️", width=55, default=False),
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
+                if is_admin:
+                    edited_jobs = st.data_editor(
+                        display_editor_df,
+                        key="editor_cnc_jobs_grid_main",
+                        num_rows="dynamic",
+                        column_order=[
+                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                            "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
+                            "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
+                        ],
+                        column_config={
+                            "ID": None,
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, min_value=1, max_value=10000, step=1, format="%d", default=1),
+                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, default="SS400"),
+                            "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130, disabled=True, default="รอหน้าเครื่องระบุ"),
+                            "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
+                                "วัน-เวลาขึ้นงาน", 
+                                width=165,
+                                help="พิมพ์วันขึ้นก่อนเสมอ เช่น 01/09/2026 10:50 หรือ 01/09 10:50"
+                            ),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, min_value=0, max_value=12000, step=10, format="%d", default=120),
+                            "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f", disabled=True),
+                            "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=145, options=JOB_STATUS, default="🟧 รอคิวผลิต"),
+                            "ลบ": st.column_config.CheckboxColumn("🗑️", width=55, default=False),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    edited_jobs = display_editor_df.copy()
+                    st.dataframe(
+                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ"]]],
+                        column_config={
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
+                            "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=125),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เลือกเครื่องจักร", width=160),
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("วัน-เวลาขึ้นงาน", width=165),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, format="%d"),
+                            "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
+                            "สถานะงาน": st.column_config.TextColumn("สถานะงาน", width=145),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
                 
                 st.markdown('<div id="editor_table_bottom_mark"></div>', unsafe_allow_html=True)
 
-                active_to_delete = edited_jobs[
-                    (edited_jobs["ลบ"] == True) & 
-                    (edited_jobs["แผนงาน"].notna()) & 
-                    (edited_jobs["แผนงาน"].astype(str).str.strip() != "") & 
-                    (edited_jobs["แผนงาน"].astype(str).str.strip() != "None")
-                ]
-                delete_count = len(active_to_delete)
+                if is_admin:
+                    active_to_delete = edited_jobs[
+                        (edited_jobs["ลบ"] == True) & 
+                        (edited_jobs["แผนงาน"].notna()) & 
+                        (edited_jobs["แผนงาน"].astype(str).str.strip() != "") & 
+                        (edited_jobs["แผนงาน"].astype(str).str.strip() != "None")
+                    ]
+                    delete_count = len(active_to_delete)
 
-                c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
-                with c_save:
-                    if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
-                        # สร้าง Map ของข้อมูลเดิมในฐานข้อมูลเพื่อเช็ค Diff
-                        db_original_map = {}
-                        for _, orig_row in df_db.iterrows():
-                            if pd.notna(orig_row.get("ID")):
-                                db_original_map[int(float(orig_row["ID"]))] = orig_row
+                    c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
+                    with c_save:
+                        if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
+                            db_original_map = {}
+                            for _, orig_row in df_db.iterrows():
+                                if pd.notna(orig_row.get("ID")):
+                                    db_original_map[int(float(orig_row["ID"]))] = orig_row
 
-                        saved_inserts = 0
-                        saved_updates = 0
+                            saved_inserts = 0
+                            saved_updates = 0
 
-                        for _, row in edited_jobs.iterrows():
-                            raw_plan = row.get("แผนงาน")
-                            p_code = safe_str(raw_plan, "")
-                            if not p_code:
-                                continue
-                            
-                            d_name = safe_str(row.get("ชื่อ Drawing."), "")
-                            qty_int = safe_int(row.get("จำนวน"), 1)
-                            mat_val = safe_str(row.get("วัสดุ"), "SS400")
-                            job_type_val = safe_str(row.get("ประเภทงาน"), "🟢 งานปกติ")
-                            step_val = safe_str(row.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ")
-                            machine_val = safe_str(row.get("เลือกเครื่องจักร"), "No.1 Awea")
-                            status_val = safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
-                            
-                            s_val = safe_float(row.get("Setup (น.)"), 15.0)
-                            b_val = safe_float(row.get("Basic (น.)"), 0.0)
-                            p_val = safe_float(row.get("โปรแกรม (น.)"), 120.0)
-                            
-                            raw_ready = row.get("วัน-เวลาขึ้นงาน")
-                            dt_parsed = parse_flexible_datetime(raw_ready)
-                            ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if dt_parsed is not None else None
-                            
-                            payload = {
-                                "plan_code": p_code,
-                                "drawing_name": d_name,
-                                "qty": qty_int,
-                                "material": mat_val,
-                                "job_type": job_type_val,
-                                "step_name": step_val,
-                                "machine_name": machine_val,
-                                "ready_at": ready_str,
-                                "setup_mins": s_val,
-                                "basic_hrs": b_val,
-                                "prog_hrs": p_val,
-                                "status": status_val
-                            }
-                            
-                            row_id = row.get("ID")
-                            
-                            # ตรวจสอบว่าเป็นแถวใหม่หรือไม่ (ถ้าไม่มี ID ถือเป็นแถวใหม่ทันที)
-                            is_new_row = False
-                            if pd.isna(row_id) or row_id is None:
-                                is_new_row = True
-                            elif str(row_id).strip() in ["", "None", "nan", "NaN", "null"]:
-                                is_new_row = True
-                            else:
-                                try:
-                                    if float(row_id) <= 0:
-                                        is_new_row = True
-                                except Exception:
-                                    is_new_row = True
-
-                            if is_new_row:
-                                if insert_supabase_job(payload):
-                                    saved_inserts += 1
-                            else:
-                                target_id = int(float(row_id))
-                                orig = db_original_map.get(target_id)
+                            for _, row in edited_jobs.iterrows():
+                                raw_plan = row.get("แผนงาน")
+                                p_code = safe_str(raw_plan, "")
+                                if not p_code:
+                                    continue
                                 
-                                is_changed = False
-                                if orig is None:
-                                    is_changed = True
+                                d_name = safe_str(row.get("ชื่อ Drawing."), "")
+                                qty_int = safe_int(row.get("จำนวน"), 1)
+                                mat_val = safe_str(row.get("วัสดุ"), "SS400")
+                                job_type_val = safe_str(row.get("ประเภทงาน"), "🟢 งานปกติ")
+                                step_val = safe_str(row.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ")
+                                machine_val = safe_str(row.get("เลือกเครื่องจักร"), "No.1 Awea")
+                                status_val = safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
+                                
+                                s_val = safe_float(row.get("Setup (น.)"), 15.0)
+                                b_val = safe_float(row.get("Basic (น.)"), 0.0)
+                                p_val = safe_float(row.get("โปรแกรม (น.)"), 120.0)
+                                
+                                raw_ready = row.get("วัน-เวลาขึ้นงาน")
+                                dt_parsed = parse_flexible_datetime(raw_ready)
+                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if dt_parsed is not None else None
+                                
+                                payload = {
+                                    "plan_code": p_code,
+                                    "drawing_name": d_name,
+                                    "qty": qty_int,
+                                    "material": mat_val,
+                                    "job_type": job_type_val,
+                                    "step_name": step_val,
+                                    "machine_name": machine_val,
+                                    "ready_at": ready_str,
+                                    "setup_mins": s_val,
+                                    "basic_hrs": b_val,
+                                    "prog_hrs": p_val,
+                                    "status": status_val
+                                }
+                                
+                                row_id = row.get("ID")
+                                
+                                is_new_row = False
+                                if pd.isna(row_id) or row_id is None:
+                                    is_new_row = True
+                                elif str(row_id).strip() in ["", "None", "nan", "NaN", "null"]:
+                                    is_new_row = True
                                 else:
-                                    if safe_str(orig.get("แผนงาน")) != p_code or \
-                                       safe_str(orig.get("ชื่อ Drawing.")) != d_name or \
-                                       safe_int(orig.get("จำนวน")) != qty_int or \
-                                       safe_str(orig.get("วัสดุ")) != mat_val or \
-                                       safe_str(orig.get("ประเภทงาน")) != job_type_val or \
-                                       safe_str(orig.get("ขั้นตอน (Step)")) != step_val or \
-                                       safe_str(orig.get("เลือกเครื่องจักร")) != machine_val or \
-                                       safe_str(orig.get("สถานะงาน")) != status_val or \
-                                       safe_float(orig.get("Setup (น.)")) != s_val or \
-                                       safe_float(orig.get("Basic (น.)")) != b_val or \
-                                       safe_float(orig.get("โปรแกรม (น.)")) != p_val:
+                                    try:
+                                        if float(row_id) <= 0:
+                                            is_new_row = True
+                                    except Exception:
+                                        is_new_row = True
+
+                                if is_new_row:
+                                    if insert_supabase_job(payload):
+                                        saved_inserts += 1
+                                else:
+                                    target_id = int(float(row_id))
+                                    orig = db_original_map.get(target_id)
+                                    
+                                    is_changed = False
+                                    if orig is None:
                                         is_changed = True
                                     else:
-                                        orig_ready_dt = parse_flexible_datetime(orig.get("วัน-เวลาขึ้นงาน"))
-                                        orig_ready_str = orig_ready_dt.strftime("%Y-%m-%d %H:%M:%S") if orig_ready_dt is not None else None
-                                        if orig_ready_str != ready_str:
+                                        if safe_str(orig.get("แผนงาน")) != p_code or \
+                                           safe_str(orig.get("ชื่อ Drawing.")) != d_name or \
+                                           safe_int(orig.get("จำนวน")) != qty_int or \
+                                           safe_str(orig.get("วัสดุ")) != mat_val or \
+                                           safe_str(orig.get("ประเภทงาน")) != job_type_val or \
+                                           safe_str(orig.get("ขั้นตอน (Step)")) != step_val or \
+                                           safe_str(orig.get("เลือกเครื่องจักร")) != machine_val or \
+                                           safe_str(orig.get("สถานะงาน")) != status_val or \
+                                           safe_float(orig.get("Setup (น.)")) != s_val or \
+                                           safe_float(orig.get("Basic (น.)")) != b_val or \
+                                           safe_float(orig.get("โปรแกรม (น.)")) != p_val:
                                             is_changed = True
+                                        else:
+                                            orig_ready_dt = parse_flexible_datetime(orig.get("วัน-เวลาขึ้นงาน"))
+                                            orig_ready_str = orig_ready_dt.strftime("%Y-%m-%d %H:%M:%S") if orig_ready_dt is not None else None
+                                            if orig_ready_str != ready_str:
+                                                is_changed = True
 
-                                if is_changed:
-                                    if update_supabase_job(target_id, payload):
-                                        saved_updates += 1
+                                    if is_changed:
+                                        if update_supabase_job(target_id, payload):
+                                            saved_updates += 1
 
-                        st.cache_data.clear()
-                        st.session_state.scroll_to_bottom = True
-                        total_affected = saved_inserts + saved_updates
-                        if total_affected > 0:
-                            st.success(f"บันทึกข้อมูลสำเร็จ! (เพิ่มใหม่ {saved_inserts} รายการ, แก้ไข {saved_updates} รายการ)")
-                        else:
-                            st.info("ไม่มีข้อมูลเปลี่ยนแปลงที่ต้องบันทึก")
-                        st.rerun()
-
-                with c_del_top:
-                    btn_del_label = f"🗑️ ลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ลบรายการที่เลือก (0 รายการ)"
-                    if st.button(btn_del_label, type="secondary", disabled=(delete_count == 0), use_container_width=True):
-                        del_success = True
-                        for _, row in active_to_delete.iterrows():
-                            row_id = row.get("ID")
-                            if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
-                                if not delete_supabase_job(int(float(row_id))):
-                                    del_success = False
-                                    
-                        if del_success:
-                            st.session_state.active_select_all = False
                             st.cache_data.clear()
                             st.session_state.scroll_to_bottom = True
-                            st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
+                            total_affected = saved_inserts + saved_updates
+                            if total_affected > 0:
+                                st.success(f"บันทึกข้อมูลสำเร็จ! (เพิ่มใหม่ {saved_inserts} รายการ, แก้ไข {saved_updates} รายการ)")
+                            else:
+                                st.info("ไม่มีข้อมูลเปลี่ยนแปลงที่ต้องบันทึก")
                             st.rerun()
-                        else:
-                            st.error("เกิดข้อผิดพลาดในการลบข้อมูลจาก Supabase")
+
+                    with c_del_top:
+                        btn_del_label = f"🗑️ ลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ลบรายการที่เลือก (0 รายการ)"
+                        if st.button(btn_del_label, type="secondary", disabled=(delete_count == 0), use_container_width=True):
+                            del_success = True
+                            for _, row in active_to_delete.iterrows():
+                                row_id = row.get("ID")
+                                if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
+                                    if not delete_supabase_job(int(float(row_id))):
+                                        del_success = False
+                                        
+                            if del_success:
+                                st.session_state.active_select_all = False
+                                st.cache_data.clear()
+                                st.session_state.scroll_to_bottom = True
+                                st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
+                                st.rerun()
+                            else:
+                                st.error("เกิดข้อผิดพลาดในการลบข้อมูลจาก Supabase")
 
             if st.session_state.scroll_to_bottom:
                 components.html("""
@@ -1529,60 +1566,80 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 
                 display_finish_df = perf_df.sort_values(by="แผนงาน", ascending=True)[["ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน", "ลบ"]].copy().reset_index(drop=True)
 
-                tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
-                with tool_c1:
-                    if st.button("✅ เลือกทั้งหมด (งาน Finish)", use_container_width=True):
-                        st.session_state.finish_select_all = True
-                        st.rerun()
-                with tool_c2:
-                    if st.button("❌ ยกเลิกทั้งหมด (งาน Finish)", use_container_width=True):
-                        st.session_state.finish_select_all = False
-                        st.rerun()
-
-                edited_finish_table = st.data_editor(
-                    display_finish_df,
-                    key="editor_finish_jobs_table_mins_v12",
-                    column_order=[
-                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
-                        "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
-                        "ผลต่าง (ชม.)", "การประเมิน", "ลบ"
-                    ],
-                    column_config={
-                        "ID": None,
-                        "แผนงาน": st.column_config.TextColumn("PLAN NO.", disabled=True, width=85),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("DRAWING NO.", disabled=True, width=180),
-                        "จำนวน": st.column_config.NumberColumn("จำนวน", disabled=True, width=65, format="%d"),
-                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", disabled=True, width=120),
-                        "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", disabled=True, width=140),
-                        "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", disabled=True, width=145, format="DD/MM HH:mm"),
-                        "เสร็จจริง": st.column_config.DatetimeColumn("เวลาจบจริง", disabled=True, width=145, format="DD/MM HH:mm"),
-                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", disabled=True, width=90, format="%.2f"),
-                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", disabled=True, width=90, format="%.2f"),
-                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", disabled=True, width=80, format="%.2f"),
-                        "การประเมิน": st.column_config.TextColumn("ผลการผลิต", disabled=True, width=160),
-                        "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55),
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
-
-                c_del_act, _ = st.columns([3, 7])
-                with c_del_act:
-                    selected_rows_to_delete = edited_finish_table[edited_finish_table["ลบ"] == True]
-                    if st.button(f"🗑️ ลบรายการ Finish ที่เลือก ({len(selected_rows_to_delete)} รายการ)", type="secondary", disabled=(len(selected_rows_to_delete) == 0)):
-                        del_success = True
-                        for _, row in selected_rows_to_delete.iterrows():
-                            row_id = row.get("ID")
-                            if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
-                                if not delete_supabase_job(int(float(row_id))):
-                                    del_success = False
-                        if del_success:
-                            st.session_state.finish_select_all = False
-                            st.cache_data.clear()
-                            st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
+                if is_admin:
+                    tool_c1, tool_c2, _ = st.columns([1.5, 1.5, 7])
+                    with tool_c1:
+                        if st.button("✅ เลือกทั้งหมด (งาน Finish)", use_container_width=True):
+                            st.session_state.finish_select_all = True
                             st.rerun()
-                        else:
-                            st.error("เกิดข้อผิดพลาดในการลบข้อมูล")
+                    with tool_c2:
+                        if st.button("❌ ยกเลิกทั้งหมด (งาน Finish)", use_container_width=True):
+                            st.session_state.finish_select_all = False
+                            st.rerun()
+
+                    edited_finish_table = st.data_editor(
+                        display_finish_df,
+                        key="editor_finish_jobs_table_mins_v12",
+                        column_order=[
+                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
+                            "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)",
+                            "ผลต่าง (ชม.)", "การประเมิน", "ลบ"
+                        ],
+                        column_config={
+                            "ID": None,
+                            "แผนงาน": st.column_config.TextColumn("PLAN NO.", disabled=True, width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("DRAWING NO.", disabled=True, width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", disabled=True, width=65, format="%d"),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", disabled=True, width=120),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", disabled=True, width=140),
+                            "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", disabled=True, width=145, format="DD/MM HH:mm"),
+                            "เสร็จจริง": st.column_config.DatetimeColumn("เวลาจบจริง", disabled=True, width=145, format="DD/MM HH:mm"),
+                            "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", disabled=True, width=90, format="%.2f"),
+                            "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", disabled=True, width=90, format="%.2f"),
+                            "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", disabled=True, width=80, format="%.2f"),
+                            "การประเมิน": st.column_config.TextColumn("ผลการผลิต", disabled=True, width=160),
+                            "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+
+                    c_del_act, _ = st.columns([3, 7])
+                    with c_del_act:
+                        selected_rows_to_delete = edited_finish_table[edited_finish_table["ลบ"] == True]
+                        if st.button(f"🗑️ ลบรายการ Finish ที่เลือก ({len(selected_rows_to_delete)} รายการ)", type="secondary", disabled=(len(selected_rows_to_delete) == 0)):
+                            del_success = True
+                            for _, row in selected_rows_to_delete.iterrows():
+                                row_id = row.get("ID")
+                                if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
+                                    if not delete_supabase_job(int(float(row_id))):
+                                        del_success = False
+                            if del_success:
+                                st.session_state.finish_select_all = False
+                                st.cache_data.clear()
+                                st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
+                                st.rerun()
+                            else:
+                                st.error("เกิดข้อผิดพลาดในการลบข้อมูล")
+                else:
+                    st.dataframe(
+                        display_finish_df[[c for c in display_finish_df.columns if c not in ["ID", "ลบ"]]],
+                        column_config={
+                            "แผนงาน": st.column_config.TextColumn("PLAN NO.", width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("DRAWING NO.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=120),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", width=140),
+                            "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", width=145, format="DD/MM HH:mm"),
+                            "เสร็จจริง": st.column_config.DatetimeColumn("เวลาจบจริง", width=145, format="DD/MM HH:mm"),
+                            "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=90, format="%.2f"),
+                            "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=90, format="%.2f"),
+                            "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", width=80, format="%.2f"),
+                            "การประเมิน": st.column_config.TextColumn("ผลการผลิต", width=160),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
 
                 st.divider()
 
@@ -1796,18 +1853,30 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             with cost_col1:
                 st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
-                edited_rates = st.data_editor(
-                    st.session_state.machine_rates,
-                    key="editor_machine_rates_full_17_v12",
-                    column_config={
-                        "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
-                        "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
-                    },
-                    use_container_width=True,
-                    hide_index=True
-                )
-                st.session_state.machine_rates = edited_rates
-                rate_map = dict(zip(edited_rates["เครื่องจักร"], edited_rates["เรตราคา (บาท/ชม.)"]))
+                if is_admin:
+                    edited_rates = st.data_editor(
+                        st.session_state.machine_rates,
+                        key="editor_machine_rates_full_17_v12",
+                        column_config={
+                            "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
+                            "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    st.session_state.machine_rates = edited_rates
+                    rate_map = dict(zip(edited_rates["เครื่องจักร"], edited_rates["เรตราคา (บาท/ชม.)"]))
+                else:
+                    st.dataframe(
+                        st.session_state.machine_rates,
+                        column_config={
+                            "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก"),
+                            "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", format="%d ฿")
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    rate_map = dict(zip(st.session_state.machine_rates["เครื่องจักร"], st.session_state.machine_rates["เรตราคา (บาท/ชม.)"]))
 
             with cost_col2:
                 if not finished_jobs_df.empty:
