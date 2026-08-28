@@ -60,25 +60,23 @@ def parse_flexible_datetime(dt_val):
     
     current_year = get_bangkok_now().year
 
-    # กรณีมีเครื่องหมายขีด - (เช่น 2026-09-01 10:50 หรือ 01-09-2026)
     if "-" in s:
         parts_dash = s.split(" ")[0].split("-")
-        if len(parts_dash) == 3 and len(parts_dash[0]) == 4: # YYYY-MM-DD
+        if len(parts_dash) == 3 and len(parts_dash[0]) == 4:
             dt_parsed = pd.to_datetime(s, errors='coerce')
             return dt_parsed.tz_localize(None) if (pd.notna(dt_parsed) and getattr(dt_parsed, 'tzinfo', None) is not None) else dt_parsed
 
-    # กรณีมีเครื่องหมาย / (บังคับให้วันขึ้นก่อนเสมอ Day/Month)
     if "/" in s:
         date_part = s.split(" ")[0]
         time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:00:00"
         parts = date_part.split("/")
         
-        if len(parts) == 2: # พิมพ์เช่น 01/09 หรือ 1/9
+        if len(parts) == 2:
             d, m = parts[0].zfill(2), parts[1].zfill(2)
             s_fixed = f"{current_year}-{m}-{d} {time_part}"
             dt_parsed = pd.to_datetime(s_fixed, errors='coerce')
             return dt_parsed
-        elif len(parts) == 3: # พิมพ์เช่น 01/09/2026 หรือ 01/09/26
+        elif len(parts) == 3:
             d, m, y = parts[0].zfill(2), parts[1].zfill(2), parts[2]
             if len(y) == 2: y = f"20{y}"
             s_fixed = f"{y}-{m}-{d} {time_part}"
@@ -94,14 +92,14 @@ def parse_flexible_datetime(dt_val):
 
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
-    if weekday == 6:  # วันอาทิตย์
+    if weekday == 6:
         return []
-    elif weekday == 5:  # วันเสาร์
+    elif weekday == 5:
         return [
             (datetime.combine(dt_date, time(8, 0)), datetime.combine(dt_date, time(12, 0))),
             (datetime.combine(dt_date, time(13, 0)), datetime.combine(dt_date, time(17, 0)))
         ]
-    else:  # จันทร์ - ศุกร์
+    else:
         return [
             (datetime.combine(dt_date, time(8, 0)), datetime.combine(dt_date, time(12, 0))),
             (datetime.combine(dt_date, time(13, 0)), datetime.combine(dt_date, time(20, 0)))
@@ -153,6 +151,22 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
             current_dt = w_end
 
     return segments, current_dt
+
+def calculate_working_hours_between(start_dt: datetime, end_dt: datetime) -> float:
+    """คำนวณเวลาการทำงานสุทธิระหว่าง 2 ช่วงเวลา โดยหักพักเที่ยงและวันหยุดออก"""
+    if start_dt >= end_dt:
+        return 0.0
+    total_sec = 0.0
+    cur_d = start_dt.date()
+    while cur_d <= end_dt.date():
+        windows = get_day_working_windows(cur_d)
+        for ws, we in windows:
+            s_overlap = max(start_dt, ws)
+            e_overlap = min(end_dt, we)
+            if s_overlap < e_overlap:
+                total_sec += (e_overlap - s_overlap).total_seconds()
+        cur_d += timedelta(days=1)
+    return total_sec / 3600.0
 
 # =========================================================
 # 1. การจัดการรูปภาพ (App Icon & Header Logo)
@@ -545,7 +559,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine
+# 5. Scheduling Engine (พร้อมแท่งแสดงสถานะ ⏳ รอรัน)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -609,7 +623,25 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                 (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m in MACHINE_LIST[:8])) and j["ready_at"] > cur_time
             ]
             if future_candidates:
-                m_available[earliest_m] = get_next_valid_work_time(min(future_candidates))
+                next_ready_target = get_next_valid_work_time(min(future_candidates))
+                
+                # คำนวณช่วงว่างรอรัน (Idle Time)
+                idle_work_hrs = calculate_working_hours_between(cur_time, next_ready_target)
+                if idle_work_hrs >= 0.2:
+                    gantt_records.append({
+                        "ข้อความบนแท่งกราฟ": f"⏳ รอรัน {idle_work_hrs:.1f} ชม.",
+                        "แผนงาน": "⏳ รอรัน (เครื่องว่าง)",
+                        "ชื่อ Drawing.": "ช่วงว่างรอขึ้นงานตามกำหนด",
+                        "จำนวน": "-",
+                        "ขั้นตอน (Step)": "รอขึ้นงานรอบถัดไป",
+                        "กิจกรรม": "⏳ รอรัน (เครื่องว่าง)",
+                        "เครื่องจักร": earliest_m,
+                        "วัสดุ": "-",
+                        "เวลาเริ่ม": cur_time,
+                        "เวลาเสร็จ": next_ready_target,
+                        "ระยะเวลา": f"{idle_work_hrs:.2f} ชม."
+                    })
+                m_available[earliest_m] = next_ready_target
             else:
                 m_available[earliest_m] = get_next_valid_work_time(cur_time + timedelta(minutes=15))
             continue
@@ -849,7 +881,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         next_available_start_found = False
 
         if len(sorted_groups) == 0:
-            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ (ทุกงานเสร็จสิ้นครบหมดแล้ว หรือยังไม่มีการระบุวันขึ้นงาน)")
+            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
         else:
             for group_idx, g_info in enumerate(sorted_groups, 1):
                 plan_code = g_info["plan_code"]
@@ -1654,17 +1686,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) + ปุ่มลัดวันนี้ / 3 วัน / 7 วัน
-            # =========================================================
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) + แสดงสถานะรอรัน
+            # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 
-                # คำนวณวันปัจจุบันและขอบเขตวันที่ทั้งหมด
                 today_date = get_bangkok_now().date()
                 gantt_min_date = df_gantt["เวลาเริ่ม"].min().date()
                 gantt_max_date = df_gantt["เวลาเสร็จ"].max().date()
 
-                # กำหนดค่าเริ่มต้นถ้ายังไม่เคยเลือก
                 if st.session_state.gantt_date_range is None:
                     st.session_state.gantt_date_range = (today_date, max(today_date + timedelta(days=7), gantt_max_date))
 
@@ -1722,6 +1752,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 color_target = "แผนงาน" if color_by_option == "แผนงาน (Plan Code)" else "กิจกรรม"
 
+                # สร้าง Map สีพิเศษสำหรับแท่งรอรัน
+                distinct_plans = [p for p in plot_gantt_df["แผนงาน"].unique() if p != "⏳ รอรัน (เครื่องว่าง)"]
+                plan_color_map = {}
+                palette = px.colors.qualitative.Bold
+                for idx, p_name in enumerate(distinct_plans):
+                    plan_color_map[p_name] = palette[idx % len(palette)]
+                plan_color_map["⏳ รอรัน (เครื่องว่าง)"] = "#CBD5E1"
+
                 fig = px.timeline(
                     plot_gantt_df,
                     x_start="เวลาเริ่ม",
@@ -1731,12 +1769,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     text="ข้อความบนแท่งกราฟ",
                     custom_data=["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "วัสดุ", "เริ่มแสดง", "เสร็จแสดง", "ระยะเวลา", "กิจกรรม"],
                     category_orders={"เครื่องจักร": display_machines},
-                    color_discrete_sequence=px.colors.qualitative.Bold if color_target == "แผนงาน" else None,
-                    color_discrete_map={
+                    color_discrete_map=plan_color_map if color_target == "แผนงาน" else {
                         "🔧 ตั้งเครื่อง / เซ็ตศูนย์": "#FF7A00",
                         "⚙️ งานปกติ": "#0284C7",
-                        "🔴 งานด่วน": "#EF4444"
-                    } if color_target == "กิจกรรม" else None
+                        "🔴 งานด่วน": "#EF4444",
+                        "⏳ รอรัน (เครื่องว่าง)": "#CBD5E1"
+                    }
                 )
                 
                 fig.update_traces(
@@ -1765,7 +1803,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     gridcolor="#E2E8F0"
                 )
                 
-                # คำนวณช่วงเวลาแกน X ให้ตรงกับวันที่เลือกอย่างแม่นยำ
                 if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
                     start_view = datetime.combine(selected_date_range[0], time(7, 30))
                     end_view = datetime.combine(selected_date_range[1], time(20, 30))
