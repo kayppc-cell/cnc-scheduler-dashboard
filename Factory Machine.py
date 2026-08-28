@@ -10,7 +10,7 @@ import requests
 import streamlit.components.v1 as components
 
 # =========================================================
-# 0. Timezone Helper (GMT+7) & Factory Shift Rules
+# 0. Timezone Helper (GMT+7) & Factory Shift Rules & Data Sanitizers
 # =========================================================
 def get_bangkok_now():
     try:
@@ -21,9 +21,33 @@ def get_bangkok_now():
 def get_bangkok_str():
     return get_bangkok_now().strftime("%Y-%m-%d %H:%M:%S")
 
+def safe_float(val, default=0.0):
+    try:
+        if pd.isna(val) or val is None or str(val).strip() in ["", "None", "nan", "NaN", "null"]:
+            return float(default)
+        f = float(val)
+        return float(default) if pd.isna(f) else f
+    except Exception:
+        return float(default)
+
+def safe_int(val, default=1):
+    try:
+        if pd.isna(val) or val is None or str(val).strip() in ["", "None", "nan", "NaN", "null"]:
+            return int(default)
+        f = float(val)
+        return int(default) if pd.isna(f) else int(f)
+    except Exception:
+        return int(default)
+
+def safe_str(val, default=""):
+    if pd.isna(val) or val is None:
+        return default
+    s = str(val).strip()
+    return default if s in ["", "None", "nan", "NaN", "null"] else s
+
 def parse_flexible_datetime(dt_val):
     """แปลงวันที่แบบบังคับให้ 'วัน' ขึ้นก่อนเสมอ (DD/MM/YYYY) ป้องกันเดือนสลับวัน 100%"""
-    if pd.isna(dt_val):
+    if pd.isna(dt_val) or dt_val is None:
         return None
     if isinstance(dt_val, (datetime, pd.Timestamp)):
         if getattr(dt_val, 'tzinfo', None) is not None:
@@ -31,7 +55,7 @@ def parse_flexible_datetime(dt_val):
         return dt_val
         
     s = str(dt_val).strip()
-    if s in ["", "None", "nan", "-"]:
+    if s in ["", "None", "nan", "NaN", "null", "-"]:
         return None
     
     current_year = get_bangkok_now().year
@@ -285,7 +309,7 @@ st.markdown("""
     .badge-drawing { background: #F0F9FF; color: #0369A1; border: 1px solid #BAE6FD; }
     .badge-qty { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; font-weight: 800; }
     .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
-    .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 700; }
+    .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 800; }
     .badge-urgent { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; font-weight: 800; }
     .badge-hold { background: #FFFBEB; color: #D97706; border: 1px solid #FCD34D; font-weight: 800; }
 
@@ -537,20 +561,17 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             
         j["ready_at"] = get_next_valid_work_time(dt_val.to_pydatetime() if isinstance(dt_val, pd.Timestamp) else dt_val)
 
-        try:
-            basic_mins = max(float(j.get("Basic (น.)", 0.0) or 0.0), 0.0)
-            prog_mins = max(float(j.get("โปรแกรม (น.)", 0.0) or 0.0), 0.0)
-            setup_mins = max(float(j.get("Setup (น.)", 15.0) or 15.0), 0.0)
-            
-            cut_mins = basic_mins + prog_mins
-            cut_hrs = (cut_mins / 60.0) if cut_mins > 0 else 0.01
-            
-            j["basic_mins"] = basic_mins
-            j["prog_mins"] = prog_mins
-            j["setup_mins"] = setup_mins
-            j["cut_hrs"] = cut_hrs
-        except (ValueError, TypeError):
-            j["basic_mins"], j["prog_mins"], j["setup_mins"], j["cut_hrs"] = 0.0, 0.0, 15.0, 0.01
+        basic_mins = safe_float(j.get("Basic (น.)"), 0.0)
+        prog_mins = safe_float(j.get("โปรแกรม (น.)"), 0.0)
+        setup_mins = safe_float(j.get("Setup (น.)"), 15.0)
+        
+        cut_mins = basic_mins + prog_mins
+        cut_hrs = (cut_mins / 60.0) if cut_mins > 0 else 0.01
+        
+        j["basic_mins"] = basic_mins
+        j["prog_mins"] = prog_mins
+        j["setup_mins"] = setup_mins
+        j["cut_hrs"] = cut_hrs
             
         j["is_urgent"] = "ด่วนแทรก" in str(j.get("ประเภทงาน", ""))
         j["remain_cut_hrs"] = j["cut_hrs"]
@@ -601,7 +622,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         setup_hrs = setup_mins / 60.0
         actual_cut_hrs = selected_job["remain_cut_hrs"]
         
-        raw_step = str(selected_job.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
+        raw_step = safe_str(selected_job.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ")
         if raw_step in ["", "None", "nan", "รันงาน"]:
             step_raw = "รอหน้าเครื่องระบุ"
         else:
@@ -656,7 +677,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
         summary_records.append({
             "ID": selected_job.get("ID", ""), "เครื่องจักร": earliest_m, "สถานะ": selected_job["สถานะงาน"],
             "ประเภทงาน": "🔴 งานด่วนแทรก" if selected_job["is_urgent"] else "🟢 งานปกติ",
-            "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name, "จำนวน": int(selected_job.get("จำนวน", 1) or 1),
+            "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name, "จำนวน": safe_int(selected_job.get("จำนวน"), 1),
             "วัสดุ": selected_job.get("วัสดุ", "-"), "ขั้นตอน (Step)": step_raw, "เวลาเริ่มจริง": setup_start,
             "เวลาเริ่ม Setup": setup_start.strftime("%d/%m %H:%M") if setup_mins > 0 else "-",
             "เวลาเริ่มขึ้นงาน": cut_start.strftime("%d/%m %H:%M"), "เวลาจบงาน": cut_end.strftime("%d/%m %H:%M"),
@@ -774,7 +795,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     "min_id": min_id
                 })
 
-        # เรียงตาม ความสำคัญ -> วัน-เวลาขึ้นงาน (วัน/เดือน/ปี) -> ID
         sorted_groups = sorted(
             group_meta, 
             key=lambda x: (
@@ -826,7 +846,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         next_available_start_found = False
 
         if len(sorted_groups) == 0:
-            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ (ทุกงานเสร็จสิ้นครบหมดแล้ว หรือยังไม่มีการระบุวันขึ้นงาน)")
+            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
         else:
             for group_idx, g_info in enumerate(sorted_groups, 1):
                 plan_code = g_info["plan_code"]
@@ -923,7 +943,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 c_btn_save, c_btn_resume = st.columns([1.5, 4])
                                 with c_btn_save:
                                     if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{s_id}", use_container_width=True):
-                                        update_payload = {"step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}"}
+                                        update_payload = {"step_name": safe_str(step_val, f"OP{idx*10}")}
                                         if update_supabase_job(s_id, update_payload):
                                             st.toast(f"บันทึกชื่อ Step {idx} เรียบร้อย!", icon="💾")
                                             st.rerun()
@@ -931,7 +951,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                     if st.button("▶️ ได้วัสดุใหม่แล้ว (Resume เริ่มรันต่อ)", key=f"btn_resume_{s_id}", type="primary", use_container_width=True):
                                         now_str = get_bangkok_str()
                                         update_payload = {
-                                            "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}" if s_name in ["", "รอหน้าเครื่องระบุ"] else s_name,
+                                            "step_name": safe_str(step_val, f"OP{idx*10}"),
                                             "status": "🟦 กำลังผลิต",
                                             "actual_start": now_str
                                         }
@@ -942,14 +962,14 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 c_btn_save, c_btn_hold, c_btn_finish = st.columns([1.5, 2.5, 2])
                                 with c_btn_save:
                                     if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{s_id}", use_container_width=True):
-                                        update_payload = {"step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}"}
+                                        update_payload = {"step_name": safe_str(step_val, f"OP{idx*10}")}
                                         if update_supabase_job(s_id, update_payload):
                                             st.toast(f"บันทึกชื่อ Step {idx} เรียบร้อย!", icon="💾")
                                             st.rerun()
                                 with c_btn_hold:
                                     if st.button("🛑 พักงาน (รอวัสดุใหม่)", key=f"btn_hold_{s_id}", use_container_width=True):
                                         update_payload = {
-                                            "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}",
+                                            "step_name": safe_str(step_val, f"OP{idx*10}"),
                                             "status": "🟨 พักงาน (รอวัสดุ)"
                                         }
                                         if update_supabase_job(s_id, update_payload):
@@ -978,7 +998,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 c_btn_save, c_btn_start, c_btn_finish = st.columns([1.5, 2, 2])
                                 with c_btn_save:
                                     if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{s_id}", use_container_width=True):
-                                        update_payload = {"step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}"}
+                                        update_payload = {"step_name": safe_str(step_val, f"OP{idx*10}")}
                                         if update_supabase_job(s_id, update_payload):
                                             st.toast(f"บันทึกชื่อ Step {idx} เรียบร้อย!", icon="💾")
                                             st.rerun()
@@ -987,7 +1007,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                         if st.button("🚀 Start (เริ่มจับเวลาจริง)", key=f"btn_start_step_{s_id}", type="primary", use_container_width=True):
                                             now_str = get_bangkok_str()
                                             update_payload = {
-                                                "step_name": step_val.strip() if step_val.strip() != "" else f"OP{idx*10}" if s_name in ["", "รอหน้าเครื่องระบุ"] else s_name,
+                                                "step_name": safe_str(step_val, f"OP{idx*10}"),
                                                 "status": "🟦 กำลังผลิต",
                                                 "actual_start": now_str
                                             }
@@ -1283,51 +1303,44 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         save_count = 0
                         for _, row in edited_jobs.iterrows():
                             raw_plan = row.get("แผนงาน")
-                            if pd.isna(raw_plan) or str(raw_plan).strip() in ["", "None", "nan"]:
+                            p_code = safe_str(raw_plan, "")
+                            if not p_code:
                                 continue
                             
-                            p_code = str(raw_plan).strip()
-                            raw_draw = row.get("ชื่อ Drawing.")
-                            d_name = "" if pd.isna(raw_draw) or str(raw_draw).strip() in ["None", "nan"] else str(raw_draw).strip()
+                            d_name = safe_str(row.get("ชื่อ Drawing."), "")
+                            qty_int = safe_int(row.get("จำนวน"), 1)
+                            mat_val = safe_str(row.get("วัสดุ"), "SS400")
+                            job_type_val = safe_str(row.get("ประเภทงาน"), "🟢 งานปกติ")
+                            step_val = safe_str(row.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ")
+                            machine_val = safe_str(row.get("เลือกเครื่องจักร"), "No.1 Awea")
+                            status_val = safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
+                            
+                            s_val = safe_float(row.get("Setup (น.)"), 15.0)
+                            b_val = safe_float(row.get("Basic (น.)"), 0.0)
+                            p_val = safe_float(row.get("โปรแกรม (น.)"), 120.0)
                             
                             raw_ready = row.get("วัน-เวลาขึ้นงาน")
                             dt_parsed = parse_flexible_datetime(raw_ready)
                             ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if dt_parsed is not None else None
                             
-                            step_val = str(row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
-                            if step_val in ["", "None", "nan"]:
-                                step_val = "รอหน้าเครื่องระบุ"
-
-                            try: qty_int = int(row.get("จำนวน", 1) or 1)
-                            except: qty_int = 1
-
-                            try: s_val = float(row.get("Setup (น.)", 15.0) or 15.0)
-                            except: s_val = 15.0
-                            
-                            try: b_val = float(row.get("Basic (น.)", 0.0) or 0.0)
-                            except: b_val = 0.0
-                            
-                            try: p_val = float(row.get("โปรแกรม (น.)", 0.0) or 0.0)
-                            except: p_val = 0.0
-
                             payload = {
                                 "plan_code": p_code,
                                 "drawing_name": d_name,
                                 "qty": qty_int,
-                                "material": str(row.get("วัสดุ", "SS400")),
-                                "job_type": str(row.get("ประเภทงาน", "🟢 งานปกติ")),
+                                "material": mat_val,
+                                "job_type": job_type_val,
                                 "step_name": step_val,
-                                "machine_name": str(row.get("เลือกเครื่องจักร", "No.1 Awea")),
+                                "machine_name": machine_val,
                                 "ready_at": ready_str,
                                 "setup_mins": s_val,
                                 "basic_hrs": b_val,
                                 "prog_hrs": p_val,
-                                "status": str(row.get("สถานะงาน", "🟧 รอคิวผลิต"))
+                                "status": status_val
                             }
                             
                             row_id = row.get("ID")
-                            if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
-                                update_supabase_job(int(row_id), payload)
+                            if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan", "NaN"] and float(row_id) > 0:
+                                update_supabase_job(int(float(row_id)), payload)
                             else:
                                 insert_supabase_job(payload)
                             save_count += 1
@@ -1344,7 +1357,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         for _, row in active_to_delete.iterrows():
                             row_id = row.get("ID")
                             if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
-                                if not delete_supabase_job(int(row_id)):
+                                if not delete_supabase_job(int(float(row_id))):
                                     del_success = False
                                     
                         if del_success:
@@ -1509,7 +1522,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         for _, row in selected_rows_to_delete.iterrows():
                             row_id = row.get("ID")
                             if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
-                                if not delete_supabase_job(int(row_id)):
+                                if not delete_supabase_job(int(float(row_id))):
                                     del_success = False
                         if del_success:
                             st.session_state.finish_select_all = False
