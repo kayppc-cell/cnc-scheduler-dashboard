@@ -392,7 +392,7 @@ ADMIN_PASSWORD = "pesadmin"
 VIEWER_PASSWORD = "pes1234"
 
 if "user_role" not in st.session_state:
-    st.session_state.user_role = None  # None, "admin", "viewer"
+    st.session_state.user_role = None
 
 if "current_view" not in st.session_state:
     st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
@@ -1537,7 +1537,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 3. รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง
+            # 3. รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (แสดงผลต่างเป็นนาที)
             # =====================================================
             if not finished_jobs_df.empty:
                 st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
@@ -1550,10 +1550,18 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     if pd.notna(s_real) and pd.notna(f_real):
                         diff_seconds = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
                         act_hrs = round(diff_seconds / 3600.0, 2)
-                        variance = round(act_hrs - r["เวลาแผน (ชม.)"], 2)
+                        variance_hrs = round(act_hrs - r["เวลาแผน (ชม.)"], 2)
+                        
+                        # คำนวณเป็นนาที (Minutes)
+                        diff_mins = round((diff_seconds / 60.0) - (r["เวลาแผน (ชม.)"] * 60.0))
+                        
                         actual_hrs_list.append(act_hrs)
-                        diff_list.append(variance)
-                        status_eval_list.append(f"🟢 เร็วกว่าแผน {abs(variance):.2f} ชม." if variance <= 0 else f"🔴 ช้ากว่าแผน +{variance:.2f} ชม.")
+                        diff_list.append(variance_hrs)
+                        
+                        if diff_mins <= 0:
+                            status_eval_list.append(f"🟢 เร็วกว่าแผน {abs(diff_mins):.0f} นาที")
+                        else:
+                            status_eval_list.append(f"🔴 ช้ากว่าแผน +{diff_mins:.0f} นาที")
                     else:
                         actual_hrs_list.append(None)
                         diff_list.append(None)
@@ -1597,7 +1605,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", disabled=True, width=90, format="%.2f"),
                             "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", disabled=True, width=90, format="%.2f"),
                             "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", disabled=True, width=80, format="%.2f"),
-                            "การประเมิน": st.column_config.TextColumn("ผลการผลิต", disabled=True, width=160),
+                            "การประเมิน": st.column_config.TextColumn("ผลการผลิต", disabled=True, width=170),
                             "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55),
                         },
                         hide_index=True,
@@ -1635,7 +1643,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=90, format="%.2f"),
                             "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=90, format="%.2f"),
                             "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", width=80, format="%.2f"),
-                            "การประเมิน": st.column_config.TextColumn("ผลการผลิต", width=160),
+                            "การประเมิน": st.column_config.TextColumn("ผลการผลิต", width=170),
                         },
                         hide_index=True,
                         use_container_width=True
