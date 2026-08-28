@@ -322,6 +322,7 @@ st.markdown("""
     .badge-qty { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; font-weight: 800; }
     .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
     .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 800; }
+    .badge-finish-date { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; font-weight: 800; }
     .badge-urgent { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; font-weight: 800; }
     .badge-hold { background: #FFFBEB; color: #D97706; border: 1px solid #FCD34D; font-weight: 800; }
 
@@ -713,6 +714,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             "วัสดุ": selected_job.get("วัสดุ", "-"), "ขั้นตอน (Step)": step_raw, "เวลาเริ่มจริง": setup_start,
             "เวลาเริ่ม Setup": setup_start.strftime("%d/%m %H:%M") if setup_mins > 0 else "-",
             "เวลาเริ่มขึ้นงาน": cut_start.strftime("%d/%m %H:%M"), "เวลาจบงาน": cut_end.strftime("%d/%m %H:%M"),
+            "เวลาจบงาน_DT": cut_end,
             "Setup (น.)": int(setup_mins), "Basic (น.)": int(selected_job["basic_mins"]),
             "โปรแกรม (น.)": int(selected_job["prog_mins"]), "รวม (ชม.)": round(total_cycle, 2)
         })
@@ -763,7 +765,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (แสดงป้ายกำหนดขึ้นงานและจบงาน)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -779,6 +781,17 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             ["🔹 รันทีละคิว (Piece by Piece)", "📦 รันรวมหลายงานพร้อมกัน (Batch Processing)"],
             horizontal=True
         )
+
+    # ดึงตารางแผนงานจำลองเพื่อหาเวลาจบงานตามแผน
+    planned_finish_map = {}
+    if not df_all.empty:
+        _, df_summary_plan, _, _ = calculate_shop_schedule(df_all, get_bangkok_now().replace(tzinfo=None))
+        if not df_summary_plan.empty:
+            for _, s_row in df_summary_plan.iterrows():
+                key_pair = (str(s_row["แผนงาน"]), str(s_row["ชื่อ Drawing."]))
+                f_dt = s_row.get("เวลาจบงาน_DT")
+                if key_pair not in planned_finish_map or (pd.notna(f_dt) and f_dt > planned_finish_map[key_pair]):
+                    planned_finish_map[key_pair] = f_dt
 
     if not df_all.empty:
         m_all_jobs = df_all[
@@ -892,10 +905,26 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 mat_val = first_step_info.get('วัสดุ', '-')
                 qty_val = int(first_step_info.get('จำนวน', 1) or 1)
 
+                # ดึงวัน-เวลาขึ้นงาน
                 if pd.notna(ready_at_dt):
                     ready_display_str = ready_at_dt.strftime("%d/%m/%Y %H:%M น.")
                 else:
                     ready_display_str = "ยังไม่ระบุเวลา"
+
+                # ดึงวัน-เวลาจบงานตามแผน
+                plan_finish_dt = planned_finish_map.get((str(plan_code), str(drawing_code)))
+                if plan_finish_dt is not None and pd.notna(plan_finish_dt):
+                    finish_plan_display_str = plan_finish_dt.strftime("%d/%m/%Y %H:%M น.")
+                else:
+                    # คำนวณเบื้องต้นหากไม่มีในผัง
+                    if pd.notna(ready_at_dt):
+                        tot_hrs = 0.0
+                        for _, s_r in plan_steps.iterrows():
+                            tot_hrs += (safe_float(s_r.get("Setup (น.)"), 15) + safe_float(s_r.get("Basic (น.)"), 0) + safe_float(s_r.get("โปรแกรม (น.)"), 120)) / 60.0
+                        _, est_finish = add_work_time_with_shift(ready_at_dt, tot_hrs)
+                        finish_plan_display_str = est_finish.strftime("%d/%m/%Y %H:%M น.")
+                    else:
+                        finish_plan_display_str = "-"
 
                 if is_hold:
                     header_box_class = "op-job-header op-job-header-hold"
@@ -910,7 +939,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     badge_gradient = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
                     status_badge_html = ''
 
-                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {group_idx}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>กำหนดขึ้นงาน:</b> {ready_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
+                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {group_idx}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>กำหนดขึ้นงาน:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>กำหนดจบงานตามแผน:</b> {finish_plan_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
                 st.markdown(card_header_html, unsafe_allow_html=True)
 
                 st.markdown(f"**📋 รายการขั้นตอนและปุ่มควบคุม ({plan_code} | {drawing_code}):**")
@@ -1541,7 +1570,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         df_display["เครื่องจักร"].astype(str).str.lower().str.contains(q_wo)
                     ]
 
-                display_cols = [c for c in df_display.columns if c != "เวลาเริ่มจริง" and c != "ID"]
+                display_cols = [c for c in df_display.columns if c not in ["เวลาเริ่มจริง", "ID", "เวลาจบงาน_DT"]]
 
                 st.dataframe(
                     df_display[display_cols],
@@ -1815,13 +1844,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     gridcolor="#E2E8F0"
                 )
 
-                # วาดแถบไฮไลต์แนวตั้ง: พักเที่ยง 12:00-13:00 น. และวันอาทิตย์ (หยุดทำการ)
                 if not plot_gantt_df.empty:
                     cur_d = (start_view.date() - timedelta(days=2))
                     max_scan_d = (end_view.date() + timedelta(days=2))
                     
                     while cur_d <= max_scan_d:
-                        # 1. ไฮไลต์วันอาทิตย์
                         if cur_d.weekday() == 6:
                             sun_start = datetime.combine(cur_d, time(0, 0))
                             sun_end = datetime.combine(cur_d + timedelta(days=1), time(0, 0))
@@ -1833,7 +1860,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 annotation_font_size=10, annotation_font_color="#DC2626"
                             )
                         else:
-                            # 2. ไฮไลต์พักเที่ยง (จันทร์ - เสาร์)
                             lunch_start = datetime.combine(cur_d, time(12, 0))
                             lunch_end = datetime.combine(cur_d, time(13, 0))
                             fig.add_vrect(
