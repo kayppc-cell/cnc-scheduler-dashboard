@@ -46,7 +46,6 @@ def safe_str(val, default=""):
     return default if s in ["", "None", "nan", "NaN", "null"] else s
 
 def parse_flexible_datetime(dt_val):
-    """แปลงวันที่แบบบังคับให้ 'วัน' ขึ้นก่อนเสมอ (DD/MM/YYYY) ป้องกันเดือนสลับวัน 100%"""
     if pd.isna(dt_val) or dt_val is None:
         return None
     if isinstance(dt_val, (datetime, pd.Timestamp)):
@@ -153,7 +152,6 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
     return segments, current_dt
 
 def calculate_working_hours_between(start_dt: datetime, end_dt: datetime) -> float:
-    """คำนวณเวลาการทำงานสุทธิระหว่าง 2 ช่วงเวลา โดยหักพักเที่ยงและวันหยุดออก"""
     if start_dt >= end_dt:
         return 0.0
     total_sec = 0.0
@@ -559,7 +557,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (พร้อมแท่งแสดงสถานะ ⏳ รอรัน)
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -625,7 +623,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             if future_candidates:
                 next_ready_target = get_next_valid_work_time(min(future_candidates))
                 
-                # คำนวณช่วงว่างรอรัน (Idle Time)
                 idle_work_hrs = calculate_working_hours_between(cur_time, next_ready_target)
                 if idle_work_hrs >= 0.2:
                     gantt_records.append({
@@ -1686,7 +1683,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) + แสดงสถานะรอรัน
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) + แสดงแถบพักเที่ยงและวันหยุด
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
@@ -1752,7 +1749,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 color_target = "แผนงาน" if color_by_option == "แผนงาน (Plan Code)" else "กิจกรรม"
 
-                # สร้าง Map สีพิเศษสำหรับแท่งรอรัน
                 distinct_plans = [p for p in plot_gantt_df["แผนงาน"].unique() if p != "⏳ รอรัน (เครื่องว่าง)"]
                 plan_color_map = {}
                 palette = px.colors.qualitative.Bold
@@ -1819,20 +1815,33 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     gridcolor="#E2E8F0"
                 )
 
+                # วาดแถบไฮไลต์แนวตั้ง: พักเที่ยง 12:00-13:00 น. และวันอาทิตย์ (หยุดทำการ)
                 if not plot_gantt_df.empty:
-                    min_dt = plot_gantt_df["เวลาเริ่ม"].min()
-                    max_dt = plot_gantt_df["เวลาเสร็จ"].max()
-                    cur_d = min_dt.date()
-                    while cur_d <= max_dt.date() + timedelta(days=1):
+                    cur_d = (start_view.date() - timedelta(days=2))
+                    max_scan_d = (end_view.date() + timedelta(days=2))
+                    
+                    while cur_d <= max_scan_d:
+                        # 1. ไฮไลต์วันอาทิตย์
                         if cur_d.weekday() == 6:
                             sun_start = datetime.combine(cur_d, time(0, 0))
                             sun_end = datetime.combine(cur_d + timedelta(days=1), time(0, 0))
                             fig.add_vrect(
                                 x0=sun_start, x1=sun_end,
-                                fillcolor="#F8FAFC", opacity=0.8,
-                                layer="below", line_width=1, line_color="#E2E8F0",
+                                fillcolor="#FEE2E2", opacity=0.45,
+                                layer="below", line_width=1, line_color="#FECACA",
                                 annotation_text="🛑 วันอาทิตย์ (หยุด)", annotation_position="top left",
-                                annotation_font_size=10, annotation_font_color="#94A3B8"
+                                annotation_font_size=10, annotation_font_color="#DC2626"
+                            )
+                        else:
+                            # 2. ไฮไลต์พักเที่ยง (จันทร์ - เสาร์)
+                            lunch_start = datetime.combine(cur_d, time(12, 0))
+                            lunch_end = datetime.combine(cur_d, time(13, 0))
+                            fig.add_vrect(
+                                x0=lunch_start, x1=lunch_end,
+                                fillcolor="#FEF3C7", opacity=0.55,
+                                layer="below", line_width=1, line_color="#FDE68A",
+                                annotation_text="🍱 พักเที่ยง", annotation_position="top left",
+                                annotation_font_size=9, annotation_font_color="#D97706"
                             )
                         cur_d += timedelta(days=1)
 
@@ -1862,11 +1871,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     </div>
                     <div class="schedule-pill">
                         <span style="font-size:16px;">🍱</span>
-                        <span style="color:#D97706;"><b>พักเบรกเที่ยง:</b> 12:00 – 13:00 น. (หยุดพักเครื่อง)</span>
+                        <span style="color:#D97706;"><b>พักเบรกเที่ยง:</b> 12:00 – 13:00 น. (แถบสีส้มอ่อน)</span>
                     </div>
                     <div class="schedule-pill">
                         <span style="font-size:16px;">🛑</span>
-                        <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ (ข้ามไปวันจันทร์ 08:00 น.)</span>
+                        <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ (แถบสีแดงอ่อน)</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
