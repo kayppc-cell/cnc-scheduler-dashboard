@@ -285,7 +285,7 @@ st.markdown("""
     .badge-drawing { background: #F0F9FF; color: #0369A1; border: 1px solid #BAE6FD; }
     .badge-qty { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; font-weight: 800; }
     .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
-    .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 800; }
+    .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 700; }
     .badge-urgent { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; font-weight: 800; }
     .badge-hold { background: #FFFBEB; color: #D97706; border: 1px solid #FCD34D; font-weight: 800; }
 
@@ -710,7 +710,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (แสดงป้ายวัน-เวลาขึ้นงาน DD/MM/YYYY)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -1168,7 +1168,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางแก้ไข/เพิ่มแถวข้อมูล)", expanded=True):
                 st.markdown("**📌 เครื่องมือจัดการตาราง:**")
-                tool_col1, tool_col2, _ = st.columns([2.5, 4, 3.5])
+                tool_col1, tool_col2, tool_search = st.columns([2.5, 3.5, 4])
                 
                 with tool_col1:
                     btn_c1, btn_c2 = st.columns(2)
@@ -1214,8 +1214,27 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     st.toast("แทรกแถวใหม่เข้าระบบสำเร็จ!", icon="🚀")
                                     st.rerun()
 
+                with tool_search:
+                    search_query_editor = st.text_input(
+                        "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร):",
+                        placeholder="พิมพ์เพื่อกรองข้อมูล...",
+                        key="search_active_editor_input"
+                    )
+
+                # ทำการกรองข้อมูลตามคำค้นหา
+                if search_query_editor.strip() != "":
+                    q = search_query_editor.strip().lower()
+                    display_editor_df = active_jobs_editor_df[
+                        active_jobs_editor_df["แผนงาน"].astype(str).str.lower().str.contains(q) |
+                        active_jobs_editor_df["ชื่อ Drawing."].astype(str).str.lower().str.contains(q) |
+                        active_jobs_editor_df["วัสดุ"].astype(str).str.lower().str.contains(q) |
+                        active_jobs_editor_df["เลือกเครื่องจักร"].astype(str).str.lower().str.contains(q)
+                    ].copy()
+                else:
+                    display_editor_df = active_jobs_editor_df.copy()
+
                 edited_jobs = st.data_editor(
-                    active_jobs_editor_df,
+                    display_editor_df,
                     key="editor_cnc_jobs_grid_main",
                     num_rows="dynamic",
                     column_order=[
@@ -1365,12 +1384,29 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =====================================================
-            # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)
+            # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet) + แถบค้นหา
             # =====================================================
             if not df_summary.empty:
                 st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
 
+                wo_search_col, _ = st.columns([4, 6])
+                with wo_search_col:
+                    search_query_wo = st.text_input(
+                        "🔍 ค้นหาในใบจ่ายคิวงาน (แผนงาน, Drawing, เครื่องจักร):",
+                        placeholder="พิมพ์เพื่อค้นหาคิวงาน...",
+                        key="search_wo_sheet_input"
+                    )
+
                 df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
+
+                if search_query_wo.strip() != "":
+                    q_wo = search_query_wo.strip().lower()
+                    df_display = df_display[
+                        df_display["แผนงาน"].astype(str).str.lower().str.contains(q_wo) |
+                        df_display["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_wo) |
+                        df_display["เครื่องจักร"].astype(str).str.lower().str.contains(q_wo)
+                    ]
+
                 display_cols = [c for c in df_display.columns if c != "เวลาเริ่มจริง" and c != "ID"]
 
                 st.dataframe(
