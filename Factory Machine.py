@@ -1300,7 +1300,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
                 with c_save:
                     if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
-                        save_count = 0
+                        # สร้าง Map ของข้อมูลเดิมในฐานข้อมูลเพื่อเช็ค Diff
+                        db_original_map = {}
+                        for _, orig_row in df_db.iterrows():
+                            if pd.notna(orig_row.get("ID")):
+                                db_original_map[int(orig_row["ID"])] = orig_row
+
+                        saved_inserts = 0
+                        saved_updates = 0
+
                         for _, row in edited_jobs.iterrows():
                             raw_plan = row.get("แผนงาน")
                             p_code = safe_str(raw_plan, "")
@@ -1339,15 +1347,48 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             }
                             
                             row_id = row.get("ID")
-                            if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan", "NaN"] and float(row_id) > 0:
-                                update_supabase_job(int(float(row_id)), payload)
+                            # ถ้าเป็นแถวใหม่ (ไม่มี ID) ให้ทำการ INSERT ทันที
+                            if pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan", "NaN", "null"] or float(row_id) <= 0:
+                                if insert_supabase_job(payload):
+                                    saved_inserts += 1
                             else:
-                                insert_supabase_job(payload)
-                            save_count += 1
+                                # ถ้าเป็นแถวเดิม ให้เช็คว่ามีการแก้ไขจริงหรือไม่ก่อนส่ง PATCH
+                                target_id = int(float(row_id))
+                                orig = db_original_map.get(target_id)
+                                
+                                is_changed = False
+                                if orig is None:
+                                    is_changed = True
+                                else:
+                                    if safe_str(orig.get("แผนงาน")) != p_code or \
+                                       safe_str(orig.get("ชื่อ Drawing.")) != d_name or \
+                                       safe_int(orig.get("จำนวน")) != qty_int or \
+                                       safe_str(orig.get("วัสดุ")) != mat_val or \
+                                       safe_str(orig.get("ประเภทงาน")) != job_type_val or \
+                                       safe_str(orig.get("ขั้นตอน (Step)")) != step_val or \
+                                       safe_str(orig.get("เลือกเครื่องจักร")) != machine_val or \
+                                       safe_str(orig.get("สถานะงาน")) != status_val or \
+                                       safe_float(orig.get("Setup (น.)")) != s_val or \
+                                       safe_float(orig.get("Basic (น.)")) != b_val or \
+                                       safe_float(orig.get("โปรแกรม (น.)")) != p_val:
+                                        is_changed = True
+                                    else:
+                                        orig_ready_dt = parse_flexible_datetime(orig.get("วัน-เวลาขึ้นงาน"))
+                                        orig_ready_str = orig_ready_dt.strftime("%Y-%m-%d %H:%M:%S") if orig_ready_dt is not None else None
+                                        if orig_ready_str != ready_str:
+                                            is_changed = True
+
+                                if is_changed:
+                                    if update_supabase_job(target_id, payload):
+                                        saved_updates += 1
 
                         st.cache_data.clear()
                         st.session_state.scroll_to_bottom = True
-                        st.success(f"บันทึกข้อมูลเรียบร้อยแล้ว ({save_count} รายการ)")
+                        total_affected = saved_inserts + saved_updates
+                        if total_affected > 0:
+                            st.success(f"บันทึกข้อมูลสำเร็จ! (เพิ่มใหม่ {saved_inserts} รายการ, แก้ไข {saved_updates} รายการ)")
+                        else:
+                            st.info("ไม่มีข้อมูลเปลี่ยนแปลงที่ต้องบันทึก")
                         st.rerun()
 
                 with c_del_top:
