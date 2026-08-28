@@ -512,7 +512,6 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
                 
-                # แปลงวัน-เวลาขึ้นงานให้เป็น Naive Datetime แท้ๆ 100%
                 if "ready_at" in df.columns:
                     df["ready_at"] = df["ready_at"].apply(parse_flexible_datetime)
                 if "actual_start" in df.columns:
@@ -1249,9 +1248,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         active_jobs_editor_df["ชื่อ Drawing."].astype(str).str.lower().str.contains(q) |
                         active_jobs_editor_df["วัสดุ"].astype(str).str.lower().str.contains(q) |
                         active_jobs_editor_df["เลือกเครื่องจักร"].astype(str).str.lower().str.contains(q)
-                    ].copy()
+                    ].copy().reset_index(drop=True)
                 else:
-                    display_editor_df = active_jobs_editor_df.copy()
+                    display_editor_df = active_jobs_editor_df.copy().reset_index(drop=True)
 
                 edited_jobs = st.data_editor(
                     display_editor_df,
@@ -1263,7 +1262,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                     ],
                     column_config={
-                        "ID": st.column_config.Column(required=False),
+                        "ID": None,
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
                         "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
                         "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, min_value=1, max_value=10000, step=1, format="%d", default=1),
@@ -1304,7 +1303,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         db_original_map = {}
                         for _, orig_row in df_db.iterrows():
                             if pd.notna(orig_row.get("ID")):
-                                db_original_map[int(orig_row["ID"])] = orig_row
+                                db_original_map[int(float(orig_row["ID"]))] = orig_row
 
                         saved_inserts = 0
                         saved_updates = 0
@@ -1347,12 +1346,24 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             }
                             
                             row_id = row.get("ID")
-                            # ถ้าเป็นแถวใหม่ (ไม่มี ID) ให้ทำการ INSERT ทันที
-                            if pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan", "NaN", "null"] or float(row_id) <= 0:
+                            
+                            # ตรวจสอบว่าเป็นแถวใหม่หรือไม่ (ถ้าไม่มี ID ถือเป็นแถวใหม่ทันที)
+                            is_new_row = False
+                            if pd.isna(row_id) or row_id is None:
+                                is_new_row = True
+                            elif str(row_id).strip() in ["", "None", "nan", "NaN", "null"]:
+                                is_new_row = True
+                            else:
+                                try:
+                                    if float(row_id) <= 0:
+                                        is_new_row = True
+                                except Exception:
+                                    is_new_row = True
+
+                            if is_new_row:
                                 if insert_supabase_job(payload):
                                     saved_inserts += 1
                             else:
-                                # ถ้าเป็นแถวเดิม ให้เช็คว่ามีการแก้ไขจริงหรือไม่ก่อนส่ง PATCH
                                 target_id = int(float(row_id))
                                 orig = db_original_map.get(target_id)
                                 
