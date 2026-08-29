@@ -436,16 +436,29 @@ st.markdown("""
         background: linear-gradient(135deg, #065F46 0%, #059669 100%);
         border-left: 8px solid #34D399;
     }
+    
+    /* Animation ไฟกระพริบการ์ด TV เมื่อใกล้เสร็จ หรือเกินเวลาแผน */
+    @keyframes pulse-card-warning {
+        0% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); opacity: 1; }
+        50% { box-shadow: 0 0 24px rgba(245, 158, 11, 0.9); opacity: 0.85; }
+        100% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); opacity: 1; }
+    }
+    @keyframes pulse-card-late {
+        0% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); opacity: 1; }
+        50% { box-shadow: 0 0 30px rgba(239, 68, 68, 1); opacity: 0.8; }
+        100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); opacity: 1; }
+    }
     .tv-card-warning {
         background: linear-gradient(135deg, #B45309 0%, #D97706 100%) !important;
         border-left: 8px solid #FCD34D !important;
-        box-shadow: 0 0 15px rgba(245, 158, 11, 0.4) !important;
+        animation: pulse-card-warning 1.8s infinite ease-in-out !important;
     }
     .tv-card-late {
         background: linear-gradient(135deg, #991B1B 0%, #DC2626 100%) !important;
         border-left: 8px solid #F87171 !important;
-        box-shadow: 0 0 15px rgba(239, 68, 68, 0.5) !important;
+        animation: pulse-card-late 1.2s infinite ease-in-out !important;
     }
+
     .tv-card-hold {
         background: linear-gradient(135deg, #92400E 0%, #D97706 100%);
         border-left: 8px solid #FBBF24;
@@ -1110,12 +1123,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 with c_btn_finish:
                                     if st.button("🏁 Finish (จบงานจริง)", key=f"btn_finish_step_{s_id}", type="primary", use_container_width=True):
                                         now_str = get_bangkok_str()
-                                        
                                         finish_payload = {
                                             "status": "🟩 เสร็จสิ้นแล้ว",
                                             "actual_finish": now_str
                                         }
-                                        
                                         if update_supabase_job(s_id, finish_payload):
                                             st.toast(f"บันทึกเวลาจบจริง {s_name} เรียบร้อย!", icon="🏁")
                                             st.rerun()
@@ -1972,7 +1983,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
                     start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
-                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
+                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 else:
                     start_view = datetime.combine(gantt_min_date, dtime(7, 30))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
@@ -2518,7 +2529,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     df_live = fetch_jobs_from_supabase()
 
     now_bangkok = get_bangkok_now()
-    cur_time_str = now_bangkok.strftime("%H:%M:%S")
     cur_date_str = now_bangkok.strftime("%d/%m/%Y")
 
     # คำนวณแผนจบงานสำหรับจอ TV
@@ -2553,7 +2563,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 elapsed_min = int((now_bangkok.replace(tzinfo=None) - pd.to_datetime(s_start)).total_seconds() / 60.0)
                 elapsed_txt = f"{elapsed_min} นาที ({elapsed_min/60.0:.1f} ชม.)"
             
-            # เช็คเวลาเสร็จสิ้นตามแผนสำหรับเปลี่ยนสีการ์ด TV
+            # เช็คเวลาเสร็จสิ้นตามแผนสำหรับเปลี่ยนสีการ์ด TV และกระพริบเตือน
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:6px;">กำลังรันงาน</b>'
             
@@ -2562,10 +2572,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 diff_mins = (f_dt - now_bangkok.replace(tzinfo=None)).total_seconds() / 60.0
                 if diff_mins < 0:
                     tv_card_cls = "tv-card tv-card-late"
-                    badge_html = '<span class="tv-pulse-dot" style="background-color:#F87171;"></span> <b style="color:#FCA5A5; margin-left:6px;">🔴 เกินเวลาแผน</b>'
+                    badge_html = '<span class="tv-pulse-dot" style="background-color:#F87171;"></span> <b style="color:#FFFFFF; margin-left:6px;">🔴 เกินเวลาแผน</b>'
                 elif 0 <= diff_mins <= 60:
                     tv_card_cls = "tv-card tv-card-warning"
-                    badge_html = '<span class="tv-pulse-dot" style="background-color:#FCD34D;"></span> <b style="color:#FDE68A; margin-left:6px;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
+                    badge_html = '<span class="tv-pulse-dot" style="background-color:#FCD34D;"></span> <b style="color:#FFFFFF; margin-left:6px;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
 
             machine_status_cards.append({
                 "machine": m,
@@ -2609,20 +2619,20 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "time_info": f"📋 คิวรอ: {len(waiting_jobs)} งาน"
             })
 
-    # Header แผงควบคุมสด TV
+    # Header แผงควบคุมสด TV พร้อมนาฬิกาวินาทีเดินสด (Live Real-time Clock)
     st.markdown(f"""
     <div style="background:#0F172A; border:2px solid #1E3A8A; border-radius:16px; padding:14px 22px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
         <div>
             <div style="font-size:22px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
                 <span>📺 PES SHOP FLOOR LIVE MONITOR</span>
-                <span style="font-size:12px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:3px 10px; border-radius:20px;">Auto-Refresh (30s)</span>
+                <span style="font-size:12px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:3px 10px; border-radius:20px;">Auto-Refresh 30s</span>
             </div>
             <div style="color:#94A3B8; font-size:13px; margin-top:2px;">
                 สถานะการผลิต 17 สถานีงานแบบ Real-time | ประจำวันที่ <b>{cur_date_str}</b>
             </div>
         </div>
         <div style="text-align:right;">
-            <div style="font-size:28px; font-weight:900; color:#F8FAFC; font-family:monospace; letter-spacing:1px;">{cur_time_str} น.</div>
+            <div id="live-tv-clock" style="font-size:28px; font-weight:900; color:#F8FAFC; font-family:monospace; letter-spacing:1px;">--:--:-- น.</div>
             <div style="font-size:13px; font-weight:bold;">
                 <span style="color:#34D399;">🟢 กำลังรัน {running_machines_count}</span> | 
                 <span style="color:#FBBF24;">🟡 พักงาน {hold_machines_count}</span> | 
@@ -2656,9 +2666,22 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    # Auto-refresh สำหรับหน้าจอ TV โดยเฉพาะ
+    # JavaScript นาฬิกาเดินวินาทีสด + Auto Reload ดึงข้อมูลใหม่ทุก 30 วินาที
     components.html("""
     <script>
+        function updateLiveClock() {
+            const now = new Date();
+            const hrs = String(now.getHours()).padStart(2, '0');
+            const mins = String(now.getMinutes()).padStart(2, '0');
+            const secs = String(now.getSeconds()).padStart(2, '0');
+            const clockEl = window.parent.document.getElementById('live-tv-clock');
+            if (clockEl) {
+                clockEl.innerText = `${hrs}:${mins}:${secs} น.`;
+            }
+        }
+        setInterval(updateLiveClock, 1000);
+        updateLiveClock();
+
         setTimeout(function() {
             const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
             if (radioBtns && radioBtns.length >= 4 && radioBtns[3].checked) {
