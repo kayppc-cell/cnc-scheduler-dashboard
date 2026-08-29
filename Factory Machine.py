@@ -1179,6 +1179,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
                     if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num}", key=f"btn_add_step_{plan_code}_{drawing_code}_{group_idx}", type="secondary", use_container_width=True):
                         now_str = get_bangkok_str()
+                        
+                        # ดึงเวลาแผนมาตรฐาน หรือใช้เวลาตาม Step แรกของใบสั่งผลิตนั้น
+                        base_setup = safe_float(first_step_info.get("Setup (น.)"), 10.0)
+                        base_basic = safe_float(first_step_info.get("Basic (น.)"), 0.0)
+                        base_prog = safe_float(first_step_info.get("โปรแกรม (น.)"), 120.0)
+                        
                         new_payload = {
                             "plan_code": str(plan_code),
                             "drawing_name": str(drawing_code),
@@ -1188,9 +1194,9 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             "step_name": new_step_input.strip() if new_step_input.strip() != "" else default_next_step_label,
                             "machine_name": selected_m,
                             "ready_at": now_str,
-                            "setup_mins": 0.0,
-                            "basic_hrs": 0.0,
-                            "prog_hrs": 0.0,
+                            "setup_mins": base_setup,
+                            "basic_hrs": base_basic,
+                            "prog_hrs": base_prog,
                             "status": "🟧 รอคิวผลิต"
                         }
                         if insert_supabase_job(new_payload):
