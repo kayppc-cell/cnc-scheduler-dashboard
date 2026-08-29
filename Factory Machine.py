@@ -1168,7 +1168,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             st.rerun()
                 
                 st.write("")
-
     else:
         st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
 
@@ -2422,7 +2421,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 # VIEW 4: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
-    # ล้างแคชเพื่อให้ดึงข้อมูลสดจาก Supabase เสมอ
     st.cache_data.clear()
     df_live = fetch_jobs_from_supabase()
 
@@ -2540,6 +2538,5 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    # หน่วงเวลา 30 วินาทีแล้วสั่ง rerun เฉพาะใน Streamlit (หน้าจอไม่เด้งกลับหน้าแรก)
     time.sleep(30)
     st.rerun()
