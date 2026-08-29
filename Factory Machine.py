@@ -1980,7 +1980,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
                     start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
-                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
+                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 else:
                     start_view = datetime.combine(gantt_min_date, dtime(7, 30))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
@@ -2547,12 +2547,17 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         hold_job = m_jobs[m_jobs["สถานะงาน"].str.contains("พักงาน")]
         waiting_jobs = m_jobs[m_jobs["สถานะงาน"].str.contains("รอคิว")]
 
-        # แถบแจ้งเตือนงานพักรอวัสดุ (เขียนบรรทัดเดียว ป้องกัน HTML แตก)
+        # แถบแจ้งเตือนงานพักรอวัสดุ พร้อมดึงเวลาเริ่มเดิมมาแสดง
         hold_alert_html = ""
         if not hold_job.empty:
             hold_machines_count += 1
             h_first = hold_job.iloc[0]
-            hold_alert_html = f'<div style="margin-top:5px; padding:3px 6px; background:rgba(217, 119, 6, 0.35); border:1px dashed #FCD34D; border-radius:6px; font-size:11px; color:#FEF08A;">🛑 <b>พักงานรอ:</b> {h_first.get("แผนงาน", "-")} ({h_first.get("ชื่อ Drawing.", "-")})</div>'
+            h_start = h_first.get("เริ่มจริง")
+            h_start_txt = ""
+            if pd.notna(h_start):
+                h_start_dt = pd.to_datetime(h_start)
+                h_start_txt = f" [เริ่ม {h_start_dt.strftime('%H:%M น.')}]"
+            hold_alert_html = f'<div style="margin-top:5px; padding:3px 6px; background:rgba(217, 119, 6, 0.35); border:1px dashed #FCD34D; border-radius:6px; font-size:11px; color:#FEF08A;">🛑 <b>พักงานรอ:</b> {h_first.get("แผนงาน", "-")} ({h_first.get("ชื่อ Drawing.", "-")}){h_start_txt}</div>'
 
         if not running_job.empty:
             running_machines_count += 1
@@ -2596,6 +2601,11 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             })
         elif not hold_job.empty:
             h_info = hold_job.iloc[0]
+            h_start = h_info.get("เริ่มจริง")
+            h_start_txt = ""
+            if pd.notna(h_start):
+                h_start_dt = pd.to_datetime(h_start)
+                h_start_txt = f" (เริ่มไว้: {h_start_dt.strftime('%H:%M น.')})"
             machine_status_cards.append({
                 "machine": m,
                 "status": "HOLD",
@@ -2604,7 +2614,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": str(h_info.get("แผนงาน", "-")),
                 "drawing": str(h_info.get("ชื่อ Drawing.", "-")),
                 "step": str(h_info.get("ขั้นตอน (Step)", "-")),
-                "time_info": "<div style='font-size:12px; font-weight:700; color:#FEF3C7;'>⚠️ เครื่องหยุด: รอเบิกวัสดุใหม่</div>"
+                "time_info": f"<div style='font-size:12px; font-weight:700; color:#FEF3C7;'>⚠️ เครื่องหยุด: รอเบิกวัสดุใหม่{h_start_txt}</div>"
             })
         else:
             idle_machines_count += 1
