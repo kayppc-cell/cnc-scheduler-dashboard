@@ -397,21 +397,20 @@ st.markdown("""
     /* สไตล์เฉพาะหน้าจอ TV Live Dashboard */
     .tv-grid-container {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
         gap: 14px;
         margin-top: 10px;
     }
     .tv-card {
-        border-radius: 16px;
+        border-radius: 14px;
         padding: 16px 18px;
         color: #FFFFFF;
-        position: relative;
-        box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+        box-shadow: 0 4px 14px rgba(0,0,0,0.12);
         display: flex;
         flex-direction: column;
         justify-content: space-between;
         min-height: 140px;
-        border: 1.5px solid rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.12);
     }
     .tv-card-running {
         background: linear-gradient(135deg, #065F46 0%, #059669 100%);
@@ -424,11 +423,11 @@ st.markdown("""
     .tv-card-idle {
         background: linear-gradient(135deg, #1E293B 0%, #334155 100%);
         border-left: 8px solid #64748B;
-        opacity: 0.9;
+        opacity: 0.92;
     }
     .tv-pulse-dot {
-        width: 12px;
-        height: 12px;
+        width: 10px;
+        height: 10px;
         border-radius: 50%;
         background-color: #34D399;
         display: inline-block;
@@ -437,7 +436,7 @@ st.markdown("""
     }
     @keyframes tv-pulse {
         0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
-        70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); }
+        70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
         100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
     }
 </style>
@@ -2440,7 +2439,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     cur_time_str = now_bangkok.strftime("%H:%M:%S")
     cur_date_str = now_bangkok.strftime("%d/%m/%Y")
 
-    # ประมวลผลสถานะ 17 เครื่อง
     machine_status_cards = []
     running_machines_count = 0
     hold_machines_count = 0
@@ -2528,31 +2526,26 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     </div>
     """, unsafe_allow_html=True)
 
-    # วาด Grid Card 17 สถานีงาน
-    cards_html = '<div class="tv-grid-container">'
+    # ประกอบ Grid Card 17 สถานีงาน (แบบกระชับ ไม่ติด Indentation Code Block)
+    card_items = []
     for c in machine_status_cards:
-        cards_html += f"""
-        <div class="{c['card_class']}">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
-                <div style="font-size:18px; font-weight:800; letter-spacing:0.5px;">{c['machine']}</div>
-                <div style="font-size:11.5px;">{c['badge_html']}</div>
-            </div>
-            <div style="margin: 4px 0;">
-                <div style="font-size:14.5px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                    📌 {c['plan']}
-                </div>
-                <div style="font-size:12px; color:rgba(255,255,255,0.85); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px;">
-                    📄 {c['drawing']}
-                </div>
-                <div style="font-size:11.5px; color:rgba(255,255,255,0.7); margin-top:2px;">
-                    ⚙️ ขั้นตอน: {c['step']}
-                </div>
-            </div>
-            <div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.15); font-size:11px; font-weight:600; color:rgba(255,255,255,0.9);">
-                {c['time_info']}
-            </div>
-        </div>
-        """
-    cards_html += '</div>'
-    
-    st.markdown(cards_html, unsafe_allow_html=True)
+        card_item = (
+            f'<div class="{c["card_class"]}">'
+            f'<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">'
+            f'<div style="font-size:17px; font-weight:800; letter-spacing:0.3px;">{c["machine"]}</div>'
+            f'<div style="font-size:11px;">{c["badge_html"]}</div>'
+            f'</div>'
+            f'<div style="margin: 4px 0;">'
+            f'<div style="font-size:14px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📌 {c["plan"]}</div>'
+            f'<div style="font-size:12px; color:rgba(255,255,255,0.85); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px;">📄 {c["drawing"]}</div>'
+            f'<div style="font-size:11.5px; color:rgba(255,255,255,0.7); margin-top:2px;">⚙️ ขั้นตอน: {c["step"]}</div>'
+            f'</div>'
+            f'<div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.15); font-size:11px; font-weight:600; color:rgba(255,255,255,0.9);">'
+            f'{c["time_info"]}'
+            f'</div>'
+            f'</div>'
+        )
+        card_items.append(card_item)
+
+    full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
+    st.markdown(full_grid_html, unsafe_allow_html=True)
