@@ -796,25 +796,22 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_work_hrs
 
 # =========================================================
-# 6. เมนูเปลี่ยนโหมด (4 แท็บมาตรฐาน - ผูก Session State 100%)
+# 6. เมนูเปลี่ยนโหมด (4 แท็บมาตรฐาน)
 # =========================================================
 nav_options = ["👷 โหมดช่างหน้าเครื่อง", "📊 แดชบอร์ดภาพรวมโรงงาน", "📑 รายงานสรุปประจำเดือน", "📺 จอทีวีกลางโรงงาน (TV Live)"]
 
-if "main_navigation_radio" not in st.session_state:
-    st.session_state.main_navigation_radio = st.session_state.current_view
-
-def on_nav_change():
-    st.session_state.current_view = st.session_state.main_navigation_radio
-
+cur_idx = nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0
 selected_tab = st.radio(
     "เลือกมุมมอง:",
     nav_options,
-    index=nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0,
+    index=cur_idx,
     horizontal=True,
-    label_visibility="collapsed",
-    key="main_navigation_radio",
-    on_change=on_nav_change
+    label_visibility="collapsed"
 )
+
+if selected_tab != st.session_state.current_view:
+    st.session_state.current_view = selected_tab
+    st.rerun()
 
 # ---------------------------------------------------------
 # VIEW 1: หน้าจอช่างหน้าเครื่อง
@@ -1172,8 +1169,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             st.rerun()
                 
                 st.write("")
-    else:
-        st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
 
 # ---------------------------------------------------------
 # VIEW 2: Dashboard ภาพรวมโรงงาน
@@ -1209,8 +1204,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True):
                 st.session_state.user_role = None
-                st.session_state.current_view = "📊 แดชบอร์ดภาพรวมโรงงาน"
-                st.session_state.main_navigation_radio = "📊 แดชบอร์ดภาพรวมโรงงาน"
                 st.rerun()
 
         df_db = fetch_jobs_from_supabase()
@@ -1707,7 +1700,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ชื่อ Drawing.": st.column_config.TextColumn("DRAWING NO.", disabled=True, width=180),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", disabled=True, width=65, format="%d"),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", disabled=True, width=120),
-                            "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", disabled=True, width=140),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", width=140),
                             "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", disabled=True, width=145, format="DD/MM HH:mm"),
                             "เสร็จจริง": st.column_config.DatetimeColumn("เวลาจบจริง", disabled=True, width=145, format="DD/MM HH:mm"),
                             "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", disabled=True, width=90, format="%.2f"),
@@ -2108,8 +2101,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True, key="btn_logout_monthly"):
                 st.session_state.user_role = None
-                st.session_state.current_view = "📑 รายงานสรุปประจำเดือน"
-                st.session_state.main_navigation_radio = "📑 รายงานสรุปประจำเดือน"
                 st.rerun()
 
         df_db = fetch_jobs_from_supabase()
@@ -2542,7 +2533,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    # ตัวนับเวลารีเฟรชแบบ Client-Side สำหรับหน้าจอ TV โดยเฉพาะ
+    # Auto-refresh สำหรับหน้าจอ TV โดยเฉพาะ
     components.html("""
     <script>
         setTimeout(function() {
