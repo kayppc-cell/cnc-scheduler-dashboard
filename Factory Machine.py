@@ -558,7 +558,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine
+# 5. Scheduling Engine (Setup มาตรฐาน 10 นาที)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -579,7 +579,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
 
         basic_mins = safe_float(j.get("Basic (น.)"), 0.0)
         prog_mins = safe_float(j.get("โปรแกรม (น.)"), 0.0)
-        setup_mins = safe_float(j.get("Setup (น.)"), 15.0)
+        setup_mins = safe_float(j.get("Setup (น.)"), 10.0)
         
         cut_mins = basic_mins + prog_mins
         cut_hrs = (cut_mins / 60.0) if cut_mins > 0 else 0.01
@@ -782,7 +782,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             horizontal=True
         )
 
-    # ดึงตารางแผนงานจำลองเพื่อหาเวลาจบงานตามแผน
     planned_finish_map = {}
     if not df_all.empty:
         _, df_summary_plan, _, _ = calculate_shop_schedule(df_all, get_bangkok_now().replace(tzinfo=None))
@@ -891,7 +890,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         next_available_start_found = False
 
         if len(sorted_groups) == 0:
-            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
+            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ (ทุกงานเสร็จสิ้นครบหมดแล้ว หรือยังไม่มีการระบุวันขึ้นงาน)")
         else:
             for group_idx, g_info in enumerate(sorted_groups, 1):
                 plan_code = g_info["plan_code"]
@@ -905,22 +904,19 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 mat_val = first_step_info.get('วัสดุ', '-')
                 qty_val = int(first_step_info.get('จำนวน', 1) or 1)
 
-                # ดึงวัน-เวลาขึ้นงาน
                 if pd.notna(ready_at_dt):
                     ready_display_str = ready_at_dt.strftime("%d/%m/%Y %H:%M น.")
                 else:
                     ready_display_str = "ยังไม่ระบุเวลา"
 
-                # ดึงวัน-เวลาจบงานตามแผน
                 plan_finish_dt = planned_finish_map.get((str(plan_code), str(drawing_code)))
                 if plan_finish_dt is not None and pd.notna(plan_finish_dt):
                     finish_plan_display_str = plan_finish_dt.strftime("%d/%m/%Y %H:%M น.")
                 else:
-                    # คำนวณเบื้องต้นหากไม่มีในผัง
                     if pd.notna(ready_at_dt):
                         tot_hrs = 0.0
                         for _, s_r in plan_steps.iterrows():
-                            tot_hrs += (safe_float(s_r.get("Setup (น.)"), 15) + safe_float(s_r.get("Basic (น.)"), 0) + safe_float(s_r.get("โปรแกรม (น.)"), 120)) / 60.0
+                            tot_hrs += (safe_float(s_r.get("Setup (น.)"), 10) + safe_float(s_r.get("Basic (น.)"), 0) + safe_float(s_r.get("โปรแกรม (น.)"), 120)) / 60.0
                         _, est_finish = add_work_time_with_shift(ready_at_dt, tot_hrs)
                         finish_plan_display_str = est_finish.strftime("%d/%m/%Y %H:%M น.")
                     else:
@@ -1190,7 +1186,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                     f_c7, f_c8, f_c9 = st.columns([1.5, 1.5, 1.5])
                     with f_c7:
-                        new_f_setup = st.number_input("เวลาตั้งเครื่อง Setup (นาที):", min_value=0, max_value=720, value=15, step=5)
+                        new_f_setup = st.number_input("เวลาตั้งเครื่อง Setup (นาที):", min_value=0, max_value=720, value=10, step=5)
                     with f_c8:
                         new_f_basic = st.number_input("Basic Machine (นาที):", min_value=0, max_value=6000, value=0, step=5)
                     with f_c9:
@@ -1222,7 +1218,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         if not df_db.empty:
             calc_df = df_db.copy()
             
-            calc_df["Setup (น.)"] = pd.to_numeric(calc_df["Setup (น.)"], errors='coerce').fillna(15.0)
+            calc_df["Setup (น.)"] = pd.to_numeric(calc_df["Setup (น.)"], errors='coerce').fillna(10.0)
             calc_df["Basic (น.)"] = pd.to_numeric(calc_df["Basic (น.)"], errors='coerce').fillna(0.0)
             calc_df["โปรแกรม (น.)"] = pd.to_numeric(calc_df["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
             
@@ -1279,7 +1275,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 target_row_data = active_jobs_editor_df.iloc[selected_target_idx]
                                 
                                 ins_qty = st.number_input("จำนวน:", min_value=1, value=int(target_row_data.get("จำนวน", 1) or 1), step=1)
-                                ins_setup = st.number_input("Setup (น.):", value=15, step=5)
+                                ins_setup = st.number_input("Setup (น.):", value=10, step=5)
                                 ins_basic = st.number_input("Basic (น.):", value=0, step=5)
                                 ins_prog = st.number_input("โปรแกรม (น.):", value=120, step=10)
                                 
@@ -1352,7 +1348,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 width=165,
                                 help="พิมพ์วันขึ้นก่อนเสมอ เช่น 01/09/2026 10:50 หรือ 01/09 10:50"
                             ),
-                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=15),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=10),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, min_value=0, max_value=12000, step=10, format="%d", default=120),
                             "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f", disabled=True),
@@ -1421,7 +1417,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 machine_val = safe_str(row.get("เลือกเครื่องจักร"), "No.1 Awea")
                                 status_val = safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
                                 
-                                s_val = safe_float(row.get("Setup (น.)"), 15.0)
+                                s_val = safe_float(row.get("Setup (น.)"), 10.0)
                                 b_val = safe_float(row.get("Basic (น.)"), 0.0)
                                 p_val = safe_float(row.get("โปรแกรม (น.)"), 120.0)
                                 
@@ -1908,47 +1904,47 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-                # =====================================================
-                # 5. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
-                # =====================================================
-                st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
-                fig_bar = px.bar(
-                    df_util,
-                    x="อัตราการใช้งาน (%)",
-                    y="เครื่องจักร",
-                    orientation="h",
-                    color="อัตราการใช้งาน (%)",
-                    color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
-                    text="ข้อความแสดง",
-                    range_x=[0, 105],
-                    category_orders={"เครื่องจักร": MACHINE_LIST}
-                )
-                fig_bar.update_yaxes(
-                    autorange="reversed",
-                    type="category",
-                    categoryorder="array",
-                    categoryarray=MACHINE_LIST
-                )
-                fig_bar.update_traces(
-                    marker_line_color="#0F172A",
-                    marker_line_width=1.2,
-                    textposition="outside",
-                    cliponaxis=False
-                )
-                fig_bar.update_layout(
-                    height=600,
-                    margin=dict(l=40, r=40, t=10, b=30),
-                    xaxis_title="อัตราการใช้งาน (%)",
-                    yaxis_title="เครื่องจักร / แผนก",
-                    xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
-                    coloraxis_showscale=False,
-                    plot_bgcolor="#FFFFFF",
-                    paper_bgcolor="#FFFFFF"
-                )
-                fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
-                st.plotly_chart(fig_bar, use_container_width=True)
+            # =====================================================
+            # 5. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
+            # =====================================================
+            st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
+            fig_bar = px.bar(
+                df_util,
+                x="อัตราการใช้งาน (%)",
+                y="เครื่องจักร",
+                orientation="h",
+                color="อัตราการใช้งาน (%)",
+                color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
+                text="ข้อความแสดง",
+                range_x=[0, 105],
+                category_orders={"เครื่องจักร": MACHINE_LIST}
+            )
+            fig_bar.update_yaxes(
+                autorange="reversed",
+                type="category",
+                categoryorder="array",
+                categoryarray=MACHINE_LIST
+            )
+            fig_bar.update_traces(
+                marker_line_color="#0F172A",
+                marker_line_width=1.2,
+                textposition="outside",
+                cliponaxis=False
+            )
+            fig_bar.update_layout(
+                height=600,
+                margin=dict(l=40, r=40, t=10, b=30),
+                xaxis_title="อัตราการใช้งาน (%)",
+                yaxis_title="เครื่องจักร / แผนก",
+                xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
+                coloraxis_showscale=False,
+                plot_bgcolor="#FFFFFF",
+                paper_bgcolor="#FFFFFF"
+            )
+            fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
+            st.plotly_chart(fig_bar, use_container_width=True)
 
-                st.divider()
+            st.divider()
 
             # =====================================================
             # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)
