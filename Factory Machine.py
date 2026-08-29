@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, time
 import zoneinfo
 import os
 import base64
+import json
 from PIL import Image
 import requests
 import streamlit.components.v1 as components
@@ -558,7 +559,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine
+# 5. Scheduling Engine (Setup มาตรฐาน 10 นาที)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -1850,10 +1851,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             sun_end = datetime.combine(cur_d + timedelta(days=1), time(0, 0))
                             fig.add_vrect(
                                 x0=sun_start, x1=sun_end,
-                                fillcolor="#FEE2E2", opacity=0.45,
-                                layer="below", line_width=1, line_color="#FECACA",
+                                fillcolor="#F8FAFC", opacity=0.8,
+                                layer="below", line_width=1, line_color="#E2E8F0",
                                 annotation_text="🛑 วันอาทิตย์ (หยุด)", annotation_position="top left",
-                                annotation_font_size=10, annotation_font_color="#DC2626"
+                                annotation_font_size=10, annotation_font_color="#94A3B8"
                             )
                         else:
                             lunch_start = datetime.combine(cur_d, time(12, 0))
@@ -1896,7 +1897,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         <span style="color:#D97706;"><b>พักเบรกเที่ยง:</b> 12:00 – 13:00 น. (แถบสีส้มอ่อน)</span>
                     </div>
                     <div class="schedule-pill">
-                        <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ (แถบสีแดงอ่อน)</span>
+                        <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ (แถบสีเทาอ่อน)</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -2171,37 +2172,33 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     })
             df_m_sum = pd.DataFrame(machine_summary)
 
-            # สร้างเอกสาร Printable HTML สำหรับสั่งพิมพ์ / เซฟเป็น PDF ทันที
-            rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td>{r['จำนวนคิวงาน']} คิว</td><td>{r['ชิ้นงานรวม (ชิ้น)']} ชิ้น</td><td>{r['เวลาแผน (ชม.)']:.2f}</td><td>{r['เวลาจริง (ชม.)']:.2f}</td><td>{r['ผลต่าง']}</td><td>{r['เรตราคา']}</td><td style='font-weight:bold;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td></tr>" for _, r in df_m_sum.iterrows()])
+            # สร้าง HTML สำหรับ Print / PDF
+            rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td style='text-align:center;'>{r['จำนวนคิวงาน']} คิว</td><td style='text-align:center;'>{r['ชิ้นงานรวม (ชิ้น)']} ชิ้น</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:center;'>{r['ผลต่าง']}</td><td style='text-align:right;'>{r['เรตราคา']}</td><td style='text-align:right; font-weight:bold;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td></tr>" for _, r in df_m_sum.iterrows()])
             
-            rows_job_html = "".join([f"<tr><td>{r['แผนงาน']}</td><td>{r['ชื่อ Drawing.']}</td><td>{r['จำนวน']}</td><td>{r['วัสดุ']}</td><td>{r['ขั้นตอน (Step)']}</td><td>{r['เลือกเครื่องจักร']}</td><td>{pd.to_datetime(r['เริ่มจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เริ่มจริง']) else '-'}</td><td>{pd.to_datetime(r['เสร็จจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เสร็จจริง']) else '-'}</td><td>{r['เวลาแผน (ชม.)']:.2f}</td><td>{r['เวลาจริง (ชม.)']:.2f}</td><td>{r['มูลค่ารวม (บาท)']:,.2f} ฿</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
+            rows_job_html = "".join([f"<tr><td>{r['แผนงาน']}</td><td>{r['ชื่อ Drawing.']}</td><td style='text-align:center;'>{r['จำนวน']}</td><td style='text-align:center;'>{r['วัสดุ']}</td><td>{r['ขั้นตอน (Step)']}</td><td>{r['เลือกเครื่องจักร']}</td><td style='text-align:center;'>{pd.to_datetime(r['เริ่มจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เริ่มจริง']) else '-'}</td><td style='text-align:center;'>{pd.to_datetime(r['เสร็จจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เสร็จจริง']) else '-'}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่ารวม (บาท)']:,.2f} ฿</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
 
             report_html_full = f"""
-            <!DOCTYPE html>
             <html>
             <head>
                 <meta charset="utf-8">
                 <title>PES Monthly Production Report - {month_names[selected_month_idx-1]} {selected_year}</title>
                 <style>
-                    @page {{ size: A4 portrait; margin: 12mm 15mm; }}
-                    body {{ font-family: 'Tahoma', 'Sarabun', 'Arial', sans-serif; color: #1E293B; margin: 0; padding: 10px; font-size: 11.5px; line-height: 1.4; }}
-                    .header-box {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2.5px solid #1E3E62; padding-bottom: 8px; margin-bottom: 12px; }}
-                    .title-text h2 {{ margin: 0; color: #0B192C; font-size: 18px; }}
-                    .title-text p {{ margin: 3px 0 0 0; color: #475569; font-size: 11px; }}
-                    .kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }}
-                    .kpi-item {{ background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px; padding: 8px 12px; text-align: center; }}
-                    .kpi-item-title {{ font-size: 10.5px; color: #64748B; font-weight: bold; }}
-                    .kpi-item-val {{ font-size: 16px; color: #0F172A; font-weight: 800; margin-top: 2px; }}
-                    h3 {{ color: #1E3E62; font-size: 13px; margin: 12px 0 6px 0; border-left: 4px solid #2563EB; padding-left: 6px; }}
-                    table {{ width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 10.5px; }}
-                    th, td {{ border: 1px solid #CBD5E1; padding: 5px 7px; text-align: left; }}
+                    @page {{ size: A4 portrait; margin: 10mm 12mm; }}
+                    body {{ font-family: 'Tahoma', 'Sarabun', 'Arial', sans-serif; color: #1E293B; margin: 0; padding: 10px; font-size: 11px; line-height: 1.4; }}
+                    .header-box {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1E3E62; padding-bottom: 8px; margin-bottom: 12px; }}
+                    .title-text h2 {{ margin: 0; color: #0B192C; font-size: 17px; }}
+                    .title-text p {{ margin: 2px 0 0 0; color: #475569; font-size: 11px; }}
+                    .kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }}
+                    .kpi-item {{ background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 6px; padding: 8px 10px; text-align: center; }}
+                    .kpi-item-title {{ font-size: 10px; color: #64748B; font-weight: bold; }}
+                    .kpi-item-val {{ font-size: 15px; color: #0F172A; font-weight: 800; margin-top: 2px; }}
+                    h3 {{ color: #1E3E62; font-size: 12px; margin: 12px 0 6px 0; border-left: 4px solid #2563EB; padding-left: 6px; }}
+                    table {{ width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 10px; }}
+                    th, td {{ border: 1px solid #CBD5E1; padding: 4px 6px; text-align: left; }}
                     th {{ background-color: #F1F5F9; color: #1E293B; font-weight: bold; }}
                     tr:nth-child(even) {{ background-color: #F8FAFC; }}
-                    .sign-box {{ display: flex; justify-content: space-between; margin-top: 25px; padding-top: 10px; }}
-                    .sign-col {{ width: 30%; text-align: center; border-top: 1px dashed #94A3B8; padding-top: 5px; font-size: 10.5px; }}
-                    @media print {{
-                        button {{ display: none !important; }}
-                    }}
+                    .sign-box {{ display: flex; justify-content: space-between; margin-top: 30px; padding-top: 10px; }}
+                    .sign-col {{ width: 30%; text-align: center; border-top: 1px dashed #94A3B8; padding-top: 5px; font-size: 10px; }}
                 </style>
             </head>
             <body>
@@ -2210,7 +2207,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                         <h2>บจก. พลวัฒน์ เอ็นจิเนียริ่ง ซัพพลาย (PES)</h2>
                         <p>รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production & Performance Report)</p>
                     </div>
-                    <div style="text-align: right; font-size: 11px;">
+                    <div style="text-align: right; font-size: 10.5px;">
                         <b>ประจำเดือน:</b> {month_names[selected_month_idx-1]} {selected_year}<br>
                         <b>วันที่ออกรายงาน:</b> {get_bangkok_now().strftime('%d/%m/%Y %H:%M น.')}
                     </div>
@@ -2248,16 +2245,11 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     <div class="sign-col">หัวหน้าแผนกผลิต / ผู้ตรวจสอบ<br><br><br>( .................................................... )</div>
                     <div class="sign-col">ผู้จัดการโรงงาน / ผู้อนุมัติ<br><br><br>( .................................................... )</div>
                 </div>
-
-                <script>
-                    window.onload = function() {{
-                        window.print();
-                    }}
-                </script>
             </body>
             </html>
             """
-            b64_report_html = base64.b64encode(report_html_full.encode('utf-8')).decode('utf-8')
+            
+            json_report_html = json.dumps(report_html_full)
 
             # ปุ่มดาวน์โหลด Excel / PDF
             with r_col_exp:
@@ -2265,13 +2257,24 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 b_col_pdf, b_col_csv = st.columns(2)
                 
                 with b_col_pdf:
-                    st.markdown(f"""
-                    <a href="data:text/html;base64,{b64_report_html}" target="_blank" style="text-decoration:none;">
-                        <button style="width:100%; background:linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color:white; border:none; padding:8px 12px; border-radius:8px; font-weight:bold; cursor:pointer; box-shadow:0 3px 8px rgba(220,38,38,0.25);">
-                            📄 พิมพ์ / บันทึกเป็น PDF
-                        </button>
-                    </a>
-                    """, unsafe_allow_html=True)
+                    components.html(f"""
+                    <button onclick="printReport()" style="width:100%; background:linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color:white; border:none; padding:9px 14px; border-radius:8px; font-weight:bold; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(220,38,38,0.25);">
+                        📄 พิมพ์ / บันทึกเป็น PDF
+                    </button>
+                    <script>
+                        function printReport() {{
+                            var reportHtml = {json_report_html};
+                            var printWin = window.open('', '_blank');
+                            printWin.document.open();
+                            printWin.document.write(reportHtml);
+                            printWin.document.close();
+                            printWin.focus();
+                            setTimeout(function() {{
+                                printWin.print();
+                            }}, 500);
+                        }}
+                    </script>
+                    """, height=45)
 
                 with b_col_csv:
                     csv_data = monthly_jobs[[
