@@ -393,6 +393,53 @@ st.markdown("""
         border-color: #CBD5E1 !important;
         cursor: not-allowed !important;
     }
+
+    /* สไตล์เฉพาะหน้าจอ TV Live Dashboard */
+    .tv-grid-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 14px;
+        margin-top: 10px;
+    }
+    .tv-card {
+        border-radius: 16px;
+        padding: 16px 18px;
+        color: #FFFFFF;
+        position: relative;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 140px;
+        border: 1.5px solid rgba(255,255,255,0.1);
+    }
+    .tv-card-running {
+        background: linear-gradient(135deg, #065F46 0%, #059669 100%);
+        border-left: 8px solid #34D399;
+    }
+    .tv-card-hold {
+        background: linear-gradient(135deg, #92400E 0%, #D97706 100%);
+        border-left: 8px solid #FBBF24;
+    }
+    .tv-card-idle {
+        background: linear-gradient(135deg, #1E293B 0%, #334155 100%);
+        border-left: 8px solid #64748B;
+        opacity: 0.9;
+    }
+    .tv-pulse-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background-color: #34D399;
+        display: inline-block;
+        box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7);
+        animation: tv-pulse 1.8s infinite;
+    }
+    @keyframes tv-pulse {
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
+        70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -750,9 +797,9 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_work_hrs
 
 # =========================================================
-# 6. เมนูเปลี่ยนโหมด (3 แท็บมาตรฐาน)
+# 6. เมนูเปลี่ยนโหมด (4 แท็บมาตรฐาน)
 # =========================================================
-nav_options = ["👷 โหมดช่างหน้าเครื่อง", "📊 แดชบอร์ดภาพรวมโรงงาน", "📑 รายงานสรุปประจำเดือน"]
+nav_options = ["👷 โหมดช่างหน้าเครื่อง", "📊 แดชบอร์ดภาพรวมโรงงาน", "📑 รายงานสรุปประจำเดือน", "📺 จอทีวีกลางโรงงาน (TV Live)"]
 selected_tab = st.radio(
     "เลือกมุมมอง:",
     nav_options,
@@ -2373,3 +2420,139 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
         else:
             st.info(f"ℹ️ ยังไม่มีประวัติงานที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' ในเดือน {month_names[selected_month_idx-1]} {selected_year}")
+
+# ---------------------------------------------------------
+# VIEW 4: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
+# ---------------------------------------------------------
+elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
+    df_live = fetch_jobs_from_supabase()
+
+    # JavaScript Auto-refresh ทุก 30 วินาที สำหรับหน้าจอ TV
+    components.html("""
+    <script>
+        setTimeout(function() {
+            window.parent.location.reload();
+        }, 30000);
+    </script>
+    """, height=0)
+
+    now_bangkok = get_bangkok_now()
+    cur_time_str = now_bangkok.strftime("%H:%M:%S")
+    cur_date_str = now_bangkok.strftime("%d/%m/%Y")
+
+    # ประมวลผลสถานะ 17 เครื่อง
+    machine_status_cards = []
+    running_machines_count = 0
+    hold_machines_count = 0
+    idle_machines_count = 0
+
+    for m in MACHINE_LIST:
+        m_jobs = df_live[df_live["เลือกเครื่องจักร"] == m] if not df_live.empty else pd.DataFrame()
+        
+        running_job = m_jobs[m_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
+        hold_job = m_jobs[m_jobs["สถานะงาน"].str.contains("พักงาน")]
+        waiting_jobs = m_jobs[m_jobs["สถานะงาน"].str.contains("รอคิว")]
+
+        if not running_job.empty:
+            running_machines_count += 1
+            r_info = running_job.iloc[0]
+            s_start = r_info.get("เริ่มจริง")
+            elapsed_txt = "-"
+            if pd.notna(s_start):
+                elapsed_min = int((now_bangkok.replace(tzinfo=None) - pd.to_datetime(s_start)).total_seconds() / 60.0)
+                elapsed_txt = f"{elapsed_min} นาที ({elapsed_min/60.0:.1f} ชม.)"
+            
+            machine_status_cards.append({
+                "machine": m,
+                "status": "RUNNING",
+                "card_class": "tv-card tv-card-running",
+                "badge_html": '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:6px;">กำลังรันงาน</b>',
+                "plan": str(r_info.get("แผนงาน", "-")),
+                "drawing": str(r_info.get("ชื่อ Drawing.", "-")),
+                "step": str(r_info.get("ขั้นตอน (Step)", "-")),
+                "time_info": f"⏱️ รันไปแล้ว: {elapsed_txt}"
+            })
+        elif not hold_job.empty:
+            hold_machines_count += 1
+            h_info = hold_job.iloc[0]
+            machine_status_cards.append({
+                "machine": m,
+                "status": "HOLD",
+                "card_class": "tv-card tv-card-hold",
+                "badge_html": '<b style="color:#FDE68A;">🛑 พักงาน (รอวัสดุ)</b>',
+                "plan": str(h_info.get("แผนงาน", "-")),
+                "drawing": str(h_info.get("ชื่อ Drawing.", "-")),
+                "step": str(h_info.get("ขั้นตอน (Step)", "-")),
+                "time_info": "⚠️ หยุดรอเบิกวัสดุใหม่"
+            })
+        else:
+            idle_machines_count += 1
+            next_txt = "ไม่มีคิวรอ"
+            next_plan = "-"
+            if not waiting_jobs.empty:
+                w_first = waiting_jobs.iloc[0]
+                next_plan = f"{w_first.get('แผนงาน', '-')} ({w_first.get('ชื่อ Drawing.', '-')})"
+                next_txt = f"คิวถัดไป: {next_plan}"
+
+            machine_status_cards.append({
+                "machine": m,
+                "status": "IDLE",
+                "card_class": "tv-card tv-card-idle",
+                "badge_html": '<b style="color:#94A3B8;">⚪ เครื่องว่าง (IDLE)</b>',
+                "plan": "พร้อมรับงาน",
+                "drawing": next_txt,
+                "step": "-",
+                "time_info": f"📋 คิวรอ: {len(waiting_jobs)} งาน"
+            })
+
+    # Header แผงควบคุมสด TV
+    st.markdown(f"""
+    <div style="background:#0F172A; border:2px solid #1E3A8A; border-radius:16px; padding:14px 22px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
+        <div>
+            <div style="font-size:22px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
+                <span>📺 PES SHOP FLOOR LIVE MONITOR</span>
+                <span style="font-size:12px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:3px 10px; border-radius:20px;">Auto-Refresh (30s)</span>
+            </div>
+            <div style="color:#94A3B8; font-size:13px; margin-top:2px;">
+                สถานะการผลิต 17 สถานีงานแบบ Real-time | ประจำวันที่ <b>{cur_date_str}</b>
+            </div>
+        </div>
+        <div style="text-align:right;">
+            <div style="font-size:28px; font-weight:900; color:#F8FAFC; font-family:monospace; letter-spacing:1px;">{cur_time_str} น.</div>
+            <div style="font-size:13px; font-weight:bold;">
+                <span style="color:#34D399;">🟢 กำลังรัน {running_machines_count}</span> | 
+                <span style="color:#FBBF24;">🟡 พักงาน {hold_machines_count}</span> | 
+                <span style="color:#94A3B8;">⚪ ว่าง {idle_machines_count}</span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # วาด Grid Card 17 สถานีงาน
+    cards_html = '<div class="tv-grid-container">'
+    for c in machine_status_cards:
+        cards_html += f"""
+        <div class="{c['card_class']}">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
+                <div style="font-size:18px; font-weight:800; letter-spacing:0.5px;">{c['machine']}</div>
+                <div style="font-size:11.5px;">{c['badge_html']}</div>
+            </div>
+            <div style="margin: 4px 0;">
+                <div style="font-size:14.5px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    📌 {c['plan']}
+                </div>
+                <div style="font-size:12px; color:rgba(255,255,255,0.85); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px;">
+                    📄 {c['drawing']}
+                </div>
+                <div style="font-size:11.5px; color:rgba(255,255,255,0.7); margin-top:2px;">
+                    ⚙️ ขั้นตอน: {c['step']}
+                </div>
+            </div>
+            <div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.15); font-size:11px; font-weight:600; color:rgba(255,255,255,0.9);">
+                {c['time_info']}
+            </div>
+        </div>
+        """
+    cards_html += '</div>'
+    
+    st.markdown(cards_html, unsafe_allow_html=True)
