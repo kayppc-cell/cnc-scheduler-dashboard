@@ -1594,7 +1594,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 3. รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง
+            # 3. รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (แสดงผลต่างเป็นนาที)
             # =====================================================
             if not finished_jobs_df.empty:
                 st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
@@ -1708,7 +1708,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)
+            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) + แสดงแถบพักเที่ยงและวันหยุด
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
@@ -1896,7 +1896,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         <span style="color:#D97706;"><b>พักเบรกเที่ยง:</b> 12:00 – 13:00 น. (แถบสีส้มอ่อน)</span>
                     </div>
                     <div class="schedule-pill">
-                        <span style="font-size:16px;">🛑</span>
                         <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ (แถบสีแดงอ่อน)</span>
                     </div>
                 </div>
@@ -2029,7 +2028,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
 # ---------------------------------------------------------
-# VIEW 3: รายงานสรุปประจำเดือน (Monthly Report & Analytics)
+# VIEW 3: รายงานสรุปประจำเดือน (Monthly Report & PDF Print)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📑 รายงานสรุปประจำเดือน":
     if st.session_state.user_role is None:
@@ -2062,7 +2061,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
         df_db = fetch_jobs_from_supabase()
 
-        # สร้างเรตราคาค่าเครื่องจักร
         current_rates_df = pd.DataFrame([
             {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES.get(m, 500)} for m in MACHINE_LIST
         ])
@@ -2071,7 +2069,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
         else:
             rate_map = DEFAULT_RATES
 
-        # ตัวเลือก เดือน และ ปี
         current_now = get_bangkok_now()
         r_col1, r_col2, r_col_exp = st.columns([2, 2, 4])
         
@@ -2081,15 +2078,11 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
         with r_col2:
             selected_year = st.selectbox("📆 เลือกปี (ค.ศ.):", [current_now.year - 1, current_now.year, current_now.year + 1], index=1)
 
-        # กรองข้อมูลงานที่เสร็จสิ้น (Finish) ในเดือนและปีที่เลือก
         if not df_db.empty:
             finished_all = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
             
-            # ตรวจสอบวันที่จากเวลาเสร็จจริง หรือ วันขึ้นงาน
             finished_all["เสร็จจริง_DT"] = pd.to_datetime(finished_all["เสร็จจริง"], errors='coerce')
             finished_all["วันขึ้นงาน_DT"] = pd.to_datetime(finished_all["วัน-เวลาขึ้นงาน"], errors='coerce')
-            
-            # ถ้ามีเวลาเสร็จจริงให้ใช้วันเสร็จจริง ถ้าไม่มีให้ใช้วันขึ้นงาน
             finished_all["Target_Date"] = finished_all["เสร็จจริง_DT"].fillna(finished_all["วันขึ้นงาน_DT"])
             
             monthly_jobs = finished_all[
@@ -2100,7 +2093,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             monthly_jobs = pd.DataFrame()
 
         if not monthly_jobs.empty:
-            # คำนวณชั่วโมงและมูลค่า
             monthly_jobs["Setup (น.)"] = pd.to_numeric(monthly_jobs["Setup (น.)"], errors='coerce').fillna(10.0)
             monthly_jobs["Basic (น.)"] = pd.to_numeric(monthly_jobs["Basic (น.)"], errors='coerce').fillna(0.0)
             monthly_jobs["โปรแกรม (น.)"] = pd.to_numeric(monthly_jobs["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
@@ -2126,7 +2118,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             monthly_jobs["เรตราคา (บาท/ชม.)"] = monthly_jobs["เลือกเครื่องจักร"].map(rate_map).fillna(500)
             monthly_jobs["มูลค่ารวม (บาท)"] = monthly_jobs["เวลาจริง (ชม.)"] * monthly_jobs["เรตราคา (บาท/ชม.)"]
 
-            # คำนวณ KPIs ภาพรวมประจำเดือน
             total_jobs_count = len(monthly_jobs)
             total_qty_pieces = monthly_jobs["จำนวน"].sum()
             total_running_hrs = monthly_jobs["เวลาจริง (ชม.)"].sum()
@@ -2155,29 +2146,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             </div>
             """, unsafe_allow_html=True)
 
-            # ปุ่มดาวน์โหลด Excel / CSV
-            with r_col_exp:
-                st.write("")
-                csv_data = monthly_jobs[[
-                    "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
-                    "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", 
-                    "เวลาจริง (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"
-                ]].to_csv(index=False).encode('utf-8-sig')
-                
-                st.download_button(
-                    label=f"📥 ดาวน์โหลดรายงานประจำเดือน ({month_names[selected_month_idx-1]}) เป็น CSV/Excel",
-                    data=csv_data,
-                    file_name=f"PES_Monthly_Report_{selected_year}_{selected_month_idx:02d}.csv",
-                    mime="text/csv",
-                    type="secondary",
-                    use_container_width=True
-                )
-
-            st.divider()
-
-            # 2. ตารางสรุปแยกตามรายเครื่องจักร (Machine Performance Summary)
-            st.markdown("#### 🏭 สรุปผลการทำงานและมูลค่าแยกตามเครื่องจักร / แผนก")
-            
+            # สร้างสรุปรายเครื่องจักร
             machine_summary = []
             for m in MACHINE_LIST:
                 m_sub = monthly_jobs[monthly_jobs["เลือกเครื่องจักร"] == m]
@@ -2200,9 +2169,131 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                         "เรตราคา": f"{rate_map.get(m, 500):,} ฿",
                         "มูลค่าผลผลิต (บาท)": round(m_val, 2)
                     })
+            df_m_sum = pd.DataFrame(machine_summary)
+
+            # สร้างเอกสาร Printable HTML สำหรับสั่งพิมพ์ / เซฟเป็น PDF ทันที
+            rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td>{r['จำนวนคิวงาน']} คิว</td><td>{r['ชิ้นงานรวม (ชิ้น)']} ชิ้น</td><td>{r['เวลาแผน (ชม.)']:.2f}</td><td>{r['เวลาจริง (ชม.)']:.2f}</td><td>{r['ผลต่าง']}</td><td>{r['เรตราคา']}</td><td style='font-weight:bold;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td></tr>" for _, r in df_m_sum.iterrows()])
+            
+            rows_job_html = "".join([f"<tr><td>{r['แผนงาน']}</td><td>{r['ชื่อ Drawing.']}</td><td>{r['จำนวน']}</td><td>{r['วัสดุ']}</td><td>{r['ขั้นตอน (Step)']}</td><td>{r['เลือกเครื่องจักร']}</td><td>{pd.to_datetime(r['เริ่มจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เริ่มจริง']) else '-'}</td><td>{pd.to_datetime(r['เสร็จจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เสร็จจริง']) else '-'}</td><td>{r['เวลาแผน (ชม.)']:.2f}</td><td>{r['เวลาจริง (ชม.)']:.2f}</td><td>{r['มูลค่ารวม (บาท)']:,.2f} ฿</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
+
+            report_html_full = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>PES Monthly Production Report - {month_names[selected_month_idx-1]} {selected_year}</title>
+                <style>
+                    @page {{ size: A4 portrait; margin: 12mm 15mm; }}
+                    body {{ font-family: 'Tahoma', 'Sarabun', 'Arial', sans-serif; color: #1E293B; margin: 0; padding: 10px; font-size: 11.5px; line-height: 1.4; }}
+                    .header-box {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2.5px solid #1E3E62; padding-bottom: 8px; margin-bottom: 12px; }}
+                    .title-text h2 {{ margin: 0; color: #0B192C; font-size: 18px; }}
+                    .title-text p {{ margin: 3px 0 0 0; color: #475569; font-size: 11px; }}
+                    .kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }}
+                    .kpi-item {{ background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px; padding: 8px 12px; text-align: center; }}
+                    .kpi-item-title {{ font-size: 10.5px; color: #64748B; font-weight: bold; }}
+                    .kpi-item-val {{ font-size: 16px; color: #0F172A; font-weight: 800; margin-top: 2px; }}
+                    h3 {{ color: #1E3E62; font-size: 13px; margin: 12px 0 6px 0; border-left: 4px solid #2563EB; padding-left: 6px; }}
+                    table {{ width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 10.5px; }}
+                    th, td {{ border: 1px solid #CBD5E1; padding: 5px 7px; text-align: left; }}
+                    th {{ background-color: #F1F5F9; color: #1E293B; font-weight: bold; }}
+                    tr:nth-child(even) {{ background-color: #F8FAFC; }}
+                    .sign-box {{ display: flex; justify-content: space-between; margin-top: 25px; padding-top: 10px; }}
+                    .sign-col {{ width: 30%; text-align: center; border-top: 1px dashed #94A3B8; padding-top: 5px; font-size: 10.5px; }}
+                    @media print {{
+                        button {{ display: none !important; }}
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="header-box">
+                    <div class="title-text">
+                        <h2>บจก. พลวัฒน์ เอ็นจิเนียริ่ง ซัพพลาย (PES)</h2>
+                        <p>รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production & Performance Report)</p>
+                    </div>
+                    <div style="text-align: right; font-size: 11px;">
+                        <b>ประจำเดือน:</b> {month_names[selected_month_idx-1]} {selected_year}<br>
+                        <b>วันที่ออกรายงาน:</b> {get_bangkok_now().strftime('%d/%m/%Y %H:%M น.')}
+                    </div>
+                </div>
+
+                <div class="kpi-grid">
+                    <div class="kpi-item"><div class="kpi-item-title">ชิ้นงานที่ผลิตเสร็จ</div><div class="kpi-item-val">{total_qty_pieces:,} ชิ้น ({total_jobs_count} คิว)</div></div>
+                    <div class="kpi-item"><div class="kpi-item-title">ชั่วโมงเดินเครื่องจริง</div><div class="kpi-item-val">{total_running_hrs:,.1f} ชม.</div></div>
+                    <div class="kpi-item"><div class="kpi-item-title">มูลค่าผลผลิตรวม</div><div class="kpi-item-val">{total_output_val:,.2f} ฿</div></div>
+                    <div class="kpi-item"><div class="kpi-item-title">ตรงตามแผน (On-Time)</div><div class="kpi-item-val">{on_time_rate:.1f} %</div></div>
+                </div>
+
+                <h3>1. สรุปผลการทำงานและมูลค่าแยกตามเครื่องจักร / แผนก</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>เครื่องจักร / แผนก</th><th>จำนวนคิว</th><th>ชิ้นงาน</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>ผลต่าง</th><th>เรตราคา</th><th>มูลค่ารวม</th>
+                        </tr>
+                    </thead>
+                    <tbody>{rows_m_html}</tbody>
+                </table>
+
+                <h3>2. รายละเอียดงานที่เสร็จสิ้นทั้งหมด</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>แผนงาน</th><th>ชื่อ Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>สถานี</th><th>เริ่มจริง</th><th>เสร็จจริง</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>มูลค่า (฿)</th>
+                        </tr>
+                    </thead>
+                    <tbody>{rows_job_html}</tbody>
+                </table>
+
+                <div class="sign-box">
+                    <div class="sign-col">ผู้จัดทำรายงาน / ฝ่ายวางแผน<br><br><br>( .................................................... )</div>
+                    <div class="sign-col">หัวหน้าแผนกผลิต / ผู้ตรวจสอบ<br><br><br>( .................................................... )</div>
+                    <div class="sign-col">ผู้จัดการโรงงาน / ผู้อนุมัติ<br><br><br>( .................................................... )</div>
+                </div>
+
+                <script>
+                    window.onload = function() {{
+                        window.print();
+                    }}
+                </script>
+            </body>
+            </html>
+            """
+            b64_report_html = base64.b64encode(report_html_full.encode('utf-8')).decode('utf-8')
+
+            # ปุ่มดาวน์โหลด Excel / PDF
+            with r_col_exp:
+                st.write("")
+                b_col_pdf, b_col_csv = st.columns(2)
+                
+                with b_col_pdf:
+                    st.markdown(f"""
+                    <a href="data:text/html;base64,{b64_report_html}" target="_blank" style="text-decoration:none;">
+                        <button style="width:100%; background:linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color:white; border:none; padding:8px 12px; border-radius:8px; font-weight:bold; cursor:pointer; box-shadow:0 3px 8px rgba(220,38,38,0.25);">
+                            📄 พิมพ์ / บันทึกเป็น PDF
+                        </button>
+                    </a>
+                    """, unsafe_allow_html=True)
+
+                with b_col_csv:
+                    csv_data = monthly_jobs[[
+                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
+                        "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", 
+                        "เวลาจริง (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"
+                    ]].to_csv(index=False).encode('utf-8-sig')
                     
+                    st.download_button(
+                        label="📥 ดาวน์โหลดเป็น CSV/Excel",
+                        data=csv_data,
+                        file_name=f"PES_Monthly_Report_{selected_year}_{selected_month_idx:02d}.csv",
+                        mime="text/csv",
+                        type="secondary",
+                        use_container_width=True
+                    )
+
+            st.divider()
+
+            # 2. ตารางสรุปแยกตามรายเครื่องจักร (Machine Performance Summary)
+            st.markdown("#### 🏭 สรุปผลการทำงานและมูลค่าแยกตามเครื่องจักร / แผนก")
             if machine_summary:
-                df_m_sum = pd.DataFrame(machine_summary)
                 st.dataframe(
                     df_m_sum,
                     column_config={
