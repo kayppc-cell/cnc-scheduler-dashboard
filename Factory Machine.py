@@ -1378,6 +1378,30 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             placeholder="พิมพ์เพื่อกรองข้อมูล เช่น SS400, No.1, รอคิวผลิต, กำลังผลิต...",
                             key="search_active_editor_input"
                         )
+
+                    # --- ส่วนเครื่องมือกู้คืนเวลาแผนเริ่มต้น (เฉพาะงานรอคิว/กำลังผลิต) ---
+                    with st.expander("🛠️ เครื่องมือกู้คืนเวลาแผนเริ่มต้น (เฉพาะงานรอคิว/กำลังผลิต)", expanded=False):
+                        st.caption("ระบบจะค้นหารายการที่ยังไม่เสร็จสิ้นและมีเวลาโปรแกรมน้อยกว่า 5 นาที เพื่อตั้งค่าเวลาเริ่มต้นให้อัตโนมัติ (ไม่กระทบงานที่ Finish แล้ว)")
+                        c_rec_set, c_rec_prog, c_rec_btn = st.columns([2, 2, 2])
+                        with c_rec_set:
+                            rec_setup_val = st.number_input("Setup เริ่มต้น (นาที):", value=10, step=5, key="rec_setup_input")
+                        with c_rec_prog:
+                            rec_prog_val = st.number_input("โปรแกรมเริ่มต้น (นาที):", value=120, step=10, key="rec_prog_input")
+                        with c_rec_btn:
+                            st.write("")
+                            st.write("")
+                            if st.button("⚡ กู้คืนเวลาแถวที่เพี้ยนทันที", type="primary", use_container_width=True, key="btn_recover_pending_jobs"):
+                                recovered_count = 0
+                                pending_mask = df_db["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]) & (df_db["โปรแกรม (น.)"] <= 5)
+                                for _, r in df_db[pending_mask].iterrows():
+                                    update_supabase_job(int(r["ID"]), {
+                                        "setup_mins": float(rec_setup_val),
+                                        "prog_hrs": float(rec_prog_val)
+                                    })
+                                    recovered_count += 1
+                                st.cache_data.clear()
+                                st.toast(f"กู้คืนเวลาสำเร็จทั้งหมด {recovered_count} รายการ!", icon="⚡")
+                                st.rerun()
                 else:
                     search_query_editor = st.text_input(
                         "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
