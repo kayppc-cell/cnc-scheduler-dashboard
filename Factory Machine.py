@@ -180,10 +180,8 @@ def highlight_running_deadlines(row, planned_finish_map):
             diff_mins = (finish_dt - now).total_seconds() / 60.0
 
             if diff_mins < 0:
-                # 🔴 เลยเวลาที่วางแผนไว้แล้ว -> สีแดงอ่อน ตัวหนังสือแดงเข้ม
                 return ['background-color: #FECACA; color: #991B1B; font-weight: bold;'] * len(row)
             elif 0 <= diff_mins <= 60:
-                # 🟡 เหลือเวลาน้อยกว่า 1 ชม. -> สีเหลืองส้มอ่อน ตัวหนังสือส้มเข้ม
                 return ['background-color: #FEF08A; color: #854D0E; font-weight: bold;'] * len(row)
 
     return [''] * len(row)
@@ -429,7 +427,7 @@ st.markdown("""
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        min-height: 140px;
+        min-height: 165px;
         border: 1px solid rgba(255,255,255,0.12);
     }
     .tv-card-running {
@@ -2557,8 +2555,8 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             hold_machines_count += 1
             h_first = hold_job.iloc[0]
             hold_alert_html = f"""
-            <div style="margin-top:6px; padding:4px 8px; background:rgba(217, 119, 6, 0.25); border:1px dashed #FCD34D; border-radius:6px; font-size:10.5px; color:#FEF08A;">
-                🛑 <b>พักงานรอ:</b> {h_first.get('แผนงาน', '-')[:8]} ({h_first.get('ชื่อ Drawing.', '-')[:15]})
+            <div style="margin-top:6px; padding:4px 8px; background:rgba(217, 119, 6, 0.35); border:1.2px dashed #FCD34D; border-radius:6px; font-size:11px; color:#FEF08A; line-height:1.3;">
+                🛑 <b>พักงานรอ:</b> {h_first.get('แผนงาน', '-')} ({h_first.get('ชื่อ Drawing.', '-')})
             </div>
             """
 
@@ -2591,7 +2589,12 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                     tv_card_cls = "tv-card tv-card-warning"
                     badge_html = '<span class="tv-pulse-dot" style="background-color:#FCD34D;"></span> <b style="color:#FFFFFF; margin-left:6px;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
 
-            time_info_combined = f"🚀 <b>เริ่ม:</b> {start_disp_txt} | ⏱️ <b>รันแล้ว:</b> {elapsed_txt}" + hold_alert_html
+            time_info_combined = f"""
+            <div style="font-size:12px; font-weight:700; color:#FFFFFF; margin-bottom:2px;">
+                🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span> | ⏱️ <b>รันแล้ว:</b> {elapsed_txt}
+            </div>
+            {hold_alert_html}
+            """
 
             machine_status_cards.append({
                 "machine": m,
@@ -2604,7 +2607,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "time_info": time_info_combined
             })
         elif not hold_job.empty:
-            # กรณีที่ไม่มีงานอื่นรันเลย แต่มีงานพักคาเครื่องไว้
             h_info = hold_job.iloc[0]
             machine_status_cards.append({
                 "machine": m,
@@ -2614,7 +2616,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": str(h_info.get("แผนงาน", "-")),
                 "drawing": str(h_info.get("ชื่อ Drawing.", "-")),
                 "step": str(h_info.get("ขั้นตอน (Step)", "-")),
-                "time_info": "⚠️ เครื่องหยุด: รอเบิกวัสดุใหม่"
+                "time_info": "<div style='font-size:12px; font-weight:700; color:#FEF3C7;'>⚠️ เครื่องหยุด: รอเบิกวัสดุใหม่</div>"
             })
         else:
             idle_machines_count += 1
@@ -2632,7 +2634,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": "พร้อมรับงาน",
                 "drawing": next_txt,
                 "step": "-",
-                "time_info": f"📋 คิวรอ: {len(waiting_jobs)} งาน"
+                "time_info": f"<div style='font-size:12px; font-weight:600; color:#CBD5E1;'>📋 คิวรอ: {len(waiting_jobs)} งาน</div>"
             })
 
     # Header แผงควบคุมสด TV พร้อมนาฬิกาวินาทีเดินสด (Live Real-time Clock)
@@ -2672,7 +2674,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             f'<div style="font-size:12px; color:rgba(255,255,255,0.85); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px;">📄 {c["drawing"]}</div>'
             f'<div style="font-size:11.5px; color:rgba(255,255,255,0.7); margin-top:2px;">⚙️ ขั้นตอน: {c["step"]}</div>'
             f'</div>'
-            f'<div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.15); font-size:11px; font-weight:600; color:rgba(255,255,255,0.9);">'
+            f'<div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.15);">'
             f'{c["time_info"]}'
             f'</div>'
             f'</div>'
