@@ -427,7 +427,7 @@ st.markdown("""
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        min-height: 165px;
+        min-height: 155px;
         border: 1px solid rgba(255,255,255,0.12);
     }
     .tv-card-running {
@@ -435,7 +435,6 @@ st.markdown("""
         border-left: 8px solid #34D399;
     }
     
-    /* Animation ไฟกระพริบการ์ด TV เมื่อใกล้เสร็จ หรือเกินเวลาแผน */
     @keyframes pulse-card-warning {
         0% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); opacity: 1; }
         50% { box-shadow: 0 0 24px rgba(245, 158, 11, 0.9); opacity: 0.85; }
@@ -2529,7 +2528,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     now_bangkok = get_bangkok_now()
     cur_date_str = now_bangkok.strftime("%d/%m/%Y")
 
-    # คำนวณแผนจบงานสำหรับจอ TV
     planned_finish_map_tv = {}
     if not df_live.empty:
         _, df_summary_tv, _, _ = calculate_shop_schedule(df_live, now_bangkok.replace(tzinfo=None))
@@ -2549,16 +2547,12 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         hold_job = m_jobs[m_jobs["สถานะงาน"].str.contains("พักงาน")]
         waiting_jobs = m_jobs[m_jobs["สถานะงาน"].str.contains("รอคิว")]
 
-        # เช็คว่ามีงานพักรอวัสดุค้างอยู่หรือไม่ (ทำแถบเตือนเสริมใต้การ์ด)
+        # แถบแจ้งเตือนงานพักรอวัสดุ (เขียนบรรทัดเดียว ป้องกัน HTML แตก)
         hold_alert_html = ""
         if not hold_job.empty:
             hold_machines_count += 1
             h_first = hold_job.iloc[0]
-            hold_alert_html = f"""
-            <div style="margin-top:6px; padding:4px 8px; background:rgba(217, 119, 6, 0.35); border:1.2px dashed #FCD34D; border-radius:6px; font-size:11px; color:#FEF08A; line-height:1.3;">
-                🛑 <b>พักงานรอ:</b> {h_first.get('แผนงาน', '-')} ({h_first.get('ชื่อ Drawing.', '-')})
-            </div>
-            """
+            hold_alert_html = f'<div style="margin-top:5px; padding:3px 6px; background:rgba(217, 119, 6, 0.35); border:1px dashed #FCD34D; border-radius:6px; font-size:11px; color:#FEF08A;">🛑 <b>พักงานรอ:</b> {h_first.get("แผนงาน", "-")} ({h_first.get("ชื่อ Drawing.", "-")})</div>'
 
         if not running_job.empty:
             running_machines_count += 1
@@ -2575,7 +2569,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 elapsed_min = int((now_bangkok.replace(tzinfo=None) - start_dt).total_seconds() / 60.0)
                 elapsed_txt = f"{elapsed_min} นาที ({elapsed_min/60.0:.1f} ชม.)"
             
-            # เช็คเวลาเสร็จสิ้นตามแผนสำหรับเปลี่ยนสีการ์ด TV และกระพริบเตือน
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:6px;">กำลังรันงาน</b>'
             
@@ -2589,12 +2582,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                     tv_card_cls = "tv-card tv-card-warning"
                     badge_html = '<span class="tv-pulse-dot" style="background-color:#FCD34D;"></span> <b style="color:#FFFFFF; margin-left:6px;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
 
-            time_info_combined = f"""
-            <div style="font-size:12px; font-weight:700; color:#FFFFFF; margin-bottom:2px;">
-                🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span> | ⏱️ <b>รันแล้ว:</b> {elapsed_txt}
-            </div>
-            {hold_alert_html}
-            """
+            time_info_combined = f'<div style="font-size:12px; font-weight:700; color:#FFFFFF;">🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span> | ⏱️ <b>รันแล้ว:</b> {elapsed_txt}</div>{hold_alert_html}'
 
             machine_status_cards.append({
                 "machine": m,
@@ -2660,7 +2648,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     </div>
     """, unsafe_allow_html=True)
 
-    # ประกอบ Grid Card 17 สถานีงาน
+    # ประกอบ Grid Card 17 สถานีงานแบบบรรทัดเดียว ป้องกัน Render Error
     card_items = []
     for c in machine_status_cards:
         card_item = (
