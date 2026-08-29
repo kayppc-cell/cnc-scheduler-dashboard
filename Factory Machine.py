@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time as dtime
+import time
 import zoneinfo
 import os
 import base64
@@ -96,13 +97,13 @@ def get_day_working_windows(dt_date):
         return []
     elif weekday == 5:
         return [
-            (datetime.combine(dt_date, time(8, 0)), datetime.combine(dt_date, time(12, 0))),
-            (datetime.combine(dt_date, time(13, 0)), datetime.combine(dt_date, time(17, 0)))
+            (datetime.combine(dt_date, dtime(8, 0)), datetime.combine(dt_date, dtime(12, 0))),
+            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
         return [
-            (datetime.combine(dt_date, time(8, 0)), datetime.combine(dt_date, time(12, 0))),
-            (datetime.combine(dt_date, time(13, 0)), datetime.combine(dt_date, time(20, 0)))
+            (datetime.combine(dt_date, dtime(8, 0)), datetime.combine(dt_date, dtime(12, 0))),
+            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(20, 0)))
         ]
 
 def get_next_valid_work_time(dt: datetime) -> datetime:
@@ -115,7 +116,7 @@ def get_next_valid_work_time(dt: datetime) -> datetime:
             elif w_start <= dt < w_end:
                 return dt
         cur_date += timedelta(days=1)
-        dt = datetime.combine(cur_date, time(8, 0))
+        dt = datetime.combine(cur_date, dtime(8, 0))
     return dt
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
@@ -1872,14 +1873,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 )
                 
                 if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
-                    start_view = datetime.combine(selected_date_range[0], time(7, 30))
-                    end_view = datetime.combine(selected_date_range[1], time(20, 30))
+                    start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
+                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
-                    start_view = datetime.combine(selected_date_range[0], time(7, 30))
-                    end_view = datetime.combine(selected_date_range[0], time(20, 30))
+                    start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
+                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
                 else:
-                    start_view = datetime.combine(gantt_min_date, time(7, 30))
-                    end_view = datetime.combine(gantt_max_date, time(20, 30))
+                    start_view = datetime.combine(gantt_min_date, dtime(7, 30))
+                    end_view = datetime.combine(gantt_max_date, dtime(20, 30))
 
                 fig.update_xaxes(
                     range=[start_view, end_view],
@@ -1893,8 +1894,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     
                     while cur_d <= max_scan_d:
                         if cur_d.weekday() == 6:
-                            sun_start = datetime.combine(cur_d, time(0, 0))
-                            sun_end = datetime.combine(cur_d + timedelta(days=1), time(0, 0))
+                            sun_start = datetime.combine(cur_d, dtime(0, 0))
+                            sun_end = datetime.combine(cur_d + timedelta(days=1), dtime(0, 0))
                             fig.add_vrect(
                                 x0=sun_start, x1=sun_end,
                                 fillcolor="#F8FAFC", opacity=0.8,
@@ -1903,8 +1904,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 annotation_font_size=10, annotation_font_color="#94A3B8"
                             )
                         else:
-                            lunch_start = datetime.combine(cur_d, time(12, 0))
-                            lunch_end = datetime.combine(cur_d, time(13, 0))
+                            lunch_start = datetime.combine(cur_d, dtime(12, 0))
+                            lunch_end = datetime.combine(cur_d, dtime(13, 0))
                             fig.add_vrect(
                                 x0=lunch_start, x1=lunch_end,
                                 fillcolor="#FEF3C7", opacity=0.55,
@@ -2218,9 +2219,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     })
             df_m_sum = pd.DataFrame(machine_summary)
 
-            # สร้าง HTML สำหรับ Print / PDF
             rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td style='text-align:center;'>{r['จำนวนคิวงาน']} คิว</td><td style='text-align:center;'>{r['ชิ้นงานรวม (ชิ้น)']} ชิ้น</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:center;'>{r['ผลต่าง']}</td><td style='text-align:right;'>{r['เรตราคา']}</td><td style='text-align:right; font-weight:bold;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td></tr>" for _, r in df_m_sum.iterrows()])
-            
             rows_job_html = "".join([f"<tr><td>{r['แผนงาน']}</td><td>{r['ชื่อ Drawing.']}</td><td style='text-align:center;'>{r['จำนวน']}</td><td style='text-align:center;'>{r['วัสดุ']}</td><td>{r['ขั้นตอน (Step)']}</td><td>{r['เลือกเครื่องจักร']}</td><td style='text-align:center;'>{pd.to_datetime(r['เริ่มจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เริ่มจริง']) else '-'}</td><td style='text-align:center;'>{pd.to_datetime(r['เสร็จจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เสร็จจริง']) else '-'}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่ารวม (บาท)']:,.2f} ฿</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
 
             report_html_full = f"""
@@ -2297,7 +2296,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             
             json_report_html = json.dumps(report_html_full)
 
-            # ปุ่มดาวน์โหลด Excel / PDF
             with r_col_exp:
                 st.write("")
                 b_col_pdf, b_col_csv = st.columns(2)
@@ -2424,16 +2422,9 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 # VIEW 4: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
+    # ล้างแคชเพื่อให้ดึงข้อมูลสดจาก Supabase เสมอ
+    st.cache_data.clear()
     df_live = fetch_jobs_from_supabase()
-
-    # JavaScript Auto-refresh ทุก 30 วินาที สำหรับหน้าจอ TV
-    components.html("""
-    <script>
-        setTimeout(function() {
-            window.parent.location.reload();
-        }, 30000);
-    </script>
-    """, height=0)
 
     now_bangkok = get_bangkok_now()
     cur_time_str = now_bangkok.strftime("%H:%M:%S")
@@ -2486,7 +2477,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         else:
             idle_machines_count += 1
             next_txt = "ไม่มีคิวรอ"
-            next_plan = "-"
             if not waiting_jobs.empty:
                 w_first = waiting_jobs.iloc[0]
                 next_plan = f"{w_first.get('แผนงาน', '-')} ({w_first.get('ชื่อ Drawing.', '-')})"
@@ -2526,7 +2516,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     </div>
     """, unsafe_allow_html=True)
 
-    # ประกอบ Grid Card 17 สถานีงาน (แบบกระชับ ไม่ติด Indentation Code Block)
+    # ประกอบ Grid Card 17 สถานีงาน
     card_items = []
     for c in machine_status_cards:
         card_item = (
@@ -2549,3 +2539,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
+
+    # หน่วงเวลา 30 วินาทีแล้วสั่ง rerun เฉพาะใน Streamlit (หน้าจอไม่เด้งกลับหน้าแรก)
+    time.sleep(30)
+    st.rerun()
