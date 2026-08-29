@@ -953,7 +953,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 if st.button(f"🏁 Finish รวมทุกงานที่กำลังรัน ({len(running_jobs)} คิว)", disabled=(len(running_jobs) == 0), type="secondary", use_container_width=True):
                     now_str = get_bangkok_str()
                     for _, r in running_jobs.iterrows():
-                        # บันทึกแค่สถานะเสร็จสิ้นและเวลาจบจริง ไม่เขียนทับ prog_hrs
                         p = {
                             "status": "🟩 เสร็จสิ้นแล้ว", 
                             "actual_finish": now_str
@@ -1112,7 +1111,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                     if st.button("🏁 Finish (จบงานจริง)", key=f"btn_finish_step_{s_id}", type="primary", use_container_width=True):
                                         now_str = get_bangkok_str()
                                         
-                                        # บันทึกสถานะเสร็จและเวลาจริงเท่านั้น ไม่เขียนทับเวลาแผนเดิม
                                         finish_payload = {
                                             "status": "🟩 เสร็จสิ้นแล้ว",
                                             "actual_finish": now_str
@@ -1171,7 +1169,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num}", key=f"btn_add_step_{plan_code}_{drawing_code}_{group_idx}", type="secondary", use_container_width=True):
                         now_str = get_bangkok_str()
                         
-                        # ดึงเวลาแผนมาตรฐานมาจาก Step แรกอัตโนมัติ เพื่อไม่ให้ในแดชบอร์ดกลายเป็น 0.00 ชม.
                         base_setup = safe_float(first_step_info.get("Setup (น.)"), 10.0)
                         base_basic = safe_float(first_step_info.get("Basic (น.)"), 0.0)
                         base_prog = safe_float(first_step_info.get("โปรแกรม (น.)"), 120.0)
@@ -1379,28 +1376,55 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             key="search_active_editor_input"
                         )
 
-                    # --- ส่วนเครื่องมือกู้คืนเวลาแผนเริ่มต้น (เฉพาะงานรอคิว/กำลังผลิต) ---
-                    with st.expander("🛠️ เครื่องมือกู้คืนเวลาแผนเริ่มต้น (เฉพาะงานรอคิว/กำลังผลิต)", expanded=False):
-                        st.caption("ระบบจะค้นหารายการที่ยังไม่เสร็จสิ้นและมีเวลาโปรแกรมน้อยกว่า 5 นาที เพื่อตั้งค่าเวลาเริ่มต้นให้อัตโนมัติ (ไม่กระทบงานที่ Finish แล้ว)")
-                        c_rec_set, c_rec_prog, c_rec_btn = st.columns([2, 2, 2])
-                        with c_rec_set:
-                            rec_setup_val = st.number_input("Setup เริ่มต้น (นาที):", value=10, step=5, key="rec_setup_input")
-                        with c_rec_prog:
-                            rec_prog_val = st.number_input("โปรแกรมเริ่มต้น (นาที):", value=120, step=10, key="rec_prog_input")
-                        with c_rec_btn:
-                            st.write("")
-                            st.write("")
-                            if st.button("⚡ กู้คืนเวลาแถวที่เพี้ยนทันที", type="primary", use_container_width=True, key="btn_recover_pending_jobs"):
-                                recovered_count = 0
-                                pending_mask = df_db["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]) & (df_db["โปรแกรม (น.)"] <= 5)
-                                for _, r in df_db[pending_mask].iterrows():
-                                    update_supabase_job(int(r["ID"]), {
-                                        "setup_mins": float(rec_setup_val),
-                                        "prog_hrs": float(rec_prog_val)
-                                    })
-                                    recovered_count += 1
+                    # --- ส่วนเครื่องมือกู้คืนข้อมูล (เวลาแผน & วันขึ้นงานที่เพี้ยน) ---
+                    with st.expander("🛠️ เครื่องมือกู้คืนข้อมูล (เวลาแผน & วันขึ้นงานที่เพี้ยน)", expanded=False):
+                        st.caption("เลือกเครื่องมือกู้คืนข้อมูลเฉพาะรายการที่ยังค้างอยู่ในคิว (ไม่กระทบงานที่ Finish แล้ว)")
+                        
+                        tab_rec1, tab_rec2 = st.tabs(["⏱️ กู้คืนชั่วโมงทำงาน (Setup/โปรแกรม)", "📅 กู้คืนวัน-เวลาขึ้นงาน (Ready At)"])
+                        
+                        with tab_rec1:
+                            c_rec_set, c_rec_prog, c_rec_btn = st.columns([2, 2, 2])
+                            with c_rec_set:
+                                rec_setup_val = st.number_input("Setup เริ่มต้น (นาที):", value=10, step=5, key="rec_setup_input")
+                            with c_rec_prog:
+                                rec_prog_val = st.number_input("โปรแกรมเริ่มต้น (นาที):", value=120, step=10, key="rec_prog_input")
+                            with c_rec_btn:
+                                st.write("")
+                                st.write("")
+                                if st.button("⚡ กู้คืนชั่วโมงทำงาน", type="primary", use_container_width=True, key="btn_recover_pending_jobs"):
+                                    recovered_count = 0
+                                    pending_mask = df_db["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]) & (df_db["โปรแกรม (น.)"] <= 5)
+                                    for _, r in df_db[pending_mask].iterrows():
+                                        update_supabase_job(int(r["ID"]), {
+                                            "setup_mins": float(rec_setup_val),
+                                            "prog_hrs": float(rec_prog_val)
+                                        })
+                                        recovered_count += 1
+                                    st.cache_data.clear()
+                                    st.toast(f"กู้คืนเวลาทำงานสำเร็จ {recovered_count} รายการ!", icon="⚡")
+                                    st.rerun()
+
+                        with tab_rec2:
+                            st.markdown("**ดึงวัน-เวลาขึ้นงานจาก Step แรกของแต่ละ Drawing กลับมาใส่อัตโนมัติ:**")
+                            if st.button("🔄 กู้คืนวัน-เวลาขึ้นงาน (Sync ตาม Step 1)", type="secondary", use_container_width=True, key="btn_sync_ready_dates"):
+                                sync_count = 0
+                                base_ready_map = {}
+                                for _, r in df_db.sort_values(by="ID", ascending=True).iterrows():
+                                    key = (str(r["แผนงาน"]), str(r["ชื่อ Drawing."]))
+                                    r_dt = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
+                                    if key not in base_ready_map and r_dt is not None:
+                                        base_ready_map[key] = r_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+                                pending_jobs = df_db[df_db["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])]
+                                for _, r in pending_jobs.iterrows():
+                                    key = (str(r["แผนงาน"]), str(r["ชื่อ Drawing."]))
+                                    target_ready_str = base_ready_map.get(key)
+                                    if target_ready_str:
+                                        update_supabase_job(int(r["ID"]), {"ready_at": target_ready_str})
+                                        sync_count += 1
+
                                 st.cache_data.clear()
-                                st.toast(f"กู้คืนเวลาสำเร็จทั้งหมด {recovered_count} รายการ!", icon="⚡")
+                                st.toast(f"กู้คืนวัน-เวลาขึ้นงานสำเร็จ {sync_count} รายการ!", icon="📅")
                                 st.rerun()
                 else:
                     search_query_editor = st.text_input(
@@ -1674,7 +1698,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 display_cols = [c for c in df_display.columns if c not in ["เวลาเริ่มจริง", "ID", "เวลาจบงาน_DT"]]
 
-                # สร้าง Map เช็คเวลาจบงาน
                 wo_finish_map = dict(
                     zip(
                         zip(df_summary["แผนงาน"].astype(str), df_summary["ชื่อ Drawing."].astype(str)),
@@ -1682,7 +1705,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
                 )
 
-                # ทำการใส่สีแจ้งเตือนในแต่ละแถว
                 styled_df_display = df_display[display_cols].style.apply(
                     highlight_running_deadlines,
                     planned_finish_map=wo_finish_map,
