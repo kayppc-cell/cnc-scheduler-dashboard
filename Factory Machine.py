@@ -797,20 +797,22 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_work_hrs
 
 # =========================================================
-# 6. เมนูเปลี่ยนโหมด (4 แท็บมาตรฐาน)
+# 6. เมนูเปลี่ยนโหมด (4 แท็บมาตรฐาน - ผูก Session State 100%)
 # =========================================================
 nav_options = ["👷 โหมดช่างหน้าเครื่อง", "📊 แดชบอร์ดภาพรวมโรงงาน", "📑 รายงานสรุปประจำเดือน", "📺 จอทีวีกลางโรงงาน (TV Live)"]
+
+def on_nav_change():
+    st.session_state.current_view = st.session_state.main_navigation_radio
+
 selected_tab = st.radio(
     "เลือกมุมมอง:",
     nav_options,
     index=nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0,
     horizontal=True,
-    label_visibility="collapsed"
+    label_visibility="collapsed",
+    key="main_navigation_radio",
+    on_change=on_nav_change
 )
-
-if selected_tab != st.session_state.current_view:
-    st.session_state.current_view = selected_tab
-    st.rerun()
 
 # ---------------------------------------------------------
 # VIEW 1: หน้าจอช่างหน้าเครื่อง
@@ -2171,7 +2173,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             total_output_val = monthly_jobs["มูลค่ารวม (บาท)"].sum()
             on_time_rate = (on_time_count / total_jobs_count * 100.0) if total_jobs_count > 0 else 100.0
 
-            # 1. การ์ด KPIs ประจำเดือน
             st.markdown(f"""
             <div class="kpi-container">
                 <div class="kpi-card kpi-green">
@@ -2193,7 +2194,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             </div>
             """, unsafe_allow_html=True)
 
-            # สร้างสรุปรายเครื่องจักร
             machine_summary = []
             for m in MACHINE_LIST:
                 m_sub = monthly_jobs[monthly_jobs["เลือกเครื่องจักร"] == m]
@@ -2538,5 +2538,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
+    # รีเฟรชเฉพาะเมื่อยังคงอยู่ที่หน้าจอทีวีเท่านั้น (นับเวลา 30 วิ)
     time.sleep(30)
-    st.rerun()
+    if st.session_state.get("current_view") == "📺 จอทีวีกลางโรงงาน (TV Live)":
+        st.rerun()
