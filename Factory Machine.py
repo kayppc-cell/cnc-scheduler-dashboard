@@ -394,6 +394,7 @@ st.markdown("""
         cursor: not-allowed !important;
     }
 
+    /* สไตล์เฉพาะหน้าจอ TV Live Dashboard */
     .tv-grid-container {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
@@ -799,6 +800,9 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
 # =========================================================
 nav_options = ["👷 โหมดช่างหน้าเครื่อง", "📊 แดชบอร์ดภาพรวมโรงงาน", "📑 รายงานสรุปประจำเดือน", "📺 จอทีวีกลางโรงงาน (TV Live)"]
 
+if "main_navigation_radio" not in st.session_state:
+    st.session_state.main_navigation_radio = st.session_state.current_view
+
 def on_nav_change():
     st.session_state.current_view = st.session_state.main_navigation_radio
 
@@ -1168,6 +1172,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             st.rerun()
                 
                 st.write("")
+    else:
+        st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
 
 # ---------------------------------------------------------
 # VIEW 2: Dashboard ภาพรวมโรงงาน
@@ -1203,7 +1209,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True):
                 st.session_state.user_role = None
-                st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
+                st.session_state.current_view = "📊 แดชบอร์ดภาพรวมโรงงาน"
+                st.session_state.main_navigation_radio = "📊 แดชบอร์ดภาพรวมโรงงาน"
                 st.rerun()
 
         df_db = fetch_jobs_from_supabase()
@@ -2101,7 +2108,8 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True, key="btn_logout_monthly"):
                 st.session_state.user_role = None
-                st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
+                st.session_state.current_view = "📑 รายงานสรุปประจำเดือน"
+                st.session_state.main_navigation_radio = "📑 รายงานสรุปประจำเดือน"
                 st.rerun()
 
         df_db = fetch_jobs_from_supabase()
@@ -2534,11 +2542,14 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    # Auto-refresh สำหรับหน้าจอทีวีแบบนุ่มนวล
+    # ตัวนับเวลารีเฟรชแบบ Client-Side สำหรับหน้าจอ TV โดยเฉพาะ
     components.html("""
     <script>
-        var timer = setTimeout(function() {
-            window.parent.document.querySelector('input[type="radio"]:checked').click();
+        setTimeout(function() {
+            const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
+            if (radioBtns && radioBtns.length >= 4 && radioBtns[3].checked) {
+                radioBtns[3].click();
+            }
         }, 30000);
     </script>
     """, height=0)
