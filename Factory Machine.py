@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta, time as dtime
-import time
 import zoneinfo
 import os
 import base64
@@ -395,7 +394,6 @@ st.markdown("""
         cursor: not-allowed !important;
     }
 
-    /* สไตล์เฉพาะหน้าจอ TV Live Dashboard */
     .tv-grid-container {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
@@ -1170,8 +1168,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             st.rerun()
                 
                 st.write("")
-    else:
-        st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
 
 # ---------------------------------------------------------
 # VIEW 2: Dashboard ภาพรวมโรงงาน
@@ -1878,7 +1874,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
                     start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
-                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
+                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
                 else:
                     start_view = datetime.combine(gantt_min_date, dtime(7, 30))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
@@ -2538,6 +2534,11 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    time.sleep(30)
-    if st.session_state.get("current_view") == "📺 จอทีวีกลางโรงงาน (TV Live)":
-        st.rerun()
+    # Auto-refresh สำหรับหน้าจอทีวีแบบนุ่มนวล
+    components.html("""
+    <script>
+        var timer = setTimeout(function() {
+            window.parent.document.querySelector('input[type="radio"]:checked').click();
+        }, 30000);
+    </script>
+    """, height=0)
