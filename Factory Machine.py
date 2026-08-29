@@ -394,7 +394,6 @@ st.markdown("""
         cursor: not-allowed !important;
     }
 
-    /* สไตล์เฉพาะหน้าจอ TV Live Dashboard */
     .tv-grid-container {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
@@ -1347,14 +1346,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                     with tool_search:
                         search_query_editor = st.text_input(
-                            "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร):",
-                            placeholder="พิมพ์เพื่อกรองข้อมูล...",
+                            "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
+                            placeholder="พิมพ์เพื่อกรองข้อมูล เช่น SS400, No.1, รอคิวผลิต, กำลังผลิต...",
                             key="search_active_editor_input"
                         )
                 else:
                     search_query_editor = st.text_input(
-                        "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร):",
-                        placeholder="พิมพ์เพื่อกรองข้อมูล...",
+                        "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
+                        placeholder="พิมพ์เพื่อกรองข้อมูล เช่น SS400, No.1, รอคิวผลิต, กำลังผลิต...",
                         key="search_active_editor_input_viewer"
                     )
 
@@ -1364,7 +1363,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         active_jobs_editor_df["แผนงาน"].astype(str).str.lower().str.contains(q) |
                         active_jobs_editor_df["ชื่อ Drawing."].astype(str).str.lower().str.contains(q) |
                         active_jobs_editor_df["วัสดุ"].astype(str).str.lower().str.contains(q) |
-                        active_jobs_editor_df["เลือกเครื่องจักร"].astype(str).str.lower().str.contains(q)
+                        active_jobs_editor_df["เลือกเครื่องจักร"].astype(str).str.lower().str.contains(q) |
+                        active_jobs_editor_df["สถานะงาน"].astype(str).str.lower().str.contains(q)
                     ].copy().reset_index(drop=True)
                 else:
                     display_editor_df = active_jobs_editor_df.copy().reset_index(drop=True)
@@ -1596,8 +1596,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 wo_search_col, _ = st.columns([4, 6])
                 with wo_search_col:
                     search_query_wo = st.text_input(
-                        "🔍 ค้นหาในใบจ่ายคิวงาน (แผนงาน, Drawing, เครื่องจักร):",
-                        placeholder="พิมพ์เพื่อค้นหาคิวงาน...",
+                        "🔍 ค้นหาในใบจ่ายคิวงาน (แผนงาน, Drawing, เครื่องจักร, สถานะ):",
+                        placeholder="พิมพ์เพื่อค้นหาคิวงาน เช่น รอคิวผลิต, กำลังผลิต...",
                         key="search_wo_sheet_input"
                     )
 
@@ -1608,7 +1608,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     df_display = df_display[
                         df_display["แผนงาน"].astype(str).str.lower().str.contains(q_wo) |
                         df_display["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_wo) |
-                        df_display["เครื่องจักร"].astype(str).str.lower().str.contains(q_wo)
+                        df_display["เครื่องจักร"].astype(str).str.lower().str.contains(q_wo) |
+                        df_display["สถานะ"].astype(str).str.lower().str.contains(q_wo)
                     ]
 
                 display_cols = [c for c in df_display.columns if c not in ["เวลาเริ่มจริง", "ID", "เวลาจบงาน_DT"]]
@@ -1701,12 +1702,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "จำนวน": st.column_config.NumberColumn("จำนวน", disabled=True, width=65, format="%d"),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", disabled=True, width=120),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", width=140),
-                            "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", disabled=True, width=145, format="DD/MM HH:mm"),
-                            "เสร็จจริง": st.column_config.DatetimeColumn("เวลาจบจริง", disabled=True, width=145, format="DD/MM HH:mm"),
-                            "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", disabled=True, width=90, format="%.2f"),
-                            "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", disabled=True, width=90, format="%.2f"),
-                            "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", disabled=True, width=80, format="%.2f"),
-                            "การประเมิน": st.column_config.TextColumn("ผลการผลิต", disabled=True, width=170),
+                            "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", width=145, format="DD/MM HH:mm"),
+                            "เสร็จจริง": st.column_config.DatetimeColumn("เวลาจบจริง", width=145, format="DD/MM HH:mm"),
+                            "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=90, format="%.2f"),
+                            "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=90, format="%.2f"),
+                            "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", width=80, format="%.2f"),
+                            "การประเมิน": st.column_config.TextColumn("ผลการผลิต", width=170),
                             "ลบ": st.column_config.CheckboxColumn("🗑️", help="ติ๊กถูกช่องนี้เพื่อเลือกลบรายการ", width=55),
                         },
                         hide_index=True,
