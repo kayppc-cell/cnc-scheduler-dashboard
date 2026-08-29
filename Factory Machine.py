@@ -951,16 +951,13 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
             with b_c2:
                 if st.button(f"🏁 Finish รวมทุกงานที่กำลังรัน ({len(running_jobs)} คิว)", disabled=(len(running_jobs) == 0), type="secondary", use_container_width=True):
-                    now_dt = get_bangkok_now()
-                    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    now_str = get_bangkok_str()
                     for _, r in running_jobs.iterrows():
-                        s_start = r.get("เริ่มจริง")
-                        calc_prog = 0.0
-                        if pd.notna(s_start):
-                            st_dt = pd.to_datetime(s_start)
-                            calc_prog = round((now_dt.replace(tzinfo=None) - st_dt).total_seconds() / 60.0, 1)
-                        p = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str}
-                        if calc_prog > 0: p["prog_hrs"] = calc_prog
+                        # บันทึกแค่สถานะเสร็จสิ้นและเวลาจบจริง ไม่เขียนทับ prog_hrs
+                        p = {
+                            "status": "🟩 เสร็จสิ้นแล้ว", 
+                            "actual_finish": now_str
+                        }
                         update_supabase_job(int(r["ID"]), p)
                     st.toast("บันทึกจบงานจริงทุกคิวเรียบร้อย!", icon="🏁")
                     st.rerun()
@@ -1113,20 +1110,14 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                             st.rerun()
                                 with c_btn_finish:
                                     if st.button("🏁 Finish (จบงานจริง)", key=f"btn_finish_step_{s_id}", type="primary", use_container_width=True):
-                                        now_dt = get_bangkok_now()
-                                        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
-                                        calc_prog_mins = 0.0
-                                        if pd.notna(s_start):
-                                            st_dt = pd.to_datetime(s_start)
-                                            calc_prog_mins = round((now_dt.replace(tzinfo=None) - st_dt).total_seconds() / 60.0, 1)
+                                        now_str = get_bangkok_str()
                                         
+                                        # บันทึกสถานะเสร็จและเวลาจริงเท่านั้น ไม่เขียนทับเวลาแผนเดิม
                                         finish_payload = {
                                             "status": "🟩 เสร็จสิ้นแล้ว",
                                             "actual_finish": now_str
                                         }
-                                        if calc_prog_mins > 0:
-                                            finish_payload["prog_hrs"] = calc_prog_mins
-
+                                        
                                         if update_supabase_job(s_id, finish_payload):
                                             st.toast(f"บันทึกเวลาจบจริง {s_name} เรียบร้อย!", icon="🏁")
                                             st.rerun()
@@ -1180,7 +1171,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num}", key=f"btn_add_step_{plan_code}_{drawing_code}_{group_idx}", type="secondary", use_container_width=True):
                         now_str = get_bangkok_str()
                         
-                        # ดึงเวลาแผนมาตรฐาน หรือใช้เวลาตาม Step แรกของใบสั่งผลิตนั้น
+                        # ดึงเวลาแผนมาตรฐานมาจาก Step แรกอัตโนมัติ เพื่อไม่ให้ในแดชบอร์ดกลายเป็น 0.00 ชม.
                         base_setup = safe_float(first_step_info.get("Setup (น.)"), 10.0)
                         base_basic = safe_float(first_step_info.get("Basic (น.)"), 0.0)
                         base_prog = safe_float(first_step_info.get("โปรแกรม (น.)"), 120.0)
