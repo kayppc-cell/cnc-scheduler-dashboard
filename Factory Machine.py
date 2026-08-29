@@ -1878,7 +1878,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
                     start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
-                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
+                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 else:
                     start_view = datetime.combine(gantt_min_date, dtime(7, 30))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
@@ -2538,7 +2538,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    # รีเฟรชเฉพาะเมื่อยังคงอยู่ที่หน้าจอทีวีเท่านั้น (นับเวลา 30 วิ)
     time.sleep(30)
     if st.session_state.get("current_view") == "📺 จอทีวีกลางโรงงาน (TV Live)":
         st.rerun()
