@@ -1672,29 +1672,87 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =====================================================
-            # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet) + แถบค้นหาและแจ้งเตือนสี
+            # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet) + แถบกรองสีกดได้
             # =====================================================
             if not df_summary.empty:
                 st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
 
-                wo_search_col, wo_legend_col = st.columns([4, 6])
+                if "wo_color_filter" not in st.session_state:
+                    st.session_state.wo_color_filter = "ALL"
+
+                # Map เช็คเวลาจบงานตามแผน
+                wo_finish_map = dict(
+                    zip(
+                        zip(df_summary["แผนงาน"].astype(str), df_summary["ชื่อ Drawing."].astype(str)),
+                        df_summary["เวลาจบงาน_DT"]
+                    )
+                )
+
+                # คำนวณจำนวนงานที่ติดสถานะเตือน
+                now_check = get_bangkok_now().replace(tzinfo=None)
+                warn_count = 0
+                late_count = 0
+                for _, r in df_summary.iterrows():
+                    if "กำลังผลิต" in str(r.get("สถานะ", "")):
+                        f_dt = wo_finish_map.get((str(r["แผนงาน"]), str(r["ชื่อ Drawing."])))
+                        if pd.notna(f_dt):
+                            diff_m = (f_dt - now_check).total_seconds() / 60.0
+                            if diff_m < 0:
+                                late_count += 1
+                            elif 0 <= diff_m <= 60:
+                                warn_count += 1
+
+                wo_search_col, wo_filter_btn_col = st.columns([4, 6])
                 with wo_search_col:
                     search_query_wo = st.text_input(
                         "🔍 ค้นหาในใบจ่ายคิวงาน (แผนงาน, Drawing, เครื่องจักร, สถานะ):",
                         placeholder="พิมพ์เพื่อค้นหาคิวงาน เช่น รอคิวผลิต, กำลังผลิต...",
                         key="search_wo_sheet_input"
                     )
-                with wo_legend_col:
-                    st.markdown("""
-                    <div style="padding-top: 28px; font-size: 12px; color: #475569;">
-                        <b>คำอธิบายสีสถานะกำลังผลิต:</b> 
-                        <span style="background-color: #FEF08A; color: #854D0E; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-left: 6px;">🟡 เหลือเวลาน้อยกว่า 1 ชม.</span>
-                        <span style="background-color: #FECACA; color: #991B1B; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-left: 6px;">🔴 เลยกำหนดเวลาแผน</span>
-                    </div>
-                    """, unsafe_allow_html=True)
 
-                df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
+                with wo_filter_btn_col:
+                    st.caption("**🎯 ตัวกรองด่วนสถานะเตือนเวลา:**")
+                    f_b1, f_b2, f_b3 = st.columns([1.5, 2.2, 2.2])
+                    with f_b1:
+                        btn_all_type = "primary" if st.session_state.wo_color_filter == "ALL" else "secondary"
+                        if st.button("🌐 ทั้งหมด", type=btn_all_type, use_container_width=True):
+                            st.session_state.wo_color_filter = "ALL"
+                            st.rerun()
+                    with f_b2:
+                        btn_warn_type = "primary" if st.session_state.wo_color_filter == "WARN" else "secondary"
+                        if st.button(f"🟡 ใกล้เสร็จ ({warn_count})", type=btn_warn_type, use_container_width=True, help="เหลือน้อยกว่า 1 ชม."):
+                            st.session_state.wo_color_filter = "WARN"
+                            st.rerun()
+                    with f_b3:
+                        btn_late_type = "primary" if st.session_state.wo_color_filter == "LATE" else "secondary"
+                        if st.button(f"🔴 เกินแผน ({late_count})", type=btn_late_type, use_container_width=True, help="เลยกำหนดเวลาแผน"):
+                            st.session_state.wo_color_filter = "LATE"
+                            st.rerun()
 
+                df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True).copy()
+
+                # กรองตามปุ่มสีที่กดเลือก
+                if st.session_state.wo_color_filter == "WARN":
+                    def is_warn_row(r):
+                        if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
+                        f_dt = wo_finish_map.get((str(r["แผนงาน"]), str(r["ชื่อ Drawing."])))
+                        if pd.notna(f_dt):
+                            diff_m = (f_dt - now_check).total_seconds() / 60.0
+                            return 0 <= diff_m <= 60
+                        return False
+                    df_display = df_display[df_display.apply(is_warn_row, axis=1)]
+
+                elif st.session_state.wo_color_filter == "LATE":
+                    def is_late_row(r):
+                        if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
+                        f_dt = wo_finish_map.get((str(r["แผนงาน"]), str(r["ชื่อ Drawing."])))
+                        if pd.notna(f_dt):
+                            diff_m = (f_dt - now_check).total_seconds() / 60.0
+                            return diff_m < 0
+                        return False
+                    df_display = df_display[df_display.apply(is_late_row, axis=1)]
+
+                # กรองตามคำค้นหาใน Search box
                 if search_query_wo.strip() != "":
                     q_wo = search_query_wo.strip().lower()
                     df_display = df_display[
@@ -1705,13 +1763,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     ]
 
                 display_cols = [c for c in df_display.columns if c not in ["เวลาเริ่มจริง", "ID", "เวลาจบงาน_DT"]]
-
-                wo_finish_map = dict(
-                    zip(
-                        zip(df_summary["แผนงาน"].astype(str), df_summary["ชื่อ Drawing."].astype(str)),
-                        df_summary["เวลาจบงาน_DT"]
-                    )
-                )
 
                 styled_df_display = df_display[display_cols].style.apply(
                     highlight_running_deadlines,
