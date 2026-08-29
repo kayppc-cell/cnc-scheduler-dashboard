@@ -2570,8 +2570,11 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
             
             elapsed_txt = "-"
+            start_disp_txt = "-"
             if pd.notna(s_start):
-                elapsed_min = int((now_bangkok.replace(tzinfo=None) - pd.to_datetime(s_start)).total_seconds() / 60.0)
+                start_dt = pd.to_datetime(s_start)
+                start_disp_txt = start_dt.strftime("%H:%M น.")
+                elapsed_min = int((now_bangkok.replace(tzinfo=None) - start_dt).total_seconds() / 60.0)
                 elapsed_txt = f"{elapsed_min} นาที ({elapsed_min/60.0:.1f} ชม.)"
             
             # เช็คเวลาเสร็จสิ้นตามแผนสำหรับเปลี่ยนสีการ์ด TV และกระพริบเตือน
@@ -2588,6 +2591,8 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                     tv_card_cls = "tv-card tv-card-warning"
                     badge_html = '<span class="tv-pulse-dot" style="background-color:#FCD34D;"></span> <b style="color:#FFFFFF; margin-left:6px;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
 
+            time_info_combined = f"🚀 <b>เริ่ม:</b> {start_disp_txt} | ⏱️ <b>รันแล้ว:</b> {elapsed_txt}" + hold_alert_html
+
             machine_status_cards.append({
                 "machine": m,
                 "status": "RUNNING",
@@ -2596,7 +2601,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": p_code,
                 "drawing": d_code,
                 "step": str(r_info.get("ขั้นตอน (Step)", "-")),
-                "time_info": f"⏱️ รันไปแล้ว: {elapsed_txt}" + hold_alert_html
+                "time_info": time_info_combined
             })
         elif not hold_job.empty:
             # กรณีที่ไม่มีงานอื่นรันเลย แต่มีงานพักคาเครื่องไว้
