@@ -1983,7 +1983,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
                     start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
-                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
+                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
                 else:
                     start_view = datetime.combine(gantt_min_date, dtime(7, 30))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
@@ -2551,6 +2551,17 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         hold_job = m_jobs[m_jobs["สถานะงาน"].str.contains("พักงาน")]
         waiting_jobs = m_jobs[m_jobs["สถานะงาน"].str.contains("รอคิว")]
 
+        # เช็คว่ามีงานพักรอวัสดุค้างอยู่หรือไม่ (ทำแถบเตือนเสริมใต้การ์ด)
+        hold_alert_html = ""
+        if not hold_job.empty:
+            hold_machines_count += 1
+            h_first = hold_job.iloc[0]
+            hold_alert_html = f"""
+            <div style="margin-top:6px; padding:4px 8px; background:rgba(217, 119, 6, 0.25); border:1px dashed #FCD34D; border-radius:6px; font-size:10.5px; color:#FEF08A;">
+                🛑 <b>พักงานรอ:</b> {h_first.get('แผนงาน', '-')[:8]} ({h_first.get('ชื่อ Drawing.', '-')[:15]})
+            </div>
+            """
+
         if not running_job.empty:
             running_machines_count += 1
             r_info = running_job.iloc[0]
@@ -2585,10 +2596,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": p_code,
                 "drawing": d_code,
                 "step": str(r_info.get("ขั้นตอน (Step)", "-")),
-                "time_info": f"⏱️ รันไปแล้ว: {elapsed_txt}"
+                "time_info": f"⏱️ รันไปแล้ว: {elapsed_txt}" + hold_alert_html
             })
         elif not hold_job.empty:
-            hold_machines_count += 1
+            # กรณีที่ไม่มีงานอื่นรันเลย แต่มีงานพักคาเครื่องไว้
             h_info = hold_job.iloc[0]
             machine_status_cards.append({
                 "machine": m,
@@ -2598,7 +2609,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": str(h_info.get("แผนงาน", "-")),
                 "drawing": str(h_info.get("ชื่อ Drawing.", "-")),
                 "step": str(h_info.get("ขั้นตอน (Step)", "-")),
-                "time_info": "⚠️ หยุดรอเบิกวัสดุใหม่"
+                "time_info": "⚠️ เครื่องหยุด: รอเบิกวัสดุใหม่"
             })
         else:
             idle_machines_count += 1
