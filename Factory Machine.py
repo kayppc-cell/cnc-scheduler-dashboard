@@ -167,6 +167,27 @@ def calculate_working_hours_between(start_dt: datetime, end_dt: datetime) -> flo
         cur_d += timedelta(days=1)
     return total_sec / 3600.0
 
+# ฟังก์ชันไฮไลต์สีแจ้งเตือนเวลาในตาราง
+def highlight_running_deadlines(row, planned_finish_map):
+    status = str(row.get("สถานะ", row.get("สถานะงาน", "")))
+    p_code = str(row.get("แผนงาน", ""))
+    d_code = str(row.get("ชื่อ Drawing.", ""))
+
+    if "กำลังผลิต" in status:
+        finish_dt = planned_finish_map.get((p_code, d_code))
+        if finish_dt is not None and pd.notna(finish_dt):
+            now = get_bangkok_now().replace(tzinfo=None)
+            diff_mins = (finish_dt - now).total_seconds() / 60.0
+
+            if diff_mins < 0:
+                # 🔴 เลยเวลาที่วางแผนไว้แล้ว -> สีแดงอ่อน ตัวหนังสือแดงเข้ม
+                return ['background-color: #FECACA; color: #991B1B; font-weight: bold;'] * len(row)
+            elif 0 <= diff_mins <= 60:
+                # 🟡 เหลือเวลาน้อยกว่า 1 ชม. -> สีเหลืองส้มอ่อน ตัวหนังสือส้มเข้ม
+                return ['background-color: #FEF08A; color: #854D0E; font-weight: bold;'] * len(row)
+
+    return [''] * len(row)
+
 # =========================================================
 # 1. การจัดการรูปภาพ (App Icon & Header Logo)
 # =========================================================
@@ -414,6 +435,16 @@ st.markdown("""
     .tv-card-running {
         background: linear-gradient(135deg, #065F46 0%, #059669 100%);
         border-left: 8px solid #34D399;
+    }
+    .tv-card-warning {
+        background: linear-gradient(135deg, #B45309 0%, #D97706 100%) !important;
+        border-left: 8px solid #FCD34D !important;
+        box-shadow: 0 0 15px rgba(245, 158, 11, 0.4) !important;
+    }
+    .tv-card-late {
+        background: linear-gradient(135deg, #991B1B 0%, #DC2626 100%) !important;
+        border-left: 8px solid #F87171 !important;
+        box-shadow: 0 0 15px rgba(239, 68, 68, 0.5) !important;
     }
     .tv-card-hold {
         background: linear-gradient(135deg, #92400E 0%, #D97706 100%);
@@ -1588,18 +1619,26 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =====================================================
-            # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet) + แถบค้นหา
+            # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet) + แถบค้นหาและแจ้งเตือนสี
             # =====================================================
             if not df_summary.empty:
                 st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
 
-                wo_search_col, _ = st.columns([4, 6])
+                wo_search_col, wo_legend_col = st.columns([4, 6])
                 with wo_search_col:
                     search_query_wo = st.text_input(
                         "🔍 ค้นหาในใบจ่ายคิวงาน (แผนงาน, Drawing, เครื่องจักร, สถานะ):",
                         placeholder="พิมพ์เพื่อค้นหาคิวงาน เช่น รอคิวผลิต, กำลังผลิต...",
                         key="search_wo_sheet_input"
                     )
+                with wo_legend_col:
+                    st.markdown("""
+                    <div style="padding-top: 28px; font-size: 12px; color: #475569;">
+                        <b>คำอธิบายสีสถานะกำลังผลิต:</b> 
+                        <span style="background-color: #FEF08A; color: #854D0E; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-left: 6px;">🟡 เหลือเวลาน้อยกว่า 1 ชม.</span>
+                        <span style="background-color: #FECACA; color: #991B1B; padding: 2px 8px; border-radius: 4px; font-weight: bold; margin-left: 6px;">🔴 เลยกำหนดเวลาแผน</span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True)
 
@@ -1614,8 +1653,23 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 display_cols = [c for c in df_display.columns if c not in ["เวลาเริ่มจริง", "ID", "เวลาจบงาน_DT"]]
 
+                # สร้าง Map เช็คเวลาจบงาน
+                wo_finish_map = dict(
+                    zip(
+                        zip(df_summary["แผนงาน"].astype(str), df_summary["ชื่อ Drawing."].astype(str)),
+                        df_summary["เวลาจบงาน_DT"]
+                    )
+                )
+
+                # ทำการใส่สีแจ้งเตือนในแต่ละแถว
+                styled_df_display = df_display[display_cols].style.apply(
+                    highlight_running_deadlines,
+                    planned_finish_map=wo_finish_map,
+                    axis=1
+                )
+
                 st.dataframe(
-                    df_display[display_cols],
+                    styled_df_display,
                     column_config={
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", width=150),
                         "สถานะ": st.column_config.TextColumn("สถานะ", width=110),
@@ -2424,6 +2478,14 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     cur_time_str = now_bangkok.strftime("%H:%M:%S")
     cur_date_str = now_bangkok.strftime("%d/%m/%Y")
 
+    # คำนวณแผนจบงานสำหรับจอ TV
+    planned_finish_map_tv = {}
+    if not df_live.empty:
+        _, df_summary_tv, _, _ = calculate_shop_schedule(df_live, now_bangkok.replace(tzinfo=None))
+        if not df_summary_tv.empty:
+            for _, s_row in df_summary_tv.iterrows():
+                planned_finish_map_tv[(str(s_row["แผนงาน"]), str(s_row["ชื่อ Drawing."]))] = s_row.get("เวลาจบงาน_DT")
+
     machine_status_cards = []
     running_machines_count = 0
     hold_machines_count = 0
@@ -2440,18 +2502,35 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             running_machines_count += 1
             r_info = running_job.iloc[0]
             s_start = r_info.get("เริ่มจริง")
+            p_code = str(r_info.get("แผนงาน", "-"))
+            d_code = str(r_info.get("ชื่อ Drawing.", "-"))
+            
             elapsed_txt = "-"
             if pd.notna(s_start):
                 elapsed_min = int((now_bangkok.replace(tzinfo=None) - pd.to_datetime(s_start)).total_seconds() / 60.0)
                 elapsed_txt = f"{elapsed_min} นาที ({elapsed_min/60.0:.1f} ชม.)"
             
+            # เช็คเวลาเสร็จสิ้นตามแผนสำหรับเปลี่ยนสีการ์ด TV
+            tv_card_cls = "tv-card tv-card-running"
+            badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:6px;">กำลังรันงาน</b>'
+            
+            f_dt = planned_finish_map_tv.get((p_code, d_code))
+            if f_dt is not None and pd.notna(f_dt):
+                diff_mins = (f_dt - now_bangkok.replace(tzinfo=None)).total_seconds() / 60.0
+                if diff_mins < 0:
+                    tv_card_cls = "tv-card tv-card-late"
+                    badge_html = '<span class="tv-pulse-dot" style="background-color:#F87171;"></span> <b style="color:#FCA5A5; margin-left:6px;">🔴 เกินเวลาแผน</b>'
+                elif 0 <= diff_mins <= 60:
+                    tv_card_cls = "tv-card tv-card-warning"
+                    badge_html = '<span class="tv-pulse-dot" style="background-color:#FCD34D;"></span> <b style="color:#FDE68A; margin-left:6px;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
+
             machine_status_cards.append({
                 "machine": m,
                 "status": "RUNNING",
-                "card_class": "tv-card tv-card-running",
-                "badge_html": '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:6px;">กำลังรันงาน</b>',
-                "plan": str(r_info.get("แผนงาน", "-")),
-                "drawing": str(r_info.get("ชื่อ Drawing.", "-")),
+                "card_class": tv_card_cls,
+                "badge_html": badge_html,
+                "plan": p_code,
+                "drawing": d_code,
                 "step": str(r_info.get("ขั้นตอน (Step)", "-")),
                 "time_info": f"⏱️ รันไปแล้ว: {elapsed_txt}"
             })
