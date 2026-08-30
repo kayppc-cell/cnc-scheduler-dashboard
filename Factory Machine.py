@@ -2441,6 +2441,12 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                 d_diff = round(d_act - d_plan, 2)
                 d_diff_mins = round(d_diff * 60)
                 
+                # รวมรายชื่อเครื่องจักรทั้งหมดที่ใช้ผลิตใน Drawing นี้
+                machines_used = g_data["เลือกเครื่องจักร"].dropna().unique()
+                machines_str = ", ".join([str(m) for m in machines_used if str(m).strip() != ""])
+                if not machines_str:
+                    machines_str = "-"
+                
                 if d_diff <= 0:
                     eval_str = f"🟢 เร็วขึ้น {abs(d_diff_mins)} นาที"
                 else:
@@ -2452,6 +2458,7 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                     "หัวข้อ Drawing": f"[{p_c}] {d_c}",
                     "จำนวน": d_qty,
                     "วัสดุ": d_mat,
+                    "เครื่องจักรที่ผลิต": machines_str,
                     "จำนวน Step": len(g_data),
                     "เวลาแผน (ชม.)": round(d_plan, 2),
                     "เวลาจริง (ชม.)": round(d_act, 2),
@@ -2501,19 +2508,21 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
 
                 st.divider()
 
+                # ตารางสรุปเวลาเปรียบเทียบราย Drawing พร้อมคอลัมน์เครื่องจักรที่ผลิต
                 st.markdown("#### 📋 ตารางสรุปเวลาเปรียบเทียบราย Drawing")
                 st.dataframe(
-                    df_draw_filtered[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "จำนวน Step", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]].sort_values(by="แผนงาน"),
+                    df_draw_filtered[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "เครื่องจักรที่ผลิต", "จำนวน Step", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]].sort_values(by="แผนงาน"),
                     column_config={
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=200),
-                        "จำนวน": st.column_config.NumberColumn("จำนวน", width=70, format="%d"),
-                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=80),
-                        "จำนวน Step": st.column_config.NumberColumn("Step", width=70, format="%d ขั้น"),
-                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("เวลาแผน (ชม.)", width=110, format="%.2f ชม."),
-                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("เวลาจริง (ชม.)", width=110, format="%.2f ชม."),
-                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("ผลต่าง (ชม.)", width=100, format="%.2f"),
-                        "การประเมิน": st.column_config.TextColumn("ผลประเมิน", width=150),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                        "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
+                        "เครื่องจักรที่ผลิต": st.column_config.TextColumn("เครื่องจักร / แผนก", width=160),
+                        "จำนวน Step": st.column_config.NumberColumn("Step", width=65, format="%d ขั้น"),
+                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("เวลาแผน (ชม.)", width=105, format="%.2f ชม."),
+                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("เวลาจริง (ชม.)", width=105, format="%.2f ชม."),
+                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("ผลต่าง (ชม.)", width=95, format="%.2f"),
+                        "การประเมิน": st.column_config.TextColumn("ผลประเมิน", width=145),
                     },
                     hide_index=True,
                     use_container_width=True
