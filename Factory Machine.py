@@ -2470,9 +2470,9 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
             f_col1, f_col2 = st.columns([2.5, 4])
             with f_col1:
                 plan_list = ["🌐 ทุกแผนงาน"] + sorted(list(df_draw_full["แผนงาน"].unique()))
-                selected_plan_filter = st.selectbox("🔍 กรองตามรหัสแผนงาน:", plan_list)
+                selected_plan_filter = st.selectbox("🔍 กรองตามรหัสแผนงาน (แผนภูมิกราฟ):", plan_list)
             with f_col2:
-                search_dw = st.text_input("🔍 ค้นหาชื่อ Drawing:", placeholder="พิมพ์ชื่อ Drawing เพื่อกรองกราฟ...")
+                search_dw = st.text_input("🔍 ค้นหาชื่อ Drawing (แผนภูมิกราฟ):", placeholder="พิมพ์ชื่อ Drawing เพื่อกรองกราฟ...")
 
             df_draw_filtered = df_draw_full.copy()
             if selected_plan_filter != "🌐 ทุกแผนงาน":
@@ -2508,10 +2508,28 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
 
                 st.divider()
 
-                # ตารางสรุปเวลาเปรียบเทียบราย Drawing พร้อมคอลัมน์เครื่องจักรที่ผลิต
+                # ตารางสรุปเวลาเปรียบเทียบราย Drawing พร้อมช่องค้นหาเฉพาะตาราง
                 st.markdown("#### 📋 ตารางสรุปเวลาเปรียบเทียบราย Drawing")
+                
+                search_dw_table = st.text_input(
+                    "🔍 ค้นหาในตารางเปรียบเทียบราย Drawing (แผนงาน, Drawing, วัสดุ, เครื่องจักร, ผลประเมิน):",
+                    placeholder="พิมพ์เพื่อค้นหาข้อมูลในตาราง เช่น SS400, No.1, เร็วขึ้น, ช้ากว่าแผน...",
+                    key="search_drawing_table_input"
+                )
+
+                df_table_display = df_draw_full.copy().sort_values(by="แผนงาน")
+                if search_dw_table.strip() != "":
+                    q_dt = search_dw_table.strip().lower()
+                    df_table_display = df_table_display[
+                        df_table_display["แผนงาน"].astype(str).str.lower().str.contains(q_dt) |
+                        df_table_display["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_dt) |
+                        df_table_display["วัสดุ"].astype(str).str.lower().str.contains(q_dt) |
+                        df_table_display["เครื่องจักรที่ผลิต"].astype(str).str.lower().str.contains(q_dt) |
+                        df_table_display["การประเมิน"].astype(str).str.lower().str.contains(q_dt)
+                    ]
+
                 st.dataframe(
-                    df_draw_filtered[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "เครื่องจักรที่ผลิต", "จำนวน Step", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]].sort_values(by="แผนงาน"),
+                    df_table_display[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "เครื่องจักรที่ผลิต", "จำนวน Step", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]],
                     column_config={
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
                         "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
