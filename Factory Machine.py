@@ -306,6 +306,34 @@ st.markdown("""
         font-weight: 800 !important; 
     }
 
+    /* Machine Live Status Box on Shop-Floor View */
+    .shop-live-banner {
+        padding: 12px 18px;
+        border-radius: 14px;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13.5px;
+        font-weight: 700;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+    }
+    .shop-live-running {
+        background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
+        border: 2px solid #10B981;
+        color: #065F46;
+    }
+    .shop-live-hold {
+        background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%);
+        border: 2px dashed #F59E0B;
+        color: #92400E;
+    }
+    .shop-live-idle {
+        background: #F8FAFC;
+        border: 2px solid #CBD5E1;
+        color: #475569;
+    }
+
     .op-job-header {
         background: linear-gradient(145deg, #FFFFFF 0%, #F8FAFC 100%);
         padding: 16px 20px;
@@ -315,6 +343,11 @@ st.markdown("""
         margin-top: 18px;
         margin-bottom: 14px;
         box-shadow: 0 8px 24px rgba(79, 70, 229, 0.08), 0 2px 6px rgba(0, 0, 0, 0.03);
+    }
+    .op-job-header-running {
+        border-left: 7px solid #10B981 !important;
+        background: linear-gradient(145deg, #FFFFFF 0%, #F0FDF4 100%) !important;
+        box-shadow: 0 8px 24px rgba(16, 185, 129, 0.15), 0 2px 6px rgba(0, 0, 0, 0.03) !important;
     }
     .op-job-header-urgent {
         border-left: 7px solid #EF4444 !important;
@@ -343,6 +376,7 @@ st.markdown("""
     .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
     .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 800; }
     .badge-finish-date { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; font-weight: 800; }
+    .badge-running { background: #ECFDF5; color: #059669; border: 1.5px solid #34D399; font-weight: 800; }
     .badge-urgent { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; font-weight: 800; }
     .badge-hold { background: #FFFBEB; color: #D97706; border: 1px solid #FCD34D; font-weight: 800; }
 
@@ -355,9 +389,9 @@ st.markdown("""
         box-shadow: 0 2px 8px rgba(0,0,0,0.02);
     }
     .step-card-running {
-        border-color: #60A5FA !important;
-        background: linear-gradient(145deg, #FFFFFF 0%, #EFF6FF 100%) !important;
-        box-shadow: 0 4px 14px rgba(37, 99, 235, 0.12) !important;
+        border-color: #34D399 !important;
+        background: linear-gradient(145deg, #FFFFFF 0%, #ECFDF5 100%) !important;
+        box-shadow: 0 4px 14px rgba(16, 185, 129, 0.15) !important;
     }
     .step-card-ready {
         border-color: #FCD34D !important;
@@ -889,6 +923,47 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     else:
         m_all_jobs = pd.DataFrame()
 
+    # --- แถบแบนเนอร์แจ้งเตือนสถานะสดของเครื่องจักรให้ช่างเห็นชัดเจน ---
+    if not m_all_jobs.empty:
+        running_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
+        hold_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
+        
+        if not running_now.empty:
+            r_cur = running_now.iloc[0]
+            st_t = r_cur.get("เริ่มจริง")
+            st_txt = "-"
+            elap_txt = "-"
+            if pd.notna(st_t):
+                st_dt = pd.to_datetime(st_t)
+                st_txt = st_dt.strftime("%H:%M น.")
+                elap_min = int((get_bangkok_now().replace(tzinfo=None) - st_dt).total_seconds() / 60.0)
+                elap_txt = f"{elap_min} นาที ({elap_min/60.0:.1f} ชม.)"
+            st.markdown(f"""
+            <div class="shop-live-banner shop-live-running">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span class="tv-pulse-dot"></span>
+                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | รันแล้ว {elap_txt})</span>
+                </div>
+                <div style="font-size:12.5px; opacity:0.9;">
+                    📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        elif not hold_now.empty:
+            h_cur = hold_now.iloc[0]
+            st.markdown(f"""
+            <div class="shop-live-banner shop-live-hold">
+                <div>🛑 <b>{selected_m}: เครื่องหยุดพักงานชั่วคราว (รอเบิกวัสดุใหม่)</b></div>
+                <div style="font-size:12.5px;">📌 <b>แผนงาน:</b> {h_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {h_cur.get('ชื่อ Drawing.', '-')}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="shop-live-banner shop-live-idle">
+                <div>⚪ <b>{selected_m}: เครื่องว่าง (IDLE)</b> — พร้อมกด Start เริ่มงานใหม่</div>
+            </div>
+            """, unsafe_allow_html=True)
+
     if not m_all_jobs.empty:
         raw_groups = m_all_jobs.groupby(["แผนงาน", "ชื่อ Drawing."], sort=False).size().reset_index()[["แผนงาน", "ชื่อ Drawing."]]
         
@@ -983,6 +1058,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 drawing_code = g_info["drawing_name"]
                 is_urgent = g_info["is_urgent"]
                 is_hold = g_info["is_hold"]
+                is_running = g_info["is_running"]
                 ready_at_dt = g_info["ready_at"]
                 
                 plan_steps = m_all_jobs[(m_all_jobs["แผนงาน"] == plan_code) & (m_all_jobs["ชื่อ Drawing."] == drawing_code)].sort_values(by="ID", ascending=True)
@@ -1012,6 +1088,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     header_box_class = "op-job-header op-job-header-hold"
                     badge_gradient = "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)"
                     status_badge_html = '<span class="badge-chip badge-hold">🛑 พักงาน (รอวัสดุใหม่)</span>'
+                elif is_running:
+                    header_box_class = "op-job-header op-job-header-running"
+                    badge_gradient = "linear-gradient(135deg, #059669 0%, #10B981 100%)"
+                    status_badge_html = '<span class="badge-chip badge-running"><span class="tv-pulse-dot" style="margin-right:4px;"></span> 🟦 กำลังผลิต (รันงานอยู่ ⏱️)</span>'
                 elif is_urgent:
                     header_box_class = "op-job-header op-job-header-urgent"
                     badge_gradient = "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)"
@@ -1065,7 +1145,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                         elif is_step_running:
                             start_txt = pd.to_datetime(s_start).strftime('%d/%m %H:%M') if pd.notna(s_start) else '-'
-                            st.caption(f"**Step {idx}:** <span style='color:#2563EB; font-weight:800; font-size:13.5px;'>🟦 กำลังผลิต (เริ่มรัน: {start_txt}) ⏱️</span>", unsafe_allow_html=True)
+                            st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) ⏱️</span>", unsafe_allow_html=True)
                         elif is_step_hold:
                             st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
                         else:
