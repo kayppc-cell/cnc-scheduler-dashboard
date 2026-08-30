@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
 from datetime import datetime, timedelta, time as dtime
 import zoneinfo
 import os
@@ -2406,7 +2407,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
 # ---------------------------------------------------------
-# VIEW 3: หมวดใหม่! วิเคราะห์ประสิทธิภาพราย Drawing (Plan vs Actual by Drawing)
+# VIEW 3: หมวดวิเคราะห์ประสิทธิภาพราย Drawing (Plan vs Actual by Drawing)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📈 วิเคราะห์ประสิทธิภาพราย Drawing":
     st.subheader("📈 วิเคราะห์และเปรียบเทียบเวลาทำงานจริงราย Drawing (Drawing Performance Analysis)")
@@ -2422,7 +2423,6 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
             finished_all["โปรแกรม (น.)"] = pd.to_numeric(finished_all["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
             finished_all["เวลาแผน (ชม.)"] = ((finished_all["Setup (น.)"] + finished_all["Basic (น.)"] + finished_all["โปรแกรม (น.)"]) / 60.0).round(2)
             
-            # คำนวณชั่วโมงจริง
             actual_hrs_list = []
             for _, r in finished_all.iterrows():
                 s_real, f_real = r.get("เริ่มจริง"), r.get("เสร็จจริง")
@@ -2433,7 +2433,6 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                     actual_hrs_list.append(r["เวลาแผน (ชม.)"])
             finished_all["เวลาจริง (ชม.)"] = actual_hrs_list
 
-            # รวบยอดชั่วโมงแผน vs เวลาจริงแยกตาม Drawing
             drawing_agg = []
             for (p_c, d_c), g_data in finished_all.groupby(["แผนงาน", "ชื่อ Drawing."]):
                 d_plan = g_data["เวลาแผน (ชม.)"].sum()
@@ -2462,7 +2461,6 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                 })
             df_draw_full = pd.DataFrame(drawing_agg)
 
-            # กล่องตัวกรอง
             f_col1, f_col2 = st.columns([2.5, 4])
             with f_col1:
                 plan_list = ["🌐 ทุกแผนงาน"] + sorted(list(df_draw_full["แผนงาน"].unique()))
@@ -2479,7 +2477,6 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
             df_draw_filtered = df_draw_filtered.sort_values(by="เวลาจริง (ชม.)", ascending=True)
 
             if not df_draw_filtered.empty:
-                # กราฟแท่งคู่เปรียบเทียบเวลาแผน vs เวลาจริง ราย Drawing
                 chart_h = max(450, len(df_draw_filtered) * 38)
                 fig_dw = px.bar(
                     df_draw_filtered,
@@ -2505,7 +2502,6 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
 
                 st.divider()
 
-                # ตารางสรุปเวลาเปรียบเทียบราย Drawing
                 st.markdown("#### 📋 ตารางสรุปเวลาเปรียบเทียบราย Drawing")
                 st.dataframe(
                     df_draw_filtered[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "จำนวน Step", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]].sort_values(by="แผนงาน"),
@@ -2531,7 +2527,7 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
         st.info("ℹ️ ยังไม่มีข้อมูลในระบบ")
 
 # ---------------------------------------------------------
-# VIEW 4: รายงานสรุปประจำเดือน (Monthly Report)
+# VIEW 4: รายงานสรุปประจำเดือน (Monthly Report & Auto Graph Print)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📑 รายงานสรุปประจำเดือน":
     if st.session_state.user_role is None:
@@ -2720,6 +2716,52 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             delayed_jobs = monthly_jobs[monthly_jobs["ผลต่าง (ชม.)"] > 0].sort_values(by="ผลต่าง (ชม.)", ascending=False).head(5)
 
+            # --- สร้างกราฟทั้ง 2 ตัวเตรียมไว้สำหรับการแสดงผลและส่งเข้าเอกสารพิมพ์ ---
+            fig_m_val = px.bar(
+                df_m_sum.sort_values(by="มูลค่าผลผลิต (บาท)", ascending=True),
+                x="มูลค่าผลผลิต (บาท)",
+                y="เครื่องจักร / แผนก",
+                orientation="h",
+                title="💰 อันดับมูลค่าผลผลิตแยกตามเครื่องจักร (บาท)",
+                color="มูลค่าผลผลิต (บาท)",
+                color_continuous_scale="Blues",
+                text_auto='.2f'
+            )
+            fig_m_val.update_traces(textposition='outside', cliponaxis=False)
+            fig_m_val.update_layout(height=380, plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF", margin=dict(l=20, r=20, t=40, b=20))
+
+            fig_compare = px.bar(
+                df_m_sum.sort_values(by="เวลาจริง (ชม.)", ascending=True),
+                x=["เวลาแผน (ชม.)", "เวลาจริง (ชม.)"],
+                y="เครื่องจักร / แผนก",
+                orientation="h",
+                barmode="group",
+                title="⏱️ เปรียบเทียบเวลาทำงาน: แผนงาน vs ทำงานจริง แต่ละเครื่องจักร (ชม.)",
+                color_discrete_map={"เวลาแผน (ชม.)": "#94A3B8", "เวลาจริง (ชม.)": "#2563EB"},
+                text_auto='.2f'
+            )
+            fig_compare.update_traces(textposition='outside', cliponaxis=False)
+            fig_compare.update_layout(
+                height=380, 
+                plot_bgcolor="#FFFFFF", 
+                paper_bgcolor="#FFFFFF", 
+                margin=dict(l=20, r=20, t=40, b=20), 
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+
+            # แปลงกราฟเป็นรูปภาพ Base64 เพื่อให้เอกสารสำหรับพิมพ์ดึงภาพกราฟไปแสดงได้ทันที
+            try:
+                img_bytes1 = pio.to_image(fig_m_val, format="png", width=750, height=360, scale=1.5)
+                chart1_base64 = f'<img src="data:image/png;base64,{base64.b64encode(img_bytes1).decode("utf-8")}" style="width:100%; max-height:280px; object-fit:contain; margin-bottom:10px;"/>'
+            except Exception:
+                chart1_base64 = '<div style="color:#64748B; font-style:italic;">(กราฟมูลค่าผลผลิต)</div>'
+
+            try:
+                img_bytes2 = pio.to_image(fig_compare, format="png", width=750, height=360, scale=1.5)
+                chart2_base64 = f'<img src="data:image/png;base64,{base64.b64encode(img_bytes2).decode("utf-8")}" style="width:100%; max-height:280px; object-fit:contain; margin-bottom:10px;"/>'
+            except Exception:
+                chart2_base64 = '<div style="color:#64748B; font-style:italic;">(กราฟเปรียบเทียบเวลาแผน vs จริง)</div>'
+
             rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td style='text-align:center;'>{r['จำนวนคิวงาน']}</td><td style='text-align:center;'>{r['ชิ้นงานรวม (ชิ้น)']}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:center;'>{r['ผลต่าง']}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วนมูลค่า (%)']:.1f}%</td></tr>" for _, r in df_m_sum.iterrows()])
             rows_mat_html = "".join([f"<tr><td>{r['ชนิดวัสดุ']}</td><td style='text-align:center;'>{r['จำนวนคิว']}</td><td style='text-align:center;'>{r['จำนวนชิ้นงาน (ชิ้น)']}</td><td style='text-align:center;'>{r['ชั่วโมงผลิตจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วน (%)']:.1f}%</td></tr>" for _, r in df_mat_sum.iterrows()])
             rows_job_html = "".join([f"<tr><td>{r['แผนงาน']}</td><td>{r['ชื่อ Drawing.']}</td><td style='text-align:center;'>{r['จำนวน']}</td><td style='text-align:center;'>{r['วัสดุ']}</td><td>{r['ขั้นตอน (Step)']}</td><td>{r['เลือกเครื่องจักร']}</td><td style='text-align:center;'>{pd.to_datetime(r['เริ่มจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เริ่มจริง']) else '-'}</td><td style='text-align:center;'>{pd.to_datetime(r['เสร็จจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เสร็จจริง']) else '-'}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่ารวม (บาท)']:,.2f} ฿</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
@@ -2728,10 +2770,10 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             <html>
             <head>
                 <meta charset="utf-8">
-                <title>PES Executive Monthly Report - {month_names[selected_month_idx-1]} {selected_year}</title>
+                <title>PES Monthly Production Report - {month_names[selected_month_idx-1]} {selected_year}</title>
                 <style>
                     @page {{ size: A4 portrait; margin: 8mm 10mm; }}
-                    body {{ font-family: 'Tahoma', 'Sarabun', 'Arial', sans-serif; color: #1E293B; margin: 0; padding: 10px; font-size: 10.5px; line-height: 1.35; }}
+                    body {{ font-family: 'Tahoma', 'Sarabun', 'Arial', sans-serif; color: #1E293B; margin: 0; padding: 10px; font-size: 10px; line-height: 1.35; }}
                     .header-box {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1E3E62; padding-bottom: 6px; margin-bottom: 10px; }}
                     .title-text h2 {{ margin: 0; color: #0B192C; font-size: 16px; }}
                     .title-text p {{ margin: 2px 0 0 0; color: #475569; font-size: 10px; }}
@@ -2739,12 +2781,13 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     .kpi-item {{ background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 8px; text-align: center; }}
                     .kpi-item-title {{ font-size: 9.5px; color: #64748B; font-weight: bold; }}
                     .kpi-item-val {{ font-size: 14px; color: #0F172A; font-weight: 800; margin-top: 2px; }}
-                    h3 {{ color: #1E3E62; font-size: 11.5px; margin: 10px 0 4px 0; border-left: 4px solid #2563EB; padding-left: 6px; }}
+                    h3 {{ color: #1E3E62; font-size: 11px; margin: 10px 0 4px 0; border-left: 4px solid #2563EB; padding-left: 6px; }}
                     table {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 9.5px; }}
                     th, td {{ border: 1px solid #CBD5E1; padding: 4px 5px; text-align: left; }}
                     th {{ background-color: #F1F5F9; color: #1E293B; font-weight: bold; }}
                     tr:nth-child(even) {{ background-color: #F8FAFC; }}
-                    .sign-box {{ display: flex; justify-content: space-between; margin-top: 25px; padding-top: 10px; }}
+                    .chart-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }}
+                    .sign-box {{ display: flex; justify-content: space-between; margin-top: 20px; padding-top: 10px; }}
                     .sign-col {{ width: 30%; text-align: center; border-top: 1px dashed #94A3B8; padding-top: 4px; font-size: 9.5px; }}
                 </style>
             </head>
@@ -2752,7 +2795,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 <div class="header-box">
                     <div class="title-text">
                         <h2>บจก. พลวัฒน์ เอ็นจิเนียริ่ง ซัพพลาย (PES)</h2>
-                        <p>รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production & Executive Report)</p>
+                        <p>รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production Report)</p>
                     </div>
                     <div style="text-align: right; font-size: 10px;">
                         <b>ประจำเดือน:</b> {month_names[selected_month_idx-1]} {selected_year}<br>
@@ -2767,19 +2810,25 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     <div class="kpi-item"><div class="kpi-item-title">ตรงตามแผน (On-Time)</div><div class="kpi-item-val">{on_time_rate:.1f} %</div></div>
                 </div>
 
-                <h3>1. สรุปผลการทำงานและสัดส่วนรายได้แยกตามเครื่องจักร / แผนก</h3>
+                <h3>1. กราฟวิเคราะห์ประสิทธิภาพและมูลค่าผลผลิต</h3>
+                <div class="chart-grid">
+                    <div>{chart1_base64}</div>
+                    <div>{chart2_base64}</div>
+                </div>
+
+                <h3>2. สรุปผลการทำงานและสัดส่วนรายได้แยกตามเครื่องจักร / แผนก</h3>
                 <table>
                     <thead><tr><th>เครื่องจักร / แผนก</th><th>คิว</th><th>ชิ้นงาน</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>ผลต่าง</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
                     <tbody>{rows_m_html}</tbody>
                 </table>
 
-                <h3>2. สรุปการใช้วัสดุและเวลาผลิต (Material Insights)</h3>
+                <h3>3. สรุปการใช้วัสดุและเวลาผลิต (Material Insights)</h3>
                 <table>
                     <thead><tr><th>ชนิดวัสดุ</th><th>คิว</th><th>ชิ้นงาน</th><th>ชั่วโมงผลิตจริง (ชม.)</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
                     <tbody>{rows_mat_html}</tbody>
                 </table>
 
-                <h3>3. รายการชิ้นงานที่ผลิตเสร็จสิ้นทั้งหมด</h3>
+                <h3>4. รายการชิ้นงานที่ผลิตเสร็จสิ้นทั้งหมด</h3>
                 <table>
                     <thead><tr><th>แผนงาน</th><th>ชื่อ Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>สถานี</th><th>เริ่มจริง</th><th>เสร็จจริง</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>มูลค่า (฿)</th></tr></thead>
                     <tbody>{rows_job_html}</tbody>
@@ -2801,7 +2850,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 with b_col_pdf:
                     components.html(f"""
                     <button onclick="printReport()" style="width:100%; background:linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color:white; border:none; padding:9px 14px; border-radius:8px; font-weight:bold; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(220,38,38,0.25);">
-                        📄 พิมพ์ / บันทึก PDF รายงานผู้บริหาร
+                        📄 พิมพ์ / บันทึก PDF (พร้อมรูปกราฟ)
                     </button>
                     <script>
                         function printReport() {{
@@ -2811,7 +2860,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                             printWin.document.write(reportHtml);
                             printWin.document.close();
                             printWin.focus();
-                            setTimeout(function() {{ printWin.print(); }}, 500);
+                            setTimeout(function() {{ printWin.print(); }}, 600);
                         }}
                     </script>
                     """, height=45)
@@ -2876,41 +2925,9 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             # กราฟเดิม: เปรียบเทียบเวลาทำงานรายเครื่องจักร & กราฟมูลค่า
             st.markdown("#### 📈 กราฟวิเคราะห์มูลค่าและเวลาการผลิตแยกตามเครื่องจักร")
             chart_c1, chart_c2 = st.columns(2)
-            
             with chart_c1:
-                fig_m_val = px.bar(
-                    df_m_sum.sort_values(by="มูลค่าผลผลิต (บาท)", ascending=True),
-                    x="มูลค่าผลผลิต (บาท)",
-                    y="เครื่องจักร / แผนก",
-                    orientation="h",
-                    title="💰 อันดับมูลค่าผลผลิตแยกตามเครื่องจักร (บาท)",
-                    color="มูลค่าผลผลิต (บาท)",
-                    color_continuous_scale="Blues",
-                    text_auto='.2f'
-                )
-                fig_m_val.update_traces(textposition='outside', cliponaxis=False)
-                fig_m_val.update_layout(height=380, plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF", margin=dict(l=20, r=20, t=40, b=20))
                 st.plotly_chart(fig_m_val, use_container_width=True)
-
             with chart_c2:
-                fig_compare = px.bar(
-                    df_m_sum.sort_values(by="เวลาจริง (ชม.)", ascending=True),
-                    x=["เวลาแผน (ชม.)", "เวลาจริง (ชม.)"],
-                    y="เครื่องจักร / แผนก",
-                    orientation="h",
-                    barmode="group",
-                    title="⏱️ เปรียบเทียบเวลาทำงาน: แผนงาน vs ทำงานจริง แต่ละเครื่องจักร (ชม.)",
-                    color_discrete_map={"เวลาแผน (ชม.)": "#94A3B8", "เวลาจริง (ชม.)": "#2563EB"},
-                    text_auto='.2f'
-                )
-                fig_compare.update_traces(textposition='outside', cliponaxis=False)
-                fig_compare.update_layout(
-                    height=380, 
-                    plot_bgcolor="#FFFFFF", 
-                    paper_bgcolor="#FFFFFF", 
-                    margin=dict(l=20, r=20, t=40, b=20), 
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
                 st.plotly_chart(fig_compare, use_container_width=True)
 
             st.divider()
@@ -3144,8 +3161,8 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
         setTimeout(function() {
             const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
-            if (radioBtns && radioBtns.length >= 4 && radioBtns[3].checked) {
-                radioBtns[3].click();
+            if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {
+                radioBtns[4].click();
             }
         }, 30000);
     </script>
