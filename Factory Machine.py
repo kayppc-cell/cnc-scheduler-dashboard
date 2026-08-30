@@ -876,9 +876,15 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     return pd.DataFrame(gantt_records), pd.DataFrame(summary_records), pd.DataFrame(util_list), total_horizon_work_hrs
 
 # =========================================================
-# 6. เมนูเปลี่ยนโหมด (4 แท็บมาตรฐาน)
+# 6. เมนูเปลี่ยนโหมด (5 หมวดการใช้งาน)
 # =========================================================
-nav_options = ["👷 โหมดช่างหน้าเครื่อง", "📊 แดชบอร์ดภาพรวมโรงงาน", "📑 รายงานสรุปประจำเดือน", "📺 จอทีวีกลางโรงงาน (TV Live)"]
+nav_options = [
+    "👷 โหมดช่างหน้าเครื่อง", 
+    "📊 แดชบอร์ดภาพรวมโรงงาน", 
+    "📈 วิเคราะห์ประสิทธิภาพราย Drawing", 
+    "📑 รายงานสรุปประจำเดือน", 
+    "📺 จอทีวีกลางโรงงาน (TV Live)"
+]
 
 cur_idx = nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0
 selected_tab = st.radio(
@@ -2400,7 +2406,132 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
 # ---------------------------------------------------------
-# VIEW 3: รายงานสรุปประจำเดือน (Monthly Executive Report)
+# VIEW 3: หมวดใหม่! วิเคราะห์ประสิทธิภาพราย Drawing (Plan vs Actual by Drawing)
+# ---------------------------------------------------------
+elif st.session_state.current_view == "📈 วิเคราะห์ประสิทธิภาพราย Drawing":
+    st.subheader("📈 วิเคราะห์และเปรียบเทียบเวลาทำงานจริงราย Drawing (Drawing Performance Analysis)")
+    
+    df_db = fetch_jobs_from_supabase()
+
+    if not df_db.empty:
+        finished_all = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
+        
+        if not finished_all.empty:
+            finished_all["Setup (น.)"] = pd.to_numeric(finished_all["Setup (น.)"], errors='coerce').fillna(10.0)
+            finished_all["Basic (น.)"] = pd.to_numeric(finished_all["Basic (น.)"], errors='coerce').fillna(0.0)
+            finished_all["โปรแกรม (น.)"] = pd.to_numeric(finished_all["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
+            finished_all["เวลาแผน (ชม.)"] = ((finished_all["Setup (น.)"] + finished_all["Basic (น.)"] + finished_all["โปรแกรม (น.)"]) / 60.0).round(2)
+            
+            # คำนวณชั่วโมงจริง
+            actual_hrs_list = []
+            for _, r in finished_all.iterrows():
+                s_real, f_real = r.get("เริ่มจริง"), r.get("เสร็จจริง")
+                if pd.notna(s_real) and pd.notna(f_real):
+                    diff_sec = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
+                    actual_hrs_list.append(round(diff_sec / 3600.0, 2))
+                else:
+                    actual_hrs_list.append(r["เวลาแผน (ชม.)"])
+            finished_all["เวลาจริง (ชม.)"] = actual_hrs_list
+
+            # รวบยอดชั่วโมงแผน vs เวลาจริงแยกตาม Drawing
+            drawing_agg = []
+            for (p_c, d_c), g_data in finished_all.groupby(["แผนงาน", "ชื่อ Drawing."]):
+                d_plan = g_data["เวลาแผน (ชม.)"].sum()
+                d_act = g_data["เวลาจริง (ชม.)"].sum()
+                d_qty = int(g_data.iloc[0].get("จำนวน", 1))
+                d_mat = g_data.iloc[0].get("วัสดุ", "-")
+                d_diff = round(d_act - d_plan, 2)
+                d_diff_mins = round(d_diff * 60)
+                
+                if d_diff <= 0:
+                    eval_str = f"🟢 เร็วขึ้น {abs(d_diff_mins)} นาที"
+                else:
+                    eval_str = f"🔴 ช้ากว่าแผน +{d_diff_mins} นาที"
+
+                drawing_agg.append({
+                    "แผนงาน": p_c,
+                    "ชื่อ Drawing.": d_c,
+                    "หัวข้อ Drawing": f"[{p_c}] {d_c}",
+                    "จำนวน": d_qty,
+                    "วัสดุ": d_mat,
+                    "จำนวน Step": len(g_data),
+                    "เวลาแผน (ชม.)": round(d_plan, 2),
+                    "เวลาจริง (ชม.)": round(d_act, 2),
+                    "ผลต่าง (ชม.)": d_diff,
+                    "การประเมิน": eval_str
+                })
+            df_draw_full = pd.DataFrame(drawing_agg)
+
+            # กล่องตัวกรอง
+            f_col1, f_col2 = st.columns([2.5, 4])
+            with f_col1:
+                plan_list = ["🌐 ทุกแผนงาน"] + sorted(list(df_draw_full["แผนงาน"].unique()))
+                selected_plan_filter = st.selectbox("🔍 กรองตามรหัสแผนงาน:", plan_list)
+            with f_col2:
+                search_dw = st.text_input("🔍 ค้นหาชื่อ Drawing:", placeholder="พิมพ์ชื่อ Drawing เพื่อกรองกราฟ...")
+
+            df_draw_filtered = df_draw_full.copy()
+            if selected_plan_filter != "🌐 ทุกแผนงาน":
+                df_draw_filtered = df_draw_filtered[df_draw_filtered["แผนงาน"] == selected_plan_filter]
+            if search_dw.strip() != "":
+                df_draw_filtered = df_draw_filtered[df_draw_filtered["ชื่อ Drawing."].str.lower().str.contains(search_dw.strip().lower())]
+
+            df_draw_filtered = df_draw_filtered.sort_values(by="เวลาจริง (ชม.)", ascending=True)
+
+            if not df_draw_filtered.empty:
+                # กราฟแท่งคู่เปรียบเทียบเวลาแผน vs เวลาจริง ราย Drawing
+                chart_h = max(450, len(df_draw_filtered) * 38)
+                fig_dw = px.bar(
+                    df_draw_filtered,
+                    y="หัวข้อ Drawing",
+                    x=["เวลาแผน (ชม.)", "เวลาจริง (ชม.)"],
+                    orientation="h",
+                    barmode="group",
+                    title=f"⏱️ เปรียบเทียบเวลาทำงานแผน vs เวลาจริง ({len(df_draw_filtered)} Drawings)",
+                    color_discrete_map={"เวลาแผน (ชม.)": "#94A3B8", "เวลาจริง (ชม.)": "#2563EB"},
+                    text_auto='.2f'
+                )
+                fig_dw.update_traces(textposition='outside', cliponaxis=False)
+                fig_dw.update_layout(
+                    height=chart_h,
+                    plot_bgcolor="#FFFFFF",
+                    paper_bgcolor="#FFFFFF",
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    yaxis_title="[รหัสแผนงาน] ชื่อ Drawing",
+                    xaxis_title="เวลาในการผลิต (ชั่วโมง)",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                st.plotly_chart(fig_dw, use_container_width=True)
+
+                st.divider()
+
+                # ตารางสรุปเวลาเปรียบเทียบราย Drawing
+                st.markdown("#### 📋 ตารางสรุปเวลาเปรียบเทียบราย Drawing")
+                st.dataframe(
+                    df_draw_filtered[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "จำนวน Step", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]].sort_values(by="แผนงาน"),
+                    column_config={
+                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=200),
+                        "จำนวน": st.column_config.NumberColumn("จำนวน", width=70, format="%d"),
+                        "วัสดุ": st.column_config.TextColumn("วัสดุ", width=80),
+                        "จำนวน Step": st.column_config.NumberColumn("Step", width=70, format="%d ขั้น"),
+                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("เวลาแผน (ชม.)", width=110, format="%.2f ชม."),
+                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("เวลาจริง (ชม.)", width=110, format="%.2f ชม."),
+                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("ผลต่าง (ชม.)", width=100, format="%.2f"),
+                        "การประเมิน": st.column_config.TextColumn("ผลประเมิน", width=150),
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.warning("⚠️ ไม่พบข้อมูล Drawing ตามเงื่อนไขที่ค้นหา")
+        else:
+            st.info("ℹ️ ยังไม่มี Drawing ที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว'")
+    else:
+        st.info("ℹ️ ยังไม่มีข้อมูลในระบบ")
+
+# ---------------------------------------------------------
+# VIEW 4: รายงานสรุปประจำเดือน (Monthly Report)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📑 รายงานสรุปประจำเดือน":
     if st.session_state.user_role is None:
@@ -2424,7 +2555,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
     else:
         c_head, c_logout = st.columns([8, 2])
         with c_head:
-            st.subheader("📑 รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production & Executive Report)")
+            st.subheader("📑 รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production Report)")
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True, key="btn_logout_monthly"):
                 st.session_state.user_role = None
@@ -2587,22 +2718,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 })
             df_mat_sum = pd.DataFrame(mat_summary).sort_values(by="ชั่วโมงผลิตจริง (ชม.)", ascending=False)
 
-            # รวบยอดชั่วโมงแผน vs เวลาจริงแยกตาม Drawing
-            drawing_compare_list = []
-            for (p_c, d_c), g_data in monthly_jobs.groupby(["แผนงาน", "ชื่อ Drawing."]):
-                d_plan_hrs = g_data["เวลาแผน (ชม.)"].sum()
-                d_act_hrs = g_data["เวลาจริง (ชม.)"].sum()
-                d_label = f"[{p_c}] {d_c}"
-                drawing_compare_list.append({
-                    "แผนงาน": p_c,
-                    "ชื่อ Drawing.": d_c,
-                    "หัวข้อ Drawing": d_label,
-                    "เวลาแผน (ชม.)": round(d_plan_hrs, 2),
-                    "เวลาจริง (ชม.)": round(d_act_hrs, 2),
-                    "ผลต่าง (ชม.)": round(d_act_hrs - d_plan_hrs, 2)
-                })
-            df_drawing_compare = pd.DataFrame(drawing_compare_list).sort_values(by="เวลาจริง (ชม.)", ascending=True)
-
             delayed_jobs = monthly_jobs[monthly_jobs["ผลต่าง (ชม.)"] > 0].sort_values(by="ผลต่าง (ชม.)", ascending=False).head(5)
 
             rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td style='text-align:center;'>{r['จำนวนคิวงาน']}</td><td style='text-align:center;'>{r['ชิ้นงานรวม (ชิ้น)']}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:center;'>{r['ผลต่าง']}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วนมูลค่า (%)']:.1f}%</td></tr>" for _, r in df_m_sum.iterrows()])
@@ -2719,9 +2834,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             st.divider()
 
-            # ---------------------------------------------------------
             # ส่วนแสดงตารางประสิทธิภาพเครื่องจักร & วัสดุ
-            # ---------------------------------------------------------
             col_sec1, col_sec2 = st.columns([1.5, 1])
 
             with col_sec1:
@@ -2760,40 +2873,10 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             st.divider()
 
-            # ---------------------------------------------------------
-            # 📊 กราฟแท่งคู่เปรียบเทียบเวลาแผน vs เวลาจริง ราย Drawing
-            # ---------------------------------------------------------
-            st.markdown("#### 📊 เปรียบเทียบเวลาทำงานแผน vs เวลาจริง ราย Drawing (Plan vs Actual by Drawing)")
-            if not df_drawing_compare.empty:
-                calc_height_drawing = max(400, len(df_drawing_compare) * 32)
-                fig_draw_compare = px.bar(
-                    df_drawing_compare,
-                    y="หัวข้อ Drawing",
-                    x=["เวลาแผน (ชม.)", "เวลาจริง (ชม.)"],
-                    orientation="h",
-                    barmode="group",
-                    title="⏱️ เปรียบเทียบเวลาทำงาน: แผนงาน vs ทำงานจริง แต่ละ Drawing (ชม.)",
-                    color_discrete_map={"เวลาแผน (ชม.)": "#94A3B8", "เวลาจริง (ชม.)": "#2563EB"},
-                    text_auto='.2f'
-                )
-                fig_draw_compare.update_layout(
-                    height=calc_height_drawing,
-                    plot_bgcolor="#FFFFFF",
-                    paper_bgcolor="#FFFFFF",
-                    margin=dict(l=20, r=20, t=40, b=20),
-                    yaxis_title="[แผนงาน] Drawing",
-                    xaxis_title="ชั่วโมงการผลิต (ชม.)",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
-                fig_draw_compare.update_traces(textposition='outside', cliponaxis=False)
-                st.plotly_chart(fig_draw_compare, use_container_width=True)
-
-            st.divider()
-
-            # ---------------------------------------------------------
-            # กราฟมูลค่าเครื่องจักร & Top 5 Delays
-            # ---------------------------------------------------------
+            # กราฟเดิม: เปรียบเทียบเวลาทำงานรายเครื่องจักร & กราฟมูลค่า
+            st.markdown("#### 📈 กราฟวิเคราะห์มูลค่าและเวลาการผลิตแยกตามเครื่องจักร")
             chart_c1, chart_c2 = st.columns(2)
+            
             with chart_c1:
                 fig_m_val = px.bar(
                     df_m_sum.sort_values(by="มูลค่าผลผลิต (บาท)", ascending=True),
@@ -2810,30 +2893,51 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 st.plotly_chart(fig_m_val, use_container_width=True)
 
             with chart_c2:
-                st.markdown("#### ⚠️ 5 อันดับงานที่ผลิตช้ากว่าแผนมากที่สุด (Top 5 Delays)")
-                if not delayed_jobs.empty:
-                    st.dataframe(
-                        delayed_jobs[["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)"]],
-                        column_config={
-                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
-                            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=180),
-                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=120),
-                            "เลือกเครื่องจักร": st.column_config.TextColumn("สถานี", width=140),
-                            "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=90, format="%.2f"),
-                            "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=90, format="%.2f"),
-                            "ผลต่าง (ชม.)": st.column_config.NumberColumn("เกินแผน (+ชม.)", width=110, format="+%.2f ชม."),
-                        },
-                        hide_index=True,
-                        use_container_width=True
-                    )
-                else:
-                    st.success("🎉 ไม่มีงานใดที่ผลิตช้ากว่าเวลาแผนที่ตั้งไว้ในเดือนนี้")
+                fig_compare = px.bar(
+                    df_m_sum.sort_values(by="เวลาจริง (ชม.)", ascending=True),
+                    x=["เวลาแผน (ชม.)", "เวลาจริง (ชม.)"],
+                    y="เครื่องจักร / แผนก",
+                    orientation="h",
+                    barmode="group",
+                    title="⏱️ เปรียบเทียบเวลาทำงาน: แผนงาน vs ทำงานจริง แต่ละเครื่องจักร (ชม.)",
+                    color_discrete_map={"เวลาแผน (ชม.)": "#94A3B8", "เวลาจริง (ชม.)": "#2563EB"},
+                    text_auto='.2f'
+                )
+                fig_compare.update_traces(textposition='outside', cliponaxis=False)
+                fig_compare.update_layout(
+                    height=380, 
+                    plot_bgcolor="#FFFFFF", 
+                    paper_bgcolor="#FFFFFF", 
+                    margin=dict(l=20, r=20, t=40, b=20), 
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                st.plotly_chart(fig_compare, use_container_width=True)
 
             st.divider()
 
-            # ---------------------------------------------------------
-            # รายละเอียดชิ้นงานทั้งหมด
-            # ---------------------------------------------------------
+            # Top 5 Delays
+            st.markdown("#### ⚠️ 5 อันดับงานที่ผลิตช้ากว่าแผนมากที่สุด (Top 5 Delays)")
+            if not delayed_jobs.empty:
+                st.dataframe(
+                    delayed_jobs[["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)"]],
+                    column_config={
+                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=180),
+                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=120),
+                        "เลือกเครื่องจักร": st.column_config.TextColumn("สถานี", width=140),
+                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=90, format="%.2f"),
+                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=90, format="%.2f"),
+                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("เกินแผน (+ชม.)", width=110, format="+%.2f ชม."),
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.success("🎉 ไม่มีงานใดที่ผลิตช้ากว่าเวลาแผนที่ตั้งไว้ในเดือนนี้")
+
+            st.divider()
+
+            # รายละเอียดงานทั้งหมด
             st.markdown(f"#### 📋 รายละเอียดชิ้นงานทั้งหมดที่เสร็จสิ้นในเดือน {month_names[selected_month_idx-1]}")
             st.dataframe(
                 monthly_jobs.sort_values(by="Target_Date", ascending=True)[[
@@ -2863,7 +2967,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.info(f"ℹ️ ยังไม่มีประวัติงานที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' ในเดือน {month_names[selected_month_idx-1]} {selected_year}")
 
 # ---------------------------------------------------------
-# VIEW 4: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
+# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
