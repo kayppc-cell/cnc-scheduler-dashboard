@@ -294,7 +294,6 @@ st.markdown("""
     .kpi-blue { background: linear-gradient(135deg, #2563EB 0%, #38BDF8 100%); }
     .kpi-orange { background: linear-gradient(135deg, #EA580C 0%, #F59E0B 100%); }
     .kpi-purple { background: linear-gradient(135deg, #7C3AED 0%, #EC4899 100%); }
-    .kpi-red { background: linear-gradient(135deg, #991B1B 0%, #DC2626 100%); }
     
     .kpi-title { 
         font-size: 13.5px !important; 
@@ -305,6 +304,12 @@ st.markdown("""
     .kpi-value { 
         font-size: 23px !important; 
         font-weight: 800 !important; 
+    }
+    .kpi-sub {
+        font-size: 11.5px;
+        margin-top: 4px;
+        opacity: 0.9;
+        font-weight: 500;
     }
 
     .shop-live-banner {
@@ -679,7 +684,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (Setup มาตรฐาน 10 นาที)
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -1282,7 +1287,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 st.write("")
 
 # ---------------------------------------------------------
-# VIEW 2: Dashboard ภาพรวมโรงงาน (พร้อม 4 วิดเจ็ตสรุปภาพรวม)
+# VIEW 2: Dashboard ภาพรวมโรงงาน
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if st.session_state.user_role is None:
@@ -1378,15 +1383,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df["โปรแกรม (น.)"] = pd.to_numeric(calc_df["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
             calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
-            # =========================================================
-            # ✨ ส่วนที่ 1: แผงควบคุมภาพรวมระดับบริหาร 4 มิติ
-            # =========================================================
             st.markdown("### 🎯 แผงสรุปภาพรวมและจุดวิกฤตการผลิต (Executive Overview)")
             
             ov_col1, ov_col2 = st.columns([1.2, 1.8])
 
             with ov_col1:
-                # 🍩 1. Donut Chart สัดส่วนสถานะงานทั้งระบบ
                 status_counts = calc_df["สถานะงาน"].value_counts().reset_index()
                 status_counts.columns = ["สถานะ", "จำนวน"]
                 donut_color_map = {
@@ -1414,7 +1415,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.plotly_chart(fig_donut, use_container_width=True)
 
             with ov_col2:
-                # ⚠️ 2. แจ้งเตือนสถานีคอขวด (Top 3 Bottleneck Machines)
                 st.markdown("**⚠️ 3 อันดับสถานีคอขวดสูงสุด (คิวงานค้างรอนานที่สุด):**")
                 waiting_sub = calc_df[calc_df["สถานะงาน"] == "🟧 รอคิวผลิต"]
                 if not waiting_sub.empty:
@@ -1437,7 +1437,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     st.success("🎉 ทุกสถานีไม่มีคิวงานคั่งค้าง")
 
                 st.write("")
-                # 🛑 3. ตัวนับชั่วโมงและมูลค่าสูญเปล่าจากงานพัก (Downtime Loss)
                 hold_sub = calc_df[calc_df["สถานะงาน"] == "🟨 พักงาน (รอวัสดุ)"]
                 total_hold_count = len(hold_sub)
                 total_hold_hrs = hold_sub["รวม (ชม.)"].sum()
@@ -1457,7 +1456,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 </div>
                 """, unsafe_allow_html=True)
 
-            # 📊 4. ตารางติดตามความคืบหน้าราย Drawing (Drawing Progress Tracker)
             with st.expander("📈 ตารางติดตามความคืบหน้าราย Drawing (Drawing Multi-Step Progress Tracker)", expanded=False):
                 drawing_progress_list = []
                 for (p_c, d_c), g_data in calc_df.groupby(["แผนงาน", "ชื่อ Drawing."]):
@@ -1503,9 +1501,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             st.divider()
 
-            # =========================================================
-            # ส่วนตารางสั่งผลิตในระบบ (Data Editor)
-            # =========================================================
             column_order = [
                 "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
                 "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
@@ -2404,7 +2399,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
 # ---------------------------------------------------------
-# VIEW 3: รายงานสรุปประจำเดือน
+# VIEW 3: รายงานสรุปประจำเดือน (Monthly Executive Report)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📑 รายงานสรุปประจำเดือน":
     if st.session_state.user_role is None:
@@ -2428,7 +2423,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
     else:
         c_head, c_logout = st.columns([8, 2])
         with c_head:
-            st.subheader("📑 รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production Report)")
+            st.subheader("📑 รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production & Executive Report)")
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True, key="btn_logout_monthly"):
                 st.session_state.user_role = None
@@ -2436,9 +2431,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
         df_db = fetch_jobs_from_supabase()
 
-        current_rates_df = pd.DataFrame([
-            {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES.get(m, 500)} for m in MACHINE_LIST
-        ])
         if "machine_rates" in st.session_state:
             rate_map = dict(zip(st.session_state.machine_rates["เครื่องจักร"], st.session_state.machine_rates["เรตราคา (บาท/ชม.)"]))
         else:
@@ -2463,8 +2455,17 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 (finished_all["Target_Date"].dt.month == selected_month_idx) &
                 (finished_all["Target_Date"].dt.year == selected_year)
             ].copy()
+
+            # คำนวณเดือนก่อนหน้า สำหรับเทียบ MoM (Month-over-Month)
+            prev_m = 12 if selected_month_idx == 1 else selected_month_idx - 1
+            prev_y = selected_year - 1 if selected_month_idx == 1 else selected_year
+            prev_monthly_jobs = finished_all[
+                (finished_all["Target_Date"].dt.month == prev_m) &
+                (finished_all["Target_Date"].dt.year == prev_y)
+            ].copy()
         else:
             monthly_jobs = pd.DataFrame()
+            prev_monthly_jobs = pd.DataFrame()
 
         if not monthly_jobs.empty:
             monthly_jobs["Setup (น.)"] = pd.to_numeric(monthly_jobs["Setup (น.)"], errors='coerce').fillna(10.0)
@@ -2473,51 +2474,85 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             monthly_jobs["จำนวน"] = pd.to_numeric(monthly_jobs["จำนวน"], errors='coerce').fillna(1).astype(int)
             monthly_jobs["เวลาแผน (ชม.)"] = ((monthly_jobs["Setup (น.)"] + monthly_jobs["Basic (น.)"] + monthly_jobs["โปรแกรม (น.)"]) / 60.0).round(2)
             
-            actual_hrs_list = []
-            on_time_count = 0
+            actual_hrs_list, diff_hrs_list, on_time_list = [], [], []
             for _, r in monthly_jobs.iterrows():
                 s_real, f_real = r.get("เริ่มจริง"), r.get("เสร็จจริง")
                 if pd.notna(s_real) and pd.notna(f_real):
-                    diff_seconds = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
-                    act_hrs = round(diff_seconds / 3600.0, 2)
+                    diff_sec = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
+                    act_hrs = round(diff_sec / 3600.0, 2)
+                    v_hrs = round(act_hrs - r["เวลาแผน (ชม.)"], 2)
                     actual_hrs_list.append(act_hrs)
-                    if act_hrs <= r["เวลาแผน (ชม.)"]:
-                        on_time_count += 1
+                    diff_hrs_list.append(v_hrs)
+                    on_time_list.append(1 if act_hrs <= r["เวลาแผน (ชม.)"] else 0)
                 else:
                     actual_hrs_list.append(r["เวลาแผน (ชม.)"])
-                    on_time_count += 1
+                    diff_hrs_list.append(0.0)
+                    on_time_list.append(1)
                     
             monthly_jobs["เวลาจริง (ชม.)"] = actual_hrs_list
+            monthly_jobs["ผลต่าง (ชม.)"] = diff_hrs_list
             monthly_jobs["เรตราคา (บาท/ชม.)"] = monthly_jobs["เลือกเครื่องจักร"].map(rate_map).fillna(500)
             monthly_jobs["มูลค่ารวม (บาท)"] = monthly_jobs["เวลาจริง (ชม.)"] * monthly_jobs["เรตราคา (บาท/ชม.)"]
 
             total_jobs_count = len(monthly_jobs)
             total_qty_pieces = monthly_jobs["จำนวน"].sum()
             total_running_hrs = monthly_jobs["เวลาจริง (ชม.)"].sum()
+            total_plan_hrs_m = monthly_jobs["เวลาแผน (ชม.)"].sum()
+            total_variance_hrs = monthly_jobs["ผลต่าง (ชม.)"].sum()
             total_output_val = monthly_jobs["มูลค่ารวม (บาท)"].sum()
-            on_time_rate = (on_time_count / total_jobs_count * 100.0) if total_jobs_count > 0 else 100.0
+            on_time_rate = (sum(on_time_list) / total_jobs_count * 100.0) if total_jobs_count > 0 else 100.0
+
+            # คำนวณ MoM เทียบเดือนก่อนหน้า
+            if not prev_monthly_jobs.empty:
+                prev_qty = prev_monthly_jobs["จำนวน"].sum()
+                prev_monthly_jobs["Setup (น.)"] = pd.to_numeric(prev_monthly_jobs["Setup (น.)"], errors='coerce').fillna(10.0)
+                prev_monthly_jobs["Basic (น.)"] = pd.to_numeric(prev_monthly_jobs["Basic (น.)"], errors='coerce').fillna(0.0)
+                prev_monthly_jobs["โปรแกรม (น.)"] = pd.to_numeric(prev_monthly_jobs["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
+                prev_monthly_jobs["เวลาแผน (ชม.)"] = ((prev_monthly_jobs["Setup (น.)"] + prev_monthly_jobs["Basic (น.)"] + prev_monthly_jobs["โปรแกรม (น.)"]) / 60.0).round(2)
+                prev_val = sum([r.get("เวลาแผน (ชม.)", 0.0) * rate_map.get(r.get("เลือกเครื่องจักร"), 500) for _, r in prev_monthly_jobs.iterrows()])
+                
+                growth_qty = ((total_qty_pieces - prev_qty) / prev_qty * 100) if prev_qty > 0 else 0.0
+                growth_val = ((total_output_val - prev_val) / prev_val * 100) if prev_val > 0 else 0.0
+                growth_qty_str = f"{'+' if growth_qty >= 0 else ''}{growth_qty:.1f}% เทียบเดือนก่อน"
+                growth_val_str = f"{'+' if growth_val >= 0 else ''}{growth_val:.1f}% เทียบเดือนก่อน"
+            else:
+                growth_qty_str = "ไม่มีข้อมูลเดือนก่อนหน้า"
+                growth_val_str = "ไม่มีข้อมูลเดือนก่อนหน้า"
+
+            # ---------------------------------------------------------
+            # 1. การ์ด KPI หลักประจำเดือน (Executive KPI Cards)
+            # ---------------------------------------------------------
+            var_color_class = "kpi-green" if total_variance_hrs <= 0 else "kpi-red"
+            var_title_txt = f"⚡ เร็วกว่าแผนรวม {abs(total_variance_hrs):.1f} ชม." if total_variance_hrs <= 0 else f"⚠️ ช้ากว่าแผนรวม +{total_variance_hrs:.1f} ชม."
 
             st.markdown(f"""
             <div class="kpi-container">
                 <div class="kpi-card kpi-green">
                     <div class="kpi-title">✅ ชิ้นงานที่ผลิตเสร็จ</div>
-                    <div class="kpi-value">{total_qty_pieces:,} <span style="font-size:15px; font-weight:600;">ชิ้น ({total_jobs_count} คิว)</span></div>
+                    <div class="kpi-value">{total_qty_pieces:,} <span style="font-size:15px; font-weight:600;">ชิ้น</span></div>
+                    <div class="kpi-sub">📊 {growth_qty_str} ({total_jobs_count} คิว)</div>
                 </div>
                 <div class="kpi-card kpi-blue">
-                    <div class="kpi-title">⏱️ ชั่วโมงเดินเครื่องรวม</div>
+                    <div class="kpi-title">⏱️ ชั่วโมงเดินเครื่องจริง</div>
                     <div class="kpi-value">{total_running_hrs:,.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div>
+                    <div class="kpi-sub">แผนที่ตั้งไว้: {total_plan_hrs_m:,.1f} ชม.</div>
                 </div>
                 <div class="kpi-card kpi-orange">
                     <div class="kpi-title">💰 มูลค่าผลผลิตรวม</div>
                     <div class="kpi-value">{total_output_val:,.2f} <span style="font-size:15px; font-weight:600;">฿</span></div>
+                    <div class="kpi-sub">📈 {growth_val_str}</div>
                 </div>
                 <div class="kpi-card kpi-purple">
-                    <div class="kpi-title">🎯 ตรงตามแผน (On-Time)</div>
+                    <div class="kpi-title">🎯 ส่งมอบตรงแผน (On-Time)</div>
                     <div class="kpi-value">{on_time_rate:.1f} %</div>
+                    <div class="kpi-sub">{var_title_txt}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
+            # ---------------------------------------------------------
+            # 2. เครื่องจักร และ สัดส่วนการสร้างรายได้ (Machine Performance & Revenue Contribution)
+            # ---------------------------------------------------------
             machine_summary = []
             for m in MACHINE_LIST:
                 m_sub = monthly_jobs[monthly_jobs["เลือกเครื่องจักร"] == m]
@@ -2527,6 +2562,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     m_plan_hrs = m_sub["เวลาแผน (ชม.)"].sum()
                     m_act_hrs = m_sub["เวลาจริง (ชม.)"].sum()
                     m_val = m_sub["มูลค่ารวม (บาท)"].sum()
+                    m_contrib = (m_val / total_output_val * 100.0) if total_output_val > 0 else 0.0
                     diff_hrs = round(m_act_hrs - m_plan_hrs, 2)
                     eval_txt = f"🟢 เร็วขึ้น {abs(diff_hrs):.2f} ชม." if diff_hrs <= 0 else f"🔴 ช้ากว่าแผน +{diff_hrs:.2f} ชม."
                     
@@ -2538,73 +2574,100 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                         "เวลาจริง (ชม.)": round(m_act_hrs, 2),
                         "ผลต่าง": eval_txt,
                         "เรตราคา": f"{rate_map.get(m, 500):,} ฿",
-                        "มูลค่าผลผลิต (บาท)": round(m_val, 2)
+                        "มูลค่าผลผลิต (บาท)": round(m_val, 2),
+                        "สัดส่วนมูลค่า (%)": round(m_contrib, 1)
                     })
-            df_m_sum = pd.DataFrame(machine_summary)
+            df_m_sum = pd.DataFrame(machine_summary).sort_values(by="มูลค่าผลผลิต (บาท)", ascending=False)
 
-            rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td style='text-align:center;'>{r['จำนวนคิวงาน']} คิว</td><td style='text-align:center;'>{r['ชิ้นงานรวม (ชิ้น)']} ชิ้น</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:center;'>{r['ผลต่าง']}</td><td style='text-align:right;'>{r['เรตราคา']}</td><td style='text-align:right; font-weight:bold;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td></tr>" for _, r in df_m_sum.iterrows()])
+            # ---------------------------------------------------------
+            # 3. วิเคราะห์ประสิทธิภาพแยกตามชนิดวัสดุ (Material Insights)
+            # ---------------------------------------------------------
+            mat_summary = []
+            for mat_name, mat_sub in monthly_jobs.groupby("วัสดุ"):
+                mat_qty = mat_sub["จำนวน"].sum()
+                mat_jobs = len(mat_sub)
+                mat_act_hrs = mat_sub["เวลาจริง (ชม.)"].sum()
+                mat_val = mat_sub["มูลค่ารวม (บาท)"].sum()
+                mat_summary.append({
+                    "ชนิดวัสดุ": mat_name if str(mat_name).strip() != "" else "ไม่ระบุ",
+                    "จำนวนคิว": mat_jobs,
+                    "จำนวนชิ้นงาน (ชิ้น)": mat_qty,
+                    "ชั่วโมงผลิตจริง (ชม.)": round(mat_act_hrs, 2),
+                    "มูลค่าผลผลิต (บาท)": round(mat_val, 2),
+                    "สัดส่วน (%)": round((mat_val / total_output_val * 100.0), 1) if total_output_val > 0 else 0.0
+                })
+            df_mat_sum = pd.DataFrame(mat_summary).sort_values(by="ชั่วโมงผลิตจริง (ชม.)", ascending=False)
+
+            # ---------------------------------------------------------
+            # 4. Top 5 งานที่ใช้เวลาเกินแผนสูงสุด (Top 5 Delays Analysis)
+            # ---------------------------------------------------------
+            delayed_jobs = monthly_jobs[monthly_jobs["ผลต่าง (ชม.)"] > 0].sort_values(by="ผลต่าง (ชม.)", ascending=False).head(5)
+
+            # ---------------------------------------------------------
+            # ส่วน HTML Export สำหรับสั่งพิมพ์ / PDF
+            # ---------------------------------------------------------
+            rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td style='text-align:center;'>{r['จำนวนคิวงาน']}</td><td style='text-align:center;'>{r['ชิ้นงานรวม (ชิ้น)']}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:center;'>{r['ผลต่าง']}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วนมูลค่า (%)']:.1f}%</td></tr>" for _, r in df_m_sum.iterrows()])
+            rows_mat_html = "".join([f"<tr><td>{r['ชนิดวัสดุ']}</td><td style='text-align:center;'>{r['จำนวนคิว']}</td><td style='text-align:center;'>{r['จำนวนชิ้นงาน (ชิ้น)']}</td><td style='text-align:center;'>{r['ชั่วโมงผลิตจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วน (%)']:.1f}%</td></tr>" for _, r in df_mat_sum.iterrows()])
             rows_job_html = "".join([f"<tr><td>{r['แผนงาน']}</td><td>{r['ชื่อ Drawing.']}</td><td style='text-align:center;'>{r['จำนวน']}</td><td style='text-align:center;'>{r['วัสดุ']}</td><td>{r['ขั้นตอน (Step)']}</td><td>{r['เลือกเครื่องจักร']}</td><td style='text-align:center;'>{pd.to_datetime(r['เริ่มจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เริ่มจริง']) else '-'}</td><td style='text-align:center;'>{pd.to_datetime(r['เสร็จจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เสร็จจริง']) else '-'}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่ารวม (บาท)']:,.2f} ฿</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
 
             report_html_full = f"""
             <html>
             <head>
                 <meta charset="utf-8">
-                <title>PES Monthly Production Report - {month_names[selected_month_idx-1]} {selected_year}</title>
+                <title>PES Executive Monthly Report - {month_names[selected_month_idx-1]} {selected_year}</title>
                 <style>
-                    @page {{ size: A4 portrait; margin: 10mm 12mm; }}
-                    body {{ font-family: 'Tahoma', 'Sarabun', 'Arial', sans-serif; color: #1E293B; margin: 0; padding: 10px; font-size: 11px; line-height: 1.4; }}
-                    .header-box {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1E3E62; padding-bottom: 8px; margin-bottom: 12px; }}
-                    .title-text h2 {{ margin: 0; color: #0B192C; font-size: 17px; }}
-                    .title-text p {{ margin: 2px 0 0 0; color: #475569; font-size: 11px; }}
-                    .kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }}
-                    .kpi-item {{ background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 6px; padding: 8px 10px; text-align: center; }}
-                    .kpi-item-title {{ font-size: 10px; color: #64748B; font-weight: bold; }}
-                    .kpi-item-val {{ font-size: 15px; color: #0F172A; font-weight: 800; margin-top: 2px; }}
-                    h3 {{ color: #1E3E62; font-size: 12px; margin: 12px 0 6px 0; border-left: 4px solid #2563EB; padding-left: 6px; }}
-                    table {{ width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 10px; }}
-                    th, td {{ border: 1px solid #CBD5E1; padding: 4px 6px; text-align: left; }}
+                    @page {{ size: A4 portrait; margin: 8mm 10mm; }}
+                    body {{ font-family: 'Tahoma', 'Sarabun', 'Arial', sans-serif; color: #1E293B; margin: 0; padding: 10px; font-size: 10.5px; line-height: 1.35; }}
+                    .header-box {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1E3E62; padding-bottom: 6px; margin-bottom: 10px; }}
+                    .title-text h2 {{ margin: 0; color: #0B192C; font-size: 16px; }}
+                    .title-text p {{ margin: 2px 0 0 0; color: #475569; font-size: 10px; }}
+                    .kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }}
+                    .kpi-item {{ background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 8px; text-align: center; }}
+                    .kpi-item-title {{ font-size: 9.5px; color: #64748B; font-weight: bold; }}
+                    .kpi-item-val {{ font-size: 14px; color: #0F172A; font-weight: 800; margin-top: 2px; }}
+                    h3 {{ color: #1E3E62; font-size: 11.5px; margin: 10px 0 4px 0; border-left: 4px solid #2563EB; padding-left: 6px; }}
+                    table {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 9.5px; }}
+                    th, td {{ border: 1px solid #CBD5E1; padding: 4px 5px; text-align: left; }}
                     th {{ background-color: #F1F5F9; color: #1E293B; font-weight: bold; }}
                     tr:nth-child(even) {{ background-color: #F8FAFC; }}
-                    .sign-box {{ display: flex; justify-content: space-between; margin-top: 30px; padding-top: 10px; }}
-                    .sign-col {{ width: 30%; text-align: center; border-top: 1px dashed #94A3B8; padding-top: 5px; font-size: 10px; }}
+                    .sign-box {{ display: flex; justify-content: space-between; margin-top: 25px; padding-top: 10px; }}
+                    .sign-col {{ width: 30%; text-align: center; border-top: 1px dashed #94A3B8; padding-top: 4px; font-size: 9.5px; }}
                 </style>
             </head>
             <body>
                 <div class="header-box">
                     <div class="title-text">
                         <h2>บจก. พลวัฒน์ เอ็นจิเนียริ่ง ซัพพลาย (PES)</h2>
-                        <p>รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production & Performance Report)</p>
+                        <p>รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production & Executive Report)</p>
                     </div>
-                    <div style="text-align: right; font-size: 10.5px;">
+                    <div style="text-align: right; font-size: 10px;">
                         <b>ประจำเดือน:</b> {month_names[selected_month_idx-1]} {selected_year}<br>
                         <b>วันที่ออกรายงาน:</b> {get_bangkok_now().strftime('%d/%m/%Y %H:%M น.')}
                     </div>
                 </div>
 
                 <div class="kpi-grid">
-                    <div class="kpi-item"><div class="kpi-item-title">ชิ้นงานที่ผลิตเสร็จ</div><div class="kpi-item-val">{total_qty_pieces:,} ชิ้น ({total_jobs_count} คิว)</div></div>
+                    <div class="kpi-item"><div class="kpi-item-title">ชิ้นงานที่ผลิตเสร็จ</div><div class="kpi-item-val">{total_qty_pieces:,} ชิ้น</div></div>
                     <div class="kpi-item"><div class="kpi-item-title">ชั่วโมงเดินเครื่องจริง</div><div class="kpi-item-val">{total_running_hrs:,.1f} ชม.</div></div>
                     <div class="kpi-item"><div class="kpi-item-title">มูลค่าผลผลิตรวม</div><div class="kpi-item-val">{total_output_val:,.2f} ฿</div></div>
                     <div class="kpi-item"><div class="kpi-item-title">ตรงตามแผน (On-Time)</div><div class="kpi-item-val">{on_time_rate:.1f} %</div></div>
                 </div>
 
-                <h3>1. สรุปผลการทำงานและมูลค่าแยกตามเครื่องจักร / แผนก</h3>
+                <h3>1. สรุปผลการทำงานและสัดส่วนรายได้แยกตามเครื่องจักร / แผนก</h3>
                 <table>
-                    <thead>
-                        <tr>
-                            <th>เครื่องจักร / แผนก</th><th>จำนวนคิว</th><th>ชิ้นงาน</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>ผลต่าง</th><th>เรตราคา</th><th>มูลค่ารวม</th>
-                        </tr>
-                    </thead>
+                    <thead><tr><th>เครื่องจักร / แผนก</th><th>คิว</th><th>ชิ้นงาน</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>ผลต่าง</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
                     <tbody>{rows_m_html}</tbody>
                 </table>
 
-                <h3>2. รายละเอียดงานที่เสร็จสิ้นทั้งหมด</h3>
+                <h3>2. สรุปการใช้วัสดุและเวลาผลิต (Material Insights)</h3>
                 <table>
-                    <thead>
-                        <tr>
-                            <th>แผนงาน</th><th>ชื่อ Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>สถานี</th><th>เริ่มจริง</th><th>เสร็จจริง</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>มูลค่า (฿)</th>
-                        </tr>
-                    </thead>
+                    <thead><tr><th>ชนิดวัสดุ</th><th>คิว</th><th>ชิ้นงาน</th><th>ชั่วโมงผลิตจริง (ชม.)</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
+                    <tbody>{rows_mat_html}</tbody>
+                </table>
+
+                <h3>3. รายการชิ้นงานที่ผลิตเสร็จสิ้นทั้งหมด</h3>
+                <table>
+                    <thead><tr><th>แผนงาน</th><th>ชื่อ Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>สถานี</th><th>เริ่มจริง</th><th>เสร็จจริง</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>มูลค่า (฿)</th></tr></thead>
                     <tbody>{rows_job_html}</tbody>
                 </table>
 
@@ -2616,17 +2679,15 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             </body>
             </html>
             """
-            
             json_report_html = json.dumps(report_html_full)
 
             with r_col_exp:
                 st.write("")
                 b_col_pdf, b_col_csv = st.columns(2)
-                
                 with b_col_pdf:
                     components.html(f"""
                     <button onclick="printReport()" style="width:100%; background:linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color:white; border:none; padding:9px 14px; border-radius:8px; font-weight:bold; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(220,38,38,0.25);">
-                        📄 พิมพ์ / บันทึกเป็น PDF
+                        📄 พิมพ์ / บันทึก PDF รายงานผู้บริหาร
                     </button>
                     <script>
                         function printReport() {{
@@ -2636,9 +2697,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                             printWin.document.write(reportHtml);
                             printWin.document.close();
                             printWin.focus();
-                            setTimeout(function() {{
-                                printWin.print();
-                            }}, 500);
+                            setTimeout(function() {{ printWin.print(); }}, 500);
                         }}
                     </script>
                     """, height=45)
@@ -2647,7 +2706,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     csv_data = monthly_jobs[[
                         "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
                         "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", 
-                        "เวลาจริง (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"
+                        "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"
                     ]].to_csv(index=False).encode('utf-8-sig')
                     
                     st.download_button(
@@ -2661,31 +2720,51 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             st.divider()
 
-            # 2. ตารางสรุปแยกตามรายเครื่องจักร
-            st.markdown("#### 🏭 สรุปผลการทำงานและมูลค่าแยกตามเครื่องจักร / แผนก")
-            if machine_summary:
+            # ---------------------------------------------------------
+            # ส่วนแสดงตารางและกราฟวิเคราะห์เชิงลึก
+            # ---------------------------------------------------------
+            col_sec1, col_sec2 = st.columns([1.5, 1])
+
+            with col_sec1:
+                st.markdown("#### 🏭 สรุปประสิทธิภาพและสัดส่วนรายได้แยกตามเครื่องจักร (Machine ROI & Revenue)")
                 st.dataframe(
                     df_m_sum,
                     column_config={
-                        "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร / แผนก", width=160),
-                        "จำนวนคิวงาน": st.column_config.NumberColumn("จำนวนคิว", width=95, format="%d คิว"),
-                        "ชิ้นงานรวม (ชิ้น)": st.column_config.NumberColumn("ชิ้นงานรวม", width=110, format="%d ชิ้น"),
-                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("เวลาแผน (ชม.)", width=110, format="%.2f ชม."),
-                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("เวลาจริง (ชม.)", width=110, format="%.2f ชม."),
-                        "ผลต่าง": st.column_config.TextColumn("ประสิทธิภาพ", width=140),
-                        "เรตราคา": st.column_config.TextColumn("เรตราคา/ชม.", width=100),
-                        "มูลค่าผลผลิต (บาท)": st.column_config.NumberColumn("มูลค่ารวม (บาท)", width=140, format="%.2f ฿")
+                        "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=150),
+                        "จำนวนคิวงาน": st.column_config.NumberColumn("คิว", width=70, format="%d"),
+                        "ชิ้นงานรวม (ชิ้น)": st.column_config.NumberColumn("ชิ้นงาน", width=85, format="%d"),
+                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                        "ผลต่าง": st.column_config.TextColumn("ผลต่างเวลา", width=125),
+                        "มูลค่าผลผลิต (บาท)": st.column_config.NumberColumn("มูลค่ารวม (บาท)", width=130, format="%.2f ฿"),
+                        "สัดส่วนมูลค่า (%)": st.column_config.ProgressColumn("สัดส่วน", width=110, min_value=0, max_value=100, format="%d%%")
                     },
                     hide_index=True,
                     use_container_width=True
                 )
-            
+
+            with col_sec2:
+                st.markdown("#### 🔩 ประสิทธิภาพแยกตามชนิดวัสดุ (Material Insights)")
+                st.dataframe(
+                    df_mat_sum,
+                    column_config={
+                        "ชนิดวัสดุ": st.column_config.TextColumn("วัสดุ", width=100),
+                        "จำนวนคิว": st.column_config.NumberColumn("คิว", width=65),
+                        "จำนวนชิ้นงาน (ชิ้น)": st.column_config.NumberColumn("ชิ้น", width=75),
+                        "ชั่วโมงผลิตจริง (ชม.)": st.column_config.NumberColumn("ชั่วโมงจริง", width=100, format="%.1f ชม."),
+                        "มูลค่าผลผลิต (บาท)": st.column_config.NumberColumn("มูลค่า (บาท)", width=120, format="%.2f ฿"),
+                        "สัดส่วน (%)": st.column_config.ProgressColumn("สัดส่วน", width=95, min_value=0, max_value=100, format="%d%%")
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+
             st.divider()
 
-            # 3. กราฟวิเคราะห์ประสิทธิภาพ
-            st.markdown("#### 📈 กราฟวิเคราะห์มูลค่าและเวลาการผลิต")
+            # ---------------------------------------------------------
+            # กราฟวิเคราะห์และ Top 5 Delay Analysis
+            # ---------------------------------------------------------
             chart_c1, chart_c2 = st.columns(2)
-            
             with chart_c1:
                 fig_m_val = px.bar(
                     df_m_sum.sort_values(by="มูลค่าผลผลิต (บาท)", ascending=True),
@@ -2696,30 +2775,38 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     color="มูลค่าผลผลิต (บาท)",
                     color_continuous_scale="Blues"
                 )
-                fig_m_val.update_layout(height=400, plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF", margin=dict(l=20, r=20, t=40, b=20))
+                fig_m_val.update_layout(height=360, plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF", margin=dict(l=20, r=20, t=40, b=20))
                 st.plotly_chart(fig_m_val, use_container_width=True)
 
             with chart_c2:
-                fig_compare = px.bar(
-                    df_m_sum,
-                    x="เครื่องจักร / แผนก",
-                    y=["เวลาแผน (ชม.)", "เวลาจริง (ชม.)"],
-                    barmode="group",
-                    title="⏱️ เปรียบเทียบเวลาทำงาน: แผนงาน vs ทำงานจริง (ชม.)",
-                    color_discrete_map={"เวลาแผน (ชม.)": "#94A3B8", "เวลาจริง (ชม.)": "#2563EB"}
-                )
-                fig_compare.update_layout(height=400, plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF", margin=dict(l=20, r=20, t=40, b=20), legend=dict(orientation="h", y=1.1))
-                st.plotly_chart(fig_compare, use_container_width=True)
+                st.markdown("#### ⚠️ 5 อันดับงานที่ผลิตช้ากว่าแผนมากที่สุด (Top 5 Delays)")
+                if not delayed_jobs.empty:
+                    st.dataframe(
+                        delayed_jobs[["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)"]],
+                        column_config={
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=160),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=100),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("สถานี", width=120),
+                            "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                            "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                            "ผลต่าง (ชม.)": st.column_config.NumberColumn("เกินแผน (+ชม.)", width=110, format="+%.2f ชม."),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.success("🎉 ไม่มีงานใดที่ผลิตช้ากว่าเวลาแผนที่ตั้งไว้")
 
             st.divider()
 
-            # 4. รายการ Job ทั้งหมดในเดือน
+            # รายละเอียดงานทั้งหมด
             st.markdown(f"#### 📋 รายละเอียดชิ้นงานทั้งหมดที่เสร็จสิ้นในเดือน {month_names[selected_month_idx-1]}")
             st.dataframe(
                 monthly_jobs.sort_values(by="Target_Date", ascending=True)[[
                     "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
                     "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", 
-                    "เวลาจริง (ชม.)", "มูลค่ารวม (บาท)"
+                    "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "มูลค่ารวม (บาท)"
                 ]],
                 column_config={
                     "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
@@ -2730,8 +2817,9 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", width=140),
                     "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", width=140, format="DD/MM HH:mm"),
                     "เสร็จจริง": st.column_config.DatetimeColumn("เสร็จจริง", width=140, format="DD/MM HH:mm"),
-                    "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=90, format="%.2f"),
-                    "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=90, format="%.2f"),
+                    "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                    "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                    "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", width=80, format="%.2f"),
                     "มูลค่ารวม (บาท)": st.column_config.NumberColumn("มูลค่า (บาท)", width=120, format="%.2f ฿"),
                 },
                 hide_index=True,
