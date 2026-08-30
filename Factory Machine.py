@@ -534,8 +534,13 @@ VIEWER_PASSWORD = "pes1234"
 if "user_role" not in st.session_state:
     st.session_state.user_role = None
 
+# ตรวจจับ URL Query Parameter เพื่อเปิดจอ TV อัตโนมัติ (เช่น ?view=tv)
+query_params = st.query_params
 if "current_view" not in st.session_state:
-    st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
+    if query_params.get("view") == "tv":
+        st.session_state.current_view = "📺 จอทีวีกลางโรงงาน (TV Live)"
+    else:
+        st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
 
 if "active_select_all" not in st.session_state:
     st.session_state.active_select_all = False
