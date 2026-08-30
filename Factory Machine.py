@@ -908,11 +908,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else None
                 min_id = steps["ID"].min()
                 
-                if is_running:
+                # --- จัดลำดับใหม่: เอา "พักงาน" ขึ้นสูงสุดเสมอ (Priority 0) เพื่อให้ช่างเห็นชัดเจน ---
+                if is_hold:
                     prio = 0
-                elif is_urgent and not is_hold:
+                elif is_running:
                     prio = 1
-                elif not is_hold:
+                elif is_urgent:
                     prio = 2
                 else:
                     prio = 3
