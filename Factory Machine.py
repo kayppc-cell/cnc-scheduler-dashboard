@@ -1299,7 +1299,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if st.session_state.user_role is None:
         st.subheader("🔒 ยืนยันตัวตนสำหรับเข้าใช้งานแดชบอร์ดภาพรวมโรงงาน")
-        st.info("กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน:\n* **ผู้บริหาร/วางแผน (แก้ไขได้):** รหัสผ่านระดับ Admin\n* **เข้าชมทั่วไป (ดูอย่างเดียว):** รหัสผ่าน `pes1234`")
+        st.info("กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน:\n* **ผู้บริหาร/วางแผน (แก้ไขได้):** รหัสผ่านระดับ Admin\n* **เข้าชมทั่วไป (ดูอย่างเดียว):** รหัสผ่านทั่วไป")
         col_pwd, col_btn = st.columns([3, 1])
         with col_pwd:
             input_pwd = st.text_input("รหัสผ่าน (Password):", type="password")
@@ -2416,7 +2416,6 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
     current_now = get_bangkok_now()
     month_names = ["มกราคม (1)", "กุมภาพันธ์ (2)", "มีนาคม (3)", "เมษายน (4)", "พฤษภาคม (5)", "มิถุนายน (6)", "กรกฎาคม (7)", "สิงหาคม (8)", "กันยายน (9)", "ตุลาคม (10)", "พฤศจิกายน (11)", "ธันวาคม (12)"]
 
-    # 1. กล่องเลือกเดือนและปีเพื่อคุมขนาดข้อมูล
     m_col1, m_col2, m_col3 = st.columns([2, 2, 3])
     with m_col1:
         sel_dw_month = st.selectbox("📅 เลือกเดือนที่ต้องการวิเคราะห์:", range(1, 13), index=current_now.month - 1, format_func=lambda x: month_names[x-1], key="dw_month_sel")
@@ -2433,7 +2432,6 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
             finished_all["วันขึ้นงาน_DT"] = pd.to_datetime(finished_all["วัน-เวลาขึ้นงาน"], errors='coerce')
             finished_all["Target_Date"] = finished_all["เสร็จจริง_DT"].fillna(finished_all["วันขึ้นงาน_DT"])
             
-            # กรองเฉพาะเดือนและปีที่เลือก
             monthly_dw_jobs = finished_all[
                 (finished_all["Target_Date"].dt.month == sel_dw_month) &
                 (finished_all["Target_Date"].dt.year == sel_dw_year)
@@ -2503,7 +2501,6 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                     })
                 df_draw_full = pd.DataFrame(drawing_agg)
 
-                # สรุปยอดการ์ด 3 สีประจำเดือน
                 count_fast = len(df_draw_full[df_draw_full["สถานะกลุ่ม"] == "FAST"])
                 count_target = len(df_draw_full[df_draw_full["สถานะกลุ่ม"] == "ON_TARGET"])
                 count_late = len(df_draw_full[df_draw_full["สถานะกลุ่ม"] == "LATE"])
@@ -2681,7 +2678,7 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
 elif st.session_state.current_view == "📑 รายงานสรุปประจำเดือน":
     if st.session_state.user_role is None:
         st.subheader("🔒 ยืนยันตัวตนสำหรับเข้าใช้งานรายงานสรุปประจำเดือน")
-        st.info("กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน:\n* **ผู้บริหาร/วางแผน:** รหัสผ่านระดับ Admin หรือ `pes1234`")
+        st.info("กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน:\n* **ผู้บริหาร/วางแผน:** รหัสผ่านระดับ Admin หรือ รหัสผ่านทั่วไป")
         col_pwd, col_btn = st.columns([3, 1])
         with col_pwd:
             input_pwd = st.text_input("รหัสผ่าน (Password):", type="password", key="pwd_monthly_report")
