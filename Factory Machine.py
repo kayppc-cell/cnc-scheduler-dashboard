@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime, timedelta, time as dtime
 import zoneinfo
 import os
@@ -167,7 +168,6 @@ def calculate_working_hours_between(start_dt: datetime, end_dt: datetime) -> flo
         cur_d += timedelta(days=1)
     return total_sec / 3600.0
 
-# ฟังก์ชันไฮไลต์สีแจ้งเตือนเวลาในตาราง
 def highlight_running_deadlines(row, planned_finish_map):
     status = str(row.get("สถานะ", row.get("สถานะงาน", "")))
     p_code = str(row.get("แผนงาน", ""))
@@ -294,6 +294,7 @@ st.markdown("""
     .kpi-blue { background: linear-gradient(135deg, #2563EB 0%, #38BDF8 100%); }
     .kpi-orange { background: linear-gradient(135deg, #EA580C 0%, #F59E0B 100%); }
     .kpi-purple { background: linear-gradient(135deg, #7C3AED 0%, #EC4899 100%); }
+    .kpi-red { background: linear-gradient(135deg, #991B1B 0%, #DC2626 100%); }
     
     .kpi-title { 
         font-size: 13.5px !important; 
@@ -306,7 +307,6 @@ st.markdown("""
         font-weight: 800 !important; 
     }
 
-    /* Machine Live Status Box on Shop-Floor View */
     .shop-live-banner {
         padding: 12px 18px;
         border-radius: 14px;
@@ -923,7 +923,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     else:
         m_all_jobs = pd.DataFrame()
 
-    # --- แถบแบนเนอร์แจ้งเตือนสถานะสดของเครื่องจักรให้ช่างเห็นชัดเจน ---
     if not m_all_jobs.empty:
         running_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
         hold_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
@@ -983,7 +982,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else None
                 min_id = steps["ID"].min()
                 
-                # --- จัดลำดับใหม่: เอา "พักงาน" ขึ้นสูงสุดเสมอ (Priority 0) เพื่อให้ช่างเห็นชัดเจน ---
                 if is_hold:
                     prio = 0
                 elif is_running:
@@ -1284,7 +1282,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 st.write("")
 
 # ---------------------------------------------------------
-# VIEW 2: Dashboard ภาพรวมโรงงาน
+# VIEW 2: Dashboard ภาพรวมโรงงาน (พร้อม 4 วิดเจ็ตสรุปภาพรวม)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if st.session_state.user_role is None:
@@ -1375,13 +1373,139 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         if not df_db.empty:
             calc_df = df_db.copy()
-            
             calc_df["Setup (น.)"] = pd.to_numeric(calc_df["Setup (น.)"], errors='coerce').fillna(10.0)
             calc_df["Basic (น.)"] = pd.to_numeric(calc_df["Basic (น.)"], errors='coerce').fillna(0.0)
             calc_df["โปรแกรม (น.)"] = pd.to_numeric(calc_df["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
-            
             calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
+            # =========================================================
+            # ✨ ส่วนที่ 1: แผงควบคุมภาพรวมระดับบริหาร 4 มิติ
+            # =========================================================
+            st.markdown("### 🎯 แผงสรุปภาพรวมและจุดวิกฤตการผลิต (Executive Overview)")
+            
+            ov_col1, ov_col2 = st.columns([1.2, 1.8])
+
+            with ov_col1:
+                # 🍩 1. Donut Chart สัดส่วนสถานะงานทั้งระบบ
+                status_counts = calc_df["สถานะงาน"].value_counts().reset_index()
+                status_counts.columns = ["สถานะ", "จำนวน"]
+                donut_color_map = {
+                    "🟩 เสร็จสิ้นแล้ว": "#10B981",
+                    "🟦 กำลังผลิต": "#2563EB",
+                    "🟨 พักงาน (รอวัสดุ)": "#F59E0B",
+                    "🟧 รอคิวผลิต": "#94A3B8"
+                }
+                fig_donut = px.pie(
+                    status_counts, 
+                    values="จำนวน", 
+                    names="สถานะ", 
+                    hole=0.55,
+                    color="สถานะ",
+                    color_discrete_map=donut_color_map,
+                    title="📊 สัดส่วนสถานะงานทั้งหมดในระบบ"
+                )
+                fig_donut.update_traces(textposition='inside', textinfo='percent+value')
+                fig_donut.update_layout(
+                    height=260, 
+                    margin=dict(l=10, r=10, t=35, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+                    plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF"
+                )
+                st.plotly_chart(fig_donut, use_container_width=True)
+
+            with ov_col2:
+                # ⚠️ 2. แจ้งเตือนสถานีคอขวด (Top 3 Bottleneck Machines)
+                st.markdown("**⚠️ 3 อันดับสถานีคอขวดสูงสุด (คิวงานค้างรอนานที่สุด):**")
+                waiting_sub = calc_df[calc_df["สถานะงาน"] == "🟧 รอคิวผลิต"]
+                if not waiting_sub.empty:
+                    m_load = waiting_sub.groupby("เลือกเครื่องจักร").agg(
+                        คิวรอ=('ID', 'count'),
+                        ชั่วโมงรวม=('รวม (ชม.)', 'sum')
+                    ).reset_index().sort_values(by="คิวรอ", ascending=False).head(3)
+
+                    bn_cols = st.columns(3)
+                    for idx_b, (_, b_row) in enumerate(m_load.iterrows()):
+                        with bn_cols[idx_b]:
+                            st.markdown(f"""
+                            <div style="background:#FEF2F2; border:1.5px solid #FECACA; border-left:5px solid #DC2626; border-radius:10px; padding:10px 14px;">
+                                <div style="font-size:11px; font-weight:bold; color:#991B1B;">อันดับ {idx_b+1} งานค้างสูงสุด</div>
+                                <div style="font-size:14px; font-weight:800; color:#1E293B; margin:2px 0;">{b_row['เลือกเครื่องจักร']}</div>
+                                <div style="font-size:12px; color:#475569;">คิวรอ: <b style="color:#DC2626;">{b_row['คิวรอ']} งาน</b> ({b_row['ชั่วโมงรวม']:.1f} ชม.)</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                else:
+                    st.success("🎉 ทุกสถานีไม่มีคิวงานคั่งค้าง")
+
+                st.write("")
+                # 🛑 3. ตัวนับชั่วโมงและมูลค่าสูญเปล่าจากงานพัก (Downtime Loss)
+                hold_sub = calc_df[calc_df["สถานะงาน"] == "🟨 พักงาน (รอวัสดุ)"]
+                total_hold_count = len(hold_sub)
+                total_hold_hrs = hold_sub["รวม (ชม.)"].sum()
+                rate_map_quick = dict(zip(st.session_state.get("machine_rates", pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES.get(m, 500)} for m in MACHINE_LIST]))["เครื่องจักร"], st.session_state.get("machine_rates", pd.DataFrame([{"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES.get(m, 500)} for m in MACHINE_LIST]))["เรตราคา (บาท/ชม.)"]))
+                total_hold_val = sum([r.get("รวม (ชม.)", 0.0) * rate_map_quick.get(r.get("เลือกเครื่องจักร"), 500) for _, r in hold_sub.iterrows()])
+
+                st.markdown(f"""
+                <div style="background:#FFFBEB; border:1.5px dashed #F59E0B; border-radius:10px; padding:10px 16px; display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <span style="font-size:13px; font-weight:800; color:#B45309;">🛑 เวลาและมูลค่าสูญเปล่าสะสมจากงานที่พักไว้ (Downtime Loss):</span><br>
+                        <span style="font-size:11.5px; color:#78350F;">มีงานติดปัญหาชะงักรอเบิกวัสดุ <b>{total_hold_count} งาน</b></span>
+                    </div>
+                    <div style="text-align:right;">
+                        <span style="font-size:18px; font-weight:900; color:#D97706;">{total_hold_hrs:.1f} ชม.</span><br>
+                        <span style="font-size:12px; font-weight:700; color:#B45309;">({total_hold_val:,.2f} ฿)</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            # 📊 4. ตารางติดตามความคืบหน้าราย Drawing (Drawing Progress Tracker)
+            with st.expander("📈 ตารางติดตามความคืบหน้าราย Drawing (Drawing Multi-Step Progress Tracker)", expanded=False):
+                drawing_progress_list = []
+                for (p_c, d_c), g_data in calc_df.groupby(["แผนงาน", "ชื่อ Drawing."]):
+                    total_steps = len(g_data)
+                    fin_steps = len(g_data[g_data["สถานะงาน"] == "🟩 เสร็จสิ้นแล้ว"])
+                    pct = int((fin_steps / total_steps * 100)) if total_steps > 0 else 0
+                    
+                    cur_run = g_data[g_data["สถานะงาน"] == "🟦 กำลังผลิต"]
+                    cur_hold = g_data[g_data["สถานะงาน"] == "🟨 พักงาน (รอวัสดุ)"]
+                    if not cur_run.empty:
+                        stage = f"🟦 กำลังรันที่ {cur_run.iloc[0]['เลือกเครื่องจักร']} ({cur_run.iloc[0]['ขั้นตอน (Step)']})"
+                    elif not cur_hold.empty:
+                        stage = f"🛑 พักงานที่ {cur_hold.iloc[0]['เลือกเครื่องจักร']} (รอวัสดุ)"
+                    elif fin_steps == total_steps:
+                        stage = "🟩 ผลิตเสร็จครบทุก Step แล้ว"
+                    else:
+                        first_wait = g_data[g_data["สถานะงาน"] == "🟧 รอคิวผลิต"].iloc[0]
+                        stage = f"🟧 รอคิวที่ {first_wait['เลือกเครื่องจักร']}"
+
+                    drawing_progress_list.append({
+                        "แผนงาน": p_c,
+                        "ชื่อ Drawing.": d_c,
+                        "จำนวน (ชิ้น)": int(g_data.iloc[0].get("จำนวน", 1)),
+                        "ความคืบหน้า (%)": pct,
+                        "ขั้นตอน (เสร็จ/ทั้งหมด)": f"{fin_steps}/{total_steps} Step",
+                        "สถานะและสถานีปัจจุบัน": stage
+                    })
+                
+                df_dp = pd.DataFrame(drawing_progress_list).sort_values(by=["ความคืบหน้า (%)", "แผนงาน"], ascending=[False, True])
+                st.dataframe(
+                    df_dp,
+                    column_config={
+                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=90),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=200),
+                        "จำนวน (ชิ้น)": st.column_config.NumberColumn("จำนวน", width=70),
+                        "ความคืบหน้า (%)": st.column_config.ProgressColumn("ความคืบหน้า", width=150, min_value=0, max_value=100, format="%d%%"),
+                        "ขั้นตอน (เสร็จ/ทั้งหมด)": st.column_config.TextColumn("สเต็ปงาน", width=110),
+                        "สถานะและสถานีปัจจุบัน": st.column_config.TextColumn("สถานะและสถานีปัจจุบัน", width=250),
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+
+            st.divider()
+
+            # =========================================================
+            # ส่วนตารางสั่งผลิตในระบบ (Data Editor)
+            # =========================================================
             column_order = [
                 "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
                 "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
@@ -1465,10 +1589,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             key="search_active_editor_input"
                         )
 
-                    # --- ส่วนเครื่องมือกู้คืนข้อมูล (เวลาแผน & วันขึ้นงานที่เพี้ยน) ---
                     with st.expander("🛠️ เครื่องมือกู้คืนข้อมูล (เวลาแผน & วันขึ้นงานที่เพี้ยน)", expanded=False):
                         st.caption("เลือกเครื่องมือกู้คืนข้อมูลเฉพาะรายการที่ยังค้างอยู่ในคิว (ไม่กระทบงานที่ Finish แล้ว)")
-                        
                         tab_rec1, tab_rec2 = st.tabs(["⏱️ กู้คืนชั่วโมงทำงาน (Setup/โปรแกรม)", "📅 กู้คืนวัน-เวลาขึ้นงาน (Ready At)"])
                         
                         with tab_rec1:
@@ -1761,7 +1883,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "wo_color_filter" not in st.session_state:
                     st.session_state.wo_color_filter = "ALL"
 
-                # Map เช็คเวลาจบงานตามแผน
                 wo_finish_map = dict(
                     zip(
                         zip(df_summary["แผนงาน"].astype(str), df_summary["ชื่อ Drawing."].astype(str)),
@@ -1769,7 +1890,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
                 )
 
-                # คำนวณจำนวนงานที่ติดสถานะเตือน
                 now_check = get_bangkok_now().replace(tzinfo=None)
                 warn_count = 0
                 late_count = 0
@@ -1812,7 +1932,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True).copy()
 
-                # กรองตามปุ่มสีที่กดเลือก
                 if st.session_state.wo_color_filter == "WARN":
                     def is_warn_row(r):
                         if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
@@ -1833,7 +1952,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         return False
                     df_display = df_display[df_display.apply(is_late_row, axis=1)]
 
-                # กรองตามคำค้นหาใน Search box
                 if search_query_wo.strip() != "":
                     q_wo = search_query_wo.strip().lower()
                     df_display = df_display[
@@ -1877,7 +1995,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 3. รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (แสดงผลต่างเป็นนาที)
+            # 3. รายการงานที่ Finish แล้ว
             # =====================================================
             if not finished_jobs_df.empty:
                 st.subheader("📋 รายการงานที่ Finish แล้ว และเช็คเวลาวางแผนเทียบกับเวลาจริง (Plan vs Actual Performance)")
@@ -1891,7 +2009,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         diff_seconds = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
                         act_hrs = round(diff_seconds / 3600.0, 2)
                         variance_hrs = round(act_hrs - r["เวลาแผน (ชม.)"], 2)
-                        
                         diff_mins = round((diff_seconds / 60.0) - (r["เวลาแผน (ชม.)"] * 60.0))
                         
                         actual_hrs_list.append(act_hrs)
@@ -1991,7 +2108,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 4. ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline) + แสดงแถบพักเที่ยงและวันหยุด
+            # 4. ผังเวลาขึ้นงาน (Gantt Chart Timeline)
             # =====================================================
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
@@ -2051,12 +2168,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     display_machines = MACHINE_LIST
 
                 plot_gantt_df = df_gantt[df_gantt["เครื่องจักร"].isin(display_machines)].copy()
-
                 plot_gantt_df["เริ่มแสดง"] = plot_gantt_df["เวลาเริ่ม"].dt.strftime("%d/%m/%Y %H:%M น.")
                 plot_gantt_df["เสร็จแสดง"] = plot_gantt_df["เวลาเสร็จ"].dt.strftime("%d/%m/%Y %H:%M น.")
 
                 color_target = "แผนงาน" if color_by_option == "แผนงาน (Plan Code)" else "กิจกรรม"
-
                 distinct_plans = [p for p in plot_gantt_df["แผนงาน"].unique() if p != "⏳ รอรัน (เครื่องว่าง)"]
                 plan_color_map = {}
                 palette = px.colors.qualitative.Bold
@@ -2098,14 +2213,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     """
                 )
                 
-                fig.update_yaxes(
-                    autorange="reversed",
-                    type="category",
-                    categoryorder="array",
-                    categoryarray=display_machines,
-                    showgrid=True,
-                    gridcolor="#E2E8F0"
-                )
+                fig.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=display_machines, showgrid=True, gridcolor="#E2E8F0")
                 
                 if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
                     start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
@@ -2117,11 +2225,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     start_view = datetime.combine(gantt_min_date, dtime(7, 30))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
 
-                fig.update_xaxes(
-                    range=[start_view, end_view],
-                    showgrid=True,
-                    gridcolor="#E2E8F0"
-                )
+                fig.update_xaxes(range=[start_view, end_view], showgrid=True, gridcolor="#E2E8F0")
 
                 if not plot_gantt_df.empty:
                     cur_d = (start_view.date() - timedelta(days=2))
@@ -2161,7 +2265,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     margin=dict(l=40, r=40, t=30, b=30),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
-                
                 st.plotly_chart(fig, use_container_width=True)
 
                 st.markdown("""
@@ -2201,18 +2304,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     range_x=[0, 105],
                     category_orders={"เครื่องจักร": MACHINE_LIST}
                 )
-                fig_bar.update_yaxes(
-                    autorange="reversed",
-                    type="category",
-                    categoryorder="array",
-                    categoryarray=MACHINE_LIST
-                )
-                fig_bar.update_traces(
-                    marker_line_color="#0F172A",
-                    marker_line_width=1.2,
-                    textposition="outside",
-                    cliponaxis=False
-                )
+                fig_bar.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=MACHINE_LIST)
+                fig_bar.update_traces(marker_line_color="#0F172A", marker_line_width=1.2, textposition="outside", cliponaxis=False)
                 fig_bar.update_layout(
                     height=600,
                     margin=dict(l=40, r=40, t=10, b=30),
@@ -2229,7 +2322,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.divider()
 
             # =====================================================
-            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)
+            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร
             # =====================================================
             st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
 
@@ -2311,7 +2404,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
 # ---------------------------------------------------------
-# VIEW 3: รายงานสรุปประจำเดือน (Monthly Report & PDF Print)
+# VIEW 3: รายงานสรุปประจำเดือน
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📑 รายงานสรุปประจำเดือน":
     if st.session_state.user_role is None:
@@ -2362,7 +2455,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
         if not df_db.empty:
             finished_all = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
-            
             finished_all["เสร็จจริง_DT"] = pd.to_datetime(finished_all["เสร็จจริง"], errors='coerce')
             finished_all["วันขึ้นงาน_DT"] = pd.to_datetime(finished_all["วัน-เวลาขึ้นงาน"], errors='coerce')
             finished_all["Target_Date"] = finished_all["เสร็จจริง_DT"].fillna(finished_all["วันขึ้นงาน_DT"])
@@ -2379,7 +2471,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             monthly_jobs["Basic (น.)"] = pd.to_numeric(monthly_jobs["Basic (น.)"], errors='coerce').fillna(0.0)
             monthly_jobs["โปรแกรม (น.)"] = pd.to_numeric(monthly_jobs["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
             monthly_jobs["จำนวน"] = pd.to_numeric(monthly_jobs["จำนวน"], errors='coerce').fillna(1).astype(int)
-            
             monthly_jobs["เวลาแผน (ชม.)"] = ((monthly_jobs["Setup (น.)"] + monthly_jobs["Basic (น.)"] + monthly_jobs["โปรแกรม (น.)"]) / 60.0).round(2)
             
             actual_hrs_list = []
@@ -2570,7 +2661,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             st.divider()
 
-            # 2. ตารางสรุปแยกตามรายเครื่องจักร (Machine Performance Summary)
+            # 2. ตารางสรุปแยกตามรายเครื่องจักร
             st.markdown("#### 🏭 สรุปผลการทำงานและมูลค่าแยกตามเครื่องจักร / แผนก")
             if machine_summary:
                 st.dataframe(
@@ -2591,7 +2682,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             
             st.divider()
 
-            # 3. กราฟวิเคราะห์ประสิทธิภาพ (Performance Charts)
+            # 3. กราฟวิเคราะห์ประสิทธิภาพ
             st.markdown("#### 📈 กราฟวิเคราะห์มูลค่าและเวลาการผลิต")
             chart_c1, chart_c2 = st.columns(2)
             
@@ -2679,7 +2770,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         hold_job = m_jobs[m_jobs["สถานะงาน"].str.contains("พักงาน")]
         waiting_jobs = m_jobs[m_jobs["สถานะงาน"].str.contains("รอคิว")]
 
-        # แถบแจ้งเตือนงานพักรอวัสดุ พร้อมดึงเวลาเริ่มเดิมมาแสดง
         hold_alert_html = ""
         if not hold_job.empty:
             hold_machines_count += 1
@@ -2767,7 +2857,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "time_info": f"<div style='font-size:12px; font-weight:600; color:#CBD5E1;'>📋 คิวรอ: {len(waiting_jobs)} งาน</div>"
             })
 
-    # Header แผงควบคุมสด TV พร้อมนาฬิกาวินาทีเดินสด (Live Real-time Clock)
     st.markdown(f"""
     <div style="background:#0F172A; border:2px solid #1E3A8A; border-radius:16px; padding:14px 22px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
         <div>
@@ -2790,7 +2879,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     </div>
     """, unsafe_allow_html=True)
 
-    # ประกอบ Grid Card 17 สถานีงานแบบบรรทัดเดียว ป้องกัน Render Error
     card_items = []
     for c in machine_status_cards:
         card_item = (
@@ -2814,7 +2902,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    # JavaScript นาฬิกาเดินวินาทีสด + Auto Reload ดึงข้อมูลใหม่ทุก 30 วินาที
     components.html("""
     <script>
         function updateLiveClock() {
