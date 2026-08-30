@@ -2436,20 +2436,34 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
             for (p_c, d_c), g_data in finished_all.groupby(["แผนงาน", "ชื่อ Drawing."]):
                 d_plan = g_data["เวลาแผน (ชม.)"].sum()
                 d_act = g_data["เวลาจริง (ชม.)"].sum()
-                d_qty = int(g_data.iloc[0].get("จำนวน", 1))
+                d_qty = int(g_data.iloc[0].get("จำนวน", 1)) or 1
                 d_mat = g_data.iloc[0].get("วัสดุ", "-")
                 d_diff = round(d_act - d_plan, 2)
                 d_diff_mins = round(d_diff * 60)
                 
+                # 1. คำนวณเวลาเฉลี่ยรายชิ้น (Cycle Time per Piece)
+                d_plan_per_pc = round(d_plan / d_qty, 2)
+                d_act_per_pc = round(d_act / d_qty, 2)
+
+                # 2. ตัวชี้วัดความแม่นยำของการประมาณเวลา (% Accuracy)
+                accuracy_pct = round((d_plan / d_act * 100), 1) if d_act > 0 else 100.0
+
                 # รวมรายชื่อเครื่องจักรทั้งหมดที่ใช้ผลิตใน Drawing นี้
                 machines_used = g_data["เลือกเครื่องจักร"].dropna().unique()
                 machines_str = ", ".join([str(m) for m in machines_used if str(m).strip() != ""])
                 if not machines_str:
                     machines_str = "-"
                 
-                if d_diff <= 0:
+                # จำแนกสถานะ 3 สี (เร็ว / ตรงแผน +-5% / ช้า)
+                pct_diff = ((d_act - d_plan) / d_plan * 100) if d_plan > 0 else 0
+                if pct_diff < -5:
+                    cat_status = "FAST"
                     eval_str = f"🟢 เร็วขึ้น {abs(d_diff_mins)} นาที"
+                elif -5 <= pct_diff <= 5:
+                    cat_status = "ON_TARGET"
+                    eval_str = f"🟡 ตรงตามแผน (±5%)"
                 else:
+                    cat_status = "LATE"
                     eval_str = f"🔴 ช้ากว่าแผน +{d_diff_mins} นาที"
 
                 drawing_agg.append({
@@ -2462,10 +2476,42 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                     "จำนวน Step": len(g_data),
                     "เวลาแผน (ชม.)": round(d_plan, 2),
                     "เวลาจริง (ชม.)": round(d_act, 2),
+                    "แผน/ชิ้น (ชม.)": d_plan_per_pc,
+                    "จริง/ชิ้น (ชม.)": d_act_per_pc,
+                    "ความแม่นยำ (%)": accuracy_pct,
                     "ผลต่าง (ชม.)": d_diff,
+                    "สถานะกลุ่ม": cat_status,
                     "การประเมิน": eval_str
                 })
             df_draw_full = pd.DataFrame(drawing_agg)
+
+            # ---------------------------------------------------------
+            # 3. การ์ดสรุปยอด Drawing วิกฤต 3 สี (Quick Stat Cards)
+            # ---------------------------------------------------------
+            count_fast = len(df_draw_full[df_draw_full["สถานะกลุ่ม"] == "FAST"])
+            count_target = len(df_draw_full[df_draw_full["สถานะกลุ่ม"] == "ON_TARGET"])
+            count_late = len(df_draw_full[df_draw_full["สถานะกลุ่ม"] == "LATE"])
+            total_late_hrs = df_draw_full[df_draw_full["ผลต่าง (ชม.)"] > 0]["ผลต่าง (ชม.)"].sum()
+
+            st.markdown(f"""
+            <div class="kpi-container">
+                <div class="kpi-card kpi-green">
+                    <div class="kpi-title">🟢 ผลิตเร็วกว่าแผน (>5%)</div>
+                    <div class="kpi-value">{count_fast} <span style="font-size:15px; font-weight:600;">Drawings</span></div>
+                    <div class="kpi-sub">ประสิทธิภาพการตัดเฉือนสูงกว่าเกณฑ์</div>
+                </div>
+                <div class="kpi-card kpi-orange">
+                    <div class="kpi-title">🟡 ตรงตามเกณฑ์เป้าหมาย (±5%)</div>
+                    <div class="kpi-value">{count_target} <span style="font-size:15px; font-weight:600;">Drawings</span></div>
+                    <div class="kpi-sub">การประมาณเวลาแม่นยำมาตรฐาน</div>
+                </div>
+                <div class="kpi-card kpi-red">
+                    <div class="kpi-title">🔴 ผลิตช้ากว่าแผน (>5%)</div>
+                    <div class="kpi-value">{count_late} <span style="font-size:15px; font-weight:600;">Drawings</span></div>
+                    <div class="kpi-sub">ช้าสะสมรวม +{total_late_hrs:.2f} ชม.</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
             f_col1, f_col2 = st.columns([2.5, 4])
             with f_col1:
@@ -2508,7 +2554,9 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
 
                 st.divider()
 
-                # ตารางสรุปเวลาเปรียบเทียบราย Drawing พร้อมช่องค้นหาเฉพาะตาราง
+                # ---------------------------------------------------------
+                # 4. ตารางเปรียบเทียบราย Drawing + ช่องค้นหาเฉพาะตาราง
+                # ---------------------------------------------------------
                 st.markdown("#### 📋 ตารางสรุปเวลาเปรียบเทียบราย Drawing")
                 
                 search_dw_table = st.text_input(
@@ -2529,22 +2577,85 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                     ]
 
                 st.dataframe(
-                    df_table_display[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "เครื่องจักรที่ผลิต", "จำนวน Step", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]],
+                    df_table_display[[
+                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "เครื่องจักรที่ผลิต", 
+                        "จำนวน Step", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "แผน/ชิ้น (ชม.)", "จริง/ชิ้น (ชม.)",
+                        "ความแม่นยำ (%)", "ผลต่าง (ชม.)", "การประเมิน"
+                    ]],
                     column_config={
-                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
-                        "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=170),
+                        "จำนวน": st.column_config.NumberColumn("จำนวน", width=60, format="%d"),
                         "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
-                        "เครื่องจักรที่ผลิต": st.column_config.TextColumn("เครื่องจักร / แผนก", width=160),
-                        "จำนวน Step": st.column_config.NumberColumn("Step", width=65, format="%d ขั้น"),
-                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("เวลาแผน (ชม.)", width=105, format="%.2f ชม."),
-                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("เวลาจริง (ชม.)", width=105, format="%.2f ชม."),
-                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("ผลต่าง (ชม.)", width=95, format="%.2f"),
+                        "เครื่องจักรที่ผลิต": st.column_config.TextColumn("เครื่องจักร / แผนก", width=140),
+                        "จำนวน Step": st.column_config.NumberColumn("Step", width=60, format="%d"),
+                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                        "แผน/ชิ้น (ชม.)": st.column_config.NumberColumn("แผน/ชิ้น", width=80, format="%.2f"),
+                        "จริง/ชิ้น (ชม.)": st.column_config.NumberColumn("จริง/ชิ้น", width=80, format="%.2f"),
+                        "ความแม่นยำ (%)": st.column_config.ProgressColumn("ความแม่นยำ", width=100, min_value=0, max_value=150, format="%d%%"),
+                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("ผลต่าง (ชม.)", width=85, format="%.2f"),
                         "การประเมิน": st.column_config.TextColumn("ผลประเมิน", width=145),
                     },
                     hide_index=True,
                     use_container_width=True
                 )
+
+                st.divider()
+
+                # ---------------------------------------------------------
+                # 5. แยกเจาะลึกความต่างระดับขั้นตอน (Step Breakdown Inspector)
+                # ---------------------------------------------------------
+                st.markdown("#### 🔬 เจาะลึกความต่างระดับขั้นตอนย่อย (Step Breakdown Inspector)")
+                drawing_options = [f"[{r['แผนงาน']}] {r['ชื่อ Drawing.']}" for _, r in df_draw_full.iterrows()]
+                selected_inspect = st.selectbox("เลือก Drawing ที่ต้องการเจาะลึกดูรายขั้นตอน:", drawing_options)
+
+                if selected_inspect:
+                    ins_plan = selected_inspect.split("] ")[0].replace("[", "").strip()
+                    ins_dw = selected_inspect.split("] ")[1].strip()
+                    step_details = finished_all[(finished_all["แผนงาน"] == ins_plan) & (finished_all["ชื่อ Drawing."] == ins_dw)].copy()
+
+                    if not step_details.empty:
+                        step_details["Setup (น.)"] = pd.to_numeric(step_details["Setup (น.)"], errors='coerce').fillna(10.0)
+                        step_details["Basic (น.)"] = pd.to_numeric(step_details["Basic (น.)"], errors='coerce').fillna(0.0)
+                        step_details["โปรแกรม (น.)"] = pd.to_numeric(step_details["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
+                        step_details["เวลาแผน (ชม.)"] = ((step_details["Setup (น.)"] + step_details["Basic (น.)"] + step_details["โปรแกรม (น.)"]) / 60.0).round(2)
+                        
+                        step_diffs, step_evals = [], []
+                        for _, sr in step_details.iterrows():
+                            s_st, s_fn = sr.get("เริ่มจริง"), sr.get("เสร็จจริง")
+                            if pd.notna(s_st) and pd.notna(s_fn):
+                                d_sec = (pd.to_datetime(s_fn) - pd.to_datetime(s_st)).total_seconds()
+                                a_h = round(d_sec / 3600.0, 2)
+                                v_h = round(a_h - sr["เวลาแผน (ชม.)"], 2)
+                                step_diffs.append(v_h)
+                                d_mins = round(v_h * 60)
+                                step_evals.append(f"🟢 เร็วขึ้น {abs(d_mins)} นาที" if v_h <= 0 else f"🔴 ช้ากว่าแผน +{d_mins} นาที")
+                            else:
+                                step_diffs.append(0.0)
+                                step_evals.append("-")
+                        
+                        step_details["ผลต่าง (ชม.)"] = step_diffs
+                        step_details["การประเมิน"] = step_evals
+
+                        st.dataframe(
+                            step_details[["ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]],
+                            column_config={
+                                "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=120),
+                                "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", width=140),
+                                "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", width=130, format="DD/MM HH:mm"),
+                                "เสร็จจริง": st.column_config.DatetimeColumn("เสร็จจริง", width=130, format="DD/MM HH:mm"),
+                                "Setup (น.)": st.column_config.NumberColumn("Setup", width=70, format="%d น."),
+                                "Basic (น.)": st.column_config.NumberColumn("Basic", width=70, format="%d น."),
+                                "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, format="%d น."),
+                                "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                                "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                                "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", width=75, format="%.2f"),
+                                "การประเมิน": st.column_config.TextColumn("ผลประเมิน", width=140),
+                            },
+                            hide_index=True,
+                            use_container_width=True
+                        )
             else:
                 st.warning("⚠️ ไม่พบข้อมูล Drawing ตามเงื่อนไขที่ค้นหา")
         else:
@@ -2742,7 +2853,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             delayed_jobs = monthly_jobs[monthly_jobs["ผลต่าง (ชม.)"] > 0].sort_values(by="ผลต่าง (ชม.)", ascending=False).head(5)
 
-            # --- สร้างกราฟทั้ง 2 ตัวเตรียมไว้สำหรับการแสดงผลและส่งเข้าเอกสารพิมพ์ ---
             fig_m_val = px.bar(
                 df_m_sum.sort_values(by="มูลค่าผลผลิต (บาท)", ascending=True),
                 x="มูลค่าผลผลิต (บาท)",
