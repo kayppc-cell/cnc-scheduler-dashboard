@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import plotly.io as pio
 from datetime import datetime, timedelta, time as dtime
 import zoneinfo
 import os
@@ -2749,115 +2748,131 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
 
-            # แปลงกราฟเป็นรูปภาพ Base64 เพื่อให้เอกสารสำหรับพิมพ์ดึงภาพกราฟไปแสดงได้ทันที
-            try:
-                img_bytes1 = pio.to_image(fig_m_val, format="png", width=750, height=360, scale=1.5)
-                chart1_base64 = f'<img src="data:image/png;base64,{base64.b64encode(img_bytes1).decode("utf-8")}" style="width:100%; max-height:280px; object-fit:contain; margin-bottom:10px;"/>'
-            except Exception:
-                chart1_base64 = '<div style="color:#64748B; font-style:italic;">(กราฟมูลค่าผลผลิต)</div>'
-
-            try:
-                img_bytes2 = pio.to_image(fig_compare, format="png", width=750, height=360, scale=1.5)
-                chart2_base64 = f'<img src="data:image/png;base64,{base64.b64encode(img_bytes2).decode("utf-8")}" style="width:100%; max-height:280px; object-fit:contain; margin-bottom:10px;"/>'
-            except Exception:
-                chart2_base64 = '<div style="color:#64748B; font-style:italic;">(กราฟเปรียบเทียบเวลาแผน vs จริง)</div>'
-
             rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td style='text-align:center;'>{r['จำนวนคิวงาน']}</td><td style='text-align:center;'>{r['ชิ้นงานรวม (ชิ้น)']}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:center;'>{r['ผลต่าง']}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วนมูลค่า (%)']:.1f}%</td></tr>" for _, r in df_m_sum.iterrows()])
             rows_mat_html = "".join([f"<tr><td>{r['ชนิดวัสดุ']}</td><td style='text-align:center;'>{r['จำนวนคิว']}</td><td style='text-align:center;'>{r['จำนวนชิ้นงาน (ชิ้น)']}</td><td style='text-align:center;'>{r['ชั่วโมงผลิตจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วน (%)']:.1f}%</td></tr>" for _, r in df_mat_sum.iterrows()])
             rows_job_html = "".join([f"<tr><td>{r['แผนงาน']}</td><td>{r['ชื่อ Drawing.']}</td><td style='text-align:center;'>{r['จำนวน']}</td><td style='text-align:center;'>{r['วัสดุ']}</td><td>{r['ขั้นตอน (Step)']}</td><td>{r['เลือกเครื่องจักร']}</td><td style='text-align:center;'>{pd.to_datetime(r['เริ่มจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เริ่มจริง']) else '-'}</td><td style='text-align:center;'>{pd.to_datetime(r['เสร็จจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เสร็จจริง']) else '-'}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่ารวม (บาท)']:,.2f} ฿</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
 
-            report_html_full = f"""
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <title>PES Monthly Production Report - {month_names[selected_month_idx-1]} {selected_year}</title>
-                <style>
-                    @page {{ size: A4 portrait; margin: 8mm 10mm; }}
-                    body {{ font-family: 'Tahoma', 'Sarabun', 'Arial', sans-serif; color: #1E293B; margin: 0; padding: 10px; font-size: 10px; line-height: 1.35; }}
-                    .header-box {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1E3E62; padding-bottom: 6px; margin-bottom: 10px; }}
-                    .title-text h2 {{ margin: 0; color: #0B192C; font-size: 16px; }}
-                    .title-text p {{ margin: 2px 0 0 0; color: #475569; font-size: 10px; }}
-                    .kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }}
-                    .kpi-item {{ background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 8px; text-align: center; }}
-                    .kpi-item-title {{ font-size: 9.5px; color: #64748B; font-weight: bold; }}
-                    .kpi-item-val {{ font-size: 14px; color: #0F172A; font-weight: 800; margin-top: 2px; }}
-                    h3 {{ color: #1E3E62; font-size: 11px; margin: 10px 0 4px 0; border-left: 4px solid #2563EB; padding-left: 6px; }}
-                    table {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 9.5px; }}
-                    th, td {{ border: 1px solid #CBD5E1; padding: 4px 5px; text-align: left; }}
-                    th {{ background-color: #F1F5F9; color: #1E293B; font-weight: bold; }}
-                    tr:nth-child(even) {{ background-color: #F8FAFC; }}
-                    .chart-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }}
-                    .sign-box {{ display: flex; justify-content: space-between; margin-top: 20px; padding-top: 10px; }}
-                    .sign-col {{ width: 30%; text-align: center; border-top: 1px dashed #94A3B8; padding-top: 4px; font-size: 9.5px; }}
-                </style>
-            </head>
-            <body>
-                <div class="header-box">
-                    <div class="title-text">
-                        <h2>บจก. พลวัฒน์ เอ็นจิเนียริ่ง ซัพพลาย (PES)</h2>
-                        <p>รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production Report)</p>
-                    </div>
-                    <div style="text-align: right; font-size: 10px;">
-                        <b>ประจำเดือน:</b> {month_names[selected_month_idx-1]} {selected_year}<br>
-                        <b>วันที่ออกรายงาน:</b> {get_bangkok_now().strftime('%d/%m/%Y %H:%M น.')}
-                    </div>
-                </div>
-
-                <div class="kpi-grid">
-                    <div class="kpi-item"><div class="kpi-item-title">ชิ้นงานที่ผลิตเสร็จ</div><div class="kpi-item-val">{total_qty_pieces:,} ชิ้น</div></div>
-                    <div class="kpi-item"><div class="kpi-item-title">ชั่วโมงเดินเครื่องจริง</div><div class="kpi-item-val">{total_running_hrs:,.1f} ชม.</div></div>
-                    <div class="kpi-item"><div class="kpi-item-title">มูลค่าผลผลิตรวม</div><div class="kpi-item-val">{total_output_val:,.2f} ฿</div></div>
-                    <div class="kpi-item"><div class="kpi-item-title">ตรงตามแผน (On-Time)</div><div class="kpi-item-val">{on_time_rate:.1f} %</div></div>
-                </div>
-
-                <h3>1. กราฟวิเคราะห์ประสิทธิภาพและมูลค่าผลผลิต</h3>
-                <div class="chart-grid">
-                    <div>{chart1_base64}</div>
-                    <div>{chart2_base64}</div>
-                </div>
-
-                <h3>2. สรุปผลการทำงานและสัดส่วนรายได้แยกตามเครื่องจักร / แผนก</h3>
-                <table>
-                    <thead><tr><th>เครื่องจักร / แผนก</th><th>คิว</th><th>ชิ้นงาน</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>ผลต่าง</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
-                    <tbody>{rows_m_html}</tbody>
-                </table>
-
-                <h3>3. สรุปการใช้วัสดุและเวลาผลิต (Material Insights)</h3>
-                <table>
-                    <thead><tr><th>ชนิดวัสดุ</th><th>คิว</th><th>ชิ้นงาน</th><th>ชั่วโมงผลิตจริง (ชม.)</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
-                    <tbody>{rows_mat_html}</tbody>
-                </table>
-
-                <h3>4. รายการชิ้นงานที่ผลิตเสร็จสิ้นทั้งหมด</h3>
-                <table>
-                    <thead><tr><th>แผนงาน</th><th>ชื่อ Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>สถานี</th><th>เริ่มจริง</th><th>เสร็จจริง</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>มูลค่า (฿)</th></tr></thead>
-                    <tbody>{rows_job_html}</tbody>
-                </table>
-
-                <div class="sign-box">
-                    <div class="sign-col">ผู้จัดทำรายงาน / ฝ่ายวางแผน<br><br><br>( .................................................... )</div>
-                    <div class="sign-col">หัวหน้าแผนกผลิต / ผู้ตรวจสอบ<br><br><br>( .................................................... )</div>
-                    <div class="sign-col">ผู้จัดการโรงงาน / ผู้อนุมัติ<br><br><br>( .................................................... )</div>
-                </div>
-            </body>
-            </html>
-            """
-            json_report_html = json.dumps(report_html_full)
+            report_data_dict = {
+                "month_str": f"{month_names[selected_month_idx-1]} {selected_year}",
+                "print_date": get_bangkok_now().strftime('%d/%m/%Y %H:%M น.'),
+                "total_qty": f"{total_qty_pieces:,}",
+                "total_hours": f"{total_running_hrs:,.1f}",
+                "total_value": f"{total_output_val:,.2f}",
+                "on_time": f"{on_time_rate:.1f}",
+                "rows_m": rows_m_html,
+                "rows_mat": rows_mat_html,
+                "rows_job": rows_job_html
+            }
+            json_report_payload = json.dumps(report_data_dict)
 
             with r_col_exp:
                 st.write("")
                 b_col_pdf, b_col_csv = st.columns(2)
                 with b_col_pdf:
                     components.html(f"""
-                    <button onclick="printReport()" style="width:100%; background:linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color:white; border:none; padding:9px 14px; border-radius:8px; font-weight:bold; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(220,38,38,0.25);">
+                    <button onclick="captureAndPrint()" style="width:100%; background:linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color:white; border:none; padding:9px 14px; border-radius:8px; font-weight:bold; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(220,38,38,0.25);">
                         📄 พิมพ์ / บันทึก PDF (พร้อมรูปกราฟ)
                     </button>
                     <script>
-                        function printReport() {{
-                            var reportHtml = {json_report_html};
-                            var printWin = window.open('', '_blank');
+                        async function captureAndPrint() {{
+                            const reportData = {json_report_payload};
+                            const pDoc = window.parent.document;
+                            
+                            const plotEls = pDoc.querySelectorAll('.js-plotly-plot');
+                            let img1Src = '', img2Src = '';
+                            
+                            if (window.parent.Plotly && plotEls.length >= 2) {{
+                                try {{
+                                    img1Src = await window.parent.Plotly.toImage(plotEls[0], {{format: 'png', width: 700, height: 320}});
+                                    img2Src = await window.parent.Plotly.toImage(plotEls[1], {{format: 'png', width: 700, height: 320}});
+                                }} catch(e) {{
+                                    console.error("Error capturing charts:", e);
+                                }}
+                            }}
+
+                            const chart1Html = img1Src ? `<img src="${{img1Src}}" style="width:100%; max-height:260px; object-fit:contain; border:1px solid #E2E8F0; border-radius:6px;"/>` : '';
+                            const chart2Html = img2Src ? `<img src="${{img2Src}}" style="width:100%; max-height:260px; object-fit:contain; border:1px solid #E2E8F0; border-radius:6px;"/>` : '';
+
+                            const fullHtml = `
+                            <html>
+                            <head>
+                                <meta charset="utf-8">
+                                <title>PES Monthly Report - ${{reportData.month_str}}</title>
+                                <style>
+                                    @page {{ size: A4 portrait; margin: 8mm 10mm; }}
+                                    body {{ font-family: 'Tahoma', 'Sarabun', 'Arial', sans-serif; color: #1E293B; margin: 0; padding: 10px; font-size: 10px; line-height: 1.35; }}
+                                    .header-box {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1E3E62; padding-bottom: 6px; margin-bottom: 10px; }}
+                                    .title-text h2 {{ margin: 0; color: #0B192C; font-size: 16px; }}
+                                    .title-text p {{ margin: 2px 0 0 0; color: #475569; font-size: 10px; }}
+                                    .kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }}
+                                    .kpi-item {{ background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 8px; text-align: center; }}
+                                    .kpi-item-title {{ font-size: 9.5px; color: #64748B; font-weight: bold; }}
+                                    .kpi-item-val {{ font-size: 14px; color: #0F172A; font-weight: 800; margin-top: 2px; }}
+                                    h3 {{ color: #1E3E62; font-size: 11px; margin: 10px 0 4px 0; border-left: 4px solid #2563EB; padding-left: 6px; }}
+                                    table {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 9.5px; }}
+                                    th, td {{ border: 1px solid #CBD5E1; padding: 4px 5px; text-align: left; }}
+                                    th {{ background-color: #F1F5F9; color: #1E293B; font-weight: bold; }}
+                                    tr:nth-child(even) {{ background-color: #F8FAFC; }}
+                                    .chart-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }}
+                                    .sign-box {{ display: flex; justify-content: space-between; margin-top: 20px; padding-top: 10px; }}
+                                    .sign-col {{ width: 30%; text-align: center; border-top: 1px dashed #94A3B8; padding-top: 4px; font-size: 9.5px; }}
+                                </style>
+                            </head>
+                            <body>
+                                <div class="header-box">
+                                    <div class="title-text">
+                                        <h2>บจก. พลวัฒน์ เอ็นจิเนียริ่ง ซัพพลาย (PES)</h2>
+                                        <p>รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production Report)</p>
+                                    </div>
+                                    <div style="text-align: right; font-size: 10px;">
+                                        <b>ประจำเดือน:</b> ${{reportData.month_str}}<br>
+                                        <b>วันที่ออกรายงาน:</b> ${{reportData.print_date}}
+                                    </div>
+                                </div>
+
+                                <div class="kpi-grid">
+                                    <div class="kpi-item"><div class="kpi-item-title">ชิ้นงานที่ผลิตเสร็จ</div><div class="kpi-item-val">${{reportData.total_qty}} ชิ้น</div></div>
+                                    <div class="kpi-item"><div class="kpi-item-title">ชั่วโมงเดินเครื่องจริง</div><div class="kpi-item-val">${{reportData.total_hours}} ชม.</div></div>
+                                    <div class="kpi-item"><div class="kpi-item-title">มูลค่าผลผลิตรวม</div><div class="kpi-item-val">${{reportData.total_value}} ฿</div></div>
+                                    <div class="kpi-item"><div class="kpi-item-title">ตรงตามแผน (On-Time)</div><div class="kpi-item-val">${{reportData.on_time}} %</div></div>
+                                </div>
+
+                                <h3>1. กราฟวิเคราะห์ประสิทธิภาพและมูลค่าผลผลิต</h3>
+                                <div class="chart-grid">
+                                    <div>${{chart1Html}}</div>
+                                    <div>${{chart2Html}}</div>
+                                </div>
+
+                                <h3>2. สรุปผลการทำงานและสัดส่วนรายได้แยกตามเครื่องจักร / แผนก</h3>
+                                <table>
+                                    <thead><tr><th>เครื่องจักร / แผนก</th><th>คิว</th><th>ชิ้นงาน</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>ผลต่าง</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
+                                    <tbody>${{reportData.rows_m}}</tbody>
+                                </table>
+
+                                <h3>3. สรุปการใช้วัสดุและเวลาผลิต (Material Insights)</h3>
+                                <table>
+                                    <thead><tr><th>ชนิดวัสดุ</th><th>คิว</th><th>ชิ้นงาน</th><th>ชั่วโมงผลิตจริง (ชม.)</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
+                                    <tbody>${{reportData.rows_mat}}</tbody>
+                                </table>
+
+                                <h3>4. รายการชิ้นงานที่ผลิตเสร็จสิ้นทั้งหมด</h3>
+                                <table>
+                                    <thead><tr><th>แผนงาน</th><th>ชื่อ Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>สถานี</th><th>เริ่มจริง</th><th>เสร็จจริง</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>มูลค่า (฿)</th></tr></thead>
+                                    <tbody>${{reportData.rows_job}}</tbody>
+                                </table>
+
+                                <div class="sign-box">
+                                    <div class="sign-col">ผู้จัดทำรายงาน / ฝ่ายวางแผน<br><br><br>( .................................................... )</div>
+                                    <div class="sign-col">หัวหน้าแผนกผลิต / ผู้ตรวจสอบ<br><br><br>( .................................................... )</div>
+                                    <div class="sign-col">ผู้จัดการโรงงาน / ผู้อนุมัติ<br><br><br>( .................................................... )</div>
+                                </div>
+                            </body>
+                            </html>
+                            `;
+
+                            const printWin = window.open('', '_blank');
                             printWin.document.open();
-                            printWin.document.write(reportHtml);
+                            printWin.document.write(fullHtml);
                             printWin.document.close();
                             printWin.focus();
                             setTimeout(function() {{ printWin.print(); }}, 600);
@@ -2883,7 +2898,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             st.divider()
 
-            # ส่วนแสดงตารางประสิทธิภาพเครื่องจักร & วัสดุ
             col_sec1, col_sec2 = st.columns([1.5, 1])
 
             with col_sec1:
@@ -2922,7 +2936,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             st.divider()
 
-            # กราฟเดิม: เปรียบเทียบเวลาทำงานรายเครื่องจักร & กราฟมูลค่า
             st.markdown("#### 📈 กราฟวิเคราะห์มูลค่าและเวลาการผลิตแยกตามเครื่องจักร")
             chart_c1, chart_c2 = st.columns(2)
             with chart_c1:
@@ -2932,7 +2945,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             st.divider()
 
-            # Top 5 Delays
             st.markdown("#### ⚠️ 5 อันดับงานที่ผลิตช้ากว่าแผนมากที่สุด (Top 5 Delays)")
             if not delayed_jobs.empty:
                 st.dataframe(
@@ -2954,7 +2966,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             st.divider()
 
-            # รายละเอียดงานทั้งหมด
             st.markdown(f"#### 📋 รายละเอียดชิ้นงานทั้งหมดที่เสร็จสิ้นในเดือน {month_names[selected_month_idx-1]}")
             st.dataframe(
                 monthly_jobs.sort_values(by="Target_Date", ascending=True)[[
