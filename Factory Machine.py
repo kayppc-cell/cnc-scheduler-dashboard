@@ -453,26 +453,27 @@ st.markdown("""
         cursor: not-allowed !important;
     }
 
+    /* สไตล์สำหรับ Grid และ Card บนจอ TV */
     .tv-grid-container {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-        gap: 14px;
-        margin-top: 10px;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 10px;
+        margin-top: 8px;
     }
     .tv-card {
-        border-radius: 14px;
-        padding: 16px 18px;
+        border-radius: 12px;
+        padding: 12px 14px;
         color: #FFFFFF;
         box-shadow: 0 4px 14px rgba(0,0,0,0.12);
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        min-height: 155px;
+        min-height: 140px;
         border: 1px solid rgba(255,255,255,0.12);
     }
     .tv-card-running {
         background: linear-gradient(135deg, #065F46 0%, #059669 100%);
-        border-left: 8px solid #34D399;
+        border-left: 7px solid #34D399;
     }
     
     @keyframes pulse-card-warning {
@@ -487,27 +488,27 @@ st.markdown("""
     }
     .tv-card-warning {
         background: linear-gradient(135deg, #B45309 0%, #D97706 100%) !important;
-        border-left: 8px solid #FCD34D !important;
+        border-left: 7px solid #FCD34D !important;
         animation: pulse-card-warning 1.8s infinite ease-in-out !important;
     }
     .tv-card-late {
         background: linear-gradient(135deg, #991B1B 0%, #DC2626 100%) !important;
-        border-left: 8px solid #F87171 !important;
+        border-left: 7px solid #F87171 !important;
         animation: pulse-card-late 1.2s infinite ease-in-out !important;
     }
 
     .tv-card-hold {
         background: linear-gradient(135deg, #92400E 0%, #D97706 100%);
-        border-left: 8px solid #FBBF24;
+        border-left: 7px solid #FBBF24;
     }
     .tv-card-idle {
         background: linear-gradient(135deg, #1E293B 0%, #334155 100%);
-        border-left: 8px solid #64748B;
+        border-left: 7px solid #64748B;
         opacity: 0.92;
     }
     .tv-pulse-dot {
-        width: 10px;
-        height: 10px;
+        width: 9px;
+        height: 9px;
         border-radius: 50%;
         background-color: #34D399;
         display: inline-block;
@@ -1520,9 +1521,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # -------------------------------------------------------------
-            # ปรับปรุง: กรองงาน Active และเรียงตาม วัน-เวลาขึ้นงาน (ลำดับไทม์ไลน์จริง)
-            # -------------------------------------------------------------
+            # เรียงตาม วัน-เวลาขึ้นงาน (ตามลำดับจริง)
             active_jobs_editor_df = calc_df[
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
             ].copy()
@@ -3170,7 +3169,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         _, df_summary_tv, _, _ = calculate_shop_schedule(df_live, now_bangkok.replace(tzinfo=None))
         if not df_summary_tv.empty:
             for _, s_row in df_summary_tv.iterrows():
-                planned_finish_map_tv[(str(s_row["แผนงาน"]), str(s_row["ชื่อ Drawing."]))] = s_row.get("เวลาจบงาน_DT")
+                key_pair = (str(s_row["แผนงาน"]), str(s_row["ชื่อ Drawing."]))
+                f_dt = s_row.get("เวลาจบงาน_DT")
+                if key_pair not in planned_finish_map_tv or (pd.notna(f_dt) and f_dt > planned_finish_map_tv[key_pair]):
+                    planned_finish_map_tv[key_pair] = f_dt
 
     machine_status_cards = []
     running_machines_count = 0
@@ -3193,7 +3195,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             if pd.notna(h_start):
                 h_start_dt = pd.to_datetime(h_start)
                 h_start_txt = f" [เริ่ม {h_start_dt.strftime('%H:%M น.')}]"
-            hold_alert_html = f'<div style="margin-top:5px; padding:3px 6px; background:rgba(217, 119, 6, 0.35); border:1px dashed #FCD34D; border-radius:6px; font-size:11px; color:#FEF08A;">🛑 <b>พักงานรอ:</b> {h_first.get("แผนงาน", "-")} ({h_first.get("ชื่อ Drawing.", "-")}){h_start_txt}</div>'
+            hold_alert_html = f'<div style="margin-top:4px; padding:3px 6px; background:rgba(217, 119, 6, 0.35); border:1px dashed #FCD34D; border-radius:6px; font-size:10.5px; color:#FEF08A;">🛑 <b>พักงานรอ:</b> {h_first.get("แผนงาน", "-")} ({h_first.get("ชื่อ Drawing.", "-")}){h_start_txt}</div>'
 
         if not running_job.empty:
             running_machines_count += 1
@@ -3201,6 +3203,14 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             s_start = r_info.get("เริ่มจริง")
             p_code = str(r_info.get("แผนงาน", "-"))
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
+            
+            # ดึงวัน-เวลาขึ้นงาน
+            r_ready_dt = parse_flexible_datetime(r_info.get("วัน-เวลาขึ้นงาน"))
+            ready_display_txt = r_ready_dt.strftime("%d/%m %H:%M") if r_ready_dt is not None else "-"
+
+            # ดึงกำหนดจบงานตามแผน
+            f_dt = planned_finish_map_tv.get((p_code, d_code))
+            finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
             
             elapsed_txt = "-"
             start_disp_txt = "-"
@@ -3211,19 +3221,26 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 elapsed_txt = f"{elapsed_min} นาที ({elapsed_min/60.0:.1f} ชม.)"
             
             tv_card_cls = "tv-card tv-card-running"
-            badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:6px;">กำลังรันงาน</b>'
+            badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:5px;">กำลังรันงาน</b>'
             
-            f_dt = planned_finish_map_tv.get((p_code, d_code))
             if f_dt is not None and pd.notna(f_dt):
                 diff_mins = (f_dt - now_bangkok.replace(tzinfo=None)).total_seconds() / 60.0
                 if diff_mins < 0:
                     tv_card_cls = "tv-card tv-card-late"
-                    badge_html = '<span class="tv-pulse-dot" style="background-color:#F87171;"></span> <b style="color:#FFFFFF; margin-left:6px;">🔴 เกินเวลาแผน</b>'
+                    badge_html = '<span class="tv-pulse-dot" style="background-color:#F87171;"></span> <b style="color:#FFFFFF; margin-left:5px;">🔴 เกินเวลาแผน</b>'
                 elif 0 <= diff_mins <= 60:
                     tv_card_cls = "tv-card tv-card-warning"
-                    badge_html = '<span class="tv-pulse-dot" style="background-color:#FCD34D;"></span> <b style="color:#FFFFFF; margin-left:6px;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
+                    badge_html = '<span class="tv-pulse-dot" style="background-color:#FCD34D;"></span> <b style="color:#FFFFFF; margin-left:5px;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
 
-            time_info_combined = f'<div style="font-size:12px; font-weight:700; color:#FFFFFF;">🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span> | ⏱️ <b>รันแล้ว:</b> {elapsed_txt}</div>{hold_alert_html}'
+            time_info_combined = f'''
+            <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
+                <div>🚀 <b>เริ่มรัน:</b> <span style="color:#93C5FD;">{start_disp_txt}</span> | ⏱️ <b>รันแล้ว:</b> {elapsed_txt}</div>
+                <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px;">
+                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
+                    <span>🏁 <b>จบแผน:</b> <b style="color:#FEF08A;">{finish_display_txt}</b></span>
+                </div>
+            </div>{hold_alert_html}
+            '''
 
             machine_status_cards.append({
                 "machine": m,
@@ -3238,27 +3255,62 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         elif not hold_job.empty:
             h_info = hold_job.iloc[0]
             h_start = h_info.get("เริ่มจริง")
+            p_code = str(h_info.get("แผนงาน", "-"))
+            d_code = str(h_info.get("ชื่อ Drawing.", "-"))
+            
+            h_ready_dt = parse_flexible_datetime(h_info.get("วัน-เวลาขึ้นงาน"))
+            ready_display_txt = h_ready_dt.strftime("%d/%m %H:%M") if h_ready_dt is not None else "-"
+            
+            f_dt = planned_finish_map_tv.get((p_code, d_code))
+            finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
+
             h_start_txt = ""
             if pd.notna(h_start):
                 h_start_dt = pd.to_datetime(h_start)
                 h_start_txt = f" (เริ่มไว้: {h_start_dt.strftime('%H:%M น.')})"
+
+            time_info_combined = f'''
+            <div style="font-size:11.5px; font-weight:700; color:#FEF3C7; line-height:1.4;">
+                <div>⚠️ <b>เครื่องหยุด:</b> รอเบิกวัสดุใหม่{h_start_txt}</div>
+                <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.9; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
+                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
+                    <span>🏁 <b>จบแผน:</b> {finish_display_txt}</span>
+                </div>
+            </div>
+            '''
+
             machine_status_cards.append({
                 "machine": m,
                 "status": "HOLD",
                 "card_class": "tv-card tv-card-hold",
                 "badge_html": '<b style="color:#FDE68A;">🛑 พักงาน (รอวัสดุ)</b>',
-                "plan": str(h_info.get("แผนงาน", "-")),
-                "drawing": str(h_info.get("ชื่อ Drawing.", "-")),
+                "plan": p_code,
+                "drawing": d_code,
                 "step": str(h_info.get("ขั้นตอน (Step)", "-")),
-                "time_info": f"<div style='font-size:12px; font-weight:700; color:#FEF3C7;'>⚠️ เครื่องหยุด: รอเบิกวัสดุใหม่{h_start_txt}</div>"
+                "time_info": time_info_combined
             })
         else:
             idle_machines_count += 1
             next_txt = "ไม่มีคิวรอ"
+            next_dates_html = ""
             if not waiting_jobs.empty:
                 w_first = waiting_jobs.iloc[0]
-                next_plan = f"{w_first.get('แผนงาน', '-')} ({w_first.get('ชื่อ Drawing.', '-')})"
-                next_txt = f"คิวถัดไป: {next_plan}"
+                p_code = str(w_first.get('แผนงาน', '-'))
+                d_code = str(w_first.get('ชื่อ Drawing.', '-'))
+                next_txt = f"คิวถัดไป: {p_code} ({d_code})"
+                
+                w_ready_dt = parse_flexible_datetime(w_first.get("วัน-เวลาขึ้นงาน"))
+                ready_display_txt = w_ready_dt.strftime("%d/%m %H:%M") if w_ready_dt is not None else "-"
+                
+                f_dt = planned_finish_map_tv.get((p_code, d_code))
+                finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
+                
+                next_dates_html = f'''
+                <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:10.5px; color:#94A3B8; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
+                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
+                    <span>🏁 <b>จบแผน:</b> {finish_display_txt}</span>
+                </div>
+                '''
 
             machine_status_cards.append({
                 "machine": m,
@@ -3268,23 +3320,23 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": "พร้อมรับงาน",
                 "drawing": next_txt,
                 "step": "-",
-                "time_info": f"<div style='font-size:12px; font-weight:600; color:#CBD5E1;'>📋 คิวรอ: {len(waiting_jobs)} งาน</div>"
+                "time_info": f"<div style='font-size:11.5px; font-weight:600; color:#CBD5E1;'>📋 คิวรอ: {len(waiting_jobs)} งาน</div>{next_dates_html}"
             })
 
     st.markdown(f"""
-    <div style="background:#0F172A; border:2px solid #1E3A8A; border-radius:16px; padding:14px 22px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
+    <div style="background:#0F172A; border:2px solid #1E3A8A; border-radius:16px; padding:12px 20px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
         <div>
-            <div style="font-size:22px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
+            <div style="font-size:21px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
                 <span>📺 PES SHOP FLOOR LIVE MONITOR</span>
-                <span style="font-size:12px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:3px 10px; border-radius:20px;">Auto-Refresh 30s</span>
+                <span style="font-size:11.5px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:2px 8px; border-radius:16px;">Auto 30s</span>
             </div>
-            <div style="color:#94A3B8; font-size:13px; margin-top:2px;">
+            <div style="color:#94A3B8; font-size:12.5px; margin-top:2px;">
                 สถานะการผลิต 17 สถานีงานแบบ Real-time | ประจำวันที่ <b>{cur_date_str}</b>
             </div>
         </div>
         <div style="text-align:right;">
-            <div id="live-tv-clock" style="font-size:28px; font-weight:900; color:#F8FAFC; font-family:monospace; letter-spacing:1px;">--:--:-- น.</div>
-            <div style="font-size:13px; font-weight:bold;">
+            <div id="live-tv-clock" style="font-size:26px; font-weight:900; color:#F8FAFC; font-family:monospace; letter-spacing:1px;">--:--:-- น.</div>
+            <div style="font-size:12.5px; font-weight:bold;">
                 <span style="color:#34D399;">🟢 กำลังรัน {running_machines_count}</span> | 
                 <span style="color:#FBBF24;">🟡 พักงาน {hold_machines_count}</span> | 
                 <span style="color:#94A3B8;">⚪ ว่าง {idle_machines_count}</span>
@@ -3297,16 +3349,16 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     for c in machine_status_cards:
         card_item = (
             f'<div class="{c["card_class"]}">'
-            f'<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">'
-            f'<div style="font-size:17px; font-weight:800; letter-spacing:0.3px;">{c["machine"]}</div>'
-            f'<div style="font-size:11px;">{c["badge_html"]}</div>'
+            f'<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">'
+            f'<div style="font-size:15.5px; font-weight:800; letter-spacing:0.2px;">{c["machine"]}</div>'
+            f'<div style="font-size:10.5px;">{c["badge_html"]}</div>'
             f'</div>'
-            f'<div style="margin: 4px 0;">'
-            f'<div style="font-size:14px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📌 {c["plan"]}</div>'
-            f'<div style="font-size:12px; color:rgba(255,255,255,0.85); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px;">📄 {c["drawing"]}</div>'
-            f'<div style="font-size:11.5px; color:rgba(255,255,255,0.7); margin-top:2px;">⚙️ ขั้นตอน: {c["step"]}</div>'
+            f'<div style="margin: 3px 0;">'
+            f'<div style="font-size:13px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📌 {c["plan"]}</div>'
+            f'<div style="font-size:11.5px; color:rgba(255,255,255,0.88); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px;">📄 {c["drawing"]}</div>'
+            f'<div style="font-size:11px; color:rgba(255,255,255,0.72); margin-top:1px;">⚙️ ขั้นตอน: {c["step"]}</div>'
             f'</div>'
-            f'<div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.15);">'
+            f'<div style="margin-top:6px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.15);">'
             f'{c["time_info"]}'
             f'</div>'
             f'</div>'
