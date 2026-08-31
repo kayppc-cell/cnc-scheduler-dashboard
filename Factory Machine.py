@@ -526,7 +526,7 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักร
+# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักร (22 สถานี)
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 VIEWER_PASSWORD = "pes1234"
@@ -558,7 +558,9 @@ MACHINE_LIST = [
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
     "No.10 เครื่องเจียรราบ", "No.11 เครื่องเจียรกลม",
     "No.12 มิลลิ่ง 1", "No.13 มิลลิ่ง 2", "No.14 มิลลิ่ง 3", "No.15 มิลลิ่ง 4",
-    "No.16 เครื่องกลึง", "No.17 แผนกเชื่อม"
+    "No.16 เครื่องกลึง",
+    "MIG CO2-No.01", "MIG CO2-No.02", "MIG CO2-No.03",
+    "ARGON-No.01", "ARGON-No.02", "WELDING_ALUMINUM-No.01"
 ]
 
 DEFAULT_RATES = {
@@ -566,7 +568,9 @@ DEFAULT_RATES = {
     "No.5 Hartford": 1000, "No.6 Bridgeport": 600, "No.7 Bridgeport": 600, "No.8 Hartford": 600, "No.9 Mikron": 1300,
     "No.10 เครื่องเจียรราบ": 500, "No.11 เครื่องเจียรกลม": 500,
     "No.12 มิลลิ่ง 1": 400, "No.13 มิลลิ่ง 2": 400, "No.14 มิลลิ่ง 3": 400, "No.15 มิลลิ่ง 4": 400,
-    "No.16 เครื่องกลึง": 400, "No.17 แผนกเชื่อม": 450
+    "No.16 เครื่องกลึง": 400,
+    "MIG CO2-No.01": 450, "MIG CO2-No.02": 450, "MIG CO2-No.03": 450,
+    "ARGON-No.01": 450, "ARGON-No.02": 450, "WELDING_ALUMINUM-No.01": 500
 }
 
 ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
@@ -1554,7 +1558,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
-            # เรียงตาม วัน-เวลาขึ้นงาน (ตามลำดับจริง)
             active_jobs_editor_df = calc_df[
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
             ].copy()
@@ -2173,7 +2176,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with gantt_f1:
                     m_filter_mode = st.radio(
                         "🔍 กรองกลุ่มสถานีงาน:",
-                        ["🌐 ทุกสถานี (17 เครื่อง)", "⚙️ CNC (No.1 - No.9)", "🔧 เจียร/มิลลิ่ง/กลึง/เชื่อม (No.10 - No.17)"],
+                        ["🌐 ทุกสถานี (22 เครื่อง)", "⚙️ CNC (No.1 - No.9)", "🔧 เจียร/มิลลิ่ง/กลึง (No.10 - No.16)", "🔥 แผนกเชื่อม (6 เครื่อง)"],
                         horizontal=True
                     )
 
@@ -2212,7 +2215,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "CNC" in m_filter_mode:
                     display_machines = MACHINE_LIST[:9]
                 elif "เจียร" in m_filter_mode:
-                    display_machines = MACHINE_LIST[9:]
+                    display_machines = MACHINE_LIST[9:16]
+                elif "เชื่อม" in m_filter_mode:
+                    display_machines = MACHINE_LIST[16:]
                 else:
                     display_machines = MACHINE_LIST
 
@@ -2356,7 +2361,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 fig_bar.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=MACHINE_LIST)
                 fig_bar.update_traces(marker_line_color="#0F172A", marker_line_width=1.2, textposition="outside", cliponaxis=False)
                 fig_bar.update_layout(
-                    height=600,
+                    height=max(600, len(MACHINE_LIST) * 30),
                     margin=dict(l=40, r=40, t=10, b=30),
                     xaxis_title="อัตราการใช้งาน (%)",
                     yaxis_title="เครื่องจักร / แผนก",
@@ -2398,7 +2403,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if is_admin:
                     edited_rates = st.data_editor(
                         st.session_state.machine_rates,
-                        key="editor_machine_rates_full_17_v12",
+                        key="editor_machine_rates_full_22_v13",
                         column_config={
                             "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
                             "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
@@ -2920,7 +2925,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 text_auto='.2f'
             )
             fig_m_val.update_traces(textposition='outside', cliponaxis=False)
-            fig_m_val.update_layout(height=380, plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF", margin=dict(l=20, r=20, t=40, b=20))
+            fig_m_val.update_layout(height=max(380, len(df_m_sum) * 26), plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF", margin=dict(l=20, r=20, t=40, b=20))
 
             fig_compare = px.bar(
                 df_m_sum.sort_values(by="เวลาจริง (ชม.)", ascending=True),
@@ -2934,7 +2939,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             )
             fig_compare.update_traces(textposition='outside', cliponaxis=False)
             fig_compare.update_layout(
-                height=380, 
+                height=max(380, len(df_m_sum) * 26), 
                 plot_bgcolor="#FFFFFF", 
                 paper_bgcolor="#FFFFFF", 
                 margin=dict(l=20, r=20, t=40, b=20), 
@@ -3188,7 +3193,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.info(f"ℹ️ ยังไม่มีประวัติงานที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' ในเดือน {month_names[selected_month_idx-1]} {selected_year}")
 
 # ---------------------------------------------------------
-# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
+# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard - 22 สถานี)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
@@ -3238,11 +3243,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             p_code = str(r_info.get("แผนงาน", "-"))
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
             
-            # ดึงวัน-เวลาขึ้นงาน
             r_ready_dt = parse_flexible_datetime(r_info.get("วัน-เวลาขึ้นงาน"))
             ready_display_txt = r_ready_dt.strftime("%d/%m %H:%M") if r_ready_dt is not None else "-"
 
-            # ดึงกำหนดจบงานตามแผน
             f_dt = planned_finish_map_tv.get((p_code, d_code))
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
             
@@ -3366,11 +3369,11 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     <div style="background:#0F172A; border:2px solid #1E3A8A; border-radius:16px; padding:12px 20px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
         <div>
             <div style="font-size:21px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
-                <span>📺 PES SHOP FLOOR LIVE MONITOR</span>
+                <span>📺 PES SHOP FLOOR LIVE MONITOR (22 สถานี)</span>
                 <span style="font-size:11.5px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:2px 8px; border-radius:16px;">Auto 30s</span>
             </div>
             <div style="color:#94A3B8; font-size:12.5px; margin-top:2px;">
-                สถานะการผลิต 17 สถานีงานแบบ Real-time | ประจำวันที่ <b>{cur_date_str}</b>
+                สถานะการผลิต 22 สถานีงานแบบ Real-time | ประจำวันที่ <b>{cur_date_str}</b>
             </div>
         </div>
         <div style="text-align:right;">
@@ -3389,7 +3392,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         card_item = (
             f'<div class="{c["card_class"]}">'
             f'<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">'
-            f'<div style="font-size:15.5px; font-weight:800; letter-spacing:0.2px;">{c["machine"]}</div>'
+            f'<div style="font-size:14.5px; font-weight:800; letter-spacing:0.2px;">{c["machine"]}</div>'
             f'<div style="font-size:10.5px;">{c["badge_html"]}</div>'
             f'</div>'
             f'<div style="margin: 3px 0;">'
@@ -3415,16 +3418,14 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         function updateTvDashboard() {{
             const now = new Date();
 
-            // นาฬิกาหลักมุมขวาบน
-            const hrs = String(now.getHours()).padStart(2, '0');
-            const mins = String(now.getMinutes()).padStart(2, '0');
-            const secs = String(now.getSeconds()).padStart(2, '0');
             const clockEl = window.parent.document.getElementById('live-tv-clock');
             if (clockEl) {{
+                const hrs = String(now.getHours()).padStart(2, '0');
+                const mins = String(now.getMinutes()).padStart(2, '0');
+                const secs = String(now.getSeconds()).padStart(2, '0');
                 clockEl.innerText = `${{hrs}}:${{mins}}:${{secs}} น.`;
             }}
 
-            // อัปเดตเวลานับขึ้นของการ์ดแต่ละเครื่องจักร
             tvTimerConfigs.forEach(cfg => {{
                 const el = window.parent.document.getElementById(cfg.id);
                 if (el) {{
