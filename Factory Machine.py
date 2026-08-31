@@ -1520,9 +1520,19 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
 
+            # -------------------------------------------------------------
+            # ปรับปรุง: กรองงาน Active และเรียงตาม วัน-เวลาขึ้นงาน (ลำดับไทม์ไลน์จริง)
+            # -------------------------------------------------------------
             active_jobs_editor_df = calc_df[
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
-            ].sort_values(by="ID", ascending=True).copy().reset_index(drop=True)
+            ].copy()
+
+            active_jobs_editor_df["temp_ready_dt"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
+            active_jobs_editor_df = active_jobs_editor_df.sort_values(
+                by=["temp_ready_dt", "ID"], 
+                ascending=[True, True], 
+                na_position="last"
+            ).drop(columns=["temp_ready_dt"]).reset_index(drop=True)
             
             for idx_row in active_jobs_editor_df.index:
                 row_status = str(active_jobs_editor_df.at[idx_row, "สถานะงาน"])
@@ -1685,7 +1695,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
                                 "วัน-เวลาขึ้นงาน", 
                                 width=165,
-                                help="พิมพ์วันขึ้นก่อนเสมอ เช่น 01/09/2026 10:50 หรือ 01/09 10:50"
+                                help="พิมพ์วันขึ้นก่อนเสมอ เช่น 31/08/2026 10:50 หรือ 31/08 10:50"
                             ),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=10),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
