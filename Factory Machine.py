@@ -904,7 +904,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (พร้อมนาฬิกาจับเวลาสด Live Stopwatch)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -3211,8 +3211,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     running_machines_count = 0
     hold_machines_count = 0
     idle_machines_count = 0
+    tv_running_timers = []
 
-    for m in MACHINE_LIST:
+    for idx_m, m in enumerate(MACHINE_LIST):
         m_jobs = df_live[df_live["เลือกเครื่องจักร"] == m] if not df_live.empty else pd.DataFrame()
         
         running_job = m_jobs[m_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
@@ -3245,13 +3246,15 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             f_dt = planned_finish_map_tv.get((p_code, d_code))
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
             
-            elapsed_txt = "-"
             start_disp_txt = "-"
+            timer_id_tv = f"tv-timer-{idx_m}"
             if pd.notna(s_start):
                 start_dt = pd.to_datetime(s_start)
                 start_disp_txt = start_dt.strftime("%H:%M น.")
-                elapsed_min = int((now_bangkok.replace(tzinfo=None) - start_dt).total_seconds() / 60.0)
-                elapsed_txt = f"{elapsed_min} นาที ({elapsed_min/60.0:.1f} ชม.)"
+                tv_running_timers.append({
+                    "id": timer_id_tv,
+                    "start": start_dt.strftime("%Y-%m-%dT%H:%M:%S")
+                })
             
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:5px;">กำลังรันงาน</b>'
@@ -3267,7 +3270,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
-                <div>🚀 <b>เริ่มรัน:</b> <span style="color:#93C5FD;">{start_disp_txt}</span> | ⏱️ <b>รันแล้ว:</b> {elapsed_txt}</div>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
+                    <span>⏱️ <b id="{timer_id_tv}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</b></span>
+                </div>
                 <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px;">
                     <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
                     <span>🏁 <b>จบแผน:</b> <b style="color:#FEF08A;">{finish_display_txt}</b></span>
@@ -3401,26 +3407,46 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    components.html("""
+    tv_timers_json = json.dumps(tv_running_timers)
+    components.html(f"""
     <script>
-        function updateLiveClock() {
+        const tvTimerConfigs = {tv_timers_json};
+
+        function updateTvDashboard() {{
             const now = new Date();
+
+            // นาฬิกาหลักมุมขวาบน
             const hrs = String(now.getHours()).padStart(2, '0');
             const mins = String(now.getMinutes()).padStart(2, '0');
             const secs = String(now.getSeconds()).padStart(2, '0');
             const clockEl = window.parent.document.getElementById('live-tv-clock');
-            if (clockEl) {
-                clockEl.innerText = `${hrs}:${mins}:${secs} น.`;
-            }
-        }
-        setInterval(updateLiveClock, 1000);
-        updateLiveClock();
+            if (clockEl) {{
+                clockEl.innerText = `${{hrs}}:${{mins}}:${{secs}} น.`;
+            }}
 
-        setTimeout(function() {
+            // อัปเดตเวลานับขึ้นของการ์ดแต่ละเครื่องจักร
+            tvTimerConfigs.forEach(cfg => {{
+                const el = window.parent.document.getElementById(cfg.id);
+                if (el) {{
+                    const startDate = new Date(cfg.start);
+                    const diffMs = Math.max(0, now - startDate);
+                    const totalSecs = Math.floor(diffMs / 1000);
+                    const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                    const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                    const tSecs = String(totalSecs % 60).padStart(2, '0');
+                    el.innerText = `${{tHrs}}:${{tMins}}:${{tSecs}}`;
+                }}
+            }});
+        }}
+
+        setInterval(updateTvDashboard, 1000);
+        updateTvDashboard();
+
+        setTimeout(function() {{
             const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
-            if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {
+            if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {{
                 radioBtns[4].click();
-            }
-        }, 30000);
+            }}
+        }}, 30000);
     </script>
     """, height=0)
