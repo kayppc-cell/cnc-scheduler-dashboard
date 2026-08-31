@@ -453,7 +453,6 @@ st.markdown("""
         cursor: not-allowed !important;
     }
 
-    /* สไตล์สำหรับ Grid และ Card บนจอ TV */
     .tv-grid-container {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -535,7 +534,6 @@ VIEWER_PASSWORD = "pes1234"
 if "user_role" not in st.session_state:
     st.session_state.user_role = None
 
-# ตรวจจับ URL Query Parameter เพื่อเปิดจอ TV อัตโนมัติ (เช่น ?view=tv)
 query_params = st.query_params
 if "current_view" not in st.session_state:
     if query_params.get("view") == "tv":
@@ -906,7 +904,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง
+# VIEW 1: หน้าจอช่างหน้าเครื่อง (พร้อมนาฬิกาจับเวลาสด Live Stopwatch)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -941,6 +939,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     else:
         m_all_jobs = pd.DataFrame()
 
+    running_timer_configs = []
+
     if not m_all_jobs.empty:
         running_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
         hold_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
@@ -949,23 +949,25 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             r_cur = running_now.iloc[0]
             st_t = r_cur.get("เริ่มจริง")
             st_txt = "-"
-            elap_txt = "-"
+            iso_start = ""
             if pd.notna(st_t):
                 st_dt = pd.to_datetime(st_t)
                 st_txt = st_dt.strftime("%H:%M น.")
-                elap_min = int((get_bangkok_now().replace(tzinfo=None) - st_dt).total_seconds() / 60.0)
-                elap_txt = f"{elap_min} นาที ({elap_min/60.0:.1f} ชม.)"
+                iso_start = st_dt.strftime("%Y-%m-%dT%H:%M:%S")
+
             st.markdown(f"""
             <div class="shop-live-banner shop-live-running">
                 <div style="display:flex; align-items:center; gap:8px;">
                     <span class="tv-pulse-dot"></span>
-                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | รันแล้ว {elap_txt})</span>
+                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ กำลังรัน: <span id="banner-timer" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
                 </div>
                 <div style="font-size:12.5px; opacity:0.9;">
                     📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
                 </div>
             </div>
             """, unsafe_allow_html=True)
+            if iso_start:
+                running_timer_configs.append({"id": "banner-timer", "start": iso_start})
         elif not hold_now.empty:
             h_cur = hold_now.iloc[0]
             st.markdown(f"""
@@ -1160,8 +1162,14 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             finish_txt = pd.to_datetime(s_finish).strftime('%d/%m %H:%M') if pd.notna(s_finish) else '-'
                             st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                         elif is_step_running:
-                            start_txt = pd.to_datetime(s_start).strftime('%d/%m %H:%M') if pd.notna(s_start) else '-'
-                            st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) ⏱️</span>", unsafe_allow_html=True)
+                            start_txt = pd.to_datetime(s_start).strftime('%H:%M น.') if pd.notna(s_start) else '-'
+                            timer_span_id = f"timer-step-{s_id}"
+                            if pd.notna(s_start):
+                                running_timer_configs.append({
+                                    "id": timer_span_id,
+                                    "start": pd.to_datetime(s_start).strftime("%Y-%m-%dT%H:%M:%S")
+                                })
+                            st.caption(f"**Step {idx}:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span id='{timer_span_id}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
                         elif is_step_hold:
                             st.caption(f"**Step {idx}:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
                         else:
@@ -1298,6 +1306,31 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             st.rerun()
                 
                 st.write("")
+
+    if running_timer_configs:
+        timers_json = json.dumps(running_timer_configs)
+        components.html(f"""
+        <script>
+            const timerConfigs = {timers_json};
+            function runLiveStopwatches() {{
+                const now = new Date();
+                timerConfigs.forEach(cfg => {{
+                    const el = window.parent.document.getElementById(cfg.id);
+                    if (el) {{
+                        const startDate = new Date(cfg.start);
+                        const diffMs = Math.max(0, now - startDate);
+                        const totalSecs = Math.floor(diffMs / 1000);
+                        const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                        const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                        const secs = String(totalSecs % 60).padStart(2, '0');
+                        el.innerText = `${{hrs}}:${{mins}}:${{secs}}`;
+                    }}
+                }});
+            }}
+            setInterval(runLiveStopwatches, 1000);
+            runLiveStopwatches();
+        </script>
+        """, height=0)
 
 # ---------------------------------------------------------
 # VIEW 2: Dashboard ภาพรวมโรงงาน
