@@ -242,7 +242,7 @@ logo_base64 = get_cached_logo()
 logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>' if logo_base64 else '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI
+# 2. ตกแต่ง UI & ไฟกระพริบนีออนชัดเจนระดับโรงงาน (High-Visibility Andon Bulbs)
 # =========================================================
 st.markdown("""
 <style>
@@ -456,19 +456,59 @@ st.markdown("""
         border-left: 7px solid #64748B !important;
         opacity: 0.92;
     }
+
+    /* =========================================================
+       ระบบดวงไฟนีออนกระพริบคมชัดสูง (High-Intensity Glowing Bulbs)
+       ========================================================= */
     .tv-pulse-dot {
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        background-color: #34D399;
-        display: inline-block;
-        box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7);
-        animation: tv-pulse 1.8s infinite;
+        width: 13px !important;
+        height: 13px !important;
+        border-radius: 50% !important;
+        background-color: #10B981 !important;
+        border: 2px solid #FFFFFF !important;
+        display: inline-block !important;
+        vertical-align: middle !important;
+        box-shadow: 0 0 8px #10B981, 0 0 16px rgba(16, 185, 129, 0.8) !important;
+        animation: tv-pulse-green 1.5s infinite ease-in-out !important;
     }
-    @keyframes tv-pulse {
-        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
-        70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
-        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+    @keyframes tv-pulse-green {
+        0% { transform: scale(0.9); box-shadow: 0 0 4px #10B981, 0 0 0 0 rgba(16, 185, 129, 0.9); }
+        50% { transform: scale(1.15); box-shadow: 0 0 12px #34D399, 0 0 0 8px rgba(16, 185, 129, 0); }
+        100% { transform: scale(0.9); box-shadow: 0 0 4px #10B981, 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    .tv-pulse-dot-warning {
+        width: 13px !important;
+        height: 13px !important;
+        border-radius: 50% !important;
+        background-color: #FACC15 !important;
+        border: 2px solid #FFFFFF !important;
+        display: inline-block !important;
+        vertical-align: middle !important;
+        box-shadow: 0 0 10px #FACC15, 0 0 18px rgba(250, 204, 21, 0.9) !important;
+        animation: tv-pulse-yellow 1.1s infinite ease-in-out !important;
+    }
+    @keyframes tv-pulse-yellow {
+        0% { transform: scale(0.9); box-shadow: 0 0 4px #FACC15, 0 0 0 0 rgba(250, 204, 21, 0.9); }
+        50% { transform: scale(1.2); box-shadow: 0 0 14px #FEF08A, 0 0 0 9px rgba(250, 204, 21, 0); }
+        100% { transform: scale(0.9); box-shadow: 0 0 4px #FACC15, 0 0 0 0 rgba(250, 204, 21, 0); }
+    }
+
+    .tv-pulse-dot-late {
+        width: 13px !important;
+        height: 13px !important;
+        border-radius: 50% !important;
+        background-color: #EF4444 !important;
+        border: 2px solid #FFFFFF !important;
+        display: inline-block !important;
+        vertical-align: middle !important;
+        box-shadow: 0 0 10px #EF4444, 0 0 20px rgba(239, 68, 68, 1) !important;
+        animation: tv-pulse-red 0.8s infinite ease-in-out !important;
+    }
+    @keyframes tv-pulse-red {
+        0% { transform: scale(0.9); box-shadow: 0 0 6px #EF4444, 0 0 0 0 rgba(239, 68, 68, 1); }
+        50% { transform: scale(1.25); box-shadow: 0 0 18px #F87171, 0 0 0 11px rgba(239, 68, 68, 0); }
+        100% { transform: scale(0.9); box-shadow: 0 0 6px #EF4444, 0 0 0 0 rgba(239, 68, 68, 0); }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -945,7 +985,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
             st.markdown(f"""
             <div class="shop-live-banner shop-live-running">
-                <div style="display:flex; align-items:center; gap:8px;">
+                <div style="display:flex; align-items:center; gap:10px;">
                     <span class="tv-pulse-dot"></span>
                     <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ กำลังรัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
                 </div>
@@ -1053,7 +1093,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             elif is_step_running:
                 header_box_class = "op-job-header op-job-header-running"
                 badge_gradient = "linear-gradient(135deg, #059669 0%, #10B981 100%)"
-                status_badge_html = '<span class="badge-chip badge-running"><span class="tv-pulse-dot" style="margin-right:4px;"></span> 🟦 กำลังผลิต (รันงานอยู่ ⏱️)</span>'
+                status_badge_html = '<span class="badge-chip badge-running"><span class="tv-pulse-dot" style="margin-right:6px;"></span> 🟦 กำลังผลิต (รันงานอยู่ ⏱️)</span>'
             elif is_urgent:
                 header_box_class = "op-job-header op-job-header-urgent"
                 badge_gradient = "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)"
@@ -1087,7 +1127,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     st_parsed = parse_flexible_datetime(s_start)
                     start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
                     step_start_epoch = to_bangkok_epoch_ms(s_start)
-                    st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
+                    st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
                 elif is_step_hold:
                     st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
                 else:
@@ -2559,7 +2599,6 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                     drawing_agg.append({
                         "แผนงาน": p_c,
                         "ชื่อ Drawing.": d_c,
-                        # แสดงรหัสแผนงาน ชื่อ Drawing และเครื่องจักรที่ผลิต
                         "หัวข้อ Drawing": f"[{p_c}] {d_c} ({machines_str})",
                         "จำนวน": d_qty,
                         "วัสดุ": d_mat,
@@ -3292,16 +3331,16 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 start_disp_txt = r_start_parsed.strftime("%H:%M น.")
             
             tv_card_cls = "tv-card tv-card-running"
-            badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:5px;">กำลังรันงาน</b>'
+            badge_html = '<span class="tv-pulse-dot" style="margin-right:6px;"></span> <b style="color:#A7F3D0;">กำลังรันงาน</b>'
             
             if f_dt is not None and pd.notna(f_dt):
                 diff_mins = (f_dt - now_bangkok.replace(tzinfo=None)).total_seconds() / 60.0
                 if diff_mins < 0:
                     tv_card_cls = "tv-card tv-card-late"
-                    badge_html = '<span class="tv-pulse-dot" style="background-color:#F87171;"></span> <b style="color:#FFFFFF; margin-left:5px;">🔴 เกินเวลาแผน</b>'
+                    badge_html = '<span class="tv-pulse-dot-late" style="margin-right:6px;"></span> <b style="color:#FFFFFF; text-shadow:0 0 4px #000;">🔴 เกินเวลาแผน</b>'
                 elif 0 <= diff_mins <= 60:
                     tv_card_cls = "tv-card tv-card-warning"
-                    badge_html = '<span class="tv-pulse-dot" style="background-color:#FCD34D;"></span> <b style="color:#FFFFFF; margin-left:5px;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
+                    badge_html = '<span class="tv-pulse-dot-warning" style="margin-right:6px;"></span> <b style="color:#FFFFFF; text-shadow:0 0 4px #000;">🟡 ใกล้เสร็จ (<1 ชม.)</b>'
 
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
