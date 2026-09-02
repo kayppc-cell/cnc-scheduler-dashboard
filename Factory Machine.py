@@ -59,6 +59,9 @@ def parse_flexible_datetime(dt_val):
     if s in ["", "None", "nan", "NaN", "null", "-"]:
         return None
     
+    # ล้างอักขระส่วนเกินที่อาจติดมาจาก REST API
+    s = s.replace('T', ' ').split('+')[0].split('Z')[0].strip()
+
     current_year = get_bangkok_now().year
 
     if "-" in s:
@@ -519,7 +522,7 @@ st.markdown("""
     @keyframes tv-pulse {
         0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
         70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
-        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -672,9 +675,9 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                 if "ready_at" in df.columns:
                     df["ready_at"] = df["ready_at"].apply(parse_flexible_datetime)
                 if "actual_start" in df.columns:
-                    df["actual_start"] = pd.to_datetime(df["actual_start"].astype(str).str.replace('T', ' ').str.split('+').str[0].str.split('Z').str[0], errors='coerce')
+                    df["actual_start"] = df["actual_start"].apply(parse_flexible_datetime)
                 if "actual_finish" in df.columns:
-                    df["actual_finish"] = pd.to_datetime(df["actual_finish"].astype(str).str.replace('T', ' ').str.split('+').str[0].str.split('Z').str[0], errors='coerce')
+                    df["actual_finish"] = df["actual_finish"].apply(parse_flexible_datetime)
                 
                 if "status" in df.columns:
                     df["status"] = df["status"].apply(normalize_status)
@@ -999,10 +1002,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             st_t = r_cur.get("เริ่มจริง")
             st_txt = "-"
             start_ts = 0
-            if pd.notna(st_t):
-                st_dt = pd.to_datetime(st_t)
-                st_txt = st_dt.strftime("%H:%M น.")
-                start_ts = int(st_dt.timestamp() * 1000)
+            act_dt = parse_flexible_datetime(st_t)
+            if act_dt is not None:
+                st_txt = act_dt.strftime("%H:%M น.")
+                start_ts = int(act_dt.timestamp() * 1000)
 
             st.markdown(f"""
             <div class="shop-live-banner shop-live-running">
@@ -1143,16 +1146,17 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 st.markdown(f"<div class='{card_style_class}'>", unsafe_allow_html=True)
                 
                 if is_step_finished:
-                    finish_txt = pd.to_datetime(s_finish).strftime('%d/%m %H:%M') if pd.notna(s_finish) else '-'
+                    fin_dt = parse_flexible_datetime(s_finish)
+                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if fin_dt is not None else '-'
                     st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                 elif is_step_running:
-                    start_txt = pd.to_datetime(s_start).strftime('%H:%M น.') if pd.notna(s_start) else '-'
+                    st_parsed = parse_flexible_datetime(s_start)
+                    start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
                     timer_span_id = f"timer-step-{target_id}"
-                    if pd.notna(s_start):
-                        s_dt_obj = pd.to_datetime(s_start)
+                    if st_parsed is not None:
                         running_timer_configs.append({
                             "id": timer_span_id,
-                            "start_ts": int(s_dt_obj.timestamp() * 1000)
+                            "start_ts": int(st_parsed.timestamp() * 1000)
                         })
                     st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span id='{timer_span_id}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
                 elif is_step_hold:
@@ -2119,8 +2123,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 actual_hrs_list, diff_list, status_eval_list = [], [], []
                 for _, r in perf_df.iterrows():
                     s_real, f_real = r.get("เริ่มจริง"), r.get("เสร็จจริง")
-                    if pd.notna(s_real) and pd.notna(f_real):
-                        diff_seconds = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
+                    act_st = parse_flexible_datetime(s_real)
+                    act_fn = parse_flexible_datetime(f_real)
+                    if act_st is not None and act_fn is not None:
+                        diff_seconds = (act_fn - act_st).total_seconds()
                         act_hrs = round(diff_seconds / 3600.0, 2)
                         variance_hrs = round(act_hrs - r["เวลาแผน (ชม.)"], 2)
                         diff_mins = round((diff_seconds / 60.0) - (r["เวลาแผน (ชม.)"] * 60.0))
@@ -2560,8 +2566,10 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                 actual_hrs_list = []
                 for _, r in monthly_dw_jobs.iterrows():
                     s_real, f_real = r.get("เริ่มจริง"), r.get("เสร็จจริง")
-                    if pd.notna(s_real) and pd.notna(f_real):
-                        diff_sec = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
+                    act_st = parse_flexible_datetime(s_real)
+                    act_fn = parse_flexible_datetime(f_real)
+                    if act_st is not None and act_fn is not None:
+                        diff_sec = (act_fn - act_st).total_seconds()
                         actual_hrs_list.append(round(diff_sec / 3600.0, 2))
                     else:
                         actual_hrs_list.append(r["เวลาแผน (ชม.)"])
@@ -2745,8 +2753,10 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                             step_diffs, step_evals = [], []
                             for _, sr in step_details.iterrows():
                                 s_st, s_fn = sr.get("เริ่มจริง"), sr.get("เสร็จจริง")
-                                if pd.notna(s_st) and pd.notna(s_fn):
-                                    d_sec = (pd.to_datetime(s_fn) - pd.to_datetime(s_st)).total_seconds()
+                                act_st = parse_flexible_datetime(s_st)
+                                act_fn = parse_flexible_datetime(s_fn)
+                                if act_st is not None and act_fn is not None:
+                                    d_sec = (act_fn - act_st).total_seconds()
                                     a_h = round(d_sec / 3600.0, 2)
                                     v_h = round(a_h - sr["เวลาแผน (ชม.)"], 2)
                                     step_diffs.append(v_h)
@@ -2864,8 +2874,10 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             actual_hrs_list, diff_hrs_list, on_time_list = [], [], []
             for _, r in monthly_jobs.iterrows():
                 s_real, f_real = r.get("เริ่มจริง"), r.get("เสร็จจริง")
-                if pd.notna(s_real) and pd.notna(f_real):
-                    diff_sec = (pd.to_datetime(f_real) - pd.to_datetime(s_real)).total_seconds()
+                act_st = parse_flexible_datetime(s_real)
+                act_fn = parse_flexible_datetime(f_real)
+                if act_st is not None and act_fn is not None:
+                    diff_sec = (act_fn - act_st).total_seconds()
                     act_hrs = round(diff_sec / 3600.0, 2)
                     v_hrs = round(act_hrs - r["เวลาแผน (ชม.)"], 2)
                     actual_hrs_list.append(act_hrs)
@@ -3292,9 +3304,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             h_first = hold_job.iloc[0]
             h_start = h_first.get("เริ่มจริง")
             h_start_txt = ""
-            if pd.notna(h_start):
-                h_start_dt = pd.to_datetime(h_start)
-                h_start_txt = f" [เริ่ม {h_start_dt.strftime('%H:%M น.')}]"
+            h_dt_parsed = parse_flexible_datetime(h_start)
+            if h_dt_parsed is not None:
+                h_start_txt = f" [เริ่ม {h_dt_parsed.strftime('%H:%M น.')}]"
             hold_alert_html = f'<div style="margin-top:4px; padding:3px 6px; background:rgba(217, 119, 6, 0.35); border:1px dashed #FCD34D; border-radius:6px; font-size:10.5px; color:#FEF08A;">🛑 <b>พักงานรอ:</b> {h_first.get("แผนงาน", "-")} ({h_first.get("ชื่อ Drawing.", "-")}){h_start_txt}</div>'
 
         if not running_job.empty:
@@ -3314,12 +3326,17 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             
             start_disp_txt = "-"
             timer_id_tv = f"tv-timer-{idx_m}"
-            if pd.notna(s_start):
-                start_dt = pd.to_datetime(s_start)
-                start_disp_txt = start_dt.strftime("%H:%M น.")
+            r_start_parsed = parse_flexible_datetime(s_start)
+
+            # หากไม่มีเวลาเริ่มจริง (actual_start) ให้ใช้เวลาที่แพลนไว้แทน เพื่อไม่ให้เวลาค้าง
+            if r_start_parsed is None and r_ready_dt is not None:
+                r_start_parsed = r_ready_dt
+
+            if r_start_parsed is not None:
+                start_disp_txt = r_start_parsed.strftime("%H:%M น.")
                 tv_running_timers.append({
                     "id": timer_id_tv,
-                    "start_ts": int(start_dt.timestamp() * 1000)
+                    "start_ts": int(r_start_parsed.timestamp() * 1000)
                 })
             
             tv_card_cls = "tv-card tv-card-running"
@@ -3338,7 +3355,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
-                    <span>⏱️ <b id="{timer_id_tv}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">--:--:--</b></span>
+                    <span>⏱️ <b id="{timer_id_tv}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</b></span>
                 </div>
                 <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px;">
                     <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
@@ -3372,9 +3389,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
 
             h_start_txt = ""
-            if pd.notna(h_start):
-                h_start_dt = pd.to_datetime(h_start)
-                h_start_txt = f" (เริ่มไว้: {h_start_dt.strftime('%H:%M น.')})"
+            h_st_parsed = parse_flexible_datetime(h_start)
+            if h_st_parsed is not None:
+                h_start_txt = f" (เริ่มไว้: {h_st_parsed.strftime('%H:%M น.')})"
 
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FEF3C7; line-height:1.4;">
