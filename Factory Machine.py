@@ -172,9 +172,10 @@ def highlight_running_deadlines(row, planned_finish_map):
     status = str(row.get("สถานะ", row.get("สถานะงาน", "")))
     p_code = str(row.get("แผนงาน", ""))
     d_code = str(row.get("ชื่อ Drawing.", ""))
+    job_id = row.get("ID")
 
     if "กำลังผลิต" in status:
-        finish_dt = planned_finish_map.get((p_code, d_code))
+        finish_dt = planned_finish_map.get(job_id) or planned_finish_map.get((p_code, d_code))
         if finish_dt is not None and pd.notna(finish_dt):
             now = get_bangkok_now().replace(tzinfo=None)
             diff_mins = (finish_dt - now).total_seconds() / 60.0
@@ -693,7 +694,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine
+# 5. Scheduling Engine (ปรับปรุงให้จัดงานกำลังผลิตขึ้นรันจริงทันที)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -705,10 +706,17 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     valid_jobs = []
     
     for j in jobs_df[active_mask].to_dict("records"):
-        ready_time = j.get("วัน-เวลาขึ้นงาน")
-        dt_val = parse_flexible_datetime(ready_time)
+        is_running_job = "กำลังผลิต" in str(j.get("สถานะงาน", ""))
+        
+        # ถ้างวดนี้กำลังผลิตอยู่จริง ให้ยึดเวลาเริ่มจริง actual_start ก่อน
+        if is_running_job and pd.notna(j.get("เริ่มจริง")):
+            dt_val = parse_flexible_datetime(j.get("เริ่มจริง"))
+        else:
+            ready_time = j.get("วัน-เวลาขึ้นงาน")
+            dt_val = parse_flexible_datetime(ready_time)
+
         if dt_val is None:
-            continue
+            dt_val = default_start_datetime
             
         j["ready_at"] = get_next_valid_work_time(dt_val.to_pydatetime() if isinstance(dt_val, pd.Timestamp) else dt_val)
 
@@ -726,7 +734,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             
         j["is_urgent"] = "ด่วนแทรก" in str(j.get("ประเภทงาน", ""))
         j["remain_cut_hrs"] = j["cut_hrs"]
-        j["need_setup"] = "กำลังผลิต" not in str(j["สถานะงาน"])
+        j["need_setup"] = not is_running_job
         valid_jobs.append(j)
         
     gantt_records, summary_records = [], []
@@ -742,13 +750,24 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                     pending_machines.add(m)
                         
         if not pending_machines: break
-        earliest_m = min(pending_machines, key=lambda m: m_available[m])
+        
+        # หาเครื่องที่มีคิวที่ 'กำลังผลิต' อยู่ เพื่อให้รันออกไปก่อนเสมอ
+        running_m_candidates = [
+            m for m in pending_machines 
+            if any((j.get("เลือกเครื่องจักร") == m) and ("กำลังผลิต" in str(j["สถานะงาน"])) for j in valid_jobs)
+        ]
+        
+        if running_m_candidates:
+            earliest_m = min(running_m_candidates, key=lambda m: m_available[m])
+        else:
+            earliest_m = min(pending_machines, key=lambda m: m_available[m])
+
         cur_time = get_next_valid_work_time(m_available[earliest_m])
         last_mat = m_last_mat[earliest_m]
         
         ready_candidates = [
             j for j in valid_jobs if (j.get("เลือกเครื่องจักร") == earliest_m or 
-            (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m in MACHINE_LIST[:8])) and j["ready_at"] <= cur_time
+            (j.get("เลือกเครื่องจักร") == "อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)" and earliest_m in MACHINE_LIST[:8])) and (j["ready_at"] <= cur_time or "กำลังผลิต" in str(j["สถานะงาน"]))
         ]
                     
         if not ready_candidates:
@@ -779,12 +798,21 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                 m_available[earliest_m] = get_next_valid_work_time(cur_time + timedelta(minutes=15))
             continue
             
-        urgent_pool = [j for j in ready_candidates if j["is_urgent"]]
-        if urgent_pool:
-            selected_job = urgent_pool[0]
+        # สิทธิ์ความสำคัญสูงสุด: 1. กำลังรันอยู่จริง -> 2. ด่วนแทรก -> 3. วัสดุเดิม -> 4. คิวตามเวลา
+        running_pool = [j for j in ready_candidates if "กำลังผลิต" in str(j["สถานะงาน"])]
+        if running_pool:
+            selected_job = running_pool[0]
+            if pd.notna(selected_job.get("เริ่มจริง")):
+                act_st = parse_flexible_datetime(selected_job.get("เริ่มจริง"))
+                if act_st is not None:
+                    cur_time = get_next_valid_work_time(act_st)
         else:
-            same_mat = [j for j in ready_candidates if j["วัสดุ"] == last_mat]
-            selected_job = same_mat[0] if same_mat else ready_candidates[0]
+            urgent_pool = [j for j in ready_candidates if j["is_urgent"]]
+            if urgent_pool:
+                selected_job = urgent_pool[0]
+            else:
+                same_mat = [j for j in ready_candidates if j["วัสดุ"] == last_mat]
+                selected_job = same_mat[0] if same_mat else ready_candidates[0]
 
         setup_mins = selected_job["setup_mins"] if selected_job["need_setup"] else 0
         setup_hrs = setup_mins / 60.0
@@ -930,6 +958,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         _, df_summary_plan, _, _ = calculate_shop_schedule(df_all, get_bangkok_now().replace(tzinfo=None))
         if not df_summary_plan.empty:
             for _, s_row in df_summary_plan.iterrows():
+                # บันทึกทั้งแบบ ID เจาะจง และแบบคู่ แผนงาน+Drawing
+                planned_finish_map[s_row.get("ID")] = s_row.get("เวลาจบงาน_DT")
                 key_pair = (str(s_row["แผนงาน"]), str(s_row["ชื่อ Drawing."]))
                 f_dt = s_row.get("เวลาจบงาน_DT")
                 if key_pair not in planned_finish_map or (pd.notna(f_dt) and f_dt > planned_finish_map[key_pair]):
@@ -1002,13 +1032,19 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_hold = any("พักงาน" in str(s) for s in steps["สถานะงาน"])
                 is_urgent = any("ด่วนแทรก" in str(t) for t in steps.get("ประเภทงาน", []))
                 
-                valid_ready_times = steps["วัน-เวลาขึ้นงาน"].dropna()
-                earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else None
+                # ถ้ารันอยู่จริง ให้ยึดเวลาเริ่มจริง actual_start
+                running_steps = steps[steps["สถานะงาน"].str.contains("กำลังผลิต")]
+                if not running_steps.empty and pd.notna(running_steps.iloc[0].get("เริ่มจริง")):
+                    earliest_ready = pd.to_datetime(running_steps.iloc[0].get("เริ่มจริง"))
+                else:
+                    valid_ready_times = steps["วัน-เวลาขึ้นงาน"].dropna()
+                    earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else None
+                
                 min_id = steps["ID"].min()
                 
-                if is_hold:
+                if is_running:
                     prio = 0
-                elif is_running:
+                elif is_hold:
                     prio = 1
                 elif is_urgent:
                     prio = 2
@@ -1081,27 +1117,31 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_urgent = g_info["is_urgent"]
                 is_hold = g_info["is_hold"]
                 is_running = g_info["is_running"]
-                ready_at_dt = g_info["ready_at"]
                 
                 plan_steps = m_all_jobs[(m_all_jobs["แผนงาน"] == plan_code) & (m_all_jobs["ชื่อ Drawing."] == drawing_code)].sort_values(by="ID", ascending=True)
                 first_step_info = plan_steps.iloc[0]
                 mat_val = first_step_info.get('วัสดุ', '-')
                 qty_val = int(first_step_info.get('จำนวน', 1) or 1)
 
-                if pd.notna(ready_at_dt):
-                    ready_display_str = ready_at_dt.strftime("%d/%m/%Y %H:%M น.")
+                # ดึงวัน-เวลาขึ้นงานของคิวนี้โดยตรง
+                step_ready_val = first_step_info.get("วัน-เวลาขึ้นงาน")
+                dt_ready = parse_flexible_datetime(step_ready_val)
+                if pd.notna(dt_ready):
+                    ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.")
                 else:
                     ready_display_str = "ยังไม่ระบุเวลา"
 
-                plan_finish_dt = planned_finish_map.get((str(plan_code), str(drawing_code)))
+                # คำนวณเวลาจบงานตามแผนเฉพาะของคิวนี้
+                first_id = first_step_info.get("ID")
+                plan_finish_dt = planned_finish_map.get(first_id) or planned_finish_map.get((str(plan_code), str(drawing_code)))
+                
                 if plan_finish_dt is not None and pd.notna(plan_finish_dt):
                     finish_plan_display_str = plan_finish_dt.strftime("%d/%m/%Y %H:%M น.")
                 else:
-                    if pd.notna(ready_at_dt):
-                        tot_hrs = 0.0
-                        for _, s_r in plan_steps.iterrows():
-                            tot_hrs += (safe_float(s_r.get("Setup (น.)"), 10) + safe_float(s_r.get("Basic (น.)"), 0) + safe_float(s_r.get("โปรแกรม (น.)"), 120)) / 60.0
-                        _, est_finish = add_work_time_with_shift(ready_at_dt, tot_hrs)
+                    calc_base_dt = pd.to_datetime(first_step_info.get("เริ่มจริง")) if (is_running and pd.notna(first_step_info.get("เริ่มจริง"))) else dt_ready
+                    if pd.notna(calc_base_dt):
+                        tot_hrs = (safe_float(first_step_info.get("Setup (น.)"), 10) + safe_float(first_step_info.get("Basic (น.)"), 0) + safe_float(first_step_info.get("โปรแกรม (น.)"), 120)) / 60.0
+                        _, est_finish = add_work_time_with_shift(calc_base_dt, tot_hrs)
                         finish_plan_display_str = est_finish.strftime("%d/%m/%Y %H:%M น.")
                     else:
                         finish_plan_display_str = "-"
@@ -1937,7 +1977,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 wo_finish_map = dict(
                     zip(
-                        zip(df_summary["แผนงาน"].astype(str), df_summary["ชื่อ Drawing."].astype(str)),
+                        df_summary["ID"],
                         df_summary["เวลาจบงาน_DT"]
                     )
                 )
@@ -1947,7 +1987,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 late_count = 0
                 for _, r in df_summary.iterrows():
                     if "กำลังผลิต" in str(r.get("สถานะ", "")):
-                        f_dt = wo_finish_map.get((str(r["แผนงาน"]), str(r["ชื่อ Drawing."])))
+                        f_dt = wo_finish_map.get(r.get("ID"))
                         if pd.notna(f_dt):
                             diff_m = (f_dt - now_check).total_seconds() / 60.0
                             if diff_m < 0:
@@ -1982,12 +2022,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.session_state.wo_color_filter = "LATE"
                             st.rerun()
 
+                # เรียงตามลำดับเวลาเริ่มคำนวณจริง
                 df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True).copy()
 
                 if st.session_state.wo_color_filter == "WARN":
                     def is_warn_row(r):
                         if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
-                        f_dt = wo_finish_map.get((str(r["แผนงาน"]), str(r["ชื่อ Drawing."])))
+                        f_dt = wo_finish_map.get(r.get("ID"))
                         if pd.notna(f_dt):
                             diff_m = (f_dt - now_check).total_seconds() / 60.0
                             return 0 <= diff_m <= 60
@@ -1997,7 +2038,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 elif st.session_state.wo_color_filter == "LATE":
                     def is_late_row(r):
                         if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
-                        f_dt = wo_finish_map.get((str(r["แผนงาน"]), str(r["ชื่อ Drawing."])))
+                        f_dt = wo_finish_map.get(r.get("ID"))
                         if pd.notna(f_dt):
                             diff_m = (f_dt - now_check).total_seconds() / 60.0
                             return diff_m < 0
@@ -2013,7 +2054,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         df_display["สถานะ"].astype(str).str.lower().str.contains(q_wo)
                     ]
 
-                display_cols = [c for c in df_display.columns if c not in ["เวลาเริ่มจริง", "ID", "เวลาจบงาน_DT"]]
+                display_cols = [c for c in df_display.columns if c not in ["เวลาเริ่มจริง", "เวลาจบงาน_DT"]]
 
                 styled_df_display = df_display[display_cols].style.apply(
                     highlight_running_deadlines,
@@ -2024,6 +2065,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.dataframe(
                     styled_df_display,
                     column_config={
+                        "ID": None,
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", width=150),
                         "สถานะ": st.column_config.TextColumn("สถานะ", width=110),
                         "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=105),
@@ -3207,10 +3249,8 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         _, df_summary_tv, _, _ = calculate_shop_schedule(df_live, now_bangkok.replace(tzinfo=None))
         if not df_summary_tv.empty:
             for _, s_row in df_summary_tv.iterrows():
-                key_pair = (str(s_row["แผนงาน"]), str(s_row["ชื่อ Drawing."]))
-                f_dt = s_row.get("เวลาจบงาน_DT")
-                if key_pair not in planned_finish_map_tv or (pd.notna(f_dt) and f_dt > planned_finish_map_tv[key_pair]):
-                    planned_finish_map_tv[key_pair] = f_dt
+                planned_finish_map_tv[s_row.get("ID")] = s_row.get("เวลาจบงาน_DT")
+                planned_finish_map_tv[(str(s_row["แผนงาน"]), str(s_row["ชื่อ Drawing."]))] = s_row.get("เวลาจบงาน_DT")
 
     machine_status_cards = []
     running_machines_count = 0
@@ -3239,6 +3279,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         if not running_job.empty:
             running_machines_count += 1
             r_info = running_job.iloc[0]
+            r_id = r_info.get("ID")
             s_start = r_info.get("เริ่มจริง")
             p_code = str(r_info.get("แผนงาน", "-"))
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
@@ -3246,7 +3287,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             r_ready_dt = parse_flexible_datetime(r_info.get("วัน-เวลาขึ้นงาน"))
             ready_display_txt = r_ready_dt.strftime("%d/%m %H:%M") if r_ready_dt is not None else "-"
 
-            f_dt = planned_finish_map_tv.get((p_code, d_code))
+            f_dt = planned_finish_map_tv.get(r_id) or planned_finish_map_tv.get((p_code, d_code))
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
             
             start_disp_txt = "-"
@@ -3296,6 +3337,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             })
         elif not hold_job.empty:
             h_info = hold_job.iloc[0]
+            h_id = h_info.get("ID")
             h_start = h_info.get("เริ่มจริง")
             p_code = str(h_info.get("แผนงาน", "-"))
             d_code = str(h_info.get("ชื่อ Drawing.", "-"))
@@ -3303,7 +3345,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             h_ready_dt = parse_flexible_datetime(h_info.get("วัน-เวลาขึ้นงาน"))
             ready_display_txt = h_ready_dt.strftime("%d/%m %H:%M") if h_ready_dt is not None else "-"
             
-            f_dt = planned_finish_map_tv.get((p_code, d_code))
+            f_dt = planned_finish_map_tv.get(h_id) or planned_finish_map_tv.get((p_code, d_code))
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
 
             h_start_txt = ""
@@ -3337,6 +3379,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             next_dates_html = ""
             if not waiting_jobs.empty:
                 w_first = waiting_jobs.iloc[0]
+                w_id = w_first.get("ID")
                 p_code = str(w_first.get('แผนงาน', '-'))
                 d_code = str(w_first.get('ชื่อ Drawing.', '-'))
                 next_txt = f"คิวถัดไป: {p_code} ({d_code})"
@@ -3344,7 +3387,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 w_ready_dt = parse_flexible_datetime(w_first.get("วัน-เวลาขึ้นงาน"))
                 ready_display_txt = w_ready_dt.strftime("%d/%m %H:%M") if w_ready_dt is not None else "-"
                 
-                f_dt = planned_finish_map_tv.get((p_code, d_code))
+                f_dt = planned_finish_map_tv.get(w_id) or planned_finish_map_tv.get((p_code, d_code))
                 finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
                 
                 next_dates_html = f'''
@@ -3420,9 +3463,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
             const clockEl = window.parent.document.getElementById('live-tv-clock');
             if (clockEl) {{
-                const hrs = String(now.getHours()).padStart(2, '0');
-                const mins = String(now.getMinutes()).padStart(2, '0');
-                const secs = String(now.getSeconds()).padStart(2, '0');
                 clockEl.innerText = `${{hrs}}:${{mins}}:${{secs}} น.`;
             }}
 
