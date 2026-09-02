@@ -56,12 +56,10 @@ def parse_flexible_datetime(dt_val):
         return dt_val
         
     s = str(dt_val).strip()
-    if s in ["", "None", "nan", "NaN", "null", "-"]:
+    if s in ["", "None", "nan", "NaN", "null", "-", "NaT"]:
         return None
     
-    # ล้างอักขระส่วนเกินที่อาจติดมาจาก REST API
     s = s.replace('T', ' ').split('+')[0].split('Z')[0].strip()
-
     current_year = get_bangkok_now().year
 
     if "-" in s:
@@ -522,7 +520,7 @@ st.markdown("""
     @keyframes tv-pulse {
         0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
         70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
-        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -701,7 +699,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (จัดคิวเที่ยงตรง: กำลังผลิต -> งานด่วน -> ลำดับเวลาจริง)
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
@@ -991,8 +989,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     else:
         m_all_jobs = pd.DataFrame()
 
-    running_timer_configs = []
-
     if not m_all_jobs.empty:
         running_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
         hold_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
@@ -1001,25 +997,23 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             r_cur = running_now.iloc[0]
             st_t = r_cur.get("เริ่มจริง")
             st_txt = "-"
-            start_ts = 0
+            start_epoch = 0
             act_dt = parse_flexible_datetime(st_t)
             if act_dt is not None:
                 st_txt = act_dt.strftime("%H:%M น.")
-                start_ts = int(act_dt.timestamp() * 1000)
+                start_epoch = int(act_dt.timestamp() * 1000)
 
             st.markdown(f"""
             <div class="shop-live-banner shop-live-running">
                 <div style="display:flex; align-items:center; gap:8px;">
                     <span class="tv-pulse-dot"></span>
-                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ กำลังรัน: <span id="banner-timer" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
+                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ กำลังรัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
                 </div>
                 <div style="font-size:12.5px; opacity:0.9;">
                     📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
                 </div>
             </div>
             """, unsafe_allow_html=True)
-            if start_ts > 0:
-                running_timer_configs.append({"id": "banner-timer", "start_ts": start_ts})
         elif not hold_now.empty:
             h_cur = hold_now.iloc[0]
             st.markdown(f"""
@@ -1152,13 +1146,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 elif is_step_running:
                     st_parsed = parse_flexible_datetime(s_start)
                     start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
-                    timer_span_id = f"timer-step-{target_id}"
-                    if st_parsed is not None:
-                        running_timer_configs.append({
-                            "id": timer_span_id,
-                            "start_ts": int(st_parsed.timestamp() * 1000)
-                        })
-                    st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span id='{timer_span_id}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
+                    step_start_epoch = int(st_parsed.timestamp() * 1000) if st_parsed is not None else 0
+                    st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
                 elif is_step_hold:
                     st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
                 else:
@@ -1292,33 +1281,32 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             
             st.write("")
 
-    if running_timer_configs:
-        timers_json = json.dumps(running_timer_configs)
-        components.html(f"""
-        <script>
-            const timerConfigs = {timers_json};
-            function runLiveStopwatches() {{
-                try {{
-                    const now = new Date().getTime();
-                    timerConfigs.forEach(cfg => {{
-                        const el = window.parent.document.getElementById(cfg.id);
-                        if (el && cfg.start_ts > 0) {{
-                            const diffMs = Math.max(0, now - cfg.start_ts);
-                            const totalSecs = Math.floor(diffMs / 1000);
-                            const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
-                            const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
-                            const secs = String(totalSecs % 60).padStart(2, '0');
-                            el.innerText = hrs + ":" + mins + ":" + secs;
-                        }}
-                    }});
-                }} catch (e) {{
-                    console.error(e);
-                }}
-            }}
-            setInterval(runLiveStopwatches, 1000);
-            runLiveStopwatches();
-        </script>
-        """, height=0)
+    components.html("""
+    <script>
+        function runLiveStopwatches() {
+            try {
+                const now = new Date().getTime();
+                const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
+                timerEls.forEach(el => {
+                    const startAttr = el.getAttribute('data-start-epoch');
+                    const startTs = parseInt(startAttr, 10);
+                    if (startTs && startTs > 0) {
+                        const diffMs = Math.max(0, now - startTs);
+                        const totalSecs = Math.floor(diffMs / 1000);
+                        const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                        const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                        const secs = String(totalSecs % 60).padStart(2, '0');
+                        el.innerText = hrs + ":" + mins + ":" + secs;
+                    }
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+        setInterval(runLiveStopwatches, 1000);
+        runLiveStopwatches();
+    </script>
+    """, height=0)
 
 # ---------------------------------------------------------
 # VIEW 2: Dashboard ภาพรวมโรงงาน
@@ -1948,7 +1936,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                     if not delete_supabase_job(int(float(row_id))):
                                         del_success = False
-                                        
                             if del_success:
                                 st.session_state.active_select_all = False
                                 st.cache_data.clear()
@@ -3289,7 +3276,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     running_machines_count = 0
     hold_machines_count = 0
     idle_machines_count = 0
-    tv_running_timers = []
 
     for idx_m, m in enumerate(MACHINE_LIST):
         m_jobs = df_live[df_live["เลือกเครื่องจักร"] == m] if not df_live.empty else pd.DataFrame()
@@ -3325,19 +3311,15 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
             
             start_disp_txt = "-"
-            timer_id_tv = f"tv-timer-{idx_m}"
+            start_epoch = 0
             r_start_parsed = parse_flexible_datetime(s_start)
 
-            # หากไม่มีเวลาเริ่มจริง (actual_start) ให้ใช้เวลาที่แพลนไว้แทน เพื่อไม่ให้เวลาค้าง
             if r_start_parsed is None and r_ready_dt is not None:
                 r_start_parsed = r_ready_dt
 
             if r_start_parsed is not None:
                 start_disp_txt = r_start_parsed.strftime("%H:%M น.")
-                tv_running_timers.append({
-                    "id": timer_id_tv,
-                    "start_ts": int(r_start_parsed.timestamp() * 1000)
-                })
+                start_epoch = int(r_start_parsed.timestamp() * 1000)
             
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:5px;">กำลังรันงาน</b>'
@@ -3355,7 +3337,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
-                    <span>⏱️ <b id="{timer_id_tv}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</b></span>
+                    <span>⏱️ <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</span></span>
                 </div>
                 <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px;">
                     <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
@@ -3494,13 +3476,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    tv_timers_json = json.dumps(tv_running_timers)
-    components.html(f"""
+    components.html("""
     <script>
-        const tvTimerConfigs = {tv_timers_json};
-
-        function updateTvDashboard() {{
-            try {{
+        function updateTvDashboard() {
+            try {
                 const now = new Date();
                 const nowTs = now.getTime();
 
@@ -3508,42 +3487,40 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 const mins = String(now.getMinutes()).padStart(2, '0');
                 const secs = String(now.getSeconds()).padStart(2, '0');
                 const clockEl = window.parent.document.getElementById('live-tv-clock');
-                if (clockEl) {{
+                if (clockEl) {
                     clockEl.innerText = hrs + ":" + mins + ":" + secs + " น.";
-                }}
+                }
 
-                if (Array.isArray(tvTimerConfigs)) {{
-                    tvTimerConfigs.forEach(cfg => {{
-                        const el = window.parent.document.getElementById(cfg.id);
-                        if (el) {{
-                            if (cfg.start_ts && cfg.start_ts > 0) {{
-                                const diffMs = Math.max(0, nowTs - cfg.start_ts);
-                                const totalSecs = Math.floor(diffMs / 1000);
-                                const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
-                                const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
-                                const tSecs = String(totalSecs % 60).padStart(2, '0');
-                                el.innerText = tHrs + ":" + tMins + ":" + tSecs;
-                            }} else {{
-                                el.innerText = "-";
-                            }}
-                        }}
-                    }});
-                }}
-            }} catch (e) {{
+                const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
+                timerEls.forEach(el => {
+                    const startAttr = el.getAttribute('data-start-epoch');
+                    const startTs = parseInt(startAttr, 10);
+                    if (startTs && startTs > 0) {
+                        const diffMs = Math.max(0, nowTs - startTs);
+                        const totalSecs = Math.floor(diffMs / 1000);
+                        const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                        const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                        const tSecs = String(totalSecs % 60).padStart(2, '0');
+                        el.innerText = tHrs + ":" + tMins + ":" + tSecs;
+                    } else {
+                        el.innerText = "-";
+                    }
+                });
+            } catch (e) {
                 console.error(e);
-            }}
-        }}
+            }
+        }
 
         setInterval(updateTvDashboard, 1000);
         updateTvDashboard();
 
-        setTimeout(function() {{
-            try {{
+        setTimeout(function() {
+            try {
                 const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
-                if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {{
+                if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {
                     radioBtns[4].click();
-                }}
-            }} catch(err) {{}}
-        }}, 30000);
+                }
+            } catch(err) {}
+        }, 30000);
     </script>
     """, height=0)
