@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta, time as dtime
 import zoneinfo
 import os
@@ -91,6 +90,22 @@ def parse_flexible_datetime(dt_val):
             return dt_parsed.tz_localize(None)
         return dt_parsed
     return None
+
+def to_bangkok_epoch_ms(dt_val):
+    if dt_val is None or pd.isna(dt_val):
+        return 0
+    dt_p = parse_flexible_datetime(dt_val)
+    if dt_p is None:
+        return 0
+    try:
+        bkk_tz = zoneinfo.ZoneInfo("Asia/Bangkok")
+        if dt_p.tzinfo is None:
+            dt_p = dt_p.replace(tzinfo=bkk_tz)
+        else:
+            dt_p = dt_p.astimezone(bkk_tz)
+        return int(dt_p.timestamp() * 1000)
+    except Exception:
+        return int((pd.to_datetime(dt_p) - pd.Timestamp("1970-01-01") - pd.Timedelta(hours=7)).total_seconds() * 1000)
 
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
@@ -946,7 +961,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: หน้าจอช่างหน้าเครื่อง (เชื่อมโยงลำดับคิวตรงกับ Work Order 100%)
+# VIEW 1: หน้าจอช่างหน้าเครื่อง
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -997,11 +1012,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             r_cur = running_now.iloc[0]
             st_t = r_cur.get("เริ่มจริง")
             st_txt = "-"
-            start_epoch = 0
+            start_epoch = to_bangkok_epoch_ms(st_t)
             act_dt = parse_flexible_datetime(st_t)
             if act_dt is not None:
                 st_txt = act_dt.strftime("%H:%M น.")
-                start_epoch = int(act_dt.timestamp() * 1000)
 
             st.markdown(f"""
             <div class="shop-live-banner shop-live-running">
@@ -1146,7 +1160,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 elif is_step_running:
                     st_parsed = parse_flexible_datetime(s_start)
                     start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
-                    step_start_epoch = int(st_parsed.timestamp() * 1000) if st_parsed is not None else 0
+                    step_start_epoch = to_bangkok_epoch_ms(s_start)
                     st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
                 elif is_step_hold:
                     st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
@@ -1936,6 +1950,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                     if not delete_supabase_job(int(float(row_id))):
                                         del_success = False
+                                        
                             if del_success:
                                 st.session_state.active_select_all = False
                                 st.cache_data.clear()
@@ -2329,7 +2344,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
                     start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
-                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
+                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
                 else:
                     start_view = datetime.combine(gantt_min_date, dtime(7, 30))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
@@ -3311,15 +3326,15 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
             
             start_disp_txt = "-"
-            start_epoch = 0
+            start_epoch = to_bangkok_epoch_ms(s_start)
             r_start_parsed = parse_flexible_datetime(s_start)
 
             if r_start_parsed is None and r_ready_dt is not None:
                 r_start_parsed = r_ready_dt
+                start_epoch = to_bangkok_epoch_ms(r_ready_dt)
 
             if r_start_parsed is not None:
                 start_disp_txt = r_start_parsed.strftime("%H:%M น.")
-                start_epoch = int(r_start_parsed.timestamp() * 1000)
             
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:5px;">กำลังรันงาน</b>'
