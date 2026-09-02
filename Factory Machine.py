@@ -555,6 +555,10 @@ if "scroll_to_bottom" not in st.session_state:
 if "gantt_date_range" not in st.session_state:
     st.session_state.gantt_date_range = None
 
+# ตัวกรองด่วนตารางติดตามความคืบหน้าราย Drawing
+if "drawing_tracker_filter" not in st.session_state:
+    st.session_state.drawing_tracker_filter = "ALL"
+
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
@@ -708,7 +712,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
     for j in jobs_df[active_mask].to_dict("records"):
         is_running_job = "กำลังผลิต" in str(j.get("สถานะงาน", ""))
         
-        # ถ้างวดนี้กำลังผลิตอยู่จริง ให้ยึดเวลาเริ่มจริง actual_start ก่อน
         if is_running_job and pd.notna(j.get("เริ่มจริง")):
             dt_val = parse_flexible_datetime(j.get("เริ่มจริง"))
         else:
@@ -751,7 +754,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                         
         if not pending_machines: break
         
-        # หาเครื่องที่มีคิวที่ 'กำลังผลิต' อยู่ เพื่อให้รันออกไปก่อนเสมอ
         running_m_candidates = [
             m for m in pending_machines 
             if any((j.get("เลือกเครื่องจักร") == m) and ("กำลังผลิต" in str(j["สถานะงาน"])) for j in valid_jobs)
@@ -797,7 +799,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
                 m_available[earliest_m] = get_next_valid_work_time(cur_time + timedelta(minutes=15))
             continue
             
-        # ลำดับความสำคัญ: 1. กำลังรันอยู่จริง -> 2. ด่วนแทรก -> 3. เรียงตามวัน-เวลาขึ้นงานจริง (FIFO ไม่ข้ามคิววัสดุ)
         running_pool = [j for j in ready_candidates if "กำลังผลิต" in str(j["สถานะงาน"])]
         if running_pool:
             selected_job = running_pool[0]
@@ -868,8 +869,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             })
         
         total_cycle = setup_hrs + actual_cut_hrs
-
-        # เก็บวัน-เวลาที่พร้อมขึ้นงานดั้งเดิมเพื่อแสดงผลในตารางเปรียบเทียบ
         orig_ready_dt = parse_flexible_datetime(selected_job.get("วัน-เวลาขึ้นงาน"))
 
         summary_records.append({
@@ -1052,7 +1051,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_hold = any("พักงาน" in str(s) for s in steps["สถานะงาน"])
                 is_urgent = any("ด่วนแทรก" in str(t) for t in steps.get("ประเภทงาน", []))
                 
-                # เรียงลำดับตามเวลาคำนวณจริงของระบบ (Synchronize กับ Work Order Sheet)
                 plan_sched_info = plan_order_map.get((str(p_code), str(d_code)))
                 if plan_sched_info:
                     sched_start_time = plan_sched_info[0]
@@ -1141,7 +1139,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 
                 plan_steps = m_all_jobs[(m_all_jobs["แผนงาน"] == plan_code) & (m_all_jobs["ชื่อ Drawing."] == drawing_code)].sort_values(by="ID", ascending=True)
                 
-                # กรองหาเฉพาะขั้นตอนที่กำลังทำอยู่จริง (Active Step)
                 active_steps = plan_steps[~plan_steps["สถานะงาน"].str.contains("เสร็จสิ้น")]
                 if not active_steps.empty:
                     current_active_step = active_steps.iloc[0]
@@ -1151,7 +1148,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 mat_val = current_active_step.get('วัสดุ', '-')
                 qty_val = int(current_active_step.get('จำนวน', 1) or 1)
 
-                # ดึงวัน-เวลาขึ้นงานของขั้นตอนปัจจุบันโดยตรง
                 step_ready_val = current_active_step.get("วัน-เวลาขึ้นงาน")
                 dt_ready = parse_flexible_datetime(step_ready_val)
                 if pd.notna(dt_ready):
@@ -1159,7 +1155,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 else:
                     ready_display_str = "ยังไม่ระบุเวลา"
 
-                # กำหนดจบงาน: ดึงตาม ID หรือ Step ของขั้นตอนปัจจุบันจาก Work Order Sheet โดยตรง
                 target_step_id = str(current_active_step.get("ID", ""))
                 target_step_name = str(current_active_step.get("ขั้นตอน (Step)", ""))
                 plan_finish_dt = planned_finish_map.get(target_step_id) or planned_finish_map.get((str(plan_code), str(drawing_code), target_step_name)) or planned_finish_map.get((str(plan_code), str(drawing_code)))
@@ -1586,13 +1581,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cur_hold = g_data[g_data["สถานะงาน"] == "🟨 พักงาน (รอวัสดุ)"]
                     if not cur_run.empty:
                         stage = f"🟦 กำลังรันที่ {cur_run.iloc[0]['เลือกเครื่องจักร']} ({cur_run.iloc[0]['ขั้นตอน (Step)']})"
+                        cat_status = "RUNNING"
                     elif not cur_hold.empty:
                         stage = f"🛑 พักงานที่ {cur_hold.iloc[0]['เลือกเครื่องจักร']} (รอวัสดุ)"
+                        cat_status = "HOLD"
                     elif fin_steps == total_steps:
                         stage = "🟩 ผลิตเสร็จครบทุก Step แล้ว"
+                        cat_status = "DONE"
                     else:
                         first_wait = g_data[g_data["สถานะงาน"] == "🟧 รอคิวผลิต"].iloc[0]
                         stage = f"🟧 รอคิวที่ {first_wait['เลือกเครื่องจักร']}"
+                        cat_status = "WAITING"
 
                     drawing_progress_list.append({
                         "แผนงาน": p_c,
@@ -1600,12 +1599,69 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "จำนวน (ชิ้น)": int(g_data.iloc[0].get("จำนวน", 1)),
                         "ความคืบหน้า (%)": pct,
                         "ขั้นตอน (เสร็จ/ทั้งหมด)": f"{fin_steps}/{total_steps} Step",
-                        "สถานะและสถานีปัจจุบัน": stage
+                        "สถานะและสถานีปัจจุบัน": stage,
+                        "status_category": cat_status
                     })
                 
-                df_dp = pd.DataFrame(drawing_progress_list).sort_values(by=["ความคืบหน้า (%)", "แผนงาน"], ascending=[False, True])
+                df_dp_all = pd.DataFrame(drawing_progress_list).sort_values(by=["ความคืบหน้า (%)", "แผนงาน"], ascending=[False, True])
+                
+                # นับจำนวนแต่ละสถานะสำหรับปุ่มตัวกรองด่วน
+                cnt_all = len(df_dp_all)
+                cnt_done = len(df_dp_all[df_dp_all["status_category"] == "DONE"])
+                cnt_run = len(df_dp_all[df_dp_all["status_category"] == "RUNNING"])
+                cnt_wait = len(df_dp_all[df_dp_all["status_category"].isin(["WAITING", "HOLD"])])
+
+                # ส่วนแถบควบคุมตัวกรองด่วน & ค้นหา
+                tk_btn_col, tk_search_col = st.columns([5.5, 4.5])
+                with tk_btn_col:
+                    st.caption("**🎯 ตัวกรองด่วนสถานะ Drawing:**")
+                    t_b1, t_b2, t_b3, t_b4 = st.columns(4)
+                    with t_b1:
+                        b_type_all = "primary" if st.session_state.drawing_tracker_filter == "ALL" else "secondary"
+                        if st.button(f"🌐 ทั้งหมด ({cnt_all})", type=b_type_all, use_container_width=True, key="btn_tk_all"):
+                            st.session_state.drawing_tracker_filter = "ALL"
+                            st.rerun()
+                    with t_b2:
+                        b_type_done = "primary" if st.session_state.drawing_tracker_filter == "DONE" else "secondary"
+                        if st.button(f"🟢 ผลิตเสร็จ ({cnt_done})", type=b_type_done, use_container_width=True, key="btn_tk_done"):
+                            st.session_state.drawing_tracker_filter = "DONE"
+                            st.rerun()
+                    with t_b3:
+                        b_type_run = "primary" if st.session_state.drawing_tracker_filter == "RUNNING" else "secondary"
+                        if st.button(f"🟦 กำลังรัน ({cnt_run})", type=b_type_run, use_container_width=True, key="btn_tk_run"):
+                            st.session_state.drawing_tracker_filter = "RUNNING"
+                            st.rerun()
+                    with t_b4:
+                        b_type_wait = "primary" if st.session_state.drawing_tracker_filter == "WAITING" else "secondary"
+                        if st.button(f"🟧 รอคิว ({cnt_wait})", type=b_type_wait, use_container_width=True, key="btn_tk_wait"):
+                            st.session_state.drawing_tracker_filter = "WAITING"
+                            st.rerun()
+
+                with tk_search_col:
+                    search_query_tracker = st.text_input(
+                        "🔍 ค้นหาในตารางความคืบหน้า (แผนงาน, Drawing):",
+                        placeholder="พิมพ์เพื่อค้นหา เช่น 26-108, AS256...",
+                        key="search_drawing_tracker_input"
+                    )
+
+                # ทำการกรองตามปุ่มและคำค้นหา
+                df_dp = df_dp_all.copy()
+                if st.session_state.drawing_tracker_filter == "DONE":
+                    df_dp = df_dp[df_dp["status_category"] == "DONE"]
+                elif st.session_state.drawing_tracker_filter == "RUNNING":
+                    df_dp = df_dp[df_dp["status_category"] == "RUNNING"]
+                elif st.session_state.drawing_tracker_filter == "WAITING":
+                    df_dp = df_dp[df_dp["status_category"].isin(["WAITING", "HOLD"])]
+
+                if search_query_tracker.strip() != "":
+                    q_tk = search_query_tracker.strip().lower()
+                    df_dp = df_dp[
+                        df_dp["แผนงาน"].astype(str).str.lower().str.contains(q_tk) |
+                        df_dp["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_tk)
+                    ]
+
                 st.dataframe(
-                    df_dp,
+                    df_dp[[c for c in df_dp.columns if c != "status_category"]],
                     column_config={
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=90),
                         "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=200),
@@ -1958,7 +2014,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                     if not delete_supabase_job(int(float(row_id))):
                                         del_success = False
-                                        
                             if del_success:
                                 st.session_state.active_select_all = False
                                 st.cache_data.clear()
@@ -2051,8 +2106,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.session_state.wo_color_filter = "LATE"
                             st.rerun()
 
-                # เรียงตามลำดับเวลาเริ่มคำนวณจริง
+                # เรียงตามลำดับเวลาเริ่มคำนวณจริง และคำนวณลำดับคิวงานของแต่ละเครื่อง
                 df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True).copy()
+                df_display["ลำดับคิว"] = df_display.groupby("เครื่องจักร").cumcount() + 1
+                df_display["ลำดับคิว"] = df_display["ลำดับคิว"].apply(lambda q: f"คิวที่ {q}")
 
                 if st.session_state.wo_color_filter == "WARN":
                     def is_warn_row(r):
@@ -2093,9 +2150,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.dataframe(
                     styled_df_display,
+                    column_order=[
+                        "เครื่องจักร", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.", 
+                        "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", "เริ่ม Setup", 
+                        "เวลาเริ่มขึ้นงาน", "เวลาจบงาน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)"
+                    ],
                     column_config={
                         "ID": None,
                         "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", width=140),
+                        "ลำดับคิว": st.column_config.TextColumn("ลำดับคิว", width=95),
                         "สถานะ": st.column_config.TextColumn("สถานะ", width=105),
                         "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=100),
                         "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
@@ -3497,9 +3560,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
             const clockEl = window.parent.document.getElementById('live-tv-clock');
             if (clockEl) {{
-                const hrs = String(now.getHours()).padStart(2, '0');
-                const mins = String(now.getMinutes()).padStart(2, '0');
-                const secs = String(now.getSeconds()).padStart(2, '0');
                 clockEl.innerText = `${{hrs}}:${{mins}}:${{secs}} น.`;
             }}
 
