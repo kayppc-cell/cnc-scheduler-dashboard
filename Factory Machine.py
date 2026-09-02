@@ -958,7 +958,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         _, df_summary_plan, _, _ = calculate_shop_schedule(df_all, get_bangkok_now().replace(tzinfo=None))
         if not df_summary_plan.empty:
             for _, s_row in df_summary_plan.iterrows():
-                # บันทึกทั้งแบบ ID เจาะจง และแบบคู่ แผนงาน+Drawing
                 planned_finish_map[s_row.get("ID")] = s_row.get("เวลาจบงาน_DT")
                 key_pair = (str(s_row["แผนงาน"]), str(s_row["ชื่อ Drawing."]))
                 f_dt = s_row.get("เวลาจบงาน_DT")
@@ -1032,13 +1031,14 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_hold = any("พักงาน" in str(s) for s in steps["สถานะงาน"])
                 is_urgent = any("ด่วนแทรก" in str(t) for t in steps.get("ประเภทงาน", []))
                 
-                # ถ้ารันอยู่จริง ให้ยึดเวลาเริ่มจริง actual_start
-                running_steps = steps[steps["สถานะงาน"].str.contains("กำลังผลิต")]
-                if not running_steps.empty and pd.notna(running_steps.iloc[0].get("เริ่มจริง")):
-                    earliest_ready = pd.to_datetime(running_steps.iloc[0].get("เริ่มจริง"))
+                # กรองหาเฉพาะขั้นตอนที่ยังไม่เสร็จ (Active Step)
+                active_steps_g = steps[~steps["สถานะงาน"].str.contains("เสร็จสิ้น")]
+                if not active_steps_g.empty:
+                    earliest_ready = active_steps_g.iloc[0].get("วัน-เวลาขึ้นงาน")
+                    if is_running and pd.notna(active_steps_g.iloc[0].get("เริ่มจริง")):
+                        earliest_ready = pd.to_datetime(active_steps_g.iloc[0].get("เริ่มจริง"))
                 else:
-                    valid_ready_times = steps["วัน-เวลาขึ้นงาน"].dropna()
-                    earliest_ready = valid_ready_times.min() if not valid_ready_times.empty else None
+                    earliest_ready = steps["วัน-เวลาขึ้นงาน"].dropna().min() if not steps["วัน-เวลาขึ้นงาน"].dropna().empty else None
                 
                 min_id = steps["ID"].min()
                 
@@ -1119,28 +1119,35 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 is_running = g_info["is_running"]
                 
                 plan_steps = m_all_jobs[(m_all_jobs["แผนงาน"] == plan_code) & (m_all_jobs["ชื่อ Drawing."] == drawing_code)].sort_values(by="ID", ascending=True)
-                first_step_info = plan_steps.iloc[0]
-                mat_val = first_step_info.get('วัสดุ', '-')
-                qty_val = int(first_step_info.get('จำนวน', 1) or 1)
+                
+                # กรองหาเฉพาะขั้นตอนที่กำลังทำอยู่จริง (Active Step) ไม่เอา Step เก่าที่ Finish แล้วมาแสดงทับ
+                active_steps = plan_steps[~plan_steps["สถานะงาน"].str.contains("เสร็จสิ้น")]
+                if not active_steps.empty:
+                    current_active_step = active_steps.iloc[0]
+                else:
+                    current_active_step = plan_steps.iloc[-1]
+                
+                mat_val = current_active_step.get('วัสดุ', '-')
+                qty_val = int(current_active_step.get('จำนวน', 1) or 1)
 
-                # ดึงวัน-เวลาขึ้นงานของคิวนี้โดยตรง
-                step_ready_val = first_step_info.get("วัน-เวลาขึ้นงาน")
+                # ดึงวัน-เวลาขึ้นงานของขั้นตอนปัจจุบันโดยตรง
+                step_ready_val = current_active_step.get("วัน-เวลาขึ้นงาน")
                 dt_ready = parse_flexible_datetime(step_ready_val)
                 if pd.notna(dt_ready):
                     ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.")
                 else:
                     ready_display_str = "ยังไม่ระบุเวลา"
 
-                # คำนวณเวลาจบงานตามแผนเฉพาะของคิวนี้
-                first_id = first_step_info.get("ID")
-                plan_finish_dt = planned_finish_map.get(first_id) or planned_finish_map.get((str(plan_code), str(drawing_code)))
+                # กำหนดจบงาน: ดึงตาม ID ของขั้นตอนปัจจุบันจาก Work Order Sheet โดยตรง
+                target_step_id = current_active_step.get("ID")
+                plan_finish_dt = planned_finish_map.get(target_step_id)
                 
                 if plan_finish_dt is not None and pd.notna(plan_finish_dt):
                     finish_plan_display_str = plan_finish_dt.strftime("%d/%m/%Y %H:%M น.")
                 else:
-                    calc_base_dt = pd.to_datetime(first_step_info.get("เริ่มจริง")) if (is_running and pd.notna(first_step_info.get("เริ่มจริง"))) else dt_ready
+                    calc_base_dt = pd.to_datetime(current_active_step.get("เริ่มจริง")) if (is_running and pd.notna(current_active_step.get("เริ่มจริง"))) else dt_ready
                     if pd.notna(calc_base_dt):
-                        tot_hrs = (safe_float(first_step_info.get("Setup (น.)"), 10) + safe_float(first_step_info.get("Basic (น.)"), 0) + safe_float(first_step_info.get("โปรแกรม (น.)"), 120)) / 60.0
+                        tot_hrs = (safe_float(current_active_step.get("Setup (น.)"), 10) + safe_float(current_active_step.get("Basic (น.)"), 0) + safe_float(current_active_step.get("โปรแกรม (น.)"), 120)) / 60.0
                         _, est_finish = add_work_time_with_shift(calc_base_dt, tot_hrs)
                         finish_plan_display_str = est_finish.strftime("%d/%m/%Y %H:%M น.")
                     else:
@@ -1326,16 +1333,16 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     if st.button(f"➕ บันทึกเพิ่ม Step {next_step_num}", key=f"btn_add_step_{plan_code}_{drawing_code}_{group_idx}", type="secondary", use_container_width=True):
                         now_str = get_bangkok_str()
                         
-                        base_setup = safe_float(first_step_info.get("Setup (น.)"), 10.0)
-                        base_basic = safe_float(first_step_info.get("Basic (น.)"), 0.0)
-                        base_prog = safe_float(first_step_info.get("โปรแกรม (น.)"), 120.0)
+                        base_setup = safe_float(current_active_step.get("Setup (น.)"), 10.0)
+                        base_basic = safe_float(current_active_step.get("Basic (น.)"), 0.0)
+                        base_prog = safe_float(current_active_step.get("โปรแกรม (น.)"), 120.0)
                         
                         new_payload = {
                             "plan_code": str(plan_code),
                             "drawing_name": str(drawing_code),
-                            "qty": int(first_step_info.get("จำนวน", 1) or 1),
-                            "material": str(first_step_info.get("วัสดุ", "SS400")),
-                            "job_type": str(first_step_info.get("ประเภทงาน", "🟢 งานปกติ")),
+                            "qty": int(current_active_step.get("จำนวน", 1) or 1),
+                            "material": str(current_active_step.get("วัสดุ", "SS400")),
+                            "job_type": str(current_active_step.get("ประเภทงาน", "🟢 งานปกติ")),
                             "step_name": new_step_input.strip() if new_step_input.strip() != "" else default_next_step_label,
                             "machine_name": selected_m,
                             "ready_at": now_str,
