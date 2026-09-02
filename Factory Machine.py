@@ -324,6 +324,39 @@ st.markdown("""
         font-size: 23px !important; 
         font-weight: 800 !important; 
     }
+    .kpi-sub {
+        font-size: 11.5px;
+        margin-top: 4px;
+        opacity: 0.9;
+        font-weight: 500;
+    }
+
+    .shop-live-banner {
+        padding: 12px 18px;
+        border-radius: 14px;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13.5px;
+        font-weight: 700;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+    }
+    .shop-live-running {
+        background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
+        border: 2px solid #10B981;
+        color: #065F46;
+    }
+    .shop-live-hold {
+        background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%);
+        border: 2px dashed #F59E0B;
+        color: #92400E;
+    }
+    .shop-live-idle {
+        background: #F8FAFC;
+        border: 2px solid #CBD5E1;
+        color: #475569;
+    }
 
     .op-job-header {
         background: linear-gradient(145deg, #FFFFFF 0%, #F8FAFC 100%);
@@ -419,32 +452,28 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์และความปลอดภัย & รายชื่อเครื่องจักร (22 สถานี)
+# 3. กำหนดสิทธิ์และความปลอดภัย & ตัวแปรเริ่มต้นระบบ
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 VIEWER_PASSWORD = "pes1234"
 
-if "user_role" not in st.session_state:
-    st.session_state.user_role = None
+default_states = {
+    "user_role": None,
+    "current_view": "👷 โหมดช่างหน้าเครื่อง",
+    "active_select_all": False,
+    "finish_select_all": False,
+    "scroll_to_bottom": False,
+    "gantt_date_range": None,
+    "drawing_tracker_filter": "ALL",
+    "wo_color_filter": "ALL"
+}
+for k, v in default_states.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 query_params = st.query_params
-if "current_view" not in st.session_state:
-    if query_params.get("view") == "tv":
-        st.session_state.current_view = "📺 จอทีวีกลางโรงงาน (TV Live)"
-    else:
-        st.session_state.current_view = "👷 โหมดช่างหน้าเครื่อง"
-
-if "active_select_all" not in st.session_state:
-    st.session_state.active_select_all = False
-
-if "finish_select_all" not in st.session_state:
-    st.session_state.finish_select_all = False
-
-if "scroll_to_bottom" not in st.session_state:
-    st.session_state.scroll_to_bottom = False
-
-if "gantt_date_range" not in st.session_state:
-    st.session_state.gantt_date_range = None
+if query_params.get("view") == "tv":
+    st.session_state.current_view = "📺 จอทีวีกลางโรงงาน (TV Live)"
 
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
@@ -586,14 +615,13 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (คำนวณงานรอคิว + กำลังผลิต + พักงาน)
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
     m_available = {m: now_dt for m in MACHINE_LIST}
     m_busy_hrs = {m: 0.0 for m in MACHINE_LIST}
     
-    # รวมงานพักงานเข้ามาคำนวณเวลาจบงานด้วย
     active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
     valid_jobs = []
     
@@ -1409,23 +1437,24 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with tk_btn_col:
                     st.caption("**🎯 ตัวกรองด่วนสถานะ Drawing:**")
                     t_b1, t_b2, t_b3, t_b4 = st.columns(4)
+                    cur_tracker_filter = st.session_state.get("drawing_tracker_filter", "ALL")
                     with t_b1:
-                        b_type_all = "primary" if st.session_state.drawing_tracker_filter == "ALL" else "secondary"
+                        b_type_all = "primary" if cur_tracker_filter == "ALL" else "secondary"
                         if st.button(f"🌐 ทั้งหมด ({cnt_all})", type=b_type_all, use_container_width=True, key="btn_tk_all"):
                             st.session_state.drawing_tracker_filter = "ALL"
                             st.rerun()
                     with t_b2:
-                        b_type_done = "primary" if st.session_state.drawing_tracker_filter == "DONE" else "secondary"
+                        b_type_done = "primary" if cur_tracker_filter == "DONE" else "secondary"
                         if st.button(f"🟢 ผลิตเสร็จ ({cnt_done})", type=b_type_done, use_container_width=True, key="btn_tk_done"):
                             st.session_state.drawing_tracker_filter = "DONE"
                             st.rerun()
                     with t_b3:
-                        b_type_run = "primary" if st.session_state.drawing_tracker_filter == "RUNNING" else "secondary"
+                        b_type_run = "primary" if cur_tracker_filter == "RUNNING" else "secondary"
                         if st.button(f"🟦 กำลังรัน ({cnt_run})", type=b_type_run, use_container_width=True, key="btn_tk_run"):
                             st.session_state.drawing_tracker_filter = "RUNNING"
                             st.rerun()
                     with t_b4:
-                        b_type_wait = "primary" if st.session_state.drawing_tracker_filter == "WAITING" else "secondary"
+                        b_type_wait = "primary" if cur_tracker_filter == "WAITING" else "secondary"
                         if st.button(f"🟧 รอคิว ({cnt_wait})", type=b_type_wait, use_container_width=True, key="btn_tk_wait"):
                             st.session_state.drawing_tracker_filter = "WAITING"
                             st.rerun()
@@ -1438,11 +1467,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
 
                 df_dp = df_dp_all.copy()
-                if st.session_state.drawing_tracker_filter == "DONE":
+                selected_filter = st.session_state.get("drawing_tracker_filter", "ALL")
+                if selected_filter == "DONE":
                     df_dp = df_dp[df_dp["status_category"] == "DONE"]
-                elif st.session_state.drawing_tracker_filter == "RUNNING":
+                elif selected_filter == "RUNNING":
                     df_dp = df_dp[df_dp["status_category"] == "RUNNING"]
-                elif st.session_state.drawing_tracker_filter == "WAITING":
+                elif selected_filter == "WAITING":
                     df_dp = df_dp[df_dp["status_category"].isin(["WAITING", "HOLD"])]
 
                 if search_query_tracker.strip() != "":
@@ -1500,7 +1530,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # คำนวณวัน-เวลาจบงานอัตโนมัติ (พร้อม fallback ป้องกันเครื่องหมายขีด)
             calculated_finish_dates = []
             for _, row_item in active_jobs_editor_df.iterrows():
                 row_id_str = str(row_item["ID"])
@@ -1887,9 +1916,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             if not df_summary.empty:
                 st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
 
-                if "wo_color_filter" not in st.session_state:
-                    st.session_state.wo_color_filter = "ALL"
-
                 wo_finish_map = dict(
                     zip(
                         df_summary["ID"].astype(str),
@@ -1921,18 +1947,19 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with wo_filter_btn_col:
                     st.caption("**🎯 ตัวกรองด่วนสถานะเตือนเวลา:**")
                     f_b1, f_b2, f_b3 = st.columns([1.5, 2.2, 2.2])
+                    cur_wo_filter = st.session_state.get("wo_color_filter", "ALL")
                     with f_b1:
-                        btn_all_type = "primary" if st.session_state.wo_color_filter == "ALL" else "secondary"
+                        btn_all_type = "primary" if cur_wo_filter == "ALL" else "secondary"
                         if st.button("🌐 ทั้งหมด", type=btn_all_type, use_container_width=True):
                             st.session_state.wo_color_filter = "ALL"
                             st.rerun()
                     with f_b2:
-                        btn_warn_type = "primary" if st.session_state.wo_color_filter == "WARN" else "secondary"
+                        btn_warn_type = "primary" if cur_wo_filter == "WARN" else "secondary"
                         if st.button(f"🟡 ใกล้เสร็จ ({warn_count})", type=btn_warn_type, use_container_width=True, help="เหลือน้อยกว่า 1 ชม."):
                             st.session_state.wo_color_filter = "WARN"
                             st.rerun()
                     with f_b3:
-                        btn_late_type = "primary" if st.session_state.wo_color_filter == "LATE" else "secondary"
+                        btn_late_type = "primary" if cur_wo_filter == "LATE" else "secondary"
                         if st.button(f"🔴 เกินแผน ({late_count})", type=btn_late_type, use_container_width=True, help="เลยกำหนดเวลาแผน"):
                             st.session_state.wo_color_filter = "LATE"
                             st.rerun()
@@ -1941,7 +1968,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 df_display["ลำดับคิว"] = df_display.groupby("เครื่องจักร").cumcount() + 1
                 df_display["ลำดับคิว"] = df_display["ลำดับคิว"].apply(lambda q: f"คิวที่ {q}")
 
-                if st.session_state.wo_color_filter == "WARN":
+                selected_wo_filter = st.session_state.get("wo_color_filter", "ALL")
+                if selected_wo_filter == "WARN":
                     def is_warn_row(r):
                         if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
                         f_dt = wo_finish_map.get(str(r.get("ID")))
@@ -1951,7 +1979,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         return False
                     df_display = df_display[df_display.apply(is_warn_row, axis=1)]
 
-                elif st.session_state.wo_color_filter == "LATE":
+                elif selected_wo_filter == "LATE":
                     def is_late_row(r):
                         if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
                         f_dt = wo_finish_map.get(str(r.get("ID")))
@@ -2241,7 +2269,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
                     start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
-                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
+                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
                 else:
                     start_view = datetime.combine(gantt_min_date, dtime(7, 30))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
@@ -3137,7 +3165,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             st.divider()
 
-            st.markdown(f"#### 📋 รายละเอียดชิ้นงานทั้งหมดที่เสร็จสิ้นในเดือน {month_names[selected_month_idx-1]}")
+            st.markdown(f"#### 📋 รายละเอียดชิ้นงานทั้งหมดที่เสร็จสิ้นในเดือน {month_names[selected_month_idx-1]} {selected_year}")
             st.dataframe(
                 monthly_jobs.sort_values(by="Target_Date", ascending=True)[[
                     "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
