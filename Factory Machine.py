@@ -324,39 +324,6 @@ st.markdown("""
         font-size: 23px !important; 
         font-weight: 800 !important; 
     }
-    .kpi-sub {
-        font-size: 11.5px;
-        margin-top: 4px;
-        opacity: 0.9;
-        font-weight: 500;
-    }
-
-    .shop-live-banner {
-        padding: 12px 18px;
-        border-radius: 14px;
-        margin-bottom: 16px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        font-size: 13.5px;
-        font-weight: 700;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.06);
-    }
-    .shop-live-running {
-        background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
-        border: 2px solid #10B981;
-        color: #065F46;
-    }
-    .shop-live-hold {
-        background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%);
-        border: 2px dashed #F59E0B;
-        color: #92400E;
-    }
-    .shop-live-idle {
-        background: #F8FAFC;
-        border: 2px solid #CBD5E1;
-        color: #475569;
-    }
 
     .op-job-header {
         background: linear-gradient(145deg, #FFFFFF 0%, #F8FAFC 100%);
@@ -368,22 +335,6 @@ st.markdown("""
         margin-bottom: 14px;
         box-shadow: 0 8px 24px rgba(79, 70, 229, 0.08), 0 2px 6px rgba(0, 0, 0, 0.03);
     }
-    .op-job-header-running {
-        border-left: 7px solid #10B981 !important;
-        background: linear-gradient(145deg, #FFFFFF 0%, #F0FDF4 100%) !important;
-        box-shadow: 0 8px 24px rgba(16, 185, 129, 0.15), 0 2px 6px rgba(0, 0, 0, 0.03) !important;
-    }
-    .op-job-header-urgent {
-        border-left: 7px solid #EF4444 !important;
-        background: linear-gradient(145deg, #FFFFFF 0%, #FEF2F2 100%) !important;
-        box-shadow: 0 8px 24px rgba(239, 68, 68, 0.12), 0 2px 6px rgba(0, 0, 0, 0.03) !important;
-    }
-    .op-job-header-hold {
-        border-left: 7px solid #F59E0B !important;
-        background: linear-gradient(145deg, #FFFFFF 0%, #FFFBEB 100%) !important;
-        box-shadow: 0 8px 24px rgba(245, 158, 11, 0.12), 0 2px 6px rgba(0, 0, 0, 0.03) !important;
-    }
-
     .badge-chip {
         display: inline-flex;
         align-items: center;
@@ -400,9 +351,6 @@ st.markdown("""
     .badge-mat { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
     .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 800; }
     .badge-finish-date { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; font-weight: 800; }
-    .badge-running { background: #ECFDF5; color: #059669; border: 1.5px solid #34D399; font-weight: 800; }
-    .badge-urgent { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; font-weight: 800; }
-    .badge-hold { background: #FFFBEB; color: #D97706; border: 1px solid #FCD34D; font-weight: 800; }
 
     .step-card {
         background: #FFFFFF;
@@ -411,57 +359,6 @@ st.markdown("""
         border: 1.5px solid #E2E8F0;
         margin-bottom: 12px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.02);
-    }
-    .step-card-running {
-        border-color: #34D399 !important;
-        background: linear-gradient(145deg, #FFFFFF 0%, #ECFDF5 100%) !important;
-        box-shadow: 0 4px 14px rgba(16, 185, 129, 0.15) !important;
-    }
-    .step-card-ready {
-        border-color: #FCD34D !important;
-        background: linear-gradient(145deg, #FFFFFF 0%, #FFFBEB 100%) !important;
-    }
-    .step-card-hold {
-        border-color: #F59E0B !important;
-        background: linear-gradient(145deg, #FFFFFF 0%, #FFFBEB 100%) !important;
-        border-style: dashed !important;
-    }
-    .step-card-finished {
-        border-color: #A7F3D0 !important;
-        background: linear-gradient(145deg, #FFFFFF 0%, #F0FDF4 100%) !important;
-    }
-
-    .batch-toolbar {
-        background: #F1F5F9;
-        border: 1.5px dashed #CBD5E1;
-        border-radius: 12px;
-        padding: 12px 16px;
-        margin-bottom: 16px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .schedule-info-box {
-        background: #F8FAFC;
-        border: 1.5px solid #E2E8F0;
-        border-radius: 12px;
-        padding: 12px 18px;
-        margin-top: 6px;
-        margin-bottom: 18px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 16px;
-        align-items: center;
-        justify-content: space-between;
-    }
-    .schedule-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 13px;
-        font-weight: 600;
-        color: #334155;
     }
 
     div.stButton > button:disabled {
@@ -492,28 +389,6 @@ st.markdown("""
         background: linear-gradient(135deg, #065F46 0%, #059669 100%);
         border-left: 7px solid #34D399;
     }
-    
-    @keyframes pulse-card-warning {
-        0% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); opacity: 1; }
-        50% { box-shadow: 0 0 24px rgba(245, 158, 11, 0.9); opacity: 0.85; }
-        100% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); opacity: 1; }
-    }
-    @keyframes pulse-card-late {
-        0% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); opacity: 1; }
-        50% { box-shadow: 0 0 30px rgba(239, 68, 68, 1); opacity: 0.8; }
-        100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); opacity: 1; }
-    }
-    .tv-card-warning {
-        background: linear-gradient(135deg, #B45309 0%, #D97706 100%) !important;
-        border-left: 7px solid #FCD34D !important;
-        animation: pulse-card-warning 1.8s infinite ease-in-out !important;
-    }
-    .tv-card-late {
-        background: linear-gradient(135deg, #991B1B 0%, #DC2626 100%) !important;
-        border-left: 7px solid #F87171 !important;
-        animation: pulse-card-late 1.2s infinite ease-in-out !important;
-    }
-
     .tv-card-hold {
         background: linear-gradient(135deg, #92400E 0%, #D97706 100%);
         border-left: 7px solid #FBBF24;
@@ -570,9 +445,6 @@ if "scroll_to_bottom" not in st.session_state:
 
 if "gantt_date_range" not in st.session_state:
     st.session_state.gantt_date_range = None
-
-if "drawing_tracker_filter" not in st.session_state:
-    st.session_state.drawing_tracker_filter = "ALL"
 
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
@@ -714,14 +586,15 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine
+# 5. Scheduling Engine (คำนวณงานรอคิว + กำลังผลิต + พักงาน)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime):
     now_dt = get_next_valid_work_time(default_start_datetime)
     m_available = {m: now_dt for m in MACHINE_LIST}
     m_busy_hrs = {m: 0.0 for m in MACHINE_LIST}
     
-    active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
+    # รวมงานพักงานเข้ามาคำนวณเวลาจบงานด้วย
+    active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
     valid_jobs = []
     
     for j in jobs_df[active_mask].to_dict("records"):
@@ -900,7 +773,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             "เวลาเริ่มจริง": setup_start,
             "เวลาเริ่ม Setup": setup_start.strftime("%d/%m %H:%M") if setup_mins > 0 else "-",
             "เวลาเริ่มขึ้นงาน": cut_start.strftime("%d/%m %H:%M"), 
-            "เวลาจบงาน": cut_end.strftime("%d/%m %H:%M"),
+            "เวลาจบงาน": cut_end.strftime("%d/%m/%Y %H:%M"),
             "เวลาจบงาน_DT": cut_end,
             "Setup (น.)": int(setup_mins), 
             "Basic (น.)": int(selected_job["basic_mins"]),
@@ -1218,7 +1091,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             if st.button("🏁 Finish (จบงานจริง)", key=f"btn_finish_step_{target_id}", type="primary", use_container_width=True):
                                 now_str = get_bangkok_str()
                                 finish_payload = {
-                                    "status": "🟩 เสร็จสิ้นแล้ว",
+                                    "status": "🟩 เสร็จสิ้นแล้ว", 
                                     "actual_finish": now_str
                                 }
                                 if update_supabase_job(target_id, finish_payload):
@@ -1627,7 +1500,31 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            active_jobs_editor_df["วัน-เวลาจบงาน"] = active_jobs_editor_df["ID"].astype(str).map(editor_finish_map).fillna("-")
+            # คำนวณวัน-เวลาจบงานอัตโนมัติ (พร้อม fallback ป้องกันเครื่องหมายขีด)
+            calculated_finish_dates = []
+            for _, row_item in active_jobs_editor_df.iterrows():
+                row_id_str = str(row_item["ID"])
+                mapped_val = editor_finish_map.get(row_id_str)
+                
+                if mapped_val and mapped_val != "-":
+                    calculated_finish_dates.append(mapped_val)
+                else:
+                    ready_parsed = parse_flexible_datetime(row_item.get("วัน-เวลาขึ้นงาน"))
+                    if ready_parsed is None:
+                        ready_parsed = current_real_time
+                    
+                    s_m = safe_float(row_item.get("Setup (น.)"), 10.0)
+                    b_m = safe_float(row_item.get("Basic (น.)"), 0.0)
+                    p_m = safe_float(row_item.get("โปรแกรม (น.)"), 120.0)
+                    tot_hrs = (s_m + b_m + p_m) / 60.0
+                    
+                    try:
+                        _, fallback_end_dt = add_work_time_with_shift(ready_parsed, tot_hrs)
+                        calculated_finish_dates.append(fallback_end_dt.strftime("%d/%m/%Y %H:%M"))
+                    except Exception:
+                        calculated_finish_dates.append("-")
+
+            active_jobs_editor_df["วัน-เวลาจบงาน"] = calculated_finish_dates
 
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
                 lambda x: x.strftime("%d/%m/%Y %H:%M") if pd.notna(x) else ""
@@ -1788,7 +1685,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             ),
                             "วัน-เวลาจบงาน": st.column_config.TextColumn(
                                 "วัน-เวลาจบงาน",
-                                width=120,
+                                width=135,
                                 disabled=True,
                                 help="เวลาจบงานโดยประมาณที่คำนวณตามแผนและกะโรงงาน"
                             ),
@@ -1815,7 +1712,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เลือกเครื่องจักร", width=160),
                             "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("วัน-เวลาขึ้นงาน", width=155),
-                            "วัน-เวลาจบงาน": st.column_config.TextColumn("วัน-เวลาจบงาน", width=120),
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn("วัน-เวลาจบงาน", width=135),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, format="%d"),
@@ -2102,7 +1999,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "กำหนดพร้อมขึ้นงาน": st.column_config.TextColumn("กำหนดพร้อมขึ้นงาน", width=155, help="วัน-เวลาขึ้นงานเดิมที่ระบุไว้ในตารางสั่งผลิต"),
                         "เวลาเริ่ม Setup": st.column_config.TextColumn("เริ่ม Setup", width=105),
                         "เวลาเริ่มขึ้นงาน": st.column_config.TextColumn("เริ่มขึ้นงานตามแผน", width=120),
-                        "เวลาจบงาน": st.column_config.TextColumn("จบงานตามแผน", width=110),
+                        "เวลาจบงาน": st.column_config.TextColumn("จบงานตามแผน", width=135),
                         "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=80, format="%d"),
                         "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=80, format="%d"),
                         "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
@@ -2344,7 +2241,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
                     start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
-                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
+                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 else:
                     start_view = datetime.combine(gantt_min_date, dtime(7, 30))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
