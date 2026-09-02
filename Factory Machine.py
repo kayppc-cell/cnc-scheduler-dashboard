@@ -2536,7 +2536,7 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
     with m_col2:
         sel_dw_year = st.selectbox("📆 เลือกปี (ค.ศ.):", [current_now.year - 1, current_now.year, current_now.year + 1], index=1, key="dw_year_sel")
     with m_col3:
-        sel_dw_limit = st.selectbox("🎯 การแสดงผลกราแท่งคู่:", ["🌐 แสดงทั้งหมดในเดือนนี้", "🔴 Top 10 ช้ากว่าแผนสูงสุด (Critical Delays)", "🟢 Top 10 เร็วกว่าแผนสูงสุด (High Efficiency)"])
+        sel_dw_limit = st.selectbox("🎯 การแสดงผลกราฟแท่งคู่:", ["🌐 แสดงทั้งหมดในเดือนนี้", "🔴 Top 10 ช้ากว่าแผนสูงสุด (Critical Delays)", "🟢 Top 10 เร็วกว่าแผนสูงสุด (High Efficiency)"])
 
     if not df_db.empty:
         finished_all = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
@@ -3338,7 +3338,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
-                    <span>⏱️ <b id="{timer_id_tv}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</b></span>
+                    <span>⏱️ <b id="{timer_id_tv}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">--:--:--</b></span>
                 </div>
                 <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px;">
                     <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
@@ -3498,13 +3498,17 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 if (Array.isArray(tvTimerConfigs)) {{
                     tvTimerConfigs.forEach(cfg => {{
                         const el = window.parent.document.getElementById(cfg.id);
-                        if (el && cfg.start_ts > 0) {{
-                            const diffMs = Math.max(0, nowTs - cfg.start_ts);
-                            const totalSecs = Math.floor(diffMs / 1000);
-                            const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
-                            const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
-                            const tSecs = String(totalSecs % 60).padStart(2, '0');
-                            el.innerText = tHrs + ":" + tMins + ":" + tSecs;
+                        if (el) {{
+                            if (cfg.start_ts && cfg.start_ts > 0) {{
+                                const diffMs = Math.max(0, nowTs - cfg.start_ts);
+                                const totalSecs = Math.floor(diffMs / 1000);
+                                const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                                const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                                const tSecs = String(totalSecs % 60).padStart(2, '0');
+                                el.innerText = tHrs + ":" + tMins + ":" + tSecs;
+                            }} else {{
+                                el.innerText = "-";
+                            }}
                         }}
                     }});
                 }}
