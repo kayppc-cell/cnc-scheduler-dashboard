@@ -869,6 +869,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime):
             })
         
         total_cycle = setup_hrs + actual_cut_hrs
+
         orig_ready_dt = parse_flexible_datetime(selected_job.get("วัน-เวลาขึ้นงาน"))
 
         summary_records.append({
@@ -1605,13 +1606,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 
                 df_dp_all = pd.DataFrame(drawing_progress_list).sort_values(by=["ความคืบหน้า (%)", "แผนงาน"], ascending=[False, True])
                 
-                # นับจำนวนแต่ละสถานะสำหรับปุ่มตัวกรองด่วน
                 cnt_all = len(df_dp_all)
                 cnt_done = len(df_dp_all[df_dp_all["status_category"] == "DONE"])
                 cnt_run = len(df_dp_all[df_dp_all["status_category"] == "RUNNING"])
                 cnt_wait = len(df_dp_all[df_dp_all["status_category"].isin(["WAITING", "HOLD"])])
 
-                # ส่วนแถบควบคุมตัวกรองด่วน & ค้นหา
                 tk_btn_col, tk_search_col = st.columns([5.5, 4.5])
                 with tk_btn_col:
                     st.caption("**🎯 ตัวกรองด่วนสถานะ Drawing:**")
@@ -1644,7 +1643,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         key="search_drawing_tracker_input"
                     )
 
-                # ทำการกรองตามปุ่มและคำค้นหา
                 df_dp = df_dp_all.copy()
                 if st.session_state.drawing_tracker_filter == "DONE":
                     df_dp = df_dp[df_dp["status_category"] == "DONE"]
@@ -1676,6 +1674,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             st.divider()
 
+            # คำนวณตารางแผนงาน (Scheduling Engine) ล่วงหน้าเพื่อดึงเวลาจบงานตามแผนมาแสดงในตารางสั่งผลิต
+            current_real_time = get_bangkok_now().replace(tzinfo=None)
+            df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(calc_df, current_real_time)
+
+            editor_finish_map = {}
+            if not df_summary.empty:
+                for _, s_row in df_summary.iterrows():
+                    editor_finish_map[str(s_row.get("ID", ""))] = s_row.get("เวลาจบงาน", "-")
+
             column_order = [
                 "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
                 "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
@@ -1699,6 +1706,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 row_step = str(active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"])
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
+
+            # เติมคอลัมน์ "วัน-เวลาจบงาน" โดยดึงจากผลการคำนวณของ Scheduling Engine
+            active_jobs_editor_df["วัน-เวลาจบงาน"] = active_jobs_editor_df["ID"].astype(str).map(editor_finish_map).fillna("-")
 
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
                 lambda x: x.strftime("%d/%m/%Y %H:%M") if pd.notna(x) else ""
@@ -1840,7 +1850,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         num_rows="dynamic",
                         column_order=[
                             "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
-                            "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
+                            "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "วัน-เวลาจบงาน", "Setup (น.)",
                             "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                         ],
                         column_config={
@@ -1854,8 +1864,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
                             "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
                                 "วัน-เวลาขึ้นงาน", 
-                                width=165,
+                                width=155,
                                 help="พิมพ์วันขึ้นก่อนเสมอ เช่น 31/08/2026 10:50 หรือ 31/08 10:50"
+                            ),
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn(
+                                "วัน-เวลาจบงาน",
+                                width=120,
+                                disabled=True,
+                                help="เวลาจบงานโดยประมาณที่คำนวณตามแผนและกะโรงงาน"
                             ),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=10),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -1879,7 +1895,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=125),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เลือกเครื่องจักร", width=160),
-                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("วัน-เวลาขึ้นงาน", width=165),
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("วัน-เวลาขึ้นงาน", width=155),
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn("วัน-เวลาจบงาน", width=120),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, format="%d"),
@@ -2014,6 +2031,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                     if not delete_supabase_job(int(float(row_id))):
                                         del_success = False
+                                        
                             if del_success:
                                 st.session_state.active_select_all = False
                                 st.cache_data.clear()
@@ -2037,9 +2055,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 </script>
                 """, height=0)
                 st.session_state.scroll_to_bottom = False
-
-            current_real_time = get_bangkok_now().replace(tzinfo=None)
-            df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(edited_jobs, current_real_time)
 
             finished_jobs_df = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
             active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])])
