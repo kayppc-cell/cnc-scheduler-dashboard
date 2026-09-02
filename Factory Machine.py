@@ -978,7 +978,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 planned_finish_map[j_id] = f_dt
                 planned_finish_map[(p_cd, d_cd, s_cd)] = f_dt
 
-            # กรองคิวงานของเครื่องจักรที่เลือก เรียงลำดับคิวตาม Work Order Sheet เป๊ะๆ
             m_wo_summary = df_summary_plan[df_summary_plan["เครื่องจักร"] == selected_m].sort_values(by="เวลาเริ่มจริง", ascending=True).copy().reset_index(drop=True)
 
     if not df_all.empty:
@@ -999,11 +998,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             r_cur = running_now.iloc[0]
             st_t = r_cur.get("เริ่มจริง")
             st_txt = "-"
-            iso_start = ""
+            start_ts = 0
             if pd.notna(st_t):
                 st_dt = pd.to_datetime(st_t)
                 st_txt = st_dt.strftime("%H:%M น.")
-                iso_start = st_dt.strftime("%Y-%m-%dT%H:%M:%S")
+                start_ts = int(st_dt.timestamp() * 1000)
 
             st.markdown(f"""
             <div class="shop-live-banner shop-live-running">
@@ -1016,8 +1015,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 </div>
             </div>
             """, unsafe_allow_html=True)
-            if iso_start:
-                running_timer_configs.append({"id": "banner-timer", "start": iso_start})
+            if start_ts > 0:
+                running_timer_configs.append({"id": "banner-timer", "start_ts": start_ts})
         elif not hold_now.empty:
             h_cur = hold_now.iloc[0]
             st.markdown(f"""
@@ -1073,7 +1072,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
         next_available_start_found = False
 
-        # วนลูปแสดงผลการ์ดตามลำดับคิวใน Work Order Sheet ทีละคิวแบบตรง 100%
         for queue_idx, (_, wo_item) in enumerate(m_wo_summary.iterrows(), 1):
             target_id = safe_int(wo_item["ID"])
             step_record = m_all_jobs[m_all_jobs["ID"] == target_id]
@@ -1097,15 +1095,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             is_step_waiting = not is_step_running and not is_step_finished and not is_step_hold
             is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
 
-            # วันเวลาพร้อมขึ้นงานดั้งเดิม
             dt_ready = parse_flexible_datetime(step_row.get("วัน-เวลาขึ้นงาน"))
             ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.") if pd.notna(dt_ready) else "ยังไม่ระบุเวลา"
 
-            # วันเวลาจบงานตามแผนจาก Work Order
             plan_finish_dt = wo_item.get("เวลาจบงาน_DT")
             finish_plan_display_str = plan_finish_dt.strftime("%d/%m/%Y %H:%M น.") if pd.notna(plan_finish_dt) else str(wo_item.get("เวลาจบงาน", "-"))
 
-            # ลอจิกการอนุญาตให้กด Start
             if "Batch" in run_mode:
                 can_start = is_step_waiting
             else:
@@ -1114,7 +1109,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     can_start = True
                     next_available_start_found = True
 
-            # สไตล์หัวการ์ด
             if is_step_hold:
                 header_box_class = "op-job-header op-job-header-hold"
                 badge_gradient = "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)"
@@ -1155,9 +1149,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     start_txt = pd.to_datetime(s_start).strftime('%H:%M น.') if pd.notna(s_start) else '-'
                     timer_span_id = f"timer-step-{target_id}"
                     if pd.notna(s_start):
+                        s_dt_obj = pd.to_datetime(s_start)
                         running_timer_configs.append({
                             "id": timer_span_id,
-                            "start": pd.to_datetime(s_start).strftime("%Y-%m-%dT%H:%M:%S")
+                            "start_ts": int(s_dt_obj.timestamp() * 1000)
                         })
                     st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span id='{timer_span_id}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
                 elif is_step_hold:
@@ -1299,19 +1294,22 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
         <script>
             const timerConfigs = {timers_json};
             function runLiveStopwatches() {{
-                const now = new Date();
-                timerConfigs.forEach(cfg => {{
-                    const el = window.parent.document.getElementById(cfg.id);
-                    if (el) {{
-                        const startDate = new Date(cfg.start);
-                        const diffMs = Math.max(0, now - startDate);
-                        const totalSecs = Math.floor(diffMs / 1000);
-                        const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
-                        const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
-                        const secs = String(totalSecs % 60).padStart(2, '0');
-                        el.innerText = `${{hrs}}:${{mins}}:${{secs}}`;
-                    }}
-                }});
+                try {{
+                    const now = new Date().getTime();
+                    timerConfigs.forEach(cfg => {{
+                        const el = window.parent.document.getElementById(cfg.id);
+                        if (el && cfg.start_ts > 0) {{
+                            const diffMs = Math.max(0, now - cfg.start_ts);
+                            const totalSecs = Math.floor(diffMs / 1000);
+                            const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                            const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                            const secs = String(totalSecs % 60).padStart(2, '0');
+                            el.innerText = hrs + ":" + mins + ":" + secs;
+                        }}
+                    }});
+                }} catch (e) {{
+                    console.error(e);
+                }}
             }}
             setInterval(runLiveStopwatches, 1000);
             runLiveStopwatches();
@@ -1591,7 +1589,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             st.divider()
 
-            # คำนวณตารางแผนงาน (Scheduling Engine)
             current_real_time = get_bangkok_now().replace(tzinfo=None)
             df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(calc_df, current_real_time)
 
@@ -2539,7 +2536,7 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
     with m_col2:
         sel_dw_year = st.selectbox("📆 เลือกปี (ค.ศ.):", [current_now.year - 1, current_now.year, current_now.year + 1], index=1, key="dw_year_sel")
     with m_col3:
-        sel_dw_limit = st.selectbox("🎯 การแสดงผลกราฟแท่งคู่:", ["🌐 แสดงทั้งหมดในเดือนนี้", "🔴 Top 10 ช้ากว่าแผนสูงสุด (Critical Delays)", "🟢 Top 10 เร็วกว่าแผนสูงสุด (High Efficiency)"])
+        sel_dw_limit = st.selectbox("🎯 การแสดงผลกราแท่งคู่:", ["🌐 แสดงทั้งหมดในเดือนนี้", "🔴 Top 10 ช้ากว่าแผนสูงสุด (Critical Delays)", "🟢 Top 10 เร็วกว่าแผนสูงสุด (High Efficiency)"])
 
     if not df_db.empty:
         finished_all = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
@@ -3322,7 +3319,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 start_disp_txt = start_dt.strftime("%H:%M น.")
                 tv_running_timers.append({
                     "id": timer_id_tv,
-                    "start": start_dt.strftime("%Y-%m-%dT%H:%M:%S")
+                    "start_ts": int(start_dt.timestamp() * 1000)
                 })
             
             tv_card_cls = "tv-card tv-card-running"
@@ -3486,35 +3483,46 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         const tvTimerConfigs = {tv_timers_json};
 
         function updateTvDashboard() {{
-            const now = new Date();
+            try {{
+                const now = new Date();
+                const nowTs = now.getTime();
 
-            const clockEl = window.parent.document.getElementById('live-tv-clock');
-            if (clockEl) {{
-                clockEl.innerText = `${{hrs}}:${{mins}}:${{secs}} น.`;
-            }}
-
-            tvTimerConfigs.forEach(cfg => {{
-                const el = window.parent.document.getElementById(cfg.id);
-                if (el) {{
-                    const startDate = new Date(cfg.start);
-                    const diffMs = Math.max(0, now - startDate);
-                    const totalSecs = Math.floor(diffMs / 1000);
-                    const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
-                    const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
-                    const tSecs = String(totalSecs % 60).padStart(2, '0');
-                    el.innerText = `${{tHrs}}:${{tMins}}:${{tSecs}}`;
+                const hrs = String(now.getHours()).padStart(2, '0');
+                const mins = String(now.getMinutes()).padStart(2, '0');
+                const secs = String(now.getSeconds()).padStart(2, '0');
+                const clockEl = window.parent.document.getElementById('live-tv-clock');
+                if (clockEl) {{
+                    clockEl.innerText = hrs + ":" + mins + ":" + secs + " น.";
                 }}
-            }});
+
+                if (Array.isArray(tvTimerConfigs)) {{
+                    tvTimerConfigs.forEach(cfg => {{
+                        const el = window.parent.document.getElementById(cfg.id);
+                        if (el && cfg.start_ts > 0) {{
+                            const diffMs = Math.max(0, nowTs - cfg.start_ts);
+                            const totalSecs = Math.floor(diffMs / 1000);
+                            const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                            const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                            const tSecs = String(totalSecs % 60).padStart(2, '0');
+                            el.innerText = tHrs + ":" + tMins + ":" + tSecs;
+                        }}
+                    }});
+                }}
+            }} catch (e) {{
+                console.error(e);
+            }}
         }}
 
         setInterval(updateTvDashboard, 1000);
         updateTvDashboard();
 
         setTimeout(function() {{
-            const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
-            if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {{
-                radioBtns[4].click();
-            }}
+            try {{
+                const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
+                if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {{
+                    radioBtns[4].click();
+                }}
+            }} catch(err) {{}}
         }}, 30000);
     </script>
     """, height=0)
