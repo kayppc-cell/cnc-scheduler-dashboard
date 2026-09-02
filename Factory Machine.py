@@ -92,22 +92,6 @@ def parse_flexible_datetime(dt_val):
         return dt_parsed
     return None
 
-def dt_to_epoch_ms(dt_val):
-    if dt_val is None or pd.isna(dt_val):
-        return 0
-    dt = parse_flexible_datetime(dt_val)
-    if dt is None or pd.isna(dt):
-        return 0
-    try:
-        bkk_tz = zoneinfo.ZoneInfo("Asia/Bangkok")
-        if getattr(dt, 'tzinfo', None) is None:
-            dt = dt.replace(tzinfo=bkk_tz)
-        else:
-            dt = dt.astimezone(bkk_tz)
-        return int(dt.timestamp() * 1000)
-    except Exception:
-        return 0
-
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
     if weekday == 6:
@@ -1013,10 +997,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             r_cur = running_now.iloc[0]
             st_t = r_cur.get("เริ่มจริง")
             st_txt = "-"
-            start_epoch = dt_to_epoch_ms(st_t)
+            start_epoch = 0
             act_dt = parse_flexible_datetime(st_t)
             if act_dt is not None:
                 st_txt = act_dt.strftime("%H:%M น.")
+                start_epoch = int(act_dt.timestamp() * 1000)
 
             st.markdown(f"""
             <div class="shop-live-banner shop-live-running">
@@ -1161,7 +1146,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 elif is_step_running:
                     st_parsed = parse_flexible_datetime(s_start)
                     start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
-                    step_start_epoch = dt_to_epoch_ms(s_start)
+                    step_start_epoch = int(st_parsed.timestamp() * 1000) if st_parsed is not None else 0
                     st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
                 elif is_step_hold:
                     st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
@@ -1300,13 +1285,13 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     <script>
         function runLiveStopwatches() {
             try {
-                const nowTs = new Date().getTime();
+                const now = new Date().getTime();
                 const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
                 timerEls.forEach(el => {
                     const startAttr = el.getAttribute('data-start-epoch');
                     const startTs = parseInt(startAttr, 10);
                     if (startTs && startTs > 0) {
-                        const diffMs = Math.max(0, nowTs - startTs);
+                        const diffMs = Math.max(0, now - startTs);
                         const totalSecs = Math.floor(diffMs / 1000);
                         const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
                         const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
@@ -1951,7 +1936,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
                                     if not delete_supabase_job(int(float(row_id))):
                                         del_success = False
-                                        
                             if del_success:
                                 st.session_state.active_select_all = False
                                 st.cache_data.clear()
@@ -3327,15 +3311,15 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
             
             start_disp_txt = "-"
-            start_epoch = dt_to_epoch_ms(s_start)
+            start_epoch = 0
             r_start_parsed = parse_flexible_datetime(s_start)
 
             if r_start_parsed is None and r_ready_dt is not None:
                 r_start_parsed = r_ready_dt
-                start_epoch = dt_to_epoch_ms(r_ready_dt)
 
             if r_start_parsed is not None:
                 start_disp_txt = r_start_parsed.strftime("%H:%M น.")
+                start_epoch = int(r_start_parsed.timestamp() * 1000)
             
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot"></span> <b style="color:#A7F3D0; margin-left:5px;">กำลังรันงาน</b>'
@@ -3460,4 +3444,83 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         </div>
         <div style="text-align:right;">
             <div id="live-tv-clock" style="font-size:26px; font-weight:900; color:#F8FAFC; font-family:monospace; letter-spacing:1px;">--:--:-- น.</div>
-            <ฉันไม่สามารถช่วยในเรื่องนี้ได้ เพราะเป็นแค่โมเดลภาษาและไม่เข้าใจคำถามนี้
+            <div style="font-size:12.5px; font-weight:bold;">
+                <span style="color:#34D399;">🟢 กำลังรัน {running_machines_count}</span> | 
+                <span style="color:#FBBF24;">🟡 พักงาน {hold_machines_count}</span> | 
+                <span style="color:#94A3B8;">⚪ ว่าง {idle_machines_count}</span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    card_items = []
+    for c in machine_status_cards:
+        card_item = (
+            f'<div class="{c["card_class"]}">'
+            f'<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">'
+            f'<div style="font-size:14.5px; font-weight:800; letter-spacing:0.2px;">{c["machine"]}</div>'
+            f'<div style="font-size:10.5px;">{c["badge_html"]}</div>'
+            f'</div>'
+            f'<div style="margin: 3px 0;">'
+            f'<div style="font-size:13px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📌 {c["plan"]}</div>'
+            f'<div style="font-size:11.5px; color:rgba(255,255,255,0.88); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px;">📄 {c["drawing"]}</div>'
+            f'<div style="font-size:11px; color:rgba(255,255,255,0.72); margin-top:1px;">⚙️ ขั้นตอน: {c["step"]}</div>'
+            f'</div>'
+            f'<div style="margin-top:6px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.15);">'
+            f'{c["time_info"]}'
+            f'</div>'
+            f'</div>'
+        )
+        card_items.append(card_item)
+
+    full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
+    st.markdown(full_grid_html, unsafe_allow_html=True)
+
+    components.html("""
+    <script>
+        function updateTvDashboard() {
+            try {
+                const now = new Date();
+                const nowTs = now.getTime();
+
+                const hrs = String(now.getHours()).padStart(2, '0');
+                const mins = String(now.getMinutes()).padStart(2, '0');
+                const secs = String(now.getSeconds()).padStart(2, '0');
+                const clockEl = window.parent.document.getElementById('live-tv-clock');
+                if (clockEl) {
+                    clockEl.innerText = hrs + ":" + mins + ":" + secs + " น.";
+                }
+
+                const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
+                timerEls.forEach(el => {
+                    const startAttr = el.getAttribute('data-start-epoch');
+                    const startTs = parseInt(startAttr, 10);
+                    if (startTs && startTs > 0) {
+                        const diffMs = Math.max(0, nowTs - startTs);
+                        const totalSecs = Math.floor(diffMs / 1000);
+                        const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                        const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                        const tSecs = String(totalSecs % 60).padStart(2, '0');
+                        el.innerText = tHrs + ":" + tMins + ":" + tSecs;
+                    } else {
+                        el.innerText = "-";
+                    }
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        setInterval(updateTvDashboard, 1000);
+        updateTvDashboard();
+
+        setTimeout(function() {
+            try {
+                const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
+                if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {
+                    radioBtns[4].click();
+                }
+            } catch(err) {}
+        }, 30000);
+    </script>
+    """, height=0)
