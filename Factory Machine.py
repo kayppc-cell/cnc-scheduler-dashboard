@@ -75,13 +75,13 @@ def parse_flexible_datetime(dt_val):
         if len(parts) == 2:
             d, m = parts[0].zfill(2), parts[1].zfill(2)
             s_fixed = f"{current_year}-{m}-{d} {time_part}"
-            dt_parsed = pd.to_datetime(s_fixed, format="%Y-%m-%d %H:%M:%S", errors='coerce')
+            dt_parsed = pd.to_datetime(s_fixed, errors='coerce')
             return dt_parsed
         elif len(parts) == 3:
             d, m, y = parts[0].zfill(2), parts[1].zfill(2), parts[2]
             if len(y) == 2: y = f"20{y}"
             s_fixed = f"{y}-{m}-{d} {time_part}"
-            dt_parsed = pd.to_datetime(s_fixed, format="%Y-%m-%d %H:%M:%S", errors='coerce')
+            dt_parsed = pd.to_datetime(s_fixed, errors='coerce')
             return dt_parsed
 
     dt_parsed = pd.to_datetime(s, errors='coerce', dayfirst=True)
@@ -95,7 +95,7 @@ def to_bangkok_epoch_ms(dt_val):
     if dt_val is None or pd.isna(dt_val):
         return 0
     dt_p = parse_flexible_datetime(dt_val)
-    if dt_p is None:
+    if dt_p is None or pd.isna(dt_p):
         return 0
     try:
         bkk_tz = zoneinfo.ZoneInfo("Asia/Bangkok")
@@ -519,7 +519,7 @@ header_content = f'''<div class="main-header">{logo_html}<div class="header-text
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. กำหนดสิทธิ์ & Session Defaults
+# 3. กำหนดสิทธิ์และความปลอดภัย & ตัวแปรเริ่มต้นระบบ
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 VIEWER_PASSWORD = "pes1234"
@@ -537,6 +537,10 @@ default_states = {
 for k, v in default_states.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+query_params = st.query_params
+if query_params.get("view") == "tv":
+    st.session_state.current_view = "📺 จอทีวีกลางโรงงาน (TV Live)"
 
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
@@ -563,7 +567,7 @@ JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทร�
 JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "🟩 เสร็จสิ้นแล้ว"]
 
 # =========================================================
-# 4. ฟังก์ชัน Supabase
+# 4. ฟังก์ชันเชื่อมต่อ Supabase
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -589,8 +593,10 @@ def insert_supabase_job(payload: dict) -> bool:
                 if res2.status_code in [200, 201]:
                     st.cache_data.clear()
                     return True
+            st.error(f"⚠️ บันทึกไม่สำเร็จ Supabase ({res.status_code}): {res.text}")
             return False
-    except Exception:
+    except Exception as e:
+        st.error(f"⚠️ เกิดข้อผิดพลาดในการเชื่อมต่อ: {str(e)}")
         return False
 
 def update_supabase_job(job_id: int, payload: dict) -> bool:
@@ -608,8 +614,10 @@ def update_supabase_job(job_id: int, payload: dict) -> bool:
                 if res2.status_code in [200, 204]:
                     st.cache_data.clear()
                     return True
+            st.error(f"⚠️ อัปเดตไม่สำเร็จ Supabase ({res.status_code}): {res.text}")
             return False
-    except Exception:
+    except Exception as e:
+        st.error(f"⚠️ เกิดข้อผิดพลาดในการเชื่อมต่อ: {str(e)}")
         return False
 
 def delete_supabase_job(job_id: int) -> bool:
@@ -644,14 +652,17 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             data = res.json()
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
+                
                 if "ready_at" in df.columns:
                     df["ready_at"] = df["ready_at"].apply(parse_flexible_datetime)
                 if "actual_start" in df.columns:
                     df["actual_start"] = df["actual_start"].apply(parse_flexible_datetime)
                 if "actual_finish" in df.columns:
                     df["actual_finish"] = df["actual_finish"].apply(parse_flexible_datetime)
+                
                 if "status" in df.columns:
                     df["status"] = df["status"].apply(normalize_status)
+                
                 if "qty" not in df.columns:
                     df["qty"] = 1
                 else:
@@ -819,7 +830,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
             "จำนวน": safe_int(selected_job.get("จำนวน"), 1),
             "วัสดุ": selected_job.get("วัสดุ", "-"), 
             "ขั้นตอน (Step)": step_raw, 
-            "กำหนดพร้อมขึ้นงาน": orig_ready_dt.strftime("%d/%m/%Y %H:%M") if orig_ready_dt is not None else "-",
+            "กำหนดพร้อมขึ้นงาน": orig_ready_dt.strftime("%d/%m/%Y %H:%M") if (orig_ready_dt is not None and pd.notna(orig_ready_dt)) else "-",
             "เวลาเริ่มจริง": setup_start,
             "เวลาเริ่ม Setup": setup_start.strftime("%d/%m %H:%M") if setup_mins > 0 else "-",
             "เวลาเริ่มขึ้นงาน": cut_start.strftime("%d/%m %H:%M"), 
@@ -888,6 +899,7 @@ if selected_tab != st.session_state.current_view:
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
+    
     df_all = fetch_jobs_from_supabase()
     
     c_m_sel, c_mode_sel = st.columns([2, 2])
@@ -1029,7 +1041,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
 
             dt_ready = parse_flexible_datetime(step_row.get("วัน-เวลาขึ้นงาน"))
-            ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.") if pd.notna(dt_ready) else "ยังไม่ระบุเวลา"
+            ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.") if (dt_ready is not None and pd.notna(dt_ready)) else "ยังไม่ระบุเวลา"
 
             plan_finish_dt = wo_item.get("เวลาจบงาน_DT")
             finish_plan_display_str = plan_finish_dt.strftime("%d/%m/%Y %H:%M น.") if pd.notna(plan_finish_dt) else str(wo_item.get("เวลาจบงาน", "-"))
@@ -1077,11 +1089,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 
                 if is_step_finished:
                     fin_dt = parse_flexible_datetime(s_finish)
-                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if fin_dt is not None else '-'
+                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if (fin_dt is not None and pd.notna(fin_dt)) else '-'
                     st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                 elif is_step_running:
                     st_parsed = parse_flexible_datetime(s_start)
-                    start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
+                    start_txt = st_parsed.strftime('%H:%M น.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
                     step_start_epoch = to_bangkok_epoch_ms(s_start)
                     st.caption(f"""**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                 elif is_step_hold:
@@ -1695,7 +1707,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 
                                 raw_ready = row.get("วัน-เวลาขึ้นงาน")
                                 dt_parsed = parse_flexible_datetime(raw_ready)
-                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if dt_parsed is not None else None
+                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if (dt_parsed is not None and pd.notna(dt_parsed)) else None
 
                                 payload = {
                                     "plan_code": p_code,
@@ -3097,7 +3109,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             h_start = h_first.get("เริ่มจริง")
             h_start_txt = ""
             h_dt_parsed = parse_flexible_datetime(h_start)
-            if h_dt_parsed is not None:
+            if h_dt_parsed is not None and pd.notna(h_dt_parsed):
                 h_start_txt = f" [เริ่ม {h_dt_parsed.strftime('%H:%M น.')}]"
             hold_alert_html = f'<div style="margin-top:4px; padding:3px 6px; background:rgba(217, 119, 6, 0.35); border:1px dashed #FCD34D; border-radius:6px; font-size:10.5px; color:#FEF08A;">🛑 <b>พักงานรอ:</b> {h_first.get("แผนงาน", "-")} ({h_first.get("ชื่อ Drawing.", "-")}){h_start_txt}</div>'
 
@@ -3111,7 +3123,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             step_name = str(r_info.get("ขั้นตอน (Step)", "-"))
             
             r_ready_dt = parse_flexible_datetime(r_info.get("วัน-เวลาขึ้นงาน"))
-            ready_display_txt = r_ready_dt.strftime("%d/%m %H:%M") if r_ready_dt is not None else "-"
+            ready_display_txt = r_ready_dt.strftime("%d/%m %H:%M") if (r_ready_dt is not None and pd.notna(r_ready_dt)) else "-"
 
             f_dt = planned_finish_map_tv.get(r_id) or planned_finish_map_tv.get((p_code, d_code, step_name)) or planned_finish_map_tv.get((p_code, d_code))
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
@@ -3120,11 +3132,11 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             start_epoch = to_bangkok_epoch_ms(s_start)
             r_start_parsed = parse_flexible_datetime(s_start)
 
-            if r_start_parsed is None and r_ready_dt is not None:
+            if r_start_parsed is None and r_ready_dt is not None and pd.notna(r_ready_dt):
                 r_start_parsed = r_ready_dt
                 start_epoch = to_bangkok_epoch_ms(r_ready_dt)
 
-            if r_start_parsed is not None:
+            if r_start_parsed is not None and pd.notna(r_start_parsed):
                 start_disp_txt = r_start_parsed.strftime("%H:%M น.")
             
             tv_card_cls = "tv-card tv-card-running"
@@ -3171,14 +3183,14 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             step_name = str(h_info.get("ขั้นตอน (Step)", "-"))
             
             h_ready_dt = parse_flexible_datetime(h_info.get("วัน-เวลาขึ้นงาน"))
-            ready_display_txt = h_ready_dt.strftime("%d/%m %H:%M") if h_ready_dt is not None else "-"
+            ready_display_txt = h_ready_dt.strftime("%d/%m %H:%M") if (h_ready_dt is not None and pd.notna(h_ready_dt)) else "-"
             
             f_dt = planned_finish_map_tv.get(h_id) or planned_finish_map_tv.get((p_code, d_code, step_name)) or planned_finish_map_tv.get((p_code, d_code))
             finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
 
             h_start_txt = ""
             h_st_parsed = parse_flexible_datetime(h_start)
-            if h_st_parsed is not None:
+            if h_st_parsed is not None and pd.notna(h_st_parsed):
                 h_start_txt = f" (เริ่มไว้: {h_st_parsed.strftime('%H:%M น.')})"
 
             time_info_combined = f'''
@@ -3214,7 +3226,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 next_txt = f"คิวถัดไป: {p_code} ({d_code})"
                 
                 w_ready_dt = parse_flexible_datetime(w_first.get("วัน-เวลาขึ้นงาน"))
-                ready_display_txt = w_ready_dt.strftime("%d/%m %H:%M") if w_ready_dt is not None else "-"
+                ready_display_txt = w_ready_dt.strftime("%d/%m %H:%M") if (w_ready_dt is not None and pd.notna(w_ready_dt)) else "-"
                 
                 f_dt = planned_finish_map_tv.get(w_id) or planned_finish_map_tv.get((p_code, d_code, step_name)) or planned_finish_map_tv.get((p_code, d_code))
                 finish_display_txt = f_dt.strftime("%d/%m %H:%M") if (f_dt is not None and pd.notna(f_dt)) else "-"
@@ -3282,51 +3294,54 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
-    components.html("""
-    <script>
-        function updateTvDashboard() {
-            try {
-                const now = new Date();
-                const nowTs = now.getTime();
+# =========================================================
+# JavaScript ท้ายไฟล์: ควบคุมนาฬิกา + Live Stopwatch
+# =========================================================
+components.html("""
+<script>
+    function updateTvDashboard() {
+        try {
+            const now = new Date();
+            const nowTs = now.getTime();
 
-                const hrs = String(now.getHours()).padStart(2, '0');
-                const mins = String(now.getMinutes()).padStart(2, '0');
-                const secs = String(now.getSeconds()).padStart(2, '0');
-                const clockEl = window.parent.document.getElementById('live-tv-clock');
-                if (clockEl) {
-                    clockEl.innerText = hrs + ":" + mins + ":" + secs + " น.";
-                }
-
-                const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
-                timerEls.forEach(el => {
-                    const startAttr = el.getAttribute('data-start-epoch');
-                    const startTs = parseInt(startAttr, 10);
-                    if (startTs && startTs > 0) {
-                        const diffMs = Math.max(0, nowTs - startTs);
-                        const totalSecs = Math.floor(diffMs / 1000);
-                        const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
-                        const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
-                        const tSecs = String(totalSecs % 60).padStart(2, '0');
-                        el.innerText = tHrs + ":" + tMins + ":" + tSecs;
-                    } else {
-                        el.innerText = "-";
-                    }
-                });
-            } catch (e) {
-                console.error(e);
+            const hrs = String(now.getHours()).padStart(2, '0');
+            const mins = String(now.getMinutes()).padStart(2, '0');
+            const secs = String(now.getSeconds()).padStart(2, '0');
+            const clockEl = window.parent.document.getElementById('live-tv-clock');
+            if (clockEl) {
+                clockEl.innerText = hrs + ":" + mins + ":" + secs + " น.";
             }
-        }
 
-        setInterval(updateTvDashboard, 1000);
-        updateTvDashboard();
-
-        setTimeout(function() {
-            try {
-                const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
-                if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {
-                    radioBtns[4].click();
+            const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
+            timerEls.forEach(el => {
+                const startAttr = el.getAttribute('data-start-epoch');
+                const startTs = parseInt(startAttr, 10);
+                if (startTs && startTs > 0) {
+                    const diffMs = Math.max(0, nowTs - startTs);
+                    const totalSecs = Math.floor(diffMs / 1000);
+                    const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                    const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                    const tSecs = String(totalSecs % 60).padStart(2, '0');
+                    el.innerText = tHrs + ":" + tMins + ":" + tSecs;
+                } else {
+                    el.innerText = "-";
                 }
-            } catch(err) {}
-        }, 30000);
-    </script>
-    """, height=0)
+            });
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    setInterval(updateTvDashboard, 1000);
+    updateTvDashboard();
+
+    setTimeout(function() {
+        try {
+            const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
+            if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {
+                radioBtns[4].click();
+            }
+        } catch(err) {}
+    }, 30000);
+</script>
+""", height=0)
