@@ -114,7 +114,7 @@ def get_day_working_windows(dt_date):
     if weekday == 6:
         return []
     elif weekday == 5:
-        # วันเสาร์: 08:30 - 17:00 น.
+        # วันเสาร์: 08:30 - 17:00 น. (หักเบรกเช้า 10:00-10:10, เที่ยง 12:00-13:00, บ่าย 15:00-15:10)
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -122,7 +122,7 @@ def get_day_working_windows(dt_date):
             (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
-        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น.
+        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น. (หักเบรกเช้า 10:00-10:10, เที่ยง 12:00-13:00, บ่าย 15:00-15:10, เย็นก่อน OT 17:00-17:30)
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -178,6 +178,21 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
 
     return segments, current_dt
 
+def calculate_working_hours_between(start_dt: datetime, end_dt: datetime) -> float:
+    if start_dt >= end_dt:
+        return 0.0
+    total_sec = 0.0
+    cur_d = start_dt.date()
+    while cur_d <= end_dt.date():
+        windows = get_day_working_windows(cur_d)
+        for ws, we in windows:
+            s_overlap = max(start_dt, ws)
+            e_overlap = min(end_dt, we)
+            if s_overlap < e_overlap:
+                total_sec += (e_overlap - s_overlap).total_seconds()
+        cur_d += timedelta(days=1)
+    return total_sec / 3600.0
+
 def highlight_running_deadlines(row, planned_finish_map):
     status = str(row.get("สถานะ", row.get("สถานะงาน", "")))
     p_code = str(row.get("แผนงาน", ""))
@@ -199,7 +214,7 @@ def highlight_running_deadlines(row, planned_finish_map):
     return [''] * len(row)
 
 # =========================================================
-# 1. App Icon & Header Logo
+# 1. การจัดการรูปภาพ (App Icon & Header Logo)
 # =========================================================
 icon_file = "log_ cnc_1.png"
 if not os.path.exists(icon_file):
@@ -236,7 +251,7 @@ logo_base64 = get_cached_logo()
 logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>' if logo_base64 else '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. UI & Neon Alert Styles
+# 2. ตกแต่ง UI & ไฟกระพริบนีออนชัดเจนระดับโรงงาน
 # =========================================================
 st.markdown("""
 <style>
@@ -351,31 +366,8 @@ st.markdown("""
     .tv-grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-top: 8px; }
     .tv-card { border-radius: 12px; padding: 12px 14px; color: #FFFFFF !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; flex-direction: column; justify-content: space-between; min-height: 140px; border: 1px solid rgba(255,255,255,0.12); }
     .tv-card-running { background: linear-gradient(135deg, #065F46 0%, #059669 100%) !important; border-left: 7px solid #34D399 !important; }
-    
-    @keyframes pulse-card-warning {
-        0% { box-shadow: 0 0 6px rgba(245, 158, 11, 0.4); }
-        50% { box-shadow: 0 0 20px rgba(245, 158, 11, 0.9); }
-        100% { box-shadow: 0 0 6px rgba(245, 158, 11, 0.4); }
-    }
-    @keyframes pulse-card-late {
-        0% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.5); }
-        50% { box-shadow: 0 0 25px rgba(239, 68, 68, 1); }
-        100% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.5); }
-    }
-    
-    .tv-card-warning {
-        background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important;
-        border-left: 7px solid #FDE047 !important;
-        border-top: 1px solid rgba(253, 224, 71, 0.4) !important;
-        animation: pulse-card-warning 1.8s infinite ease-in-out !important;
-    }
-    .tv-card-late {
-        background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important;
-        border-left: 7px solid #EF4444 !important;
-        border-top: 1px solid rgba(239, 68, 68, 0.5) !important;
-        animation: pulse-card-late 1.2s infinite ease-in-out !important;
-    }
-
+    .tv-card-warning { background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important; border-left: 7px solid #FDE047 !important; }
+    .tv-card-late { background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important; border-left: 7px solid #EF4444 !important; }
     .tv-card-hold { background: linear-gradient(135deg, #92400E 0%, #D97706 100%) !important; border-left: 7px solid #FBBF24 !important; }
     .tv-card-idle { background: linear-gradient(135deg, #1E293B 0%, #334155 100%) !important; border-left: 7px solid #64748B !important; opacity: 0.92; }
 
@@ -385,49 +377,9 @@ st.markdown("""
         border-radius: 50% !important;
         background-color: #10B981 !important;
         border: 2px solid #FFFFFF !important;
-        display: inline-block !important;
+        display: inline-block;
         vertical-align: middle !important;
         box-shadow: 0 0 8px #10B981, 0 0 16px rgba(16, 185, 129, 0.8) !important;
-        animation: tv-pulse-green 1.5s infinite ease-in-out !important;
-    }
-    @keyframes tv-pulse-green {
-        0% { transform: scale(0.9); box-shadow: 0 0 4px #10B981, 0 0 0 0 rgba(16, 185, 129, 0.9); }
-        50% { transform: scale(1.15); box-shadow: 0 0 12px #34D399, 0 0 0 8px rgba(16, 185, 129, 0); }
-        100% { transform: scale(0.9); box-shadow: 0 0 4px #10B981, 0 0 0 0 rgba(16, 185, 129, 0); }
-    }
-
-    .tv-pulse-dot-warning {
-        width: 13px !important;
-        height: 13px !important;
-        border-radius: 50% !important;
-        background-color: #FACC15 !important;
-        border: 2px solid #FFFFFF !important;
-        display: inline-block !important;
-        vertical-align: middle !important;
-        box-shadow: 0 0 10px #FACC15, 0 0 18px rgba(250, 204, 21, 0.9) !important;
-        animation: tv-pulse-yellow 1.1s infinite ease-in-out !important;
-    }
-    @keyframes tv-pulse-yellow {
-        0% { transform: scale(0.9); box-shadow: 0 0 4px #FACC15, 0 0 0 0 rgba(250, 204, 21, 0.9); }
-        50% { transform: scale(1.2); box-shadow: 0 0 14px #FEF08A, 0 0 0 9px rgba(250, 204, 21, 0); }
-        100% { transform: scale(0.9); box-shadow: 0 0 4px #FACC15, 0 0 0 0 rgba(250, 204, 21, 0); }
-    }
-
-    .tv-pulse-dot-late {
-        width: 13px !important;
-        height: 13px !important;
-        border-radius: 50% !important;
-        background-color: #EF4444 !important;
-        border: 2px solid #FFFFFF !important;
-        display: inline-block !important;
-        vertical-align: middle !important;
-        box-shadow: 0 0 10px #EF4444, 0 0 20px rgba(239, 68, 68, 1) !important;
-        animation: tv-pulse-red 0.8s infinite ease-in-out !important;
-    }
-    @keyframes tv-pulse-red {
-        0% { transform: scale(0.9); box-shadow: 0 0 6px #EF4444, 0 0 0 0 rgba(239, 68, 68, 1); }
-        50% { transform: scale(1.25); box-shadow: 0 0 18px #F87171, 0 0 0 11px rgba(239, 68, 68, 0); }
-        100% { transform: scale(0.9); box-shadow: 0 0 6px #EF4444, 0 0 0 0 rgba(239, 68, 68, 0); }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -455,10 +407,6 @@ default_states = {
 for k, v in default_states.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
-query_params = st.query_params
-if query_params.get("view") == "tv":
-    st.session_state.current_view = "📺 จอทีวีกลางโรงงาน (TV Live)"
 
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
@@ -789,7 +737,6 @@ if selected_tab != st.session_state.current_view:
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
-    
     df_all = fetch_jobs_from_supabase()
     
     c_m_sel, c_mode_sel = st.columns([2, 2])
@@ -1023,7 +970,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# VIEW 2: Dashboard ภาพรวมโรงงาน
+# VIEW 2: Dashboard ภาพรวมโรงงาน (ฉบับสมบูรณ์ กราฟและตารางครบ 100%)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     is_admin = (st.session_state.user_role == "admin")
@@ -1043,6 +990,64 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         calc_df["Basic (น.)"] = pd.to_numeric(calc_df["Basic (น.)"], errors='coerce').fillna(0.0)
         calc_df["โปรแกรม (น.)"] = pd.to_numeric(calc_df["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
         calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
+
+        st.markdown("### 🎯 แผงสรุปภาพรวมและจุดวิกฤตการผลิต (Executive Overview)")
+        ov_col1, ov_col2 = st.columns([1.2, 1.8])
+
+        with ov_col1:
+            status_counts = calc_df["สถานะงาน"].value_counts().reset_index()
+            status_counts.columns = ["สถานะ", "จำนวน"]
+            donut_color_map = {
+                "🟩 เสร็จสิ้นแล้ว": "#10B981", "🟦 กำลังผลิต": "#2563EB",
+                "🟨 พักงาน (รอวัสดุ)": "#F59E0B", "🟧 รอคิวผลิต": "#94A3B8"
+            }
+            fig_donut = px.pie(
+                status_counts, values="จำนวน", names="สถานะ", hole=0.55,
+                color="สถานะ", color_discrete_map=donut_color_map, title="📊 สัดส่วนสถานะงานทั้งหมดในระบบ"
+            )
+            fig_donut.update_traces(textposition='inside', textinfo='percent+value')
+            fig_donut.update_layout(height=260, margin=dict(l=10, r=10, t=35, b=10), plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF")
+            st.plotly_chart(fig_donut, use_container_width=True)
+
+        with ov_col2:
+            st.markdown("**⚠️ 3 อันดับสถานีคอขวดสูงสุด (คิวงานค้างรอนานที่สุด):**")
+            waiting_sub = calc_df[calc_df["สถานะงาน"] == "🟧 รอคิวผลิต"]
+            if not waiting_sub.empty:
+                m_load = waiting_sub.groupby("เลือกเครื่องจักร").agg(คิวรอ=('ID', 'count'), ชั่วโมงรวม=('รวม (ชม.)', 'sum')).reset_index().sort_values(by="คิวรอ", ascending=False).head(3)
+                bn_cols = st.columns(3)
+                for idx_b, (_, b_row) in enumerate(m_load.iterrows()):
+                    with bn_cols[idx_b]:
+                        st.markdown(f"""
+                        <div style="background:#FEF2F2; border:1.5px solid #FECACA; border-left:5px solid #DC2626; border-radius:10px; padding:10px 14px;">
+                            <div style="font-size:11px; font-weight:bold; color:#991B1B;">อันดับ {idx_b+1} งานค้างสูงสุด</div>
+                            <div style="font-size:14px; font-weight:800; color:#1E293B; margin:2px 0;">{b_row['เลือกเครื่องจักร']}</div>
+                            <div style="font-size:12px; color:#475569;">คิวรอ: <b style="color:#DC2626;">{b_row['คิวรอ']} งาน</b> ({b_row['ชั่วโมงรวม']:.1f} ชม.)</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+            else:
+                st.success("🎉 ทุกสถานีไม่มีคิวงานคั่งค้าง")
+
+            st.write("")
+            hold_sub = calc_df[calc_df["สถานะงาน"] == "🟨 พักงาน (รอวัสดุ)"]
+            total_hold_count = len(hold_sub)
+            total_hold_hrs = hold_sub["รวม (ชม.)"].sum()
+            rate_map_quick = DEFAULT_RATES
+            total_hold_val = sum([r.get("รวม (ชม.)", 0.0) * rate_map_quick.get(r.get("เลือกเครื่องจักร"), 500) for _, r in hold_sub.iterrows()])
+
+            st.markdown(f"""
+            <div style="background:#FFFBEB; border:1.5px dashed #F59E0B; border-radius:10px; padding:10px 16px; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <span style="font-size:13px; font-weight:800; color:#B45309;">🛑 เวลาและมูลค่าสูญเปล่าสะสมจากงานที่พักไว้ (Downtime Loss):</span><br>
+                    <span style="font-size:11.5px; color:#78350F;">มีงานติดปัญหาชะงักรอเบิกวัสดุ <b>{total_hold_count} งาน</b></span>
+                </div>
+                <div style="text-align:right;">
+                    <span style="font-size:18px; font-weight:900; color:#D97706;">{total_hold_hrs:.1f} ชม.</span><br>
+                    <span style="font-size:12px; font-weight:700; color:#B45309;">({total_hold_val:,.2f} ฿)</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.divider()
 
         df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(calc_df)
 
@@ -1186,12 +1191,71 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.dataframe(display_df[[c for c in display_df.columns if c not in ["ID", "ลบ"]]], hide_index=True, use_container_width=True)
 
         st.divider()
+
+        # =====================================================
+        # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)
+        # =====================================================
         if not df_summary.empty:
             st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
-            st.dataframe(df_summary, use_container_width=True, hide_index=True)
+            df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True).copy()
+            df_display["ลำดับคิว"] = df_display.groupby("เครื่องจักร").cumcount() + 1
+            df_display["ลำดับคิว"] = df_display["ลำดับคิว"].apply(lambda q: f"คิวที่ {q}")
+            display_cols = [c for c in df_display.columns if c not in ["เวลาเริ่มจริง", "เวลาจบงาน_DT"]]
+            styled_df_display = df_display[display_cols].style.apply(
+                highlight_running_deadlines, planned_finish_map=dict(zip(df_summary["ID"].astype(str), df_summary["เวลาจบงาน_DT"])), axis=1
+            )
+            st.dataframe(styled_df_display, use_container_width=True, hide_index=True)
+            st.divider()
+
+        # =====================================================
+        # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline)
+        # =====================================================
+        if not df_gantt.empty:
+            st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
+            plot_gantt_df = df_gantt.copy()
+            plot_gantt_df["เริ่มแสดง"] = plot_gantt_df["เวลาเริ่ม"].dt.strftime("%d/%m/%Y %H:%M น.")
+            plot_gantt_df["เสร็จแสดง"] = plot_gantt_df["เวลาเสร็จ"].dt.strftime("%d/%m/%Y %H:%M น.")
+
+            fig = px.timeline(
+                plot_gantt_df, x_start="เวลาเริ่ม", x_end="เวลาเสร็จ", y="เครื่องจักร", color="แผนงาน",
+                text="ข้อความบนแท่งกราฟ", category_orders={"เครื่องจักร": MACHINE_LIST}
+            )
+            fig.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=MACHINE_LIST)
+            fig.update_layout(height=max(450, len(MACHINE_LIST) * 32), plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF")
+            st.plotly_chart(fig, use_container_width=True)
+            st.divider()
+
+        # =====================================================
+        # 4. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
+        # =====================================================
+        st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
+        fig_bar = px.bar(
+            df_util, x="อัตราการใช้งาน (%)", y="เครื่องจักร", orientation="h",
+            color="อัตราการใช้งาน (%)", color_continuous_scale="Blues", text="ข้อความแสดง",
+            range_x=[0, 105], category_orders={"เครื่องจักร": MACHINE_LIST}
+        )
+        fig_bar.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=MACHINE_LIST)
+        fig_bar.update_layout(height=max(500, len(MACHINE_LIST) * 28), plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF")
+        fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", annotation_text="เป้าหมาย 85%")
+        st.plotly_chart(fig_bar, use_container_width=True)
+        st.divider()
+
+        # =====================================================
+        # 5. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Cost Calculation)
+        # =====================================================
+        st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
+        finished_jobs_df = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
+        if not finished_jobs_df.empty:
+            cost_df = finished_jobs_df.copy()
+            cost_df["รวม (ชม.)"] = ((cost_df["Setup (น.)"] + cost_df["Basic (น.)"] + cost_df["โปรแกรม (น.)"]) / 60.0).round(2)
+            cost_df["เรตราคา (บาท/ชม.)"] = cost_df["เลือกเครื่องจักร"].map(DEFAULT_RATES).fillna(500)
+            cost_df["มูลค่ารวม (บาท)"] = cost_df["รวม (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]
+            st.dataframe(cost_df[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]], use_container_width=True, hide_index=True)
+        else:
+            st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
 # ---------------------------------------------------------
-# VIEW 3: วิเคราะห์ประสิทธิภาพราย Drawing
+# VIEW 3: วิเคราะห์ Drawing
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📈 วิเคราะห์ประสิทธิภาพราย Drawing":
     st.subheader("📈 วิเคราะห์และเปรียบเทียบเวลาทำงานจริงราย Drawing")
@@ -1216,16 +1280,8 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
     df_live = fetch_jobs_from_supabase()
-
     now_bangkok = get_bangkok_now()
     cur_date_str = now_bangkok.strftime("%d/%m/%Y")
-
-    planned_finish_map_tv = {}
-    if not df_live.empty:
-        _, df_summary_tv, _, _ = calculate_shop_schedule(df_live)
-        if not df_summary_tv.empty:
-            for _, s_row in df_summary_tv.iterrows():
-                planned_finish_map_tv[str(s_row.get("ID", ""))] = s_row.get("เวลาจบงาน_DT")
 
     machine_cards = []
     r_count, h_count, i_count = 0, 0, 0
