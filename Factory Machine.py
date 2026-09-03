@@ -69,7 +69,7 @@ def parse_flexible_datetime(dt_val):
 
     if "/" in s:
         date_part = s.split(" ")[0]
-        time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:00:00"
+        time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:30:00"
         parts = date_part.split("/")
         
         if len(parts) == 2:
@@ -107,21 +107,28 @@ def to_bangkok_epoch_ms(dt_val):
     except Exception:
         return int((pd.to_datetime(dt_p) - pd.Timestamp("1970-01-01") - pd.Timedelta(hours=7)).total_seconds() * 1000)
 
+# กำหนดช่วงเวลาทำงานจริงโดยหักเวลาพักเบรก 10:00-10:10 และ 15:00-15:10
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
     if weekday == 6:
+        # วันอาทิตย์: หยุดทำการ
         return []
     elif weekday == 5:
-        # วันเสาร์: เริ่ม 08:30 - 12:00 น. และ 13:00 - 17:00 น. (7.5 ชม./วัน)
+        # วันเสาร์: 08:30 - 17:00 น.
         return [
-            (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(12, 0))),
-            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(17, 0)))
+            (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
+            (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
+            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(15, 0))),
+            (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
-        # วันจันทร์ - ศุกร์: เริ่ม 08:00 - 12:00 น. และ 13:00 - 20:00 น. (11 ชม./วัน)
+        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น. (พักเบรกเย็นก่อน OT 17:00 - 17:30 น.)
         return [
-            (datetime.combine(dt_date, dtime(8, 0)), datetime.combine(dt_date, dtime(12, 0))),
-            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(20, 0)))
+            (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
+            (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
+            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(15, 0))),
+            (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0))),
+            (datetime.combine(dt_date, dtime(17, 30)), datetime.combine(dt_date, dtime(20, 0)))
         ]
 
 def get_next_valid_work_time(dt: datetime) -> datetime:
@@ -134,9 +141,7 @@ def get_next_valid_work_time(dt: datetime) -> datetime:
             elif w_start <= dt < w_end:
                 return dt
         cur_date += timedelta(days=1)
-        next_h = 8
-        next_m = 30 if cur_date.weekday() == 5 else 0
-        dt = datetime.combine(cur_date, dtime(next_h, next_m))
+        dt = datetime.combine(cur_date, dtime(8, 30))
     return dt
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
@@ -155,7 +160,7 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
                 break
                 
         if not active_window:
-            current_dt = get_next_valid_work_time(current_dt + timedelta(minutes=10))
+            current_dt = get_next_valid_work_time(current_dt + timedelta(minutes=5))
             continue
             
         w_start, w_end = active_window
@@ -514,7 +519,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:00-20:00 น.) | ส. (08:30-17:00 น.) | พักเที่ยง 12:00-13:00 น. | หยุดวันอาทิตย์</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:30-20:00 น.) | ส. (08:30-17:00 น.) | เบรกเช้า 10:00-10:10 น. | พักเที่ยง 12:00-13:00 น. | เบรกบ่าย 15:00-15:10 น. | หยุดวันอาทิตย์</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
@@ -681,7 +686,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (คำนวณตามแผนแม่นยำ ไม่เลื่อนตามนาฬิกาจริง)
+# 5. Scheduling Engine (คำนวณตามแผนแม่นยำ พร้อมหักเบรกทุกช่วง)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime=None):
     active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
@@ -856,7 +861,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
             total_factory_work_hours += (we - ws).total_seconds() / 3600.0
         iter_date += timedelta(days=1)
         
-    total_horizon_work_hrs = max(total_factory_work_hours, 11.0)
+    total_horizon_work_hrs = max(total_factory_work_hours, 8.83)
     
     util_list = []
     for m in MACHINE_LIST:
@@ -1549,7 +1554,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
             ].copy()
 
-            # ซิงค์ลำดับแถวให้ตรงกับตาราง Work Order Sheet 100%
             if not df_summary.empty:
                 order_map = {str(val): i for i, val in enumerate(df_summary["ID"].astype(str))}
                 active_jobs_editor_df["temp_plan_order"] = active_jobs_editor_df["ID"].astype(str).map(order_map).fillna(999999)
@@ -2306,13 +2310,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 fig.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=display_machines, showgrid=True, gridcolor="#E2E8F0")
                 
                 if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
-                    start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
+                    start_view = datetime.combine(selected_date_range[0], dtime(8, 0))
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
-                    start_view = datetime.combine(selected_date_range[0], dtime(7, 30))
+                    start_view = datetime.combine(selected_date_range[0], dtime(8, 0))
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 else:
-                    start_view = datetime.combine(gantt_min_date, dtime(7, 30))
+                    start_view = datetime.combine(gantt_min_date, dtime(8, 0))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
 
                 fig.update_xaxes(range=[start_view, end_view], showgrid=True, gridcolor="#E2E8F0")
@@ -2333,15 +2337,33 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 annotation_font_size=10, annotation_font_color="#94A3B8"
                             )
                         else:
+                            # แสดงแถบเบรกเช้า
+                            b1_start = datetime.combine(cur_d, dtime(10, 0))
+                            b1_end = datetime.combine(cur_d, dtime(10, 10))
+                            fig.add_vrect(x0=b1_start, x1=b1_end, fillcolor="#FEF3C7", opacity=0.6, layer="below", line_width=0)
+                            
+                            # แสดงแถบพักเที่ยง
                             lunch_start = datetime.combine(cur_d, dtime(12, 0))
                             lunch_end = datetime.combine(cur_d, dtime(13, 0))
                             fig.add_vrect(
                                 x0=lunch_start, x1=lunch_end,
-                                fillcolor="#FEF3C7", opacity=0.55,
+                                fillcolor="#FEF3C7", opacity=0.6,
                                 layer="below", line_width=1, line_color="#FDE68A",
                                 annotation_text="🍱 พักเที่ยง", annotation_position="top left",
                                 annotation_font_size=9, annotation_font_color="#D97706"
                             )
+                            
+                            # แสดงแถบเบรกบ่าย
+                            b2_start = datetime.combine(cur_d, dtime(15, 0))
+                            b2_end = datetime.combine(cur_d, dtime(15, 10))
+                            fig.add_vrect(x0=b2_start, x1=b2_end, fillcolor="#FEF3C7", opacity=0.6, layer="below", line_width=0)
+
+                            # แสดงแถบเบรกเย็นวันธรรมดาก่อน OT
+                            if cur_d.weekday() < 5:
+                                ot_b_start = datetime.combine(cur_d, dtime(17, 0))
+                                ot_b_end = datetime.combine(cur_d, dtime(17, 30))
+                                fig.add_vrect(x0=ot_b_start, x1=ot_b_end, fillcolor="#FEF3C7", opacity=0.5, layer="below", line_width=0)
+
                         cur_d += timedelta(days=1)
 
                 fig.update_layout(
@@ -2361,18 +2383,22 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 <div class="schedule-info-box">
                     <div class="schedule-pill">
                         <span style="font-size:16px;">⏱️</span>
-                        <span><b>จันทร์ – ศุกร์:</b> 08:00 – 12:00 น. และ 13:00 – 20:00 น. (11 ชม./วัน)</span>
+                        <span><b>จันทร์ – ศุกร์:</b> 08:30 – 12:00 น. และ 13:00 – 20:00 น. (พักเย็น 17:00 – 17:30 น.)</span>
                     </div>
                     <div class="schedule-pill">
                         <span style="font-size:16px;">⏱️</span>
-                        <span><b>วันเสาร์:</b> 08:30 – 12:00 น. และ 13:00 – 17:00 น. (7.5 ชม./วัน)</span>
+                        <span><b>วันเสาร์:</b> 08:30 – 12:00 น. และ 13:00 – 17:00 น. (7.17 ชม./วัน)</span>
+                    </div>
+                    <div class="schedule-pill">
+                        <span style="font-size:16px;">☕</span>
+                        <span style="color:#D97706;"><b>เบรกเช้า/บ่าย (จ.-ส.):</b> 10:00 – 10:10 น. และ 15:00 – 15:10 น.</span>
                     </div>
                     <div class="schedule-pill">
                         <span style="font-size:16px;">🍱</span>
-                        <span style="color:#D97706;"><b>พักเบรกเที่ยง:</b> 12:00 – 13:00 น. (แถบสีส้มอ่อน)</span>
+                        <span style="color:#D97706;"><b>พักเที่ยง:</b> 12:00 – 13:00 น.</span>
                     </div>
                     <div class="schedule-pill">
-                        <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ (แถบสีเทาอ่อน)</span>
+                        <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
