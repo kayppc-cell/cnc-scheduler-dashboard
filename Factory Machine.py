@@ -247,7 +247,7 @@ logo_base64 = get_cached_logo()
 logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>' if logo_base64 else '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI & ไฟกระพริบนีออนชัดเจนระดับโรงงาน
+# 2. ตกแต่ง UI
 # =========================================================
 st.markdown("""
 <style>
@@ -533,7 +533,7 @@ default_states = {
     "gantt_date_range": None,
     "drawing_tracker_filter": "ALL",
     "wo_color_filter": "ALL",
-    "cleared_finish_jobs": set()  # บันทึก ID รายการที่ผู้ใช้สั่งลบวันเวลาจบงานทิ้ง
+    "cleared_finish_jobs": set()
 }
 for k, v in default_states.items():
     if k not in st.session_state:
@@ -683,7 +683,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (คำนวณตามแผนแม่นยำ พร้อมหักเบรกทุกช่วง)
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime=None):
     active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
@@ -1551,20 +1551,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
             ].copy()
 
-            if not df_summary.empty:
-                order_map = {str(val): i for i, val in enumerate(df_summary["ID"].astype(str))}
-                active_jobs_editor_df["temp_plan_order"] = active_jobs_editor_df["ID"].astype(str).map(order_map).fillna(999999)
-                active_jobs_editor_df = active_jobs_editor_df.sort_values(
-                    by=["temp_plan_order", "ID"],
-                    ascending=[True, True]
-                ).drop(columns=["temp_plan_order"]).reset_index(drop=True)
-            else:
-                active_jobs_editor_df["temp_ready_dt"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-                active_jobs_editor_df = active_jobs_editor_df.sort_values(
-                    by=["temp_ready_dt", "ID"], 
-                    ascending=[True, True], 
-                    na_position="last"
-                ).drop(columns=["temp_ready_dt"]).reset_index(drop=True)
+            # แปลงวัน-เวลาขึ้นงานเป็น Datetime เพื่อเรียงลำดับตามเวลาจริง
+            active_jobs_editor_df["temp_ready_dt"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
+            active_jobs_editor_df = active_jobs_editor_df.sort_values(
+                by=["temp_ready_dt", "ID"], 
+                ascending=[True, True], 
+                na_position="last"
+            ).drop(columns=["temp_ready_dt"]).reset_index(drop=True)
             
             for idx_row in active_jobs_editor_df.index:
                 row_status = str(active_jobs_editor_df.at[idx_row, "สถานะงาน"])
@@ -1785,7 +1778,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             if cur_fin_val in ["", "-", "None"]:
                                 st.session_state.cleared_finish_jobs.add(r_id_str)
                             else:
-                                # หากมีการคำนวณใหม่หรือกรอกเวลาใหม่ให้ถอดออกจาก Mask
                                 if r_id_str in st.session_state.cleared_finish_jobs and len(cur_fin_val) >= 10:
                                     st.session_state.cleared_finish_jobs.discard(r_id_str)
 
