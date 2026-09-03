@@ -114,7 +114,6 @@ def get_day_working_windows(dt_date):
     if weekday == 6:
         return []
     elif weekday == 5:
-        # วันเสาร์: 08:30 - 17:00 น.
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -122,7 +121,6 @@ def get_day_working_windows(dt_date):
             (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
-        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น.
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -955,7 +953,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# VIEW 2: Dashboard ภาพรวมโรงงาน
+# VIEW 2: Dashboard ภาพรวมโรงงาน (ฉบับสมบูรณ์)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     is_admin = (st.session_state.user_role == "admin")
@@ -1159,15 +1157,33 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     use_container_width=True
                 )
                 
+                # แมปข้อมูลเดิมจาก Database ไว้เช็ค
+                db_original_map = {}
+                for _, orig_row in df_db.iterrows():
+                    if pd.notna(orig_row.get("ID")):
+                        db_original_map[int(float(orig_row["ID"]))] = orig_row
+
                 c_save, c_del, _ = st.columns([2.5, 3.5, 4])
                 with c_save:
                     if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
                         for _, row in edited_jobs.iterrows():
                             p_code = safe_str(row.get("แผนงาน"), "")
                             if not p_code: continue
+                            
+                            row_id = row.get("ID")
+                            target_id = int(float(row_id)) if (pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"]) else None
+                            orig = db_original_map.get(target_id) if target_id is not None else None
+
                             raw_ready = row.get("วัน-เวลาขึ้นงาน")
                             dt_parsed = parse_flexible_datetime(raw_ready)
+
+                            # แก้ไขสำคัญ: ป้องกันค่าวันขึ้นงานหาย เมื่อไม่มีการพิมพ์ใหม่ ให้ดึงเวลาเดิม ไม่ส่ง None ไปทับ
+                            if dt_parsed is None or pd.isna(dt_parsed):
+                                if orig is not None:
+                                    dt_parsed = parse_flexible_datetime(orig.get("วัน-เวลาขึ้นงาน"))
+
                             ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if (dt_parsed is not None and pd.notna(dt_parsed)) else None
+
                             payload = {
                                 "plan_code": p_code, "drawing_name": safe_str(row.get("ชื่อ Drawing."), ""),
                                 "qty": safe_int(row.get("จำนวน"), 1), "material": safe_str(row.get("วัสดุ"), "SS400"),
@@ -1176,13 +1192,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 "setup_mins": safe_float(row.get("Setup (น.)"), 10.0), "basic_hrs": safe_float(row.get("Basic (น.)"), 0.0),
                                 "prog_hrs": safe_float(row.get("โปรแกรม (น.)"), 120.0), "status": safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
                             }
-                            row_id = row.get("ID")
-                            if pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan"]:
+
+                            if target_id is None:
                                 insert_supabase_job(payload)
                             else:
-                                update_supabase_job(int(float(row_id)), payload)
+                                update_supabase_job(target_id, payload)
+
                         st.cache_data.clear()
-                        st.toast("บันทึกข้อมูลสำเร็จ!", icon="💾")
+                        st.toast("บันทึกข้อมูลเรียบร้อยแล้ว!", icon="💾")
                         st.rerun()
 
                 with c_del:
@@ -1197,9 +1214,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         st.divider()
 
-        # ---------------------------------------------------------
+        # =====================================================
         # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)
-        # ---------------------------------------------------------
+        # =====================================================
         if not df_summary.empty:
             st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
             df_display = df_summary.sort_values(by="เวลาเริ่มจริง", ascending=True).copy()
@@ -1212,9 +1229,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.dataframe(styled_df_display, use_container_width=True, hide_index=True)
             st.divider()
 
-        # ---------------------------------------------------------
+        # =====================================================
         # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline)
-        # ---------------------------------------------------------
+        # =====================================================
         if not df_gantt.empty:
             st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
             plot_gantt_df = df_gantt.copy()
@@ -1230,9 +1247,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
-        # ---------------------------------------------------------
+        # =====================================================
         # 4. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
-        # ---------------------------------------------------------
+        # =====================================================
         st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
         fig_bar = px.bar(
             df_util, x="อัตราการใช้งาน (%)", y="เครื่องจักร", orientation="h",
@@ -1245,9 +1262,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         st.plotly_chart(fig_bar, use_container_width=True)
         st.divider()
 
-        # ---------------------------------------------------------
+        # =====================================================
         # 5. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Cost Calculation)
-        # ---------------------------------------------------------
+        # =====================================================
         st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
         finished_jobs_df = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
         if not finished_jobs_df.empty:
@@ -1285,7 +1302,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
     df_live = fetch_jobs_from_supabase()
-
     now_bangkok = get_bangkok_now()
     cur_date_str = now_bangkok.strftime("%d/%m/%Y")
 
