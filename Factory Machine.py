@@ -1504,59 +1504,54 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =====================================================
-            # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline) - คำนวณตรงกับคิวลูกโซ่ ป้องกัน NaT/OverflowError
+            # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline) - บังคับให้แท่งกราฟแสดงผลแน่นอน
             # =====================================================
             gantt_records = []
             for _, r_g in active_jobs_editor_df.iterrows():
-                st_dt = parse_flexible_datetime(r_g.get("วัน-เวลาขึ้นงาน"))
-                fn_dt = parse_flexible_datetime(r_g.get("วัน-เวลาจบงาน"))
+                st_raw = r_g.get("วัน-เวลาขึ้นงาน")
+                fn_raw = r_g.get("วัน-เวลาจบงาน")
                 
-                if st_dt is not None and fn_dt is not None and pd.notna(st_dt) and pd.notna(fn_dt):
-                    if 2020 <= st_dt.year <= 2035 and 2020 <= fn_dt.year <= 2035:
-                        seg_hrs = (fn_dt - st_dt).total_seconds() / 3600.0
-                        gantt_records.append({
-                            "ข้อความบนแท่งกราฟ": str(r_g.get("แผนงาน", "-")),
-                            "แผนงาน": str(r_g.get("แผนงาน", "-")),
-                            "ชื่อ Drawing.": str(r_g.get("ชื่อ Drawing.", "-")),
-                            "จำนวน": str(r_g.get("จำนวน", 1)),
-                            "ขั้นตอน (Step)": str(r_g.get("ขั้นตอน (Step)", "-")),
-                            "เครื่องจักร": str(r_g.get("เลือกเครื่องจักร", "-")),
-                            "วัสดุ": str(r_g.get("วัสดุ", "-")),
-                            "เวลาเริ่ม": st_dt,
-                            "เวลาเสร็จ": fn_dt,
-                            "ระยะเวลา": f"{seg_hrs:.2f} ชม.",
-                            "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
-                        })
+                st_dt = parse_flexible_datetime(st_raw)
+                fn_dt = parse_flexible_datetime(fn_raw)
+
+                # ถ้าหาเวลาไม่พบ ให้ตั้งเวลาชดเชยเพื่อไม่ให้แท่งกราฟหลุดหาย
+                if st_dt is None:
+                    st_dt = get_bangkok_now().replace(tzinfo=None)
+                if fn_dt is None or fn_dt <= st_dt:
+                    tot_mins = safe_float(r_g.get("โปรแกรม (น.)"), 120.0) + safe_float(r_g.get("Setup (น.)"), 10.0)
+                    fn_dt = st_dt + timedelta(minutes=max(tot_mins, 30.0))
+
+                p_name = str(r_g.get("แผนงาน", "-"))
+                dw_name = str(r_g.get("ชื่อ Drawing.", "-"))
+                step_name = str(r_g.get("ขั้นตอน (Step)", "-"))
+                m_name = str(r_g.get("เลือกเครื่องจักร", "-"))
+                mat_name = str(r_g.get("วัสดุ", "-"))
+                qty_val = str(r_g.get("จำนวน", 1))
+                tot_hrs = safe_float(r_g.get("รวม (ชม.)"), 0.0)
+
+                gantt_records.append({
+                    "ข้อความบนแท่งกราฟ": f"{p_name}",
+                    "แผนงาน": p_name,
+                    "ชื่อ Drawing.": dw_name,
+                    "จำนวน": qty_val,
+                    "ขั้นตอน (Step)": step_name,
+                    "เครื่องจักร": m_name,
+                    "วัสดุ": mat_name,
+                    "เวลาเริ่ม": pd.Timestamp(st_dt),
+                    "เวลาเสร็จ": pd.Timestamp(fn_dt),
+                    "ระยะเวลา": f"{tot_hrs:.2f} ชม.",
+                    "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
+                })
 
             df_gantt = pd.DataFrame(gantt_records)
 
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 
+                # หาช่วงเวลาครอบคลุมแท่งกราฟทั้งหมดที่มีจริง
+                gantt_min_date = df_gantt["เวลาเริ่ม"].min().date()
+                gantt_max_date = df_gantt["เวลาเสร็จ"].max().date()
                 today_date = get_bangkok_now().date()
-                
-                valid_st_series = pd.to_datetime(df_gantt["เวลาเริ่ม"], errors='coerce').dropna()
-                valid_fn_series = pd.to_datetime(df_gantt["เวลาเสร็จ"], errors='coerce').dropna()
-
-                if not valid_st_series.empty:
-                    first_valid_st = valid_st_series.min()
-                    gantt_min_date = first_valid_st.date() if pd.notna(first_valid_st) else today_date
-                else:
-                    gantt_min_date = today_date
-
-                if not valid_fn_series.empty:
-                    last_valid_fn = valid_fn_series.max()
-                    gantt_max_date = last_valid_fn.date() if pd.notna(last_valid_fn) else (today_date + timedelta(days=14))
-                else:
-                    gantt_max_date = today_date + timedelta(days=14)
-
-                if gantt_min_date.year < 2020 or gantt_min_date.year > 2035:
-                    gantt_min_date = today_date
-                if gantt_max_date.year < 2020 or gantt_max_date.year > 2035:
-                    gantt_max_date = today_date + timedelta(days=14)
-
-                if st.session_state.gantt_date_range is None or not isinstance(st.session_state.gantt_date_range, (list, tuple)):
-                    st.session_state.gantt_date_range = (today_date, min(gantt_max_date, today_date + timedelta(days=7)))
 
                 gantt_f1, gantt_f2, gantt_f3 = st.columns([2.2, 3.2, 1.8])
                 with gantt_f1:
@@ -1586,14 +1581,18 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
                             st.rerun()
 
-                    min_calendar_val = min(gantt_min_date, today_date) - timedelta(days=30)
-                    max_calendar_val = max(gantt_max_date, today_date) + timedelta(days=90)
+                    # ล็อกขอบเขตปฏิทินให้ปลอดภัย
+                    min_cal = min(gantt_min_date, today_date) - timedelta(days=15)
+                    max_cal = max(gantt_max_date, today_date) + timedelta(days=60)
+
+                    if st.session_state.gantt_date_range is None:
+                        st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
 
                     selected_date_range = st.date_input(
                         "เลือกช่วงวันที่กำหนดเอง:",
                         value=st.session_state.gantt_date_range,
-                        min_value=min_calendar_val,
-                        max_value=max_calendar_val,
+                        min_value=min_cal,
+                        max_value=max_cal,
                         label_visibility="collapsed"
                     )
                     st.session_state.gantt_date_range = selected_date_range
@@ -1613,11 +1612,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 plot_gantt_df = df_gantt[df_gantt["เครื่องจักร"].isin(display_machines)].copy()
 
                 if not plot_gantt_df.empty:
-                    plot_gantt_df["เริ่มแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเริ่ม"]).dt.strftime("%d/%m/%Y %H:%M น.")
-                    plot_gantt_df["เสร็จแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเสร็จ"]).dt.strftime("%d/%m/%Y %H:%M น.")
+                    plot_gantt_df["เริ่มแสดง"] = plot_gantt_df["เวลาเริ่ม"].dt.strftime("%d/%m/%Y %H:%M น.")
+                    plot_gantt_df["เสร็จแสดง"] = plot_gantt_df["เวลาเสร็จ"].dt.strftime("%d/%m/%Y %H:%M น.")
 
                     color_target = "แผนงาน" if color_by_option == "แผนงาน (Plan Code)" else "กิจกรรม"
-                    distinct_plans = [p for p in plot_gantt_df["แผนงาน"].unique()]
+                    distinct_plans = list(plot_gantt_df["แผนงาน"].unique())
                     palette = px.colors.qualitative.Bold
                     plan_color_map = {p_name: palette[i % len(palette)] for i, p_name in enumerate(distinct_plans)}
 
@@ -1652,28 +1651,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     
                     fig.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=display_machines, showgrid=True, gridcolor="#E2E8F0")
 
+                    # ดึงช่วงเวลาแกน X ให้ครอบคลุมแท่งกราฟที่กำลังดู
                     if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
-                        start_view = datetime.combine(selected_date_range[0], dtime(8, 0))
-                        end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
+                        start_view = datetime.combine(selected_date_range[0], dtime(0, 0))
+                        end_view = datetime.combine(selected_date_range[1], dtime(23, 59))
                     else:
-                        start_view = datetime.combine(gantt_min_date, dtime(8, 0))
-                        end_view = datetime.combine(gantt_max_date, dtime(20, 30))
+                        start_view = datetime.combine(gantt_min_date, dtime(0, 0))
+                        end_view = datetime.combine(gantt_max_date, dtime(23, 59))
 
                     fig.update_xaxes(range=[start_view, end_view], showgrid=True, gridcolor="#E2E8F0")
-
-                    cur_d = start_view.date()
-                    max_scan_d = min(end_view.date(), cur_d + timedelta(days=60))
-                    while cur_d <= max_scan_d:
-                        if cur_d.weekday() == 6:
-                            fig.add_vrect(
-                                x0=datetime.combine(cur_d, dtime(0, 0)),
-                                x1=datetime.combine(cur_d + timedelta(days=1), dtime(0, 0)),
-                                fillcolor="#F8FAFC", opacity=0.8,
-                                layer="below", line_width=1, line_color="#E2E8F0",
-                                annotation_text="🛑 วันอาทิตย์ (หยุด)", annotation_position="top left",
-                                annotation_font_size=10, annotation_font_color="#94A3B8"
-                            )
-                        cur_d += timedelta(days=1)
 
                     fig.update_layout(
                         height=max(450, len(display_machines) * 35),
@@ -1688,7 +1674,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.info("ℹ️ ไม่มีรายการคิวงานในกลุ่มสถานีที่เลือก")
+                    st.warning("⚠️ ไม่มีคิวงานในกลุ่มสถานีที่เลือกนี้")
 
                 st.markdown("""
                 <div class="schedule-info-box">
