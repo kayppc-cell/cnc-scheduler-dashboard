@@ -107,13 +107,11 @@ def to_bangkok_epoch_ms(dt_val):
     except Exception:
         return int((pd.to_datetime(dt_p) - pd.Timestamp("1970-01-01") - pd.Timedelta(hours=7)).total_seconds() * 1000)
 
-# กำหนดช่วงเวลากะทำงานจริง หักช่วงพักเบรก 10:00-10:10 และ 15:00-15:10
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
     if weekday == 6:
         return []
     elif weekday == 5:
-        # วันเสาร์: 08:30 - 17:00 น.
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -121,7 +119,6 @@ def get_day_working_windows(dt_date):
             (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
-        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น. (พักเบรกเย็นก่อน OT 17:00 - 17:30 น.)
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -130,13 +127,11 @@ def get_day_working_windows(dt_date):
             (datetime.combine(dt_date, dtime(17, 30)), datetime.combine(dt_date, dtime(20, 0)))
         ]
 
-# ฟังก์ชันกระโดดข้ามช่วงพักเบรกแม่นยำ (แก้ปัญหาเวลาเริ่มตกที่ 15:00 น. หรือ 10:00 น. เป๊ะ)
 def get_next_valid_work_time(dt: datetime) -> datetime:
     cur_date = dt.date()
     for _ in range(14):
         windows = get_day_working_windows(cur_date)
         for w_start, w_end in windows:
-            # ถ้าเวลาน้อยกว่าหรือเท่ากับ w_start หรือตกอยู่ในช่องว่างพักเบรก ให้ดีดไปเริ่มที่ w_start
             if dt <= w_start:
                 return w_start
             elif w_start < dt < w_end:
@@ -537,7 +532,8 @@ default_states = {
     "scroll_to_bottom": False,
     "gantt_date_range": None,
     "drawing_tracker_filter": "ALL",
-    "wo_color_filter": "ALL"
+    "wo_color_filter": "ALL",
+    "cleared_finish_jobs": set()  # บันทึก ID รายการที่ผู้ใช้สั่งลบวันเวลาจบงานทิ้ง
 }
 for k, v in default_states.items():
     if k not in st.session_state:
@@ -1576,11 +1572,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
+            # คำนวณวัน-เวลาจบงาน พร้อมระบบเช็ค Clear Mask
             calculated_finish_dates = []
             for _, row_item in active_jobs_editor_df.iterrows():
                 row_id_str = str(row_item["ID"])
-                mapped_val = editor_finish_map.get(row_id_str)
                 
+                # หากผู้ใช้เคยสั่งลบเซลล์นี้ทิ้ง ให้คงค่าว่างไว้ตลอด
+                if row_id_str in st.session_state.cleared_finish_jobs:
+                    calculated_finish_dates.append("")
+                    continue
+
+                mapped_val = editor_finish_map.get(row_id_str)
                 if mapped_val and mapped_val != "-":
                     calculated_finish_dates.append(mapped_val)
                 else:
@@ -1735,7 +1737,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     display_editor_df = active_jobs_editor_df.copy().reset_index(drop=True)
 
                 if is_admin:
-                    # ปลดล็อกให้สามารถคลิกแก้/ลบตัวเลขในช่องวัน-เวลาจบงานได้ (disabled=False)
                     edited_jobs = st.data_editor(
                         display_editor_df,
                         key="editor_cnc_jobs_grid_main",
@@ -1763,7 +1764,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 "วัน-เวลาจบงาน",
                                 width=135,
                                 disabled=False,
-                                help="สามารถลบตัวเลขทิ้งได้ แต่ค่าจะถูกคำนวณจากสูตรกะเวลาให้อัตโนมัติ"
+                                help="สามารถลบตัวเลขทิ้งได้ หากลบแล้วระบบจะคงค่าว่างไว้"
                             ),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=10),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -1775,6 +1776,19 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         hide_index=True,
                         use_container_width=True
                     )
+
+                    # ตรวจสอบการลบค่าในช่องวัน-เวลาจบงานของผู้ใช้
+                    for _, edit_r in edited_jobs.iterrows():
+                        r_id_str = str(edit_r.get("ID", ""))
+                        cur_fin_val = str(edit_r.get("วัน-เวลาจบงาน", "")).strip()
+                        if r_id_str and r_id_str not in ["", "None", "nan"]:
+                            if cur_fin_val in ["", "-", "None"]:
+                                st.session_state.cleared_finish_jobs.add(r_id_str)
+                            else:
+                                # หากมีการคำนวณใหม่หรือกรอกเวลาใหม่ให้ถอดออกจาก Mask
+                                if r_id_str in st.session_state.cleared_finish_jobs and len(cur_fin_val) >= 10:
+                                    st.session_state.cleared_finish_jobs.discard(r_id_str)
+
                 else:
                     edited_jobs = display_editor_df.copy()
                     st.dataframe(
