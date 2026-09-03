@@ -1749,26 +1749,37 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =====================================================
             # 4. ผังเวลาขึ้นงาน (Gantt Chart Timeline) - ป้องกัน OverflowError
             # =====================================================
+            gantt_records = []
+            for _, r_g in active_jobs_editor_df.iterrows():
+                gantt_records.append({
+                    "ข้อความบนแท่งกราฟ": str(r_g["แผนงาน"]),
+                    "แผนงาน": str(r_g["แผนงาน"]),
+                    "ชื่อ Drawing.": str(r_g["ชื่อ Drawing."]),
+                    "จำนวน": str(r_g["จำนวน"]),
+                    "ขั้นตอน (Step)": str(r_g["ขั้นตอน (Step)"]),
+                    "เครื่องจักร": str(r_g["เลือกเครื่องจักร"]),
+                    "วัสดุ": str(r_g["วัสดุ"]),
+                    "เวลาเริ่ม": r_g["_dt_start"],
+                    "เวลาเสร็จ": r_g["_dt_finish"],
+                    "ระยะเวลา": f"{r_g['รวม (ชม.)']} ชม.",
+                    "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
+                })
+
+            df_gantt = pd.DataFrame(gantt_records)
+
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
                 
                 today_date = get_bangkok_now().date()
                 
+                # กรองเฉพาะวันที่อยู่ในช่วง ค.ศ. ปกติ ป้องกัน OverflowError จากปีเพี้ยน
                 valid_starts = pd.to_datetime(df_gantt["เวลาเริ่ม"], errors='coerce').dropna()
                 valid_ends = pd.to_datetime(df_gantt["เวลาเสร็จ"], errors='coerce').dropna()
+                valid_starts = valid_starts[(valid_starts.dt.year >= 2020) & (valid_starts.dt.year <= 2035)]
+                valid_ends = valid_ends[(valid_ends.dt.year >= 2020) & (valid_ends.dt.year <= 2035)]
 
-                valid_starts = valid_starts[(valid_starts.dt.year >= 2000) & (valid_starts.dt.year <= 2100)]
-                valid_ends = valid_ends[(valid_ends.dt.year >= 2000) & (valid_ends.dt.year <= 2100)]
-
-                if not valid_starts.empty:
-                    gantt_min_date = max(valid_starts.min().date(), today_date - timedelta(days=90))
-                else:
-                    gantt_min_date = today_date
-
-                if not valid_ends.empty:
-                    gantt_max_date = min(valid_ends.max().date(), today_date + timedelta(days=180))
-                else:
-                    gantt_max_date = today_date + timedelta(days=14)
+                gantt_min_date = valid_starts.min().date() if not valid_starts.empty else today_date
+                gantt_max_date = valid_ends.max().date() if not valid_ends.empty else (today_date + timedelta(days=14))
 
                 if st.session_state.gantt_date_range is None:
                     st.session_state.gantt_date_range = (today_date, min(today_date + timedelta(days=7), gantt_max_date))
@@ -1878,13 +1889,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 elif isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 1:
                     start_view = datetime.combine(selected_date_range[0], dtime(8, 0))
-                    end_view = datetime.combine(selected_date_range[0], dtime(20, 30))
+                    end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
                 else:
                     start_view = datetime.combine(gantt_min_date, dtime(8, 0))
                     end_view = datetime.combine(gantt_max_date, dtime(20, 30))
 
                 fig.update_xaxes(range=[start_view, end_view], showgrid=True, gridcolor="#E2E8F0")
 
+                # วนลูปวาดวันอาทิตย์และช่วงพักเบรกของโรงงาน (จำกัดลูปสูงสุด 60 วัน ป้องกันค้าง)
                 if not plot_gantt_df.empty:
                     cur_d = start_view.date() - timedelta(days=1)
                     max_scan_d = min(end_view.date() + timedelta(days=1), cur_d + timedelta(days=60))
