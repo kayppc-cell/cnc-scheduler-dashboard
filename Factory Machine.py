@@ -1757,28 +1757,31 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             st.divider()
 
-            # =====================================================
-        # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline) - คำนวณตรงกับคิวลูกโซ่ 100%
+        # =====================================================
+        # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline) - ดึงเวลาจากช่องตาราง ป้องกัน KeyError
         # =====================================================
         gantt_records = []
         for _, r_g in active_jobs_editor_df.iterrows():
-            st_dt = r_g["_dt_start"]
-            fn_dt = r_g["_dt_finish"]
-            if pd.notna(st_dt) and pd.notna(fn_dt):
-                seg_hrs = (fn_dt - st_dt).total_seconds() / 3600.0
-                gantt_records.append({
-                    "ข้อความบนแท่งกราฟ": str(r_g.get("แผนงาน", "-")),
-                    "แผนงาน": str(r_g.get("แผนงาน", "-")),
-                    "ชื่อ Drawing.": str(r_g.get("ชื่อ Drawing.", "-")),
-                    "จำนวน": str(r_g.get("จำนวน", 1)),
-                    "ขั้นตอน (Step)": str(r_g.get("ขั้นตอน (Step)", "-")),
-                    "เครื่องจักร": str(r_g.get("เลือกเครื่องจักร", "-")),
-                    "วัสดุ": str(r_g.get("วัสดุ", "-")),
-                    "เวลาเริ่ม": st_dt,
-                    "เวลาเสร็จ": fn_dt,
-                    "ระยะเวลา": f"{seg_hrs:.2f} ชม.",
-                    "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
-                })
+            # ดึงเวลาจากช่อง "วัน-เวลาขึ้นงาน" และ "วัน-เวลาจบงาน" โดยตรง ไม่เรียก _dt_start ป้องกัน KeyError 100%
+            st_dt = parse_flexible_datetime(r_g.get("วัน-เวลาขึ้นงาน"))
+            fn_dt = parse_flexible_datetime(r_g.get("วัน-เวลาจบงาน"))
+            
+            if st_dt is not None and fn_dt is not None and pd.notna(st_dt) and pd.notna(fn_dt):
+                if 2020 <= st_dt.year <= 2035 and 2020 <= fn_dt.year <= 2035:
+                    seg_hrs = (fn_dt - st_dt).total_seconds() / 3600.0
+                    gantt_records.append({
+                        "ข้อความบนแท่งกราฟ": str(r_g.get("แผนงาน", "-")),
+                        "แผนงาน": str(r_g.get("แผนงาน", "-")),
+                        "ชื่อ Drawing.": str(r_g.get("ชื่อ Drawing.", "-")),
+                        "จำนวน": str(r_g.get("จำนวน", 1)),
+                        "ขั้นตอน (Step)": str(r_g.get("ขั้นตอน (Step)", "-")),
+                        "เครื่องจักร": str(r_g.get("เลือกเครื่องจักร", "-")),
+                        "วัสดุ": str(r_g.get("วัสดุ", "-")),
+                        "เวลาเริ่ม": st_dt,
+                        "เวลาเสร็จ": fn_dt,
+                        "ระยะเวลา": f"{seg_hrs:.2f} ชม.",
+                        "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
+                    })
 
         df_gantt = pd.DataFrame(gantt_records)
 
