@@ -112,6 +112,7 @@ def get_day_working_windows(dt_date):
     if weekday == 6:
         return []
     elif weekday == 5:
+        # วันเสาร์: 08:30 - 17:00 น. (หักเบรกเช้า 10:00-10:10, เที่ยง 12:00-13:00, บ่าย 15:00-15:10)
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -119,6 +120,7 @@ def get_day_working_windows(dt_date):
             (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
+        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น. (หักเบรกเช้า 10:00-10:10, เที่ยง 12:00-13:00, บ่าย 15:00-15:10, เย็นก่อน OT 17:00-17:30)
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -247,7 +249,7 @@ logo_base64 = get_cached_logo()
 logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>' if logo_base64 else '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI
+# 2. ตกแต่ง UI & ไฟกระพริบนีออนชัดเจนระดับโรงงาน
 # =========================================================
 st.markdown("""
 <style>
@@ -683,7 +685,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine
+# 5. Scheduling Engine (คำนวณตามแผนแม่นยำ พร้อมระบบ Chain Reference)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime=None):
     active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
@@ -760,6 +762,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
         ready_candidates.sort(key=job_priority_key)
         selected_job = ready_candidates[0]
 
+        # หากเป็นคิวถัดไปและเครื่องว่างช้ากว่าเวลาขึ้นงานเดิม ให้เริ่มเมื่อเครื่องว่าง (Chain Logic)
         job_ready_time = selected_job["ready_at"]
         if cur_time < job_ready_time:
             cur_time = get_next_valid_work_time(job_ready_time)
@@ -1565,12 +1568,21 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # คำนวณวัน-เวลาจบงาน พร้อมระบบเช็ค Clear Mask
+            # ---------------------------------------------------------
+            # ระบบ Chain Schedule: เชื่อมวันเวลาขึ้นงานอัตโนมัติตามลำดับคิว
+            # ---------------------------------------------------------
             calculated_finish_dates = []
-            for _, row_item in active_jobs_editor_df.iterrows():
+            machine_last_finish_sim = {}
+
+            for row_idx, row_item in active_jobs_editor_df.iterrows():
                 row_id_str = str(row_item["ID"])
-                
-                # หากผู้ใช้เคยสั่งลบเซลล์นี้ทิ้ง ให้คงค่าว่างไว้ตลอด
+                m_target = str(row_item.get("เลือกเครื่องจักร", ""))
+
+                current_ready_parsed = parse_flexible_datetime(row_item.get("วัน-เวลาขึ้นงาน"))
+                if current_ready_parsed is None and m_target in machine_last_finish_sim:
+                    current_ready_parsed = machine_last_finish_sim[m_target]
+                    active_jobs_editor_df.at[row_idx, "วัน-เวลาขึ้นงาน"] = current_ready_parsed.strftime("%d/%m/%Y %H:%M")
+
                 if row_id_str in st.session_state.cleared_finish_jobs:
                     calculated_finish_dates.append("")
                     continue
@@ -1578,8 +1590,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 mapped_val = editor_finish_map.get(row_id_str)
                 if mapped_val and mapped_val != "-":
                     calculated_finish_dates.append(mapped_val)
+                    m_f_dt = parse_flexible_datetime(mapped_val)
+                    if m_f_dt is not None:
+                        machine_last_finish_sim[m_target] = m_f_dt
                 else:
-                    ready_parsed = parse_flexible_datetime(row_item.get("วัน-เวลาขึ้นงาน"))
+                    ready_parsed = current_ready_parsed
                     if ready_parsed is None:
                         ready_parsed = get_bangkok_now().replace(tzinfo=None)
                     
@@ -1591,13 +1606,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     try:
                         _, fallback_end_dt = add_work_time_with_shift(ready_parsed, tot_hrs)
                         calculated_finish_dates.append(fallback_end_dt.strftime("%d/%m/%Y %H:%M"))
+                        machine_last_finish_sim[m_target] = fallback_end_dt
                     except Exception:
                         calculated_finish_dates.append("-")
 
             active_jobs_editor_df["วัน-เวลาจบงาน"] = calculated_finish_dates
 
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
-                lambda x: x.strftime("%d/%m/%Y %H:%M") if pd.notna(x) else ""
+                lambda x: x.strftime("%d/%m/%Y %H:%M") if (pd.notna(x) and isinstance(x, (datetime, pd.Timestamp))) else str(x or "")
             )
 
             if "ลบ" not in active_jobs_editor_df.columns:
@@ -1770,7 +1786,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         use_container_width=True
                     )
 
-                    # ตรวจสอบการลบค่าในช่องวัน-เวลาจบงานของผู้ใช้
+                    # ตรวจจับการสั่งลบค่าในช่องวัน-เวลาจบงาน
                     for _, edit_r in edited_jobs.iterrows():
                         r_id_str = str(edit_r.get("ID", ""))
                         cur_fin_val = str(edit_r.get("วัน-เวลาจบงาน", "")).strip()
