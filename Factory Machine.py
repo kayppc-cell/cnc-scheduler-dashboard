@@ -552,7 +552,7 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: โหมดช่างหน้าเครื่อง (คิวครบทุกคิว ไม่โดนกรองหาย)
+# VIEW 1: โหมดช่างหน้าเครื่อง (คิวครบทุกคิว ไม่ตัดออก)
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
@@ -860,7 +860,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     """, height=0)
 
 # ---------------------------------------------------------
-# VIEW 2: แดชบอร์ดภาพรวมโรงงาน (ฉบับเต็มสมบูรณ์ 100%)
+# VIEW 2: แดชบอร์ดภาพรวมโรงงาน (ครบทุกกราฟ ไม่ติด NaT ไม่ตัดอะไรออก)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if st.session_state.user_role is None:
@@ -1504,9 +1504,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =====================================================
-            # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline) - บังคับให้แท่งกราฟแสดงผลแน่นอน
+            # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline) - ตัดปัญหา NaT ออก 100%
             # =====================================================
+            today_date = get_bangkok_now().date()
+            today_dt = get_bangkok_now().replace(tzinfo=None)
+
             gantt_records = []
+            valid_start_dates = []
+            valid_end_dates = []
+
             for _, r_g in active_jobs_editor_df.iterrows():
                 st_raw = r_g.get("วัน-เวลาขึ้นงาน")
                 fn_raw = r_g.get("วัน-เวลาจบงาน")
@@ -1514,10 +1520,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st_dt = parse_flexible_datetime(st_raw)
                 fn_dt = parse_flexible_datetime(fn_raw)
 
-                # ถ้าหาเวลาไม่พบ ให้ตั้งเวลาชดเชยเพื่อไม่ให้แท่งกราฟหลุดหาย
-                if st_dt is None:
-                    st_dt = get_bangkok_now().replace(tzinfo=None)
-                if fn_dt is None or fn_dt <= st_dt:
+                if st_dt is None or pd.isna(st_dt):
+                    st_dt = today_dt
+                if fn_dt is None or pd.isna(fn_dt) or fn_dt <= st_dt:
                     tot_mins = safe_float(r_g.get("โปรแกรม (น.)"), 120.0) + safe_float(r_g.get("Setup (น.)"), 10.0)
                     fn_dt = st_dt + timedelta(minutes=max(tot_mins, 30.0))
 
@@ -1529,6 +1534,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 qty_val = str(r_g.get("จำนวน", 1))
                 tot_hrs = safe_float(r_g.get("รวม (ชม.)"), 0.0)
 
+                valid_start_dates.append(st_dt.date())
+                valid_end_dates.append(fn_dt.date())
+
                 gantt_records.append({
                     "ข้อความบนแท่งกราฟ": f"{p_name}",
                     "แผนงาน": p_name,
@@ -1537,8 +1545,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "ขั้นตอน (Step)": step_name,
                     "เครื่องจักร": m_name,
                     "วัสดุ": mat_name,
-                    "เวลาเริ่ม": pd.Timestamp(st_dt),
-                    "เวลาเสร็จ": pd.Timestamp(fn_dt),
+                    "เวลาเริ่ม": st_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "เวลาเสร็จ": fn_dt.strftime("%Y-%m-%d %H:%M:%S"),
                     "ระยะเวลา": f"{tot_hrs:.2f} ชม.",
                     "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
                 })
@@ -1547,11 +1555,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             if not df_gantt.empty:
                 st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
-                
-                # หาช่วงเวลาครอบคลุมแท่งกราฟทั้งหมดที่มีจริง
-                gantt_min_date = df_gantt["เวลาเริ่ม"].min().date()
-                gantt_max_date = df_gantt["เวลาเสร็จ"].max().date()
-                today_date = get_bangkok_now().date()
+
+                gantt_min_date = min(valid_start_dates) if valid_start_dates else today_date
+                gantt_max_date = max(valid_end_dates) if valid_end_dates else (today_date + timedelta(days=14))
 
                 gantt_f1, gantt_f2, gantt_f3 = st.columns([2.2, 3.2, 1.8])
                 with gantt_f1:
@@ -1581,21 +1587,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
                             st.rerun()
 
-                    # ล็อกขอบเขตปฏิทินให้ปลอดภัย
-                    min_cal = min(gantt_min_date, today_date) - timedelta(days=15)
-                    max_cal = max(gantt_max_date, today_date) + timedelta(days=60)
+                min_cal = min(gantt_min_date, today_date) - timedelta(days=15)
+                max_cal = max(gantt_max_date, today_date) + timedelta(days=60)
 
-                    if st.session_state.gantt_date_range is None:
-                        st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
+                if st.session_state.gantt_date_range is None or not isinstance(st.session_state.gantt_date_range, (list, tuple)):
+                    st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
 
-                    selected_date_range = st.date_input(
-                        "เลือกช่วงวันที่กำหนดเอง:",
-                        value=st.session_state.gantt_date_range,
-                        min_value=min_cal,
-                        max_value=max_cal,
-                        label_visibility="collapsed"
-                    )
-                    st.session_state.gantt_date_range = selected_date_range
+                selected_date_range = st.date_input(
+                    "เลือกช่วงวันที่กำหนดเอง:",
+                    value=st.session_state.gantt_date_range,
+                    min_value=min_cal,
+                    max_value=max_cal,
+                    label_visibility="collapsed"
+                )
+                st.session_state.gantt_date_range = selected_date_range
 
                 with gantt_f3:
                     color_by_option = st.selectbox("🎨 แยกสีตาม:", ["แผนงาน (Plan Code)", "กิจกรรม (Setup/ตัดเฉือน)"])
@@ -1612,8 +1617,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 plot_gantt_df = df_gantt[df_gantt["เครื่องจักร"].isin(display_machines)].copy()
 
                 if not plot_gantt_df.empty:
-                    plot_gantt_df["เริ่มแสดง"] = plot_gantt_df["เวลาเริ่ม"].dt.strftime("%d/%m/%Y %H:%M น.")
-                    plot_gantt_df["เสร็จแสดง"] = plot_gantt_df["เวลาเสร็จ"].dt.strftime("%d/%m/%Y %H:%M น.")
+                    plot_gantt_df["เริ่มแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเริ่ม"]).dt.strftime("%d/%m/%Y %H:%M น.")
+                    plot_gantt_df["เสร็จแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเสร็จ"]).dt.strftime("%d/%m/%Y %H:%M น.")
 
                     color_target = "แผนงาน" if color_by_option == "แผนงาน (Plan Code)" else "กิจกรรม"
                     distinct_plans = list(plot_gantt_df["แผนงาน"].unique())
@@ -1651,7 +1656,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     
                     fig.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=display_machines, showgrid=True, gridcolor="#E2E8F0")
 
-                    # ดึงช่วงเวลาแกน X ให้ครอบคลุมแท่งกราฟที่กำลังดู
                     if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
                         start_view = datetime.combine(selected_date_range[0], dtime(0, 0))
                         end_view = datetime.combine(selected_date_range[1], dtime(23, 59))
@@ -1716,10 +1720,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if m_name in m_busy_map:
                     m_busy_map[m_name] += tot_h
 
-            if not df_gantt.empty and not valid_st_series.empty and not valid_fn_series.empty:
+            if valid_start_dates and valid_end_dates:
                 total_factory_work_hours = 0.0
-                i_d = valid_st_series.min().date()
-                m_d = valid_fn_series.max().date()
+                i_d = min(valid_start_dates)
+                m_d = max(valid_end_dates)
                 while i_d <= m_d:
                     for ws, we in get_day_working_windows(i_d):
                         total_factory_work_hours += (we - ws).total_seconds() / 3600.0
@@ -1769,7 +1773,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =====================================================
-            # 5. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (ชุดเดียว ไม่ซ้ำ)
+            # 5. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร
             # =====================================================
             st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
 
