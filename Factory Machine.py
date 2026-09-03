@@ -68,19 +68,17 @@ def parse_flexible_datetime(dt_val):
             dt_parsed = pd.to_datetime(s, errors='coerce')
             return dt_parsed.tz_localize(None) if (pd.notna(dt_parsed) and getattr(dt_parsed, 'tzinfo', None) is not None) else dt_parsed
 
-    # บังคับอ่านแบบ วัน/เดือน/ปี (Day-First) เสมอ ไม่สลับเดือนขึ้นก่อน
+    # บังคับอ่านแบบ วัน/เดือน/ปี (Day-First)
     if "/" in s:
         date_part = s.split(" ")[0]
         time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:30:00"
         parts = date_part.split("/")
         
-        # กรณีพิมพ์ วัน/เดือน (เช่น 04/09 14:30)
         if len(parts) == 2:
             d, m = parts[0].zfill(2), parts[1].zfill(2)
             s_fixed = f"{current_year}-{m}-{d} {time_part}"
             dt_parsed = pd.to_datetime(s_fixed, format="%Y-%m-%d %H:%M:%S", errors='coerce')
             return dt_parsed
-        # กรณีพิมพ์ วัน/เดือน/ปี (เช่น 04/09/2026 14:30)
         elif len(parts) == 3:
             d, m, y = parts[0].zfill(2), parts[1].zfill(2), parts[2]
             if len(y) == 2: y = f"20{y}"
@@ -116,7 +114,6 @@ def get_day_working_windows(dt_date):
     if weekday == 6:
         return []
     elif weekday == 5:
-        # วันเสาร์: 08:30 - 17:00 น.
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -124,7 +121,6 @@ def get_day_working_windows(dt_date):
             (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
-        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น.
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -253,7 +249,7 @@ logo_base64 = get_cached_logo()
 logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>' if logo_base64 else '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI & ไฟกระพริบนีออนชัดเจนระดับโรงงาน
+# 2. ตกแต่ง UI
 # =========================================================
 st.markdown("""
 <style>
@@ -1572,7 +1568,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
             # ---------------------------------------------------------
-            # ระบบ Chain Schedule: เชื่อมวันเวลาขึ้นงานอัตโนมัติตามลำดับคิว
+            # ระบบ Chain Schedule: เชื่อมวันเวลาขึ้นงานอัตโนมัติตามลำดับคิว (ป้องกัน NaT Error)
             # ---------------------------------------------------------
             calculated_finish_dates = []
             machine_last_finish_sim = {}
@@ -1582,9 +1578,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 m_target = str(row_item.get("เลือกเครื่องจักร", ""))
 
                 current_ready_parsed = parse_flexible_datetime(row_item.get("วัน-เวลาขึ้นงาน"))
-                if current_ready_parsed is None and m_target in machine_last_finish_sim:
+                if (current_ready_parsed is None or pd.isna(current_ready_parsed)) and m_target in machine_last_finish_sim:
                     current_ready_parsed = machine_last_finish_sim[m_target]
-                    active_jobs_editor_df.at[row_idx, "วัน-เวลาขึ้นงาน"] = current_ready_parsed.strftime("%d/%m/%Y %H:%M")
+                    # เช็คความถูกต้อง ป้องกัน Error NaTType
+                    if current_ready_parsed is not None and pd.notna(current_ready_parsed):
+                        active_jobs_editor_df.at[row_idx, "วัน-เวลาขึ้นงาน"] = current_ready_parsed.strftime("%d/%m/%Y %H:%M")
 
                 if row_id_str in st.session_state.cleared_finish_jobs:
                     calculated_finish_dates.append("")
@@ -1594,11 +1592,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if mapped_val and mapped_val != "-":
                     calculated_finish_dates.append(mapped_val)
                     m_f_dt = parse_flexible_datetime(mapped_val)
-                    if m_f_dt is not None:
+                    if m_f_dt is not None and pd.notna(m_f_dt):
                         machine_last_finish_sim[m_target] = m_f_dt
                 else:
                     ready_parsed = current_ready_parsed
-                    if ready_parsed is None:
+                    if ready_parsed is None or pd.isna(ready_parsed):
                         ready_parsed = get_bangkok_now().replace(tzinfo=None)
                     
                     s_m = safe_float(row_item.get("Setup (น.)"), 10.0)
@@ -1615,8 +1613,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             active_jobs_editor_df["วัน-เวลาจบงาน"] = calculated_finish_dates
 
+            # แปลงแสดงผล ป้องกัน NaT Error
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
-                lambda x: x.strftime("%d/%m/%Y %H:%M") if (pd.notna(x) and isinstance(x, (datetime, pd.Timestamp))) else str(x or "")
+                lambda x: x.strftime("%d/%m/%Y %H:%M") if (pd.notna(x) and isinstance(x, (datetime, pd.Timestamp))) else ("" if pd.isna(x) else str(x))
             )
 
             if "ลบ" not in active_jobs_editor_df.columns:
