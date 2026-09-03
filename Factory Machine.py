@@ -75,13 +75,13 @@ def parse_flexible_datetime(dt_val):
         if len(parts) == 2:
             d, m = parts[0].zfill(2), parts[1].zfill(2)
             s_fixed = f"{current_year}-{m}-{d} {time_part}"
-            dt_parsed = pd.to_datetime(s_fixed, errors='coerce')
+            dt_parsed = pd.to_datetime(s_fixed, format="%Y-%m-%d %H:%M:%S", errors='coerce')
             return dt_parsed
         elif len(parts) == 3:
             d, m, y = parts[0].zfill(2), parts[1].zfill(2), parts[2]
             if len(y) == 2: y = f"20{y}"
             s_fixed = f"{y}-{m}-{d} {time_part}"
-            dt_parsed = pd.to_datetime(s_fixed, errors='coerce')
+            dt_parsed = pd.to_datetime(s_fixed, format="%Y-%m-%d %H:%M:%S", errors='coerce')
             return dt_parsed
 
     dt_parsed = pd.to_datetime(s, errors='coerce', dayfirst=True)
@@ -95,7 +95,7 @@ def to_bangkok_epoch_ms(dt_val):
     if dt_val is None or pd.isna(dt_val):
         return 0
     dt_p = parse_flexible_datetime(dt_val)
-    if dt_p is None or pd.isna(dt_p):
+    if dt_p is None:
         return 0
     try:
         bkk_tz = zoneinfo.ZoneInfo("Asia/Bangkok")
@@ -247,7 +247,7 @@ logo_base64 = get_cached_logo()
 logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>' if logo_base64 else '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. ตกแต่ง UI & ไฟกระพริบนีออนชัดเจนระดับโรงงาน
+# 2. ตกแต่ง UI & สไตล์
 # =========================================================
 st.markdown("""
 <style>
@@ -319,22 +319,9 @@ st.markdown("""
     .kpi-purple { background: linear-gradient(135deg, #7C3AED 0%, #EC4899 100%); }
     .kpi-red { background: linear-gradient(135deg, #991B1B 0%, #DC2626 100%); }
     
-    .kpi-title { 
-        font-size: 13.5px !important; 
-        font-weight: 700 !important; 
-        margin-bottom: 4px; 
-        opacity: 0.95; 
-    }
-    .kpi-value { 
-        font-size: 23px !important; 
-        font-weight: 800 !important; 
-    }
-    .kpi-sub { 
-        font-size: 11.5px; 
-        margin-top: 4px; 
-        opacity: 0.9; 
-        font-weight: 500; 
-    }
+    .kpi-title { font-size: 13.5px !important; font-weight: 700 !important; margin-bottom: 4px; opacity: 0.95; }
+    .kpi-value { font-size: 23px !important; font-weight: 800 !important; }
+    .kpi-sub { font-size: 11.5px; margin-top: 4px; opacity: 0.9; font-weight: 500; }
 
     .shop-live-banner {
         padding: 12px 18px;
@@ -347,21 +334,9 @@ st.markdown("""
         font-weight: 700;
         box-shadow: 0 4px 14px rgba(0,0,0,0.06);
     }
-    .shop-live-running { 
-        background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%); 
-        border: 2px solid #10B981; 
-        color: #065F46; 
-    }
-    .shop-live-hold { 
-        background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%); 
-        border: 2px dashed #F59E0B; 
-        color: #92400E; 
-    }
-    .shop-live-idle { 
-        background: #F8FAFC; 
-        border: 2px solid #CBD5E1; 
-        color: #475569; 
-    }
+    .shop-live-running { background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%); border: 2px solid #10B981; color: #065F46; }
+    .shop-live-hold { background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%); border: 2px dashed #F59E0B; color: #92400E; }
+    .shop-live-idle { background: #F8FAFC; border: 2px solid #CBD5E1; color: #475569; }
 
     .op-job-header {
         background: linear-gradient(145deg, #FFFFFF 0%, #F8FAFC 100%);
@@ -373,16 +348,7 @@ st.markdown("""
         margin-bottom: 14px;
         box-shadow: 0 8px 24px rgba(79, 70, 229, 0.08), 0 2px 6px rgba(0, 0, 0, 0.03);
     }
-    .badge-chip { 
-        display: inline-flex; 
-        align-items: center; 
-        padding: 4px 12px; 
-        border-radius: 8px; 
-        font-weight: 700; 
-        font-size: 12.5px; 
-        margin-right: 8px; 
-        margin-bottom: 4px; 
-    }
+    .badge-chip { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 8px; font-weight: 700; font-size: 12.5px; margin-right: 8px; margin-bottom: 4px; }
     .badge-station { background: #EEF2FF; color: #4338CA; border: 1px solid #C7D2FE; }
     .badge-drawing { background: #F0F9FF; color: #0369A1; border: 1px solid #BAE6FD; }
     .badge-qty { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; font-weight: 800; }
@@ -390,77 +356,16 @@ st.markdown("""
     .badge-date { background: #F3E8FF; color: #6B21A8; border: 1px solid #E9D5FF; font-weight: 800; }
     .badge-finish-date { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; font-weight: 800; }
 
-    .step-card { 
-        background: #FFFFFF; 
-        padding: 14px 16px; 
-        border-radius: 14px; 
-        border: 1.5px solid #E2E8F0; 
-        margin-bottom: 12px; 
-        box-shadow: 0 2px 8px rgba(0,0,0,0.02); 
-    }
+    .step-card { background: #FFFFFF; padding: 14px 16px; border-radius: 14px; border: 1.5px solid #E2E8F0; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.02); }
+    div.stButton > button:disabled { background-color: #F1F5F9 !important; color: #94A3B8 !important; border-color: #CBD5E1 !important; cursor: not-allowed !important; }
 
-    div.stButton > button:disabled { 
-        background-color: #F1F5F9 !important; 
-        color: #94A3B8 !important; 
-        border-color: #CBD5E1 !important; 
-        cursor: not-allowed !important; 
-    }
-
-    .tv-grid-container { 
-        display: grid; 
-        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); 
-        gap: 10px; 
-        margin-top: 8px; 
-    }
-    .tv-card { 
-        border-radius: 12px; 
-        padding: 12px 14px; 
-        color: #FFFFFF !important; 
-        box-shadow: 0 4px 14px rgba(0,0,0,0.12); 
-        display: flex; 
-        flex-direction: column; 
-        justify-content: space-between; 
-        min-height: 140px; 
-        border: 1px solid rgba(255,255,255,0.12); 
-    }
-    .tv-card-running { 
-        background: linear-gradient(135deg, #065F46 0%, #059669 100%) !important; 
-        border-left: 7px solid #34D399 !important; 
-    }
-    
-    @keyframes pulse-card-warning {
-        0% { box-shadow: 0 0 6px rgba(245, 158, 11, 0.4); }
-        50% { box-shadow: 0 0 20px rgba(245, 158, 11, 0.9); }
-        100% { box-shadow: 0 0 6px rgba(245, 158, 11, 0.4); }
-    }
-    @keyframes pulse-card-late {
-        0% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.5); }
-        50% { box-shadow: 0 0 25px rgba(239, 68, 68, 1); }
-        100% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.5); }
-    }
-    
-    .tv-card-warning {
-        background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important;
-        border-left: 7px solid #FDE047 !important;
-        border-top: 1px solid rgba(253, 224, 71, 0.4) !important;
-        animation: pulse-card-warning 1.8s infinite ease-in-out !important;
-    }
-    .tv-card-late {
-        background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important;
-        border-left: 7px solid #EF4444 !important;
-        border-top: 1px solid rgba(239, 68, 68, 0.5) !important;
-        animation: pulse-card-late 1.2s infinite ease-in-out !important;
-    }
-
-    .tv-card-hold { 
-        background: linear-gradient(135deg, #92400E 0%, #D97706 100%) !important; 
-        border-left: 7px solid #FBBF24 !important; 
-    }
-    .tv-card-idle { 
-        background: linear-gradient(135deg, #1E293B 0%, #334155 100%) !important; 
-        border-left: 7px solid #64748B !important; 
-        opacity: 0.92; 
-    }
+    .tv-grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-top: 8px; }
+    .tv-card { border-radius: 12px; padding: 12px 14px; color: #FFFFFF !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; flex-direction: column; justify-content: space-between; min-height: 140px; border: 1px solid rgba(255,255,255,0.12); }
+    .tv-card-running { background: linear-gradient(135deg, #065F46 0%, #059669 100%) !important; border-left: 7px solid #34D399 !important; }
+    .tv-card-warning { background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important; border-left: 7px solid #FDE047 !important; }
+    .tv-card-late { background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important; border-left: 7px solid #EF4444 !important; }
+    .tv-card-hold { background: linear-gradient(135deg, #92400E 0%, #D97706 100%) !important; border-left: 7px solid #FBBF24 !important; }
+    .tv-card-idle { background: linear-gradient(135deg, #1E293B 0%, #334155 100%) !important; border-left: 7px solid #64748B !important; opacity: 0.92; }
 
     .tv-pulse-dot {
         width: 13px !important;
@@ -471,46 +376,6 @@ st.markdown("""
         display: inline-block;
         vertical-align: middle !important;
         box-shadow: 0 0 8px #10B981, 0 0 16px rgba(16, 185, 129, 0.8) !important;
-        animation: tv-pulse-green 1.5s infinite ease-in-out !important;
-    }
-    @keyframes tv-pulse-green {
-        0% { transform: scale(0.9); box-shadow: 0 0 4px #10B981, 0 0 0 0 rgba(16, 185, 129, 0.9); }
-        50% { transform: scale(1.15); box-shadow: 0 0 12px #34D399, 0 0 0 8px rgba(16, 185, 129, 0); }
-        100% { transform: scale(0.9); box-shadow: 0 0 4px #10B981, 0 0 0 0 rgba(16, 185, 129, 0); }
-    }
-
-    .tv-pulse-dot-warning {
-        width: 13px !important;
-        height: 13px !important;
-        border-radius: 50% !important;
-        background-color: #FACC15 !important;
-        border: 2px solid #FFFFFF !important;
-        display: inline-block;
-        vertical-align: middle !important;
-        box-shadow: 0 0 10px #FACC15, 0 0 18px rgba(250, 204, 21, 0.9) !important;
-        animation: tv-pulse-yellow 1.1s infinite ease-in-out !important;
-    }
-    @keyframes tv-pulse-yellow {
-        0% { transform: scale(0.9); box-shadow: 0 0 4px #FACC15, 0 0 0 0 rgba(250, 204, 21, 0.9); }
-        50% { transform: scale(1.2); box-shadow: 0 0 14px #FEF08A, 0 0 0 9px rgba(250, 204, 21, 0); }
-        100% { transform: scale(0.9); box-shadow: 0 0 4px #FACC15, 0 0 0 0 rgba(250, 204, 21, 0); }
-    }
-
-    .tv-pulse-dot-late {
-        width: 13px !important;
-        height: 13px !important;
-        border-radius: 50% !important;
-        background-color: #EF4444 !important;
-        border: 2px solid #FFFFFF !important;
-        display: inline-block;
-        vertical-align: middle !important;
-        box-shadow: 0 0 10px #EF4444, 0 0 20px rgba(239, 68, 68, 1) !important;
-        animation: tv-pulse-red 0.8s infinite ease-in-out !important;
-    }
-    @keyframes tv-pulse-red {
-        0% { transform: scale(0.9); box-shadow: 0 0 6px #EF4444, 0 0 0 0 rgba(239, 68, 68, 1); }
-        50% { transform: scale(1.25); box-shadow: 0 0 18px #F87171, 0 0 0 11px rgba(239, 68, 68, 0); }
-        100% { transform: scale(0.9); box-shadow: 0 0 6px #EF4444, 0 0 0 0 rgba(239, 68, 68, 0); }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -537,10 +402,6 @@ default_states = {
 for k, v in default_states.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
-query_params = st.query_params
-if query_params.get("view") == "tv":
-    st.session_state.current_view = "📺 จอทีวีกลางโรงงาน (TV Live)"
 
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
@@ -593,10 +454,8 @@ def insert_supabase_job(payload: dict) -> bool:
                 if res2.status_code in [200, 201]:
                     st.cache_data.clear()
                     return True
-            st.error(f"⚠️ บันทึกไม่สำเร็จ Supabase ({res.status_code}): {res.text}")
             return False
-    except Exception as e:
-        st.error(f"⚠️ เกิดข้อผิดพลาดในการเชื่อมต่อ: {str(e)}")
+    except Exception:
         return False
 
 def update_supabase_job(job_id: int, payload: dict) -> bool:
@@ -614,10 +473,8 @@ def update_supabase_job(job_id: int, payload: dict) -> bool:
                 if res2.status_code in [200, 204]:
                     st.cache_data.clear()
                     return True
-            st.error(f"⚠️ อัปเดตไม่สำเร็จ Supabase ({res.status_code}): {res.text}")
             return False
-    except Exception as e:
-        st.error(f"⚠️ เกิดข้อผิดพลาดในการเชื่อมต่อ: {str(e)}")
+    except Exception:
         return False
 
 def delete_supabase_job(job_id: int) -> bool:
@@ -652,17 +509,14 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
             data = res.json()
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data)
-                
                 if "ready_at" in df.columns:
                     df["ready_at"] = df["ready_at"].apply(parse_flexible_datetime)
                 if "actual_start" in df.columns:
                     df["actual_start"] = df["actual_start"].apply(parse_flexible_datetime)
                 if "actual_finish" in df.columns:
                     df["actual_finish"] = df["actual_finish"].apply(parse_flexible_datetime)
-                
                 if "status" in df.columns:
                     df["status"] = df["status"].apply(normalize_status)
-                
                 if "qty" not in df.columns:
                     df["qty"] = 1
                 else:
@@ -715,7 +569,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
         j["prog_mins"] = prog_mins
         j["setup_mins"] = setup_mins
         j["cut_hrs"] = cut_hrs
-            
         j["is_urgent"] = "ด่วนแทรก" in str(j.get("ประเภทงาน", ""))
         j["remain_cut_hrs"] = j["cut_hrs"]
         j["need_setup"] = not is_running_job
@@ -768,10 +621,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
         actual_cut_hrs = selected_job["remain_cut_hrs"]
         
         raw_step = safe_str(selected_job.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ")
-        if raw_step in ["", "None", "nan", "รันงาน"]:
-            step_raw = "รอหน้าเครื่องระบุ"
-        else:
-            step_raw = raw_step
+        step_raw = "รอหน้าเครื่องระบุ" if raw_step in ["", "None", "nan", "รันงาน"] else raw_step
             
         job_code = str(selected_job.get('แผนงาน', '-'))
         drawing_name = str(selected_job.get("ชื่อ Drawing.", "-"))
@@ -784,16 +634,11 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
             for s_st, s_en in setup_segments:
                 gantt_records.append({
                     "ข้อความบนแท่งกราฟ": "🔧 Setup", 
-                    "แผนงาน": job_code, 
-                    "ชื่อ Drawing.": drawing_name,
-                    "จำนวน": qty_val, 
-                    "ขั้นตอน (Step)": "Setup ตั้งเครื่อง", 
+                    "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name,
+                    "จำนวน": qty_val, "ขั้นตอน (Step)": "Setup ตั้งเครื่อง", 
                     "กิจกรรม": "🔧 ตั้งเครื่อง / เซ็ตศูนย์",
-                    "เครื่องจักร": earliest_m, 
-                    "วัสดุ": selected_job.get("วัสดุ", "-"),
-                    "เวลาเริ่ม": s_st, 
-                    "เวลาเสร็จ": s_en, 
-                    "ระยะเวลา": f"{setup_mins:.0f} นาที"
+                    "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"),
+                    "เวลาเริ่ม": s_st, "เวลาเสร็จ": s_en, "ระยะเวลา": f"{setup_mins:.0f} นาที"
                 })
             cut_start = setup_end
         else:
@@ -805,16 +650,11 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
             seg_hrs = (c_en - c_st).total_seconds() / 3600.0
             gantt_records.append({
                 "ข้อความบนแท่งกราฟ": short_bar_label, 
-                "แผนงาน": job_code, 
-                "ชื่อ Drawing.": drawing_name,
-                "จำนวน": qty_val, 
-                "ขั้นตอน (Step)": step_raw,
+                "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name,
+                "จำนวน": qty_val, "ขั้นตอน (Step)": step_raw,
                 "กิจกรรม": "🔴 งานด่วน" if selected_job["is_urgent"] else "⚙️ งานปกติ",
-                "เครื่องจักร": earliest_m, 
-                "วัสดุ": selected_job.get("วัสดุ", "-"),
-                "เวลาเริ่ม": c_st, 
-                "เวลาเสร็จ": c_en, 
-                "ระยะเวลา": f"{seg_hrs:.2f} ชม."
+                "เครื่องจักร": earliest_m, "วัสดุ": selected_job.get("วัสดุ", "-"),
+                "เวลาเริ่ม": c_st, "เวลาเสร็จ": c_en, "ระยะเวลา": f"{seg_hrs:.2f} ชม."
             })
         
         total_cycle = setup_hrs + actual_cut_hrs
@@ -825,8 +665,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
             "เครื่องจักร": earliest_m, 
             "สถานะ": selected_job["สถานะงาน"],
             "ประเภทงาน": "🔴 งานด่วนแทรก" if selected_job["is_urgent"] else "🟢 งานปกติ",
-            "แผนงาน": job_code, 
-            "ชื่อ Drawing.": drawing_name, 
+            "แผนงาน": job_code, "ชื่อ Drawing.": drawing_name, 
             "จำนวน": safe_int(selected_job.get("จำนวน"), 1),
             "วัสดุ": selected_job.get("วัสดุ", "-"), 
             "ขั้นตอน (Step)": step_raw, 
@@ -899,7 +738,6 @@ if selected_tab != st.session_state.current_view:
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
-    
     df_all = fetch_jobs_from_supabase()
     
     c_m_sel, c_mode_sel = st.columns([2, 2])
@@ -1041,7 +879,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
 
             dt_ready = parse_flexible_datetime(step_row.get("วัน-เวลาขึ้นงาน"))
-            ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.") if (dt_ready is not None and pd.notna(dt_ready)) else "ยังไม่ระบุเวลา"
+            ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.") if pd.notna(dt_ready) else "ยังไม่ระบุเวลา"
 
             plan_finish_dt = wo_item.get("เวลาจบงาน_DT")
             finish_plan_display_str = plan_finish_dt.strftime("%d/%m/%Y %H:%M น.") if pd.notna(plan_finish_dt) else str(wo_item.get("เวลาจบงาน", "-"))
@@ -1089,11 +927,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 
                 if is_step_finished:
                     fin_dt = parse_flexible_datetime(s_finish)
-                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if (fin_dt is not None and pd.notna(fin_dt)) else '-'
+                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if fin_dt is not None else '-'
                     st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                 elif is_step_running:
                     st_parsed = parse_flexible_datetime(s_start)
-                    start_txt = st_parsed.strftime('%H:%M น.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
+                    start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
                     step_start_epoch = to_bangkok_epoch_ms(s_start)
                     st.caption(f"""**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                 elif is_step_hold:
@@ -1532,7 +1370,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =========================================================================
-            # 🔗 LOGIC แทรกเพิ่ม: คำนวณวันขึ้นงานและวันจบงานแบบลูกโซ่อัตโนมัติ (Forward Chaining)
+            # 🔗 LOGIC: คำนวณวันขึ้นงานและวันจบงานแบบลูกโซ่อัตโนมัติ (Forward Chaining)
             # =========================================================================
             column_order = [
                 "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -1545,6 +1383,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # เรียงลำดับรายการตามวันขึ้นงานเดิมและ ID
             active_jobs_editor_df["temp_ready_dt"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
             active_jobs_editor_df = active_jobs_editor_df.sort_values(by=["temp_ready_dt", "ID"], ascending=[True, True], na_position="last").drop(columns=["temp_ready_dt"]).reset_index(drop=True)
+
+            # ตรวจสอบว่าผู้ใช้กำลังแก้ไขเซลล์ในตารางสดหรือไม่ ถ้ามีให้นำค่ามาผสานทันที
+            editor_state = st.session_state.get("editor_cnc_jobs_grid_main", {})
+            edited_rows = editor_state.get("edited_rows", {})
+            if edited_rows:
+                for row_idx_str, changes in edited_rows.items():
+                    r_i = int(row_idx_str)
+                    if r_i < len(active_jobs_editor_df):
+                        for col_name, new_val in changes.items():
+                            if col_name in active_jobs_editor_df.columns:
+                                active_jobs_editor_df.at[r_i, col_name] = new_val
 
             m_available_tracker = {}
             chained_ready_dates = []
@@ -1575,6 +1424,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = chained_ready_dates
             active_jobs_editor_df["วัน-เวลาจบงาน"] = chained_finish_dates
+            active_jobs_editor_df["รวม (ชม.)"] = ((active_jobs_editor_df["Setup (น.)"] + active_jobs_editor_df["Basic (น.)"] + active_jobs_editor_df["โปรแกรม (น.)"]) / 60.0).round(2)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
             with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ลิงก์เวลาลูกโซ่อัตโนมัติ)", expanded=True):
@@ -1695,11 +1545,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
                     with c_save:
                         if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
-                            db_original_map = {}
-                            for _, orig_row in df_db.iterrows():
-                                if pd.notna(orig_row.get("ID")):
-                                    db_original_map[int(float(orig_row["ID"]))] = orig_row
-
                             for _, row in edited_jobs.iterrows():
                                 p_code = safe_str(row.get("แผนงาน"), "")
                                 if not p_code: 
