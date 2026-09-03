@@ -107,11 +107,10 @@ def to_bangkok_epoch_ms(dt_val):
     except Exception:
         return int((pd.to_datetime(dt_p) - pd.Timestamp("1970-01-01") - pd.Timedelta(hours=7)).total_seconds() * 1000)
 
-# กำหนดช่วงเวลาทำงานจริงโดยหักเวลาพักเบรก 10:00-10:10 และ 15:00-15:10
+# กำหนดช่วงเวลากะทำงานจริง หักช่วงพักเบรก 10:00-10:10 และ 15:00-15:10
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
     if weekday == 6:
-        # วันอาทิตย์: หยุดทำการ
         return []
     elif weekday == 5:
         # วันเสาร์: 08:30 - 17:00 น.
@@ -131,14 +130,16 @@ def get_day_working_windows(dt_date):
             (datetime.combine(dt_date, dtime(17, 30)), datetime.combine(dt_date, dtime(20, 0)))
         ]
 
+# ฟังก์ชันกระโดดข้ามช่วงพักเบรกแม่นยำ (แก้ปัญหาเวลาเริ่มตกที่ 15:00 น. หรือ 10:00 น. เป๊ะ)
 def get_next_valid_work_time(dt: datetime) -> datetime:
     cur_date = dt.date()
     for _ in range(14):
         windows = get_day_working_windows(cur_date)
         for w_start, w_end in windows:
-            if dt < w_start:
+            # ถ้าเวลาน้อยกว่าหรือเท่ากับ w_start หรือตกอยู่ในช่องว่างพักเบรก ให้ดีดไปเริ่มที่ w_start
+            if dt <= w_start:
                 return w_start
-            elif w_start <= dt < w_end:
+            elif w_start < dt < w_end:
                 return dt
         cur_date += timedelta(days=1)
         dt = datetime.combine(cur_date, dtime(8, 30))
@@ -1734,6 +1735,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     display_editor_df = active_jobs_editor_df.copy().reset_index(drop=True)
 
                 if is_admin:
+                    # ปลดล็อกให้สามารถคลิกแก้/ลบตัวเลขในช่องวัน-เวลาจบงานได้ (disabled=False)
                     edited_jobs = st.data_editor(
                         display_editor_df,
                         key="editor_cnc_jobs_grid_main",
@@ -1760,8 +1762,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "วัน-เวลาจบงาน": st.column_config.TextColumn(
                                 "วัน-เวลาจบงาน",
                                 width=135,
-                                disabled=True,
-                                help="เวลาจบงานโดยประมาณที่คำนวณตามแผนและกะโรงงาน"
+                                disabled=False,
+                                help="สามารถลบตัวเลขทิ้งได้ แต่ค่าจะถูกคำนวณจากสูตรกะเวลาให้อัตโนมัติ"
                             ),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=10),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
@@ -2337,12 +2339,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 annotation_font_size=10, annotation_font_color="#94A3B8"
                             )
                         else:
-                            # แสดงแถบเบรกเช้า
                             b1_start = datetime.combine(cur_d, dtime(10, 0))
                             b1_end = datetime.combine(cur_d, dtime(10, 10))
                             fig.add_vrect(x0=b1_start, x1=b1_end, fillcolor="#FEF3C7", opacity=0.6, layer="below", line_width=0)
                             
-                            # แสดงแถบพักเที่ยง
                             lunch_start = datetime.combine(cur_d, dtime(12, 0))
                             lunch_end = datetime.combine(cur_d, dtime(13, 0))
                             fig.add_vrect(
@@ -2353,12 +2353,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 annotation_font_size=9, annotation_font_color="#D97706"
                             )
                             
-                            # แสดงแถบเบรกบ่าย
                             b2_start = datetime.combine(cur_d, dtime(15, 0))
                             b2_end = datetime.combine(cur_d, dtime(15, 10))
                             fig.add_vrect(x0=b2_start, x1=b2_end, fillcolor="#FEF3C7", opacity=0.6, layer="below", line_width=0)
 
-                            # แสดงแถบเบรกเย็นวันธรรมดาก่อน OT
                             if cur_d.weekday() < 5:
                                 ot_b_start = datetime.combine(cur_d, dtime(17, 0))
                                 ot_b_end = datetime.combine(cur_d, dtime(17, 30))
