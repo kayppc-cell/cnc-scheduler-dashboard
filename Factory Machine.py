@@ -97,7 +97,7 @@ def to_bangkok_epoch_ms(dt_val):
     if dt_val is None or pd.isna(dt_val):
         return 0
     dt_p = parse_flexible_datetime(dt_val)
-    if dt_p is None:
+    if dt_p is None or pd.isna(dt_p):
         return 0
     try:
         bkk_tz = zoneinfo.ZoneInfo("Asia/Bangkok")
@@ -114,6 +114,7 @@ def get_day_working_windows(dt_date):
     if weekday == 6:
         return []
     elif weekday == 5:
+        # วันเสาร์: 08:30 - 17:00 น.
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -121,6 +122,7 @@ def get_day_working_windows(dt_date):
             (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
+        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น.
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -762,6 +764,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
         ready_candidates.sort(key=job_priority_key)
         selected_job = ready_candidates[0]
 
+        # หากเป็นคิวถัดไปและเครื่องว่างช้ากว่าเวลาขึ้นงานเดิม ให้เริ่มเมื่อเครื่องว่าง (Chain Logic)
         job_ready_time = selected_job["ready_at"]
         if cur_time < job_ready_time:
             cur_time = get_next_valid_work_time(job_ready_time)
@@ -833,7 +836,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
             "จำนวน": safe_int(selected_job.get("จำนวน"), 1),
             "วัสดุ": selected_job.get("วัสดุ", "-"), 
             "ขั้นตอน (Step)": step_raw, 
-            "กำหนดพร้อมขึ้นงาน": orig_ready_dt.strftime("%d/%m/%Y %H:%M") if orig_ready_dt is not None else "-",
+            "กำหนดพร้อมขึ้นงาน": orig_ready_dt.strftime("%d/%m/%Y %H:%M") if (orig_ready_dt is not None and pd.notna(orig_ready_dt)) else "-",
             "เวลาเริ่มจริง": setup_start,
             "เวลาเริ่ม Setup": setup_start.strftime("%d/%m %H:%M") if setup_mins > 0 else "-",
             "เวลาเริ่มขึ้นงาน": cut_start.strftime("%d/%m %H:%M"), 
@@ -1044,7 +1047,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
 
             dt_ready = parse_flexible_datetime(step_row.get("วัน-เวลาขึ้นงาน"))
-            ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.") if pd.notna(dt_ready) else "ยังไม่ระบุเวลา"
+            ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.") if (dt_ready is not None and pd.notna(dt_ready)) else "ยังไม่ระบุเวลา"
 
             plan_finish_dt = wo_item.get("เวลาจบงาน_DT")
             finish_plan_display_str = plan_finish_dt.strftime("%d/%m/%Y %H:%M น.") if pd.notna(plan_finish_dt) else str(wo_item.get("เวลาจบงาน", "-"))
@@ -1092,11 +1095,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 
                 if is_step_finished:
                     fin_dt = parse_flexible_datetime(s_finish)
-                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if fin_dt is not None else '-'
+                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if (fin_dt is not None and pd.notna(fin_dt)) else '-'
                     st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                 elif is_step_running:
                     st_parsed = parse_flexible_datetime(s_start)
-                    start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
+                    start_txt = st_parsed.strftime('%H:%M น.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
                     step_start_epoch = to_bangkok_epoch_ms(s_start)
                     st.caption(f"""**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                 elif is_step_hold:
@@ -1615,7 +1618,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             # แปลงแสดงผล ป้องกัน NaT Error
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
-                lambda x: x.strftime("%d/%m/%Y %H:%M") if (pd.notna(x) and isinstance(x, (datetime, pd.Timestamp))) else ("" if pd.isna(x) else str(x))
+                lambda x: x.strftime("%d/%m/%Y %H:%M") if (pd.notna(x) and isinstance(x, (datetime, pd.Timestamp))) else ("" if (pd.isna(x) or str(x).strip() in ["None", "nan", "NaT"]) else str(x))
             )
 
             if "ลบ" not in active_jobs_editor_df.columns:
@@ -1865,7 +1868,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 
                                 raw_ready = row.get("วัน-เวลาขึ้นงาน")
                                 dt_parsed = parse_flexible_datetime(raw_ready)
-                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if dt_parsed is not None else None
+                                # แก้จุด NaT Error ให้ถูกต้อง 100%
+                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if (dt_parsed is not None and pd.notna(dt_parsed)) else None
                                 
                                 payload = {
                                     "plan_code": p_code,
@@ -1921,7 +1925,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                             is_changed = True
                                         else:
                                             orig_ready_dt = parse_flexible_datetime(orig.get("วัน-เวลาขึ้นงาน"))
-                                            orig_ready_str = orig_ready_dt.strftime("%Y-%m-%d %H:%M:%S") if orig_ready_dt is not None else None
+                                            orig_ready_str = orig_ready_dt.strftime("%Y-%m-%d %H:%M:%S") if (orig_ready_dt is not None and pd.notna(orig_ready_dt)) else None
                                             if orig_ready_str != ready_str:
                                                 is_changed = True
 
