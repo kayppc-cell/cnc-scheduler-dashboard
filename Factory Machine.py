@@ -1751,19 +1751,29 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =====================================================
             gantt_records = []
             for _, r_g in active_jobs_editor_df.iterrows():
-                gantt_records.append({
-                    "ข้อความบนแท่งกราฟ": str(r_g["แผนงาน"]),
-                    "แผนงาน": str(r_g["แผนงาน"]),
-                    "ชื่อ Drawing.": str(r_g["ชื่อ Drawing."]),
-                    "จำนวน": str(r_g["จำนวน"]),
-                    "ขั้นตอน (Step)": str(r_g["ขั้นตอน (Step)"]),
-                    "เครื่องจักร": str(r_g["เลือกเครื่องจักร"]),
-                    "วัสดุ": str(r_g["วัสดุ"]),
-                    "เวลาเริ่ม": r_g["_dt_start"],
-                    "เวลาเสร็จ": r_g["_dt_finish"],
-                    "ระยะเวลา": f"{r_g['รวม (ชม.)']} ชม.",
-                    "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
-                })
+                # ดึงเวลาเริ่มและเวลาเสร็จอย่างปลอดภัย ป้องกัน KeyError
+                st_val = r_g.get("_dt_start") if "_dt_start" in r_g else None
+                fn_val = r_g.get("_dt_finish") if "_dt_finish" in r_g else None
+                
+                st_dt = parse_flexible_datetime(st_val) or parse_flexible_datetime(r_g.get("วัน-เวลาขึ้นงาน"))
+                fn_dt = parse_flexible_datetime(fn_val) or parse_flexible_datetime(r_g.get("วัน-เวลาจบงาน"))
+                
+                # กรองเฉพาะแถวที่มีวันเวลาสมบูรณ์ และอยู่ในช่วง ค.ศ. ปกติ (ป้องกันปี 0001 หรือปีทะลุ 2100)
+                if st_dt is not None and fn_dt is not None and pd.notna(st_dt) and pd.notna(fn_dt):
+                    if 2020 <= st_dt.year <= 2035 and 2020 <= fn_dt.year <= 2035:
+                        gantt_records.append({
+                            "ข้อความบนแท่งกราฟ": str(r_g.get("แผนงาน", "-")),
+                            "แผนงาน": str(r_g.get("แผนงาน", "-")),
+                            "ชื่อ Drawing.": str(r_g.get("ชื่อ Drawing.", "-")),
+                            "จำนวน": str(r_g.get("จำนวน", 1)),
+                            "ขั้นตอน (Step)": str(r_g.get("ขั้นตอน (Step)", "-")),
+                            "เครื่องจักร": str(r_g.get("เลือกเครื่องจักร", "-")),
+                            "วัสดุ": str(r_g.get("วัสดุ", "-")),
+                            "เวลาเริ่ม": st_dt,
+                            "เวลาเสร็จ": fn_dt,
+                            "ระยะเวลา": f"{r_g.get('รวม (ชม.)', 0)} ชม.",
+                            "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
+                        })
 
             df_gantt = pd.DataFrame(gantt_records)
 
@@ -1772,7 +1782,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 
                 today_date = get_bangkok_now().date()
                 
-                # กรองเฉพาะวันที่อยู่ในช่วง ค.ศ. ปกติ ป้องกัน OverflowError จากปีเพี้ยน
+                # กรองหาช่วงวันที่เริ่มต้นและสิ้นสุดที่ปลอดภัย ป้องกัน OverflowError
                 valid_starts = pd.to_datetime(df_gantt["เวลาเริ่ม"], errors='coerce').dropna()
                 valid_ends = pd.to_datetime(df_gantt["เวลาเสร็จ"], errors='coerce').dropna()
                 valid_starts = valid_starts[(valid_starts.dt.year >= 2020) & (valid_starts.dt.year <= 2035)]
@@ -1781,8 +1791,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 gantt_min_date = valid_starts.min().date() if not valid_starts.empty else today_date
                 gantt_max_date = valid_ends.max().date() if not valid_ends.empty else (today_date + timedelta(days=14))
 
+                # ตรวจสอบและตั้งค่าช่วงเริ่มต้นของ Date Range ใน Session State
                 if st.session_state.gantt_date_range is None:
                     st.session_state.gantt_date_range = (today_date, min(today_date + timedelta(days=7), gantt_max_date))
+                elif isinstance(st.session_state.gantt_date_range, (list, tuple)):
+                    # ป้องกันค่าเก่าใน session state ที่มีปีเพี้ยนตกค้าง
+                    chk_d1 = st.session_state.gantt_date_range[0]
+                    if chk_d1.year < 2020 or chk_d1.year > 2035:
+                        st.session_state.gantt_date_range = (today_date, min(today_date + timedelta(days=7), gantt_max_date))
 
                 gantt_f1, gantt_f2, gantt_f3 = st.columns([2.2, 3.2, 1.8])
                 with gantt_f1:
@@ -1812,6 +1828,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
                             st.rerun()
 
+                    # ขอบเขตปฏิทินที่ปลอดภัย ไม่ทำให้ระบบ Overflow
                     min_calendar_val = max(gantt_min_date - timedelta(days=30), datetime(2020, 1, 1).date())
                     max_calendar_val = min(gantt_max_date + timedelta(days=60), datetime(2035, 12, 31).date())
 
@@ -1884,6 +1901,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 
                 fig.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=display_machines, showgrid=True, gridcolor="#E2E8F0")
                 
+                # กำหนดช่วง Viewport ในแกนเวลา x-axis
                 if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
                     start_view = datetime.combine(selected_date_range[0], dtime(8, 0))
                     end_view = datetime.combine(selected_date_range[1], dtime(20, 30))
@@ -1896,7 +1914,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 fig.update_xaxes(range=[start_view, end_view], showgrid=True, gridcolor="#E2E8F0")
 
-                # วนลูปวาดวันอาทิตย์และช่วงพักเบรกของโรงงาน (จำกัดลูปสูงสุด 60 วัน ป้องกันค้าง)
+                # วาดแถบวันอาทิตย์และช่วงพักเบรกของโรงงานอย่างปลอดภัย (จำกัดลูปสูงสุด 60 วัน)
                 if not plot_gantt_df.empty:
                     cur_d = start_view.date() - timedelta(days=1)
                     max_scan_d = min(end_view.date() + timedelta(days=1), cur_d + timedelta(days=60))
