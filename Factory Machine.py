@@ -764,7 +764,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
         ready_candidates.sort(key=job_priority_key)
         selected_job = ready_candidates[0]
 
-        # หากเป็นคิวถัดไปและเครื่องว่างช้ากว่าเวลาขึ้นงานเดิม ให้เริ่มเมื่อเครื่องว่าง (Chain Logic)
+        # หากเครื่องว่างช้ากว่าเวลาขึ้นงานเดิม ให้เริ่มเมื่อเครื่องว่าง (Chain Logic)
         job_ready_time = selected_job["ready_at"]
         if cur_time < job_ready_time:
             cur_time = get_next_valid_work_time(job_ready_time)
@@ -1537,6 +1537,33 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             st.divider()
 
+            # -------------------------------------------------------------------------------------------------
+            # ปรับปรุง: จำลองและต่อเวลาแบบ Chain (สลับฟันปลา) ล่วงหน้าก่อนคำนวณ เพื่อให้ตารางได้รับเวลาครบ 100%
+            # -------------------------------------------------------------------------------------------------
+            calc_df["temp_ready_dt"] = calc_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
+            calc_df = calc_df.sort_values(by=["temp_ready_dt", "ID"], ascending=[True, True], na_position="last").drop(columns=["temp_ready_dt"]).reset_index(drop=True)
+
+            machine_sim_tracker = {}
+            for r_idx, r_val in calc_df.iterrows():
+                m_target = str(r_val.get("เลือกเครื่องจักร", ""))
+                ready_dt = parse_flexible_datetime(r_val.get("วัน-เวลาขึ้นงาน"))
+                
+                # หากไม่มีวันขึ้นงาน ให้รับค่าเวลาจบงานจากคิวก่อนหน้าในเครื่องเดียวกัน
+                if (ready_dt is None or pd.isna(ready_dt)) and m_target in machine_sim_tracker:
+                    ready_dt = machine_sim_tracker[m_target]
+                    calc_df.at[r_idx, "วัน-เวลาขึ้นงาน"] = ready_dt.strftime("%d/%m/%Y %H:%M")
+                
+                if ready_dt is not None and pd.notna(ready_dt):
+                    s_mins = safe_float(r_val.get("Setup (น.)"), 10.0)
+                    b_mins = safe_float(r_val.get("Basic (น.)"), 0.0)
+                    p_mins = safe_float(r_val.get("โปรแกรม (น.)"), 120.0)
+                    total_dur_hrs = (s_mins + b_mins + p_mins) / 60.0
+                    try:
+                        _, f_end_dt = add_work_time_with_shift(ready_dt, total_dur_hrs)
+                        machine_sim_tracker[m_target] = f_end_dt
+                    except Exception:
+                        pass
+
             # คำนวณตารางตามเวลาแผนงานแม่นยำ
             df_gantt, df_summary, df_util, total_plan_hrs = calculate_shop_schedule(calc_df)
 
@@ -1556,7 +1583,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
             ].copy()
 
-            # เรียงลำดับตามวัน-เวลาขึ้นงานจริง (Day-First)
             active_jobs_editor_df["temp_ready_dt"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
             active_jobs_editor_df = active_jobs_editor_df.sort_values(
                 by=["temp_ready_dt", "ID"], 
@@ -1570,9 +1596,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if "รอคิวผลิต" in row_status and (row_step in ["", "None", "nan", "OP10", "OP20", "OP30", "OP40", "OP50", "(รอช่างหน้าเครื่องระบุ)", "รันงาน"]):
                     active_jobs_editor_df.at[idx_row, "ขั้นตอน (Step)"] = "รอหน้าเครื่องระบุ"
 
-            # ---------------------------------------------------------
-            # ระบบ Chain Schedule: เชื่อมวันเวลาขึ้นงานอัตโนมัติตามลำดับคิว (ป้องกัน NaT Error)
-            # ---------------------------------------------------------
+            # คำนวณวัน-เวลาจบงาน พร้อมระบบ Chain และ Clear Mask
             calculated_finish_dates = []
             machine_last_finish_sim = {}
 
@@ -1583,7 +1607,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 current_ready_parsed = parse_flexible_datetime(row_item.get("วัน-เวลาขึ้นงาน"))
                 if (current_ready_parsed is None or pd.isna(current_ready_parsed)) and m_target in machine_last_finish_sim:
                     current_ready_parsed = machine_last_finish_sim[m_target]
-                    # เช็คความถูกต้อง ป้องกัน Error NaTType
                     if current_ready_parsed is not None and pd.notna(current_ready_parsed):
                         active_jobs_editor_df.at[row_idx, "วัน-เวลาขึ้นงาน"] = current_ready_parsed.strftime("%d/%m/%Y %H:%M")
 
@@ -1616,7 +1639,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             active_jobs_editor_df["วัน-เวลาจบงาน"] = calculated_finish_dates
 
-            # แปลงแสดงผล ป้องกัน NaT Error
+            # แปลงแสดงผล
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
                 lambda x: x.strftime("%d/%m/%Y %H:%M") if (pd.notna(x) and isinstance(x, (datetime, pd.Timestamp))) else ("" if (pd.isna(x) or str(x).strip() in ["None", "nan", "NaT"]) else str(x))
             )
@@ -1868,7 +1891,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 
                                 raw_ready = row.get("วัน-เวลาขึ้นงาน")
                                 dt_parsed = parse_flexible_datetime(raw_ready)
-                                # แก้จุด NaT Error ให้ถูกต้อง 100%
+                                
+                                # แก้ไขจุด NaT Error อย่างปลอดภัย 100%
                                 ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if (dt_parsed is not None and pd.notna(dt_parsed)) else None
                                 
                                 payload = {
