@@ -69,7 +69,7 @@ def parse_flexible_datetime(dt_val):
 
     if "/" in s:
         date_part = s.split(" ")[0]
-        time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:30:00"
+        time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:00:00"
         parts = date_part.split("/")
         
         if len(parts) == 2:
@@ -109,19 +109,17 @@ def to_bangkok_epoch_ms(dt_val):
 
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
-    if weekday == 6: # วันอาทิตย์หยุด
+    if weekday == 6:
         return []
-    elif weekday == 5: # วันเสาร์ (08:00-12:00 และ 13:00-17:00)
+    elif weekday == 5:
         return [
             (datetime.combine(dt_date, dtime(8, 0)), datetime.combine(dt_date, dtime(12, 0))),
             (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(17, 0)))
         ]
-    else: # จันทร์ - ศุกร์ (08:30-20:00 น. พร้อมเบรก 10:00-10:10, 12:00-13:00, 15:00-15:10)
+    else:
         return [
-            (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
-            (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
-            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(15, 0))),
-            (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(20, 0)))
+            (datetime.combine(dt_date, dtime(8, 0)), datetime.combine(dt_date, dtime(12, 0))),
+            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(20, 0)))
         ]
 
 def get_next_valid_work_time(dt: datetime) -> datetime:
@@ -134,10 +132,7 @@ def get_next_valid_work_time(dt: datetime) -> datetime:
             elif w_start <= dt < w_end:
                 return dt
         cur_date += timedelta(days=1)
-        # วันถัดไป: ถ้าวันเสาร์เริ่ม 08:00 ถ้าวันธรรมดาเริ่ม 08:30
-        start_hour = 8 if cur_date.weekday() == 5 else 8
-        start_min = 0 if cur_date.weekday() == 5 else 30
-        dt = datetime.combine(cur_date, dtime(start_hour, start_min))
+        dt = datetime.combine(cur_date, dtime(8, 0))
     return dt
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
@@ -156,7 +151,7 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
                 break
                 
         if not active_window:
-            current_dt = get_next_valid_work_time(current_dt + timedelta(minutes=5))
+            current_dt = get_next_valid_work_time(current_dt + timedelta(minutes=10))
             continue
             
         w_start, w_end = active_window
@@ -515,7 +510,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:30-20:00 น.) [เบรก 10:00-10:10, 15:00-15:10] | ส. (08:00-17:00 น.) | พักเที่ยง 12:00-13:00 น. | หยุดวันอาทิตย์</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:00-20:00 น.) | ส. (08:00-17:00 น.) | พักเที่ยง 12:00-13:00 น. | หยุดวันอาทิตย์</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
@@ -682,7 +677,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (คำนวณวัน-เวลาตามกะใหม่และเวลาแผนอย่างแม่นยำ)
+# 5. Scheduling Engine (คำนวณตามแผนแม่นยำ ไม่เลื่อนตามนาฬิกาจริง)
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime=None):
     active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
@@ -776,7 +771,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
         job_code = str(selected_job.get('แผนงาน', '-'))
         drawing_name = str(selected_job.get("ชื่อ Drawing.", "-"))
         qty_val = str(selected_job.get("จำนวน", 1))
-        
         short_bar_label = f"{job_code}"
         
         setup_start = cur_time
@@ -858,7 +852,7 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
             total_factory_work_hours += (we - ws).total_seconds() / 3600.0
         iter_date += timedelta(days=1)
         
-    total_horizon_work_hrs = max(total_factory_work_hours, 10.16)
+    total_horizon_work_hrs = max(total_factory_work_hours, 11.0)
     
     util_list = []
     for m in MACHINE_LIST:
@@ -1096,7 +1090,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     st_parsed = parse_flexible_datetime(s_start)
                     start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
                     step_start_epoch = to_bangkok_epoch_ms(s_start)
-                    st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch="{step_start_epoch}" style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>", unsafe_allow_html=True)
+                    # แก้ไข Syntax Error ที่บรรทัดนี้ด้วย Triple Quotes ป้องกัน Quote ชนกัน
+                    st.caption(f"""**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                 elif is_step_hold:
                     st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
                 else:
@@ -1551,7 +1546,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
             ].copy()
 
-            # ซิงค์ลำดับแถวให้ตรงกับตาราง Work Order Sheet 100%
             if not df_summary.empty:
                 order_map = {str(val): i for i, val in enumerate(df_summary["ID"].astype(str))}
                 active_jobs_editor_df["temp_plan_order"] = active_jobs_editor_df["ID"].astype(str).map(order_map).fillna(999999)
@@ -2335,7 +2329,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 annotation_font_size=10, annotation_font_color="#94A3B8"
                             )
                         else:
-                            # ไฮไลต์ช่วงพักเที่ยง
                             lunch_start = datetime.combine(cur_d, dtime(12, 0))
                             lunch_end = datetime.combine(cur_d, dtime(13, 0))
                             fig.add_vrect(
@@ -2345,22 +2338,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 annotation_text="🍱 พักเที่ยง", annotation_position="top left",
                                 annotation_font_size=9, annotation_font_color="#D97706"
                             )
-                            # ไฮไลต์ช่วงพักเบรก จันทร์-ศุกร์
-                            if cur_d.weekday() < 5:
-                                b1_start = datetime.combine(cur_d, dtime(10, 0))
-                                b1_end = datetime.combine(cur_d, dtime(10, 10))
-                                fig.add_vrect(
-                                    x0=b1_start, x1=b1_end,
-                                    fillcolor="#FFEDD5", opacity=0.6,
-                                    layer="below", line_width=1, line_color="#FDBA74"
-                                )
-                                b2_start = datetime.combine(cur_d, dtime(15, 0))
-                                b2_end = datetime.combine(cur_d, dtime(15, 10))
-                                fig.add_vrect(
-                                    x0=b2_start, x1=b2_end,
-                                    fillcolor="#FFEDD5", opacity=0.6,
-                                    layer="below", line_width=1, line_color="#FDBA74"
-                                )
                         cur_d += timedelta(days=1)
 
                 fig.update_layout(
@@ -2380,11 +2357,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 <div class="schedule-info-box">
                     <div class="schedule-pill">
                         <span style="font-size:16px;">⏱️</span>
-                        <span><b>จันทร์ – ศุกร์:</b> 08:30 – 12:00 น. และ 13:00 – 20:00 น. (10 ชม. 10 นาที/วัน)</span>
+                        <span><b>จันทร์ – ศุกร์:</b> 08:00 – 12:00 น. และ 13:00 – 20:00 น. (11 ชม./วัน)</span>
                     </div>
                     <div class="schedule-pill">
-                        <span style="font-size:16px;">☕</span>
-                        <span style="color:#C2410C;"><b>พักเบรกเช้า/บ่าย:</b> 10:00 – 10:10 น. และ 15:00 – 15:10 น.</span>
+                        <span style="font-size:16px;">⏱️</span>
+                        <span><b>วันเสาร์:</b> 08:00 – 12:00 น. และ 13:00 – 17:00 น. (8 ชม./วัน)</span>
                     </div>
                     <div class="schedule-pill">
                         <span style="font-size:16px;">🍱</span>
