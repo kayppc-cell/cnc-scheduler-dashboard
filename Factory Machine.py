@@ -61,27 +61,31 @@ def parse_flexible_datetime(dt_val):
     s = s.replace('T', ' ').split('+')[0].split('Z')[0].strip()
     current_year = get_bangkok_now().year
 
+    # กรณีรูปแบบมาตรฐานฐานข้อมูล YYYY-MM-DD
     if "-" in s:
         parts_dash = s.split(" ")[0].split("-")
         if len(parts_dash) == 3 and len(parts_dash[0]) == 4:
             dt_parsed = pd.to_datetime(s, errors='coerce')
             return dt_parsed.tz_localize(None) if (pd.notna(dt_parsed) and getattr(dt_parsed, 'tzinfo', None) is not None) else dt_parsed
 
+    # บังคับอ่านแบบ วัน/เดือน/ปี (Day-First) เสมอ ไม่สลับเดือนขึ้นก่อน
     if "/" in s:
         date_part = s.split(" ")[0]
         time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:30:00"
         parts = date_part.split("/")
         
+        # กรณีพิมพ์ วัน/เดือน (เช่น 04/09 14:30)
         if len(parts) == 2:
             d, m = parts[0].zfill(2), parts[1].zfill(2)
             s_fixed = f"{current_year}-{m}-{d} {time_part}"
-            dt_parsed = pd.to_datetime(s_fixed, errors='coerce')
+            dt_parsed = pd.to_datetime(s_fixed, format="%Y-%m-%d %H:%M:%S", errors='coerce')
             return dt_parsed
+        # กรณีพิมพ์ วัน/เดือน/ปี (เช่น 04/09/2026 14:30)
         elif len(parts) == 3:
             d, m, y = parts[0].zfill(2), parts[1].zfill(2), parts[2]
             if len(y) == 2: y = f"20{y}"
             s_fixed = f"{y}-{m}-{d} {time_part}"
-            dt_parsed = pd.to_datetime(s_fixed, errors='coerce')
+            dt_parsed = pd.to_datetime(s_fixed, format="%Y-%m-%d %H:%M:%S", errors='coerce')
             return dt_parsed
 
     dt_parsed = pd.to_datetime(s, errors='coerce', dayfirst=True)
@@ -112,7 +116,7 @@ def get_day_working_windows(dt_date):
     if weekday == 6:
         return []
     elif weekday == 5:
-        # วันเสาร์: 08:30 - 17:00 น. (หักเบรกเช้า 10:00-10:10, เที่ยง 12:00-13:00, บ่าย 15:00-15:10)
+        # วันเสาร์: 08:30 - 17:00 น.
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -120,7 +124,7 @@ def get_day_working_windows(dt_date):
             (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
-        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น. (หักเบรกเช้า 10:00-10:10, เที่ยง 12:00-13:00, บ่าย 15:00-15:10, เย็นก่อน OT 17:00-17:30)
+        # วันจันทร์ - ศุกร์: 08:30 - 20:00 น.
         return [
             (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
             (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
@@ -685,7 +689,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # =========================================================
-# 5. Scheduling Engine (คำนวณตามแผนแม่นยำ พร้อมระบบ Chain Reference)
+# 5. Scheduling Engine
 # =========================================================
 def calculate_shop_schedule(jobs_df, default_start_datetime=None):
     active_mask = jobs_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
@@ -762,7 +766,6 @@ def calculate_shop_schedule(jobs_df, default_start_datetime=None):
         ready_candidates.sort(key=job_priority_key)
         selected_job = ready_candidates[0]
 
-        # หากเป็นคิวถัดไปและเครื่องว่างช้ากว่าเวลาขึ้นงานเดิม ให้เริ่มเมื่อเครื่องว่าง (Chain Logic)
         job_ready_time = selected_job["ready_at"]
         if cur_time < job_ready_time:
             cur_time = get_next_valid_work_time(job_ready_time)
@@ -1554,7 +1557,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
             ].copy()
 
-            # แปลงวัน-เวลาขึ้นงานเป็น Datetime เพื่อเรียงลำดับตามเวลาจริง
+            # เรียงลำดับตามวัน-เวลาขึ้นงานจริง (Day-First)
             active_jobs_editor_df["temp_ready_dt"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
             active_jobs_editor_df = active_jobs_editor_df.sort_values(
                 by=["temp_ready_dt", "ID"], 
@@ -2540,7 +2543,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
 # ---------------------------------------------------------
-# VIEW 3: หมวดวิเคราะห์ประสิทธิภาพราย Drawing (Plan vs Actual by Drawing)
+# VIEW 3: หมวดวิเคราะห์ประสิทธิภาพราย Drawing
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📈 วิเคราะห์ประสิทธิภาพราย Drawing":
     st.subheader("📈 วิเคราะห์และเปรียบเทียบเวลาทำงานจริงราย Drawing (Drawing Performance Analysis)")
@@ -2815,7 +2818,7 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
         st.info("ℹ️ ยังไม่มีข้อมูลในระบบ")
 
 # ---------------------------------------------------------
-# VIEW 4: รายงานสรุปประจำเดือน (Monthly Report & Auto Graph Print)
+# VIEW 4: รายงานสรุปประจำเดือน
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📑 รายงานสรุปประจำเดือน":
     if st.session_state.user_role is None:
