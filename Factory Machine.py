@@ -112,11 +112,13 @@ def get_day_working_windows(dt_date):
     if weekday == 6:
         return []
     elif weekday == 5:
+        # วันเสาร์: เริ่ม 08:30 - 12:00 น. และ 13:00 - 17:00 น. (7.5 ชม./วัน)
         return [
-            (datetime.combine(dt_date, dtime(8, 0)), datetime.combine(dt_date, dtime(12, 0))),
+            (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(12, 0))),
             (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(17, 0)))
         ]
     else:
+        # วันจันทร์ - ศุกร์: เริ่ม 08:00 - 12:00 น. และ 13:00 - 20:00 น. (11 ชม./วัน)
         return [
             (datetime.combine(dt_date, dtime(8, 0)), datetime.combine(dt_date, dtime(12, 0))),
             (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(20, 0)))
@@ -132,7 +134,9 @@ def get_next_valid_work_time(dt: datetime) -> datetime:
             elif w_start <= dt < w_end:
                 return dt
         cur_date += timedelta(days=1)
-        dt = datetime.combine(cur_date, dtime(8, 0))
+        next_h = 8
+        next_m = 30 if cur_date.weekday() == 5 else 0
+        dt = datetime.combine(cur_date, dtime(next_h, next_m))
     return dt
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
@@ -510,7 +514,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:00-20:00 น.) | ส. (08:00-17:00 น.) | พักเที่ยง 12:00-13:00 น. | หยุดวันอาทิตย์</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:00-20:00 น.) | ส. (08:30-17:00 น.) | พักเที่ยง 12:00-13:00 น. | หยุดวันอาทิตย์</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
@@ -1090,7 +1094,6 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     st_parsed = parse_flexible_datetime(s_start)
                     start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
                     step_start_epoch = to_bangkok_epoch_ms(s_start)
-                    # แก้ไข Syntax Error ที่บรรทัดนี้ด้วย Triple Quotes ป้องกัน Quote ชนกัน
                     st.caption(f"""**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                 elif is_step_hold:
                     st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
@@ -1546,6 +1549,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "⏳ รอคิวผลิต", "⚙️ กำลังผลิต"])
             ].copy()
 
+            # ซิงค์ลำดับแถวให้ตรงกับตาราง Work Order Sheet 100%
             if not df_summary.empty:
                 order_map = {str(val): i for i, val in enumerate(df_summary["ID"].astype(str))}
                 active_jobs_editor_df["temp_plan_order"] = active_jobs_editor_df["ID"].astype(str).map(order_map).fillna(999999)
@@ -2361,7 +2365,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     </div>
                     <div class="schedule-pill">
                         <span style="font-size:16px;">⏱️</span>
-                        <span><b>วันเสาร์:</b> 08:00 – 12:00 น. และ 13:00 – 17:00 น. (8 ชม./วัน)</span>
+                        <span><b>วันเสาร์:</b> 08:30 – 12:00 น. และ 13:00 – 17:00 น. (7.5 ชม./วัน)</span>
                     </div>
                     <div class="schedule-pill">
                         <span style="font-size:16px;">🍱</span>
