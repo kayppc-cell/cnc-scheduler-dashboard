@@ -735,6 +735,7 @@ if selected_tab != st.session_state.current_view:
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
+    
     df_all = fetch_jobs_from_supabase()
     
     c_m_sel, c_mode_sel = st.columns([2, 2])
@@ -747,32 +748,16 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             horizontal=True
         )
 
-    planned_finish_map = {}
-    m_wo_summary = pd.DataFrame()
-    
-    if not df_all.empty:
-        _, df_summary_plan, _, _ = calculate_shop_schedule(df_all)
-        if not df_summary_plan.empty:
-            for _, s_row in df_summary_plan.iterrows():
-                j_id = str(s_row.get("ID", ""))
-                p_cd = str(s_row.get("แผนงาน", ""))
-                d_cd = str(s_row.get("ชื่อ Drawing.", ""))
-                s_cd = str(s_row.get("ขั้นตอน (Step)", ""))
-                f_dt = s_row.get("เวลาจบงาน_DT")
-
-                planned_finish_map[j_id] = f_dt
-                planned_finish_map[(p_cd, d_cd, s_cd)] = f_dt
-
-            m_wo_summary = df_summary_plan[df_summary_plan["เครื่องจักร"] == selected_m].sort_values(by="เวลาเริ่มจริง", ascending=True).copy().reset_index(drop=True)
-
+    # ดึงงานทั้งหมดของเครื่องที่เลือก (รวมงานกำลังผลิต, พักงาน และงานรอคิวทุกรายการ ไม่ตัดทิ้ง)
     if not df_all.empty:
         m_all_jobs = df_all[
             (df_all["เลือกเครื่องจักร"] == selected_m) &
-            (df_all["วัน-เวลาขึ้นงาน"].notna() | df_all["สถานะงาน"].isin(["🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
+            (df_all["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
         ].copy()
     else:
         m_all_jobs = pd.DataFrame()
 
+    # แบนเนอร์สถานะภาพรวมของเครื่องจักรปัจจุบัน
     if not m_all_jobs.empty:
         running_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
         hold_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
@@ -812,9 +797,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             </div>
             """, unsafe_allow_html=True)
 
-    if m_wo_summary.empty:
+    if m_all_jobs.empty:
         st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
     else:
+        # แผงควบคุมกรณีเลือกโหมดรันรวม (Batch Processing Mode)
         if "Batch" in run_mode:
             st.markdown("""
             <div class="batch-toolbar">
@@ -849,22 +835,34 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     st.toast("บันทึกจบงานจริงทุกคิวเรียบร้อย!", icon="🏁")
                     st.rerun()
 
+        # จัดลำดับคิวให้เรียงตามความสำคัญ: งานกำลังผลิต (0) -> พักงาน (1) -> งานรอคิวตามเวลาขึ้นงาน (2)
+        def sort_op_jobs(x):
+            st_val = str(x.get("สถานะงาน", ""))
+            if "กำลังผลิต" in st_val:
+                prio = 0
+            elif "พักงาน" in st_val:
+                prio = 1
+            else:
+                prio = 2
+            r_dt = parse_flexible_datetime(x.get("วัน-เวลาขึ้นงาน"))
+            return (prio, r_dt if r_dt is not None else pd.Timestamp.max, safe_int(x.get("ID")))
+
+        m_active = m_all_jobs.copy()
+        m_active["_sort_key"] = m_active.apply(sort_op_jobs, axis=1)
+        m_active = m_active.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
+
+        cur_chain_time = None
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
         next_available_start_found = False
 
-        for queue_idx, (_, wo_item) in enumerate(m_wo_summary.iterrows(), 1):
-            target_id = safe_int(wo_item["ID"])
-            step_record = m_all_jobs[m_all_jobs["ID"] == target_id]
-            if step_record.empty:
-                continue
-            step_row = step_record.iloc[0]
-
+        for queue_idx, step_row in m_active.iterrows():
+            target_id = safe_int(step_row["ID"])
             plan_code = str(step_row.get("แผนงาน", "-"))
             drawing_code = str(step_row.get("ชื่อ Drawing.", "-"))
             qty_val = int(step_row.get("จำนวน", 1) or 1)
             mat_val = str(step_row.get("วัสดุ", "-"))
             raw_s_name = str(step_row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
-            s_name = raw_s_name if raw_s_name not in ["", "None", "nan", "รอหน้าเครื่องระบุ"] else f"OP{queue_idx*10}"
+            s_name = raw_s_name if raw_s_name not in ["", "None", "nan", "รอหน้าเครื่องระบุ"] else f"OP{(queue_idx+1)*10}"
             s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
             s_start = step_row.get("เริ่มจริง")
             s_finish = step_row.get("เสร็จจริง")
@@ -875,11 +873,25 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             is_step_waiting = not is_step_running and not is_step_finished and not is_step_hold
             is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
 
-            dt_ready = parse_flexible_datetime(step_row.get("วัน-เวลาขึ้นงาน"))
-            ready_display_str = dt_ready.strftime("%d/%m/%Y %H:%M น.") if pd.notna(dt_ready) else "ยังไม่ระบุเวลา"
+            # คำนวณเวลาลูกโซ่ต่อเนื่องตามกะและช่วงพักเบรกโรงงาน
+            s_m = safe_float(step_row.get("Setup (น.)"), 10.0)
+            b_m = safe_float(step_row.get("Basic (น.)"), 0.0)
+            p_m = safe_float(step_row.get("โปรแกรม (น.)"), 120.0)
+            tot_h = (s_m + b_m + p_m) / 60.0
 
-            plan_finish_dt = wo_item.get("เวลาจบงาน_DT")
-            finish_plan_display_str = plan_finish_dt.strftime("%d/%m/%Y %H:%M น.") if pd.notna(plan_finish_dt) else str(wo_item.get("เวลาจบงาน", "-"))
+            if cur_chain_time is None:
+                r_parsed = parse_flexible_datetime(step_row.get("วัน-เวลาขึ้นงาน"))
+                if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
+                    r_parsed = get_bangkok_now().replace(tzinfo=None)
+                start_w_dt = get_next_valid_work_time(r_parsed)
+            else:
+                start_w_dt = get_next_valid_work_time(cur_chain_time)
+
+            _, finish_w_dt = add_work_time_with_shift(start_w_dt, tot_h)
+            cur_chain_time = finish_w_dt
+
+            ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.")
+            finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.")
 
             if "Batch" in run_mode:
                 can_start = is_step_waiting
@@ -889,6 +901,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     can_start = True
                     next_available_start_found = True
 
+            # สไตล์ของการ์ดหัวข้อ
             if is_step_hold:
                 header_box_class = "op-job-header op-job-header-hold"
                 badge_gradient = "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)"
@@ -906,7 +919,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 badge_gradient = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
                 status_badge_html = ''
 
-            card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>กำหนดขึ้นงาน:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>กำหนดจบงานตามแผน:</b> {finish_plan_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
+            card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>กำหนดขึ้นงาน:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>กำหนดจบงานตามแผน:</b> {finish_plan_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
             st.markdown(card_header_html, unsafe_allow_html=True)
 
             card_style_class = "step-card"
@@ -924,11 +937,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 
                 if is_step_finished:
                     fin_dt = parse_flexible_datetime(s_finish)
-                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if fin_dt is not None else '-'
+                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if (fin_dt is not None and pd.notna(fin_dt)) else '-'
                     st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                 elif is_step_running:
                     st_parsed = parse_flexible_datetime(s_start)
-                    start_txt = st_parsed.strftime('%H:%M น.') if st_parsed is not None else '-'
+                    start_txt = st_parsed.strftime('%H:%M น.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
                     step_start_epoch = to_bangkok_epoch_ms(s_start)
                     st.caption(f"""**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                 elif is_step_hold:
@@ -1034,8 +1047,9 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
+            # ส่วนเพิ่ม Step ย่อยต่อท้ายสำหรับ Drawing นี้
             with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับ {plan_code} ({drawing_code})", expanded=False):
-                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=f"OP{(queue_idx+1)*10}", placeholder="เช่น OP20, กลึง, เจียร, เชื่อม", key=f"new_step_name_input_{target_id}")
+                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=f"OP{(queue_idx+2)*10}", placeholder="เช่น OP20, กลึง, เจียร, เชื่อม", key=f"new_step_name_input_{target_id}")
 
                 if st.button(f"➕ บันทึกเพิ่มขั้นตอนต่อท้าย", key=f"btn_add_step_{target_id}", type="secondary", use_container_width=True):
                     now_str = get_bangkok_str()
@@ -1049,7 +1063,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         "qty": int(qty_val),
                         "material": str(mat_val),
                         "job_type": str(step_row.get("ประเภทงาน", "🟢 งานปกติ")),
-                        "step_name": new_step_input.strip() if new_step_input.strip() != "" else f"OP{(queue_idx+1)*10}",
+                        "step_name": new_step_input.strip() if new_step_input.strip() != "" else f"OP{(queue_idx+2)*10}",
                         "machine_name": selected_m,
                         "ready_at": now_str,
                         "setup_mins": base_setup,
@@ -1061,20 +1075,19 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         st.cache_data.clear()
                         st.toast(f"เพิ่มขั้นตอน {new_step_input} เรียบร้อยแล้ว!", icon="🚀")
                         st.rerun()
-            
             st.write("")
 
     components.html("""
     <script>
         function runLiveStopwatches() {
             try {
-                const now = new Date().getTime();
+                const nowTs = new Date().getTime();
                 const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
                 timerEls.forEach(el => {
                     const startAttr = el.getAttribute('data-start-epoch');
                     const startTs = parseInt(startAttr, 10);
                     if (startTs && startTs > 0) {
-                        const diffMs = Math.max(0, now - startTs);
+                        const diffMs = Math.max(0, nowTs - startTs);
                         const totalSecs = Math.floor(diffMs / 1000);
                         const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
                         const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
@@ -1082,9 +1095,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         el.innerText = hrs + ":" + mins + ":" + secs;
                     }
                 });
-            } catch (e) {
-                console.error(e);
-            }
+            } catch (e) {}
         }
         setInterval(runLiveStopwatches, 1000);
         runLiveStopwatches();
