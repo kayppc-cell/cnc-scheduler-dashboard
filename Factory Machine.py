@@ -1611,8 +1611,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =====================================================
             # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)
             # =====================================================
-            if not df_summary.empty:
-                st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
+            st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
 
             # ดึงข้อมูลที่เพิ่งคำนวณคิวลูกโซ่จาก active_jobs_editor_df มาใช้โดยตรง ไม่คำนวณซ้ำ
             df_wo_direct = active_jobs_editor_df.copy()
@@ -1743,9 +1742,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 },
                 use_container_width=True,
                 hide_index=True
-                )
+            )
 
-                st.divider()
+            st.divider()
 
             # =====================================================
             # 4. ผังเวลาขึ้นงาน (Gantt Chart Timeline) - ป้องกัน OverflowError
