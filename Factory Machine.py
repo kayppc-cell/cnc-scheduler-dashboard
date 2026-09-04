@@ -257,8 +257,8 @@ st.markdown("""
         padding-top: 0.8rem !important;
         padding-bottom: 2.5rem !important;
         padding-left: 0.8rem !important;
-        padding-right: 0.8rem !important;
         max-width: 100% !important;
+        padding-right: 0.8rem !important;
     }
 
     .main-header {
@@ -860,7 +860,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     """, height=0)
 
 # ---------------------------------------------------------
-# VIEW 2: แดชบอร์ดภาพรวมโรงงาน (ล็อก Baseline + รันลูกโซ่ 100%)
+# VIEW 2: แดชบอร์ดภาพรวมโรงงาน
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if st.session_state.user_role is None:
@@ -1305,29 +1305,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         hide_index=True,
                         use_container_width=True
                     )
-                else:
-                    edited_jobs = display_editor_df.copy()
-                    st.dataframe(
-                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ", "กำหนดพร้อมขึ้นงาน (Baseline)", "เริ่มตามลูกโซ่"]]],
-                        column_config={
-                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
-                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
-                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
-                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
-                            "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=125),
-                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130),
-                            "เลือกเครื่องจักร": st.column_config.TextColumn("เลือกเครื่องจักร", width=160),
-                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("วัน-เวลาขึ้นงาน", width=155),
-                            "วัน-เวลาจบงาน": st.column_config.TextColumn("วัน-เวลาจบงานตามแผน", width=155),
-                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
-                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
-                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, format="%d"),
-                            "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
-                            "สถานะงาน": st.column_config.TextColumn("สถานะงาน", width=145),
-                        },
-                        hide_index=True,
-                        use_container_width=True
-                    )
                 
                 st.markdown('<div id="editor_table_bottom_mark"></div>', unsafe_allow_html=True)
 
@@ -1343,7 +1320,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
                     with c_save:
                         if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
-                            # อัปเดตเฉพาะแถวที่มีการเปลี่ยนแปลงจริง เพื่อความรวดเร็ว ไม่กระตุก
                             editor_diffs = st.session_state.get("editor_cnc_jobs_grid_main", {}).get("edited_rows", {})
                             for idx_row, row in edited_jobs.iterrows():
                                 p_code = safe_str(row.get("แผนงาน"), "")
@@ -1373,7 +1349,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan"]:
                                     insert_supabase_job(payload)
                                 else:
-                                    # บันทึกเมื่อมีการแก้แถวนั้น หรือเป็นรายการใหม่
                                     if idx_row in editor_diffs or not editor_diffs:
                                         update_supabase_job(int(float(row_id)), payload)
 
@@ -1393,8 +1368,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.cache_data.clear()
                             st.session_state.scroll_to_bottom = True
                             st.rerun()
-                            else:
-                                st.error("เกิดข้อผิดพลาดในการลบข้อมูลจาก Supabase")
 
             finished_jobs_df = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
             active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])])
@@ -1429,10 +1402,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             df_wo_direct["เครื่องจักร / แผนก"] = df_wo_direct["เลือกเครื่องจักร"]
             df_wo_direct["สถานะ"] = df_wo_direct["สถานะงาน"]
             
-            # ช่องนี้แสดงเวลา Baseline เดิมที่ล็อกไว้เพื่อสอบกลับ
             df_wo_direct["กำหนดพร้อมขึ้นงาน"] = df_wo_direct["กำหนดพร้อมขึ้นงาน (Baseline)"]
-            
-            # ช่องนี้แสดงเวลาลูกโซ่ที่ต่อเนื่องกันจริง
             df_wo_direct["เริ่มขึ้นงานตามแผน"] = df_wo_direct.get("เริ่มตามลูกโซ่", df_wo_direct["วัน-เวลาขึ้นงาน"])
             df_wo_direct["จบงานตามแผน"] = df_wo_direct["วัน-เวลาจบงาน"]
 
@@ -1511,7 +1481,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     df_display["สถานะ"].astype(str).str.lower().str.contains(q_wo)
                 ]
 
-            display_cols = [c for c in df_display.columns if c not in ["_dt_start", "_dt_finish", "_sort_key", "กำหนดพร้อมขึ้นงาน (Baseline)"]]
+            display_cols = [c for c in df_display.columns if c not in ["_dt_start", "_dt_finish", "_sort_key", "กำหนดพร้อมขึ้นงาน (Baseline)", "เริ่มตามลูกโซ่"]]
 
             styled_df_display = df_display[display_cols].style.apply(
                 highlight_running_deadlines,
@@ -1562,7 +1532,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             valid_end_dates = []
 
             for _, r_g in active_jobs_editor_df.iterrows():
-                st_raw = r_g.get("วัน-เวลาขึ้นงาน")
+                st_raw = r_g.get("เริ่มตามลูกโซ่", r_g.get("วัน-เวลาขึ้นงาน"))
                 fn_raw = r_g.get("วัน-เวลาจบงาน")
                 
                 st_dt = parse_flexible_datetime(st_raw)
