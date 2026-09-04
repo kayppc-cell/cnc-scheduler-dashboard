@@ -2117,28 +2117,76 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 fin_display_df["ผลเทียบแผน"] = plan_result_list
                 fin_display_df["ลบประวัติ"] = st.session_state.finish_select_all
 
-                fin_tool1, fin_tool2 = st.columns([3, 4])
-                with fin_tool1:
-                    if is_admin:
-                        fb_c1, fb_c2 = st.columns(2)
-                        with fb_c1:
-                            if st.button("✅ เลือกหมด (เสร็จ)", key="btn_sel_all_fin", use_container_width=True):
-                                st.session_state.finish_select_all = True
-                                st.rerun()
-                        with fb_c2:
-                            if st.button("❌ ยกเลิก (เสร็จ)", key="btn_unsel_all_fin", use_container_width=True):
-                                st.session_state.finish_select_all = False
-                                st.rerun()
-                with fin_tool2:
-                    search_fin = st.text_input("🔍 ค้นหาในประวัติงานเสร็จสิ้น (แผนงาน, Drawing, เครื่องจักร):", key="search_finished_history_input")
+                st.markdown("**🔎 ค้นหาด่วนด้วยปุ่ม:**")
+                quick_filter = st.session_state.get("finished_history_quick_filter", "ALL")
+                q_cols = st.columns(6)
+                quick_buttons = [
+                    ("ALL", "🌐 ทั้งหมด"),
+                    ("TODAY", "📅 วันนี้"),
+                    ("7D", "🗓️ 7 วัน"),
+                    ("LATE", "🔴 จบช้า"),
+                    ("ONTIME", "🟢 ตรง/เร็ว"),
+                    ("PAUSED", "⏸️ มีพัก"),
+                ]
+                for q_col, (filter_key, filter_label) in zip(q_cols, quick_buttons):
+                    with q_col:
+                        if st.button(
+                            filter_label,
+                            key=f"btn_finished_quick_{filter_key}",
+                            type="primary" if quick_filter == filter_key else "secondary",
+                            use_container_width=True
+                        ):
+                            st.session_state.finished_history_quick_filter = filter_key
+                            st.rerun()
 
-                if search_fin.strip() != "":
-                    q_f = search_fin.strip().lower()
-                    fin_display_df = fin_display_df[
-                        fin_display_df["แผนงาน"].astype(str).str.lower().str.contains(q_f) |
-                        fin_display_df["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_f) |
-                        fin_display_df["เลือกเครื่องจักร"].astype(str).str.lower().str.contains(q_f)
-                    ]
+                machine_options = ["🌐 ทุกเครื่อง"] + sorted(fin_display_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
+                plan_options = ["🌐 ทุกแผนงาน"] + sorted(fin_display_df["แผนงาน"].dropna().astype(str).unique().tolist())
+                drawing_options = ["🌐 ทุก Drawing"] + sorted(fin_display_df["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
+
+                sel_c1, sel_c2, sel_c3 = st.columns([1.2, 1, 1.5])
+                with sel_c1:
+                    selected_fin_machine = st.selectbox("🏭 เลือกเครื่องจักร:", machine_options, key="finished_history_machine_select")
+                with sel_c2:
+                    selected_fin_plan = st.selectbox("📌 เลือกแผนงาน:", plan_options, key="finished_history_plan_select")
+                with sel_c3:
+                    selected_fin_drawing = st.selectbox("📄 เลือก Drawing:", drawing_options, key="finished_history_drawing_select")
+
+                total_finished_before_filter = len(fin_display_df)
+                finish_dates = fin_display_df["เสร็จจริง"].apply(parse_flexible_datetime)
+                today_finished = get_bangkok_now().date()
+
+                if quick_filter == "TODAY":
+                    fin_display_df = fin_display_df[finish_dates.apply(lambda x: x is not None and x.date() == today_finished)]
+                elif quick_filter == "7D":
+                    start_7d = today_finished - timedelta(days=6)
+                    fin_display_df = fin_display_df[finish_dates.apply(lambda x: x is not None and start_7d <= x.date() <= today_finished)]
+                elif quick_filter == "LATE":
+                    fin_display_df = fin_display_df[pd.to_numeric(fin_display_df["จบคลาดเคลื่อน (น.)"], errors="coerce") > 0]
+                elif quick_filter == "ONTIME":
+                    finish_diff_series = pd.to_numeric(fin_display_df["จบคลาดเคลื่อน (น.)"], errors="coerce")
+                    fin_display_df = fin_display_df[finish_diff_series.notna() & (finish_diff_series <= 0)]
+                elif quick_filter == "PAUSED":
+                    fin_display_df = fin_display_df[pd.to_numeric(fin_display_df["พักสะสม (ชม.)"], errors="coerce") > 0]
+
+                if selected_fin_machine != "🌐 ทุกเครื่อง":
+                    fin_display_df = fin_display_df[fin_display_df["เลือกเครื่องจักร"].astype(str) == selected_fin_machine]
+                if selected_fin_plan != "🌐 ทุกแผนงาน":
+                    fin_display_df = fin_display_df[fin_display_df["แผนงาน"].astype(str) == selected_fin_plan]
+                if selected_fin_drawing != "🌐 ทุก Drawing":
+                    fin_display_df = fin_display_df[fin_display_df["ชื่อ Drawing."].astype(str) == selected_fin_drawing]
+
+                st.caption(f"แสดงผล {len(fin_display_df):,} จากทั้งหมด {total_finished_before_filter:,} รายการ")
+
+                if is_admin:
+                    fb_c1, fb_c2, _ = st.columns([1.5, 1.5, 4])
+                    with fb_c1:
+                        if st.button("✅ เลือกหมด (เสร็จ)", key="btn_sel_all_fin", use_container_width=True):
+                            st.session_state.finish_select_all = True
+                            st.rerun()
+                    with fb_c2:
+                        if st.button("❌ ยกเลิก (เสร็จ)", key="btn_unsel_all_fin", use_container_width=True):
+                            st.session_state.finish_select_all = False
+                            st.rerun()
 
                 if is_admin:
                     edited_fin = st.data_editor(
