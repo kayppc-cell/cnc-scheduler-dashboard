@@ -191,10 +191,10 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
     return segments, current_dt
 
 def highlight_running_deadlines(row, planned_finish_map):
-    status = str(row.get("เธชเธ–เธฒเธเธฐ", row.get("เธชเธ–เธฒเธเธฐเธเธฒเธ", "")))
+    status = str(row.get("สถานะ", row.get("สถานะงาน", "")))
     job_id = str(row.get("ID", ""))
 
-    if "เธเธณเธฅเธฑเธเธเธฅเธดเธ•" in status:
+    if "กำลังผลิต" in status:
         finish_dt = planned_finish_map.get(job_id)
         if finish_dt is not None and pd.notna(finish_dt):
             now = get_bangkok_now().replace(tzinfo=None)
@@ -208,7 +208,7 @@ def highlight_running_deadlines(row, planned_finish_map):
     return [''] * len(row)
 
 # =========================================================
-# 1. เธเธฒเธฃเธเธฑเธ”เธเธฒเธฃเธฃเธนเธเธ เธฒเธ (App Icon & Header Logo)
+# 1. การจัดการรูปภาพ (App Icon & Header Logo)
 # =========================================================
 icon_file = "log_ cnc_1.png"
 if not os.path.exists(icon_file):
@@ -217,7 +217,7 @@ if not os.path.exists(icon_file):
             icon_file = alt_icon
             break
 
-favicon_img = Image.open(icon_file) if os.path.exists(icon_file) else "๐ญ"
+favicon_img = Image.open(icon_file) if os.path.exists(icon_file) else "🏭"
 
 st.set_page_config(
     page_title="PES Production Monitor",
@@ -242,10 +242,10 @@ def get_cached_logo():
     return None
 
 logo_base64 = get_cached_logo()
-logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>' if logo_base64 else '<div class="header-logo-icon">๐ญ</div>'
+logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="header-logo" alt="Logo"/>' if logo_base64 else '<div class="header-logo-icon">🏭</div>'
 
 # =========================================================
-# 2. เธ•เธเนเธ•เนเธ UI
+# 2. ตกแต่ง UI
 # =========================================================
 st.markdown("""
 <style>
@@ -378,18 +378,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>เธฃเธฐเธเธเธ•เธดเธ”เธ•เธฒเธกเนเธฅเธฐเธเธฑเธเธ—เธถเธเธเธฒเธเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธเนเธเธเธเธเธฅเธดเธ•</h1><p>เธ.-เธจ. (08:30-20:00 เธ.) | เธช. (08:30-17:00 เธ.) | เน€เธเธฃเธเน€เธเนเธฒ 10:00-10:10 เธ. | เธเธฑเธเน€เธ—เธตเนเธขเธ 12:00-13:00 เธ. | เน€เธเธฃเธเธเนเธฒเธข 15:00-15:10 เธ. | เธซเธขเธธเธ”เธงเธฑเธเธญเธฒเธ—เธดเธ•เธขเน</p></div></div>'''
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>ระบบติดตามและบันทึกงานหน้าเครื่องแผนกผลิต</h1><p>จ.-ศ. (08:30-20:00 น.) | ส. (08:30-17:00 น.) | เบรกเช้า 10:00-10:10 น. | พักเที่ยง 12:00-13:00 น. | เบรกบ่าย 15:00-15:10 น. | หยุดวันอาทิตย์</p></div></div>'''
 st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
-# 3. เธเธณเธซเธเธ”เธชเธดเธ—เธเธดเนเนเธฅเธฐเธเธงเธฒเธกเธเธฅเธญเธ”เธ เธฑเธข & เธ•เธฑเธงเนเธเธฃเน€เธฃเธดเนเธกเธ•เนเธเธฃเธฐเธเธ
+# 3. กำหนดสิทธิ์และความปลอดภัย & ตัวแปรเริ่มต้นระบบ
 # =========================================================
 ADMIN_PASSWORD = "pesadmin"
 VIEWER_PASSWORD = "pes1234"
 
 default_states = {
     "user_role": None,
-    "current_view": "๐‘ท เนเธซเธกเธ”เธเนเธฒเธเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธ",
+    "current_view": "👷 โหมดช่างหน้าเครื่อง",
     "active_select_all": False,
     "finish_select_all": False,
     "scroll_to_bottom": False,
@@ -404,9 +404,9 @@ for k, v in default_states.items():
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
     "No.6 Bridgeport", "No.7 Bridgeport", "No.8 Hartford", "No.9 Mikron",
-    "No.10 เน€เธเธฃเธทเนเธญเธเน€เธเธตเธขเธฃเธฃเธฒเธ", "No.11 เน€เธเธฃเธทเนเธญเธเน€เธเธตเธขเธฃเธเธฅเธก",
-    "No.12 เธกเธดเธฅเธฅเธดเนเธ 1", "No.13 เธกเธดเธฅเธฅเธดเนเธ 2", "No.14 เธกเธดเธฅเธฅเธดเนเธ 3", "No.15 เธกเธดเธฅเธฅเธดเนเธ 4",
-    "No.16 เน€เธเธฃเธทเนเธญเธเธเธฅเธถเธ",
+    "No.10 เครื่องเจียรราบ", "No.11 เครื่องเจียรกลม",
+    "No.12 มิลลิ่ง 1", "No.13 มิลลิ่ง 2", "No.14 มิลลิ่ง 3", "No.15 มิลลิ่ง 4",
+    "No.16 เครื่องกลึง",
     "MIG CO2-No.01", "MIG CO2-No.02", "MIG CO2-No.03",
     "ARGON-No.01", "ARGON-No.02", "WELDING_ALUMINUM-No.01"
 ]
@@ -414,19 +414,19 @@ MACHINE_LIST = [
 DEFAULT_RATES = {
     "No.1 Awea": 1200, "No.2 Awea": 1000, "No.3 Hartford": 1000, "No.4 Sanco": 1000,
     "No.5 Hartford": 1000, "No.6 Bridgeport": 600, "No.7 Bridgeport": 600, "No.8 Hartford": 600, "No.9 Mikron": 1300,
-    "No.10 เน€เธเธฃเธทเนเธญเธเน€เธเธตเธขเธฃเธฃเธฒเธ": 500, "No.11 เน€เธเธฃเธทเนเธญเธเน€เธเธตเธขเธฃเธเธฅเธก": 500,
-    "No.12 เธกเธดเธฅเธฅเธดเนเธ 1": 400, "No.13 เธกเธดเธฅเธฅเธดเนเธ 2": 400, "No.14 เธกเธดเธฅเธฅเธดเนเธ 3": 400, "No.15 เธกเธดเธฅเธฅเธดเนเธ 4": 400,
-    "No.16 เน€เธเธฃเธทเนเธญเธเธเธฅเธถเธ": 400,
+    "No.10 เครื่องเจียรราบ": 500, "No.11 เครื่องเจียรกลม": 500,
+    "No.12 มิลลิ่ง 1": 400, "No.13 มิลลิ่ง 2": 400, "No.14 มิลลิ่ง 3": 400, "No.15 มิลลิ่ง 4": 400,
+    "No.16 เครื่องกลึง": 400,
     "MIG CO2-No.01": 450, "MIG CO2-No.02": 450, "MIG CO2-No.03": 450,
     "ARGON-No.01": 450, "ARGON-No.02": 450, "WELDING_ALUMINUM-No.01": 500
 }
 
-ASSIGN_OPTIONS = ["เธญเธฑเธ•เนเธเธกเธฑเธ•เธด (เน€เธเธฃเธทเนเธญเธ 3 เนเธเธเนเธ”เธเนเนเธ”เน)"] + MACHINE_LIST
-JOB_TYPES = ["๐ข เธเธฒเธเธเธเธ•เธด", "๐”ด เธเธฒเธเธ”เนเธงเธเนเธ—เธฃเธ"]
-JOB_STATUS = ["๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•", "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•", "๐จ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)", "๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง"]
+ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
+JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทรก"]
+JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "🟩 เสร็จสิ้นแล้ว"]
 
 # =========================================================
-# 4. เธเธฑเธเธเนเธเธฑเธเน€เธเธทเนเธญเธกเธ•เนเธญ Supabase
+# 4. ฟังก์ชันเชื่อมต่อ Supabase
 # =========================================================
 def get_supabase_headers():
     key = st.secrets["SUPABASE_KEY"]
@@ -487,14 +487,14 @@ def delete_supabase_job(job_id: int) -> bool:
 
 def normalize_status(status_str: str) -> str:
     s = str(status_str)
-    if "เธเธฑเธเธเธฒเธ" in s or "เธฃเธญเธงเธฑเธชเธ”เธธ" in s:
-        return "๐จ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)"
-    elif "เธเธณเธฅเธฑเธเธเธฅเธดเธ•" in s:
-        return "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•"
-    elif "เน€เธชเธฃเนเธเธชเธดเนเธ" in s:
-        return "๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง"
+    if "พักงาน" in s or "รอวัสดุ" in s:
+        return "🟨 พักงาน (รอวัสดุ)"
+    elif "กำลังผลิต" in s:
+        return "🟦 กำลังผลิต"
+    elif "เสร็จสิ้น" in s:
+        return "🟩 เสร็จสิ้นแล้ว"
     else:
-        return "๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•"
+        return "🟧 รอคิวผลิต"
 
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
@@ -521,12 +521,12 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                     df["qty"] = pd.to_numeric(df["qty"], errors='coerce').fillna(1).astype(int)
                     
                 col_map = {
-                    "id": "ID", "plan_code": "เนเธเธเธเธฒเธ", "drawing_name": "เธเธทเนเธญ Drawing.",
-                    "qty": "เธเธณเธเธงเธ", "material": "เธงเธฑเธชเธ”เธธ", "job_type": "เธเธฃเธฐเน€เธ เธ—เธเธฒเธ",
-                    "step_name": "เธเธฑเนเธเธ•เธญเธ (Step)", "machine_name": "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ",
-                    "ready_at": "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ", "setup_mins": "Setup (เธ.)",
-                    "basic_hrs": "Basic (เธ.)", "prog_hrs": "เนเธเธฃเนเธเธฃเธก (เธ.)",
-                    "status": "เธชเธ–เธฒเธเธฐเธเธฒเธ", "actual_start": "เน€เธฃเธดเนเธกเธเธฃเธดเธ", "actual_finish": "เน€เธชเธฃเนเธเธเธฃเธดเธ"
+                    "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
+                    "qty": "จำนวน", "material": "วัสดุ", "job_type": "ประเภทงาน",
+                    "step_name": "ขั้นตอน (Step)", "machine_name": "เลือกเครื่องจักร",
+                    "ready_at": "วัน-เวลาขึ้นงาน", "setup_mins": "Setup (น.)",
+                    "basic_hrs": "Basic (น.)", "prog_hrs": "โปรแกรม (น.)",
+                    "status": "สถานะงาน", "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง"
                 }
                 return df.rename(columns=col_map)
         return pd.DataFrame()
@@ -534,65 +534,65 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
         return pd.DataFrame()
 
 # ---------------------------------------------------------
-# เนเธ—เนเธเน€เธกเธเธนเน€เธเธฅเธตเนเธขเธเธกเธธเธกเธกเธญเธเธซเธฅเธฑเธ
+# แท็บเมนูเปลี่ยนมุมมองหลัก
 # ---------------------------------------------------------
 nav_options = [
-    "๐‘ท เนเธซเธกเธ”เธเนเธฒเธเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธ", 
-    "๐“ เนเธ”เธเธเธญเธฃเนเธ”เธ เธฒเธเธฃเธงเธกเนเธฃเธเธเธฒเธ", 
-    "๐“ เธงเธดเน€เธเธฃเธฒเธฐเธซเนเธเธฃเธฐเธชเธดเธ—เธเธดเธ เธฒเธเธฃเธฒเธข Drawing", 
-    "๐“‘ เธฃเธฒเธขเธเธฒเธเธชเธฃเธธเธเธเธฃเธฐเธเธณเน€เธ”เธทเธญเธ", 
-    "๐“บ เธเธญเธ—เธตเธงเธตเธเธฅเธฒเธเนเธฃเธเธเธฒเธ (TV Live)"
+    "👷 โหมดช่างหน้าเครื่อง", 
+    "📊 แดชบอร์ดภาพรวมโรงงาน", 
+    "📈 วิเคราะห์ประสิทธิภาพราย Drawing", 
+    "📑 รายงานสรุปประจำเดือน", 
+    "📺 จอทีวีกลางโรงงาน (TV Live)"
 ]
 
 cur_idx = nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0
-selected_tab = st.radio("เน€เธฅเธทเธญเธเธกเธธเธกเธกเธญเธ:", nav_options, index=cur_idx, horizontal=True, label_visibility="collapsed")
+selected_tab = st.radio("เลือกมุมมอง:", nav_options, index=cur_idx, horizontal=True, label_visibility="collapsed")
 
 if selected_tab != st.session_state.current_view:
     st.session_state.current_view = selected_tab
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: เนเธซเธกเธ”เธเนเธฒเธเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธ
+# VIEW 1: โหมดช่างหน้าเครื่อง
 # ---------------------------------------------------------
-if st.session_state.current_view == "๐‘ท เนเธซเธกเธ”เธเนเธฒเธเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธ":
-    st.markdown("### ๐“ฑ เธเธฑเธเธ—เธถเธเธชเธ–เธฒเธเธฐเธเธฒเธเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธ / เนเธเธเธเธเธฅเธดเธ•")
+if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
+    st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
     df_all = fetch_jobs_from_supabase()
     
     c_m_sel, c_mode_sel = st.columns([2, 2])
     with c_m_sel:
-        selected_m = st.selectbox("๐ญ เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ:", MACHINE_LIST, key="op_machine_select")
+        selected_m = st.selectbox("🏭 เลือกเครื่องจักร / แผนก:", MACHINE_LIST, key="op_machine_select")
     with c_mode_sel:
-        run_mode = st.radio("โ๏ธ เธฃเธนเธเนเธเธเธเธฒเธฃเธเธฅเธดเธ•:", ["๐”น เธฃเธฑเธเธ—เธตเธฅเธฐเธเธดเธง (Piece by Piece)", "๐“ฆ เธฃเธฑเธเธฃเธงเธกเธซเธฅเธฒเธขเธเธฒเธเธเธฃเนเธญเธกเธเธฑเธ (Batch Processing)"], horizontal=True)
+        run_mode = st.radio("⚙️ รูปแบบการผลิต:", ["🔹 รันทีละคิว (Piece by Piece)", "📦 รันรวมหลายงานพร้อมกัน (Batch Processing)"], horizontal=True)
 
     if not df_all.empty:
         m_all_jobs = df_all[
-            (df_all["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"] == selected_m) &
-            (df_all["เธชเธ–เธฒเธเธฐเธเธฒเธ"].isin(["๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•", "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•", "๐จ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)"]))
+            (df_all["เลือกเครื่องจักร"] == selected_m) &
+            (df_all["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
         ].copy()
     else:
         m_all_jobs = pd.DataFrame()
 
     if not m_all_jobs.empty:
-        running_now = m_all_jobs[m_all_jobs["เธชเธ–เธฒเธเธฐเธเธฒเธ"].str.contains("เธเธณเธฅเธฑเธเธเธฅเธดเธ•")]
-        hold_now = m_all_jobs[m_all_jobs["เธชเธ–เธฒเธเธฐเธเธฒเธ"].str.contains("เธเธฑเธเธเธฒเธ")]
+        running_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
+        hold_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
         
         if not running_now.empty:
             r_cur = running_now.iloc[0]
-            st_t = r_cur.get("เน€เธฃเธดเนเธกเธเธฃเธดเธ")
+            st_t = r_cur.get("เริ่มจริง")
             st_txt = "-"
             start_epoch = to_bangkok_epoch_ms(st_t)
             act_dt = parse_flexible_datetime(st_t)
             if act_dt is not None:
-                st_txt = act_dt.strftime("%H:%M เธ.")
+                st_txt = act_dt.strftime("%H:%M น.")
 
             st.markdown(f"""
             <div class="shop-live-banner shop-live-running">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span class="tv-pulse-dot"></span>
-                    <span>๐ข <b>{selected_m}: เธเธณเธฅเธฑเธเธฃเธฑเธเธเธฒเธเธญเธขเธนเน</b> (เน€เธฃเธดเนเธก: {st_txt} | โฑ๏ธ เธเธณเธฅเธฑเธเธฃเธฑเธ: <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
+                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ กำลังรัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
                 </div>
                 <div style="font-size:12.5px; opacity:0.9;">
-                    ๐“ <b>เนเธเธเธเธฒเธ:</b> {r_cur.get('เนเธเธเธเธฒเธ', '-')} | ๐“ <b>Drawing:</b> {r_cur.get('เธเธทเนเธญ Drawing.', '-')}
+                    📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -600,59 +600,59 @@ if st.session_state.current_view == "๐‘ท เนเธซเธกเ�
             h_cur = hold_now.iloc[0]
             st.markdown(f"""
             <div class="shop-live-banner shop-live-hold">
-                <div>๐‘ <b>{selected_m}: เน€เธเธฃเธทเนเธญเธเธซเธขเธธเธ”เธเธฑเธเธเธฒเธเธเธฑเนเธงเธเธฃเธฒเธง (เธฃเธญเน€เธเธดเธเธงเธฑเธชเธ”เธธเนเธซเธกเน)</b></div>
-                <div style="font-size:12.5px;">๐“ <b>เนเธเธเธเธฒเธ:</b> {h_cur.get('เนเธเธเธเธฒเธ', '-')} | ๐“ <b>Drawing:</b> {h_cur.get('เธเธทเนเธญ Drawing.', '-')}</div>
+                <div>🛑 <b>{selected_m}: เครื่องหยุดพักงานชั่วคราว (รอเบิกวัสดุใหม่)</b></div>
+                <div style="font-size:12.5px;">📌 <b>แผนงาน:</b> {h_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {h_cur.get('ชื่อ Drawing.', '-')}</div>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div class="shop-live-banner shop-live-idle">
-                <div>โช <b>{selected_m}: เน€เธเธฃเธทเนเธญเธเธงเนเธฒเธ (IDLE)</b> โ€” เธเธฃเนเธญเธกเธเธ” Start เน€เธฃเธดเนเธกเธเธฒเธเนเธซเธกเน</div>
+                <div>⚪ <b>{selected_m}: เครื่องว่าง (IDLE)</b> — พร้อมกด Start เริ่มงานใหม่</div>
             </div>
             """, unsafe_allow_html=True)
 
     if m_all_jobs.empty:
-        st.info(f"๐ เธชเธ–เธฒเธเธต {selected_m} เนเธกเนเธกเธตเธเธดเธงเธเธฒเธเธเนเธฒเธเนเธเธฃเธฐเธเธ")
+        st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
     else:
         if "Batch" in run_mode:
             st.markdown("""
             <div class="batch-toolbar">
                 <div>
-                    <b style="color:#1E3A8A; font-size:14.5px;">๐“ฆ เนเธเธเธเธงเธเธเธธเธกเธเธฒเธฃเธฃเธฑเธเธเธฒเธเนเธเธเธเธฅเธธเนเธก (Batch Processing Mode)</b><br>
-                    <span style="font-size:12px; color:#64748B;">เน€เธซเธกเธฒเธฐเธชเธณเธซเธฃเธฑเธเธเธฒเธเธ—เธตเนเน€เธเนเธ•เธ—เธนเธฅเธเธฃเธฑเนเธเน€เธ”เธตเธขเธงเนเธฅเนเธงเธฃเธฑเธ Step เน€เธ”เธตเธขเธงเธเธฑเธเธ•เนเธญเน€เธเธทเนเธญเธเธซเธฅเธฒเธขเน เธเธดเธง</span>
+                    <b style="color:#1E3A8A; font-size:14.5px;">📦 แผงควบคุมการรันงานแบบกลุ่ม (Batch Processing Mode)</b><br>
+                    <span style="font-size:12px; color:#64748B;">เหมาะสำหรับงานที่เซ็ตทูลครั้งเดียวแล้วรัน Step เดียวกันต่อเนื่องหลายๆ คิว</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
             
             b_c1, b_c2 = st.columns(2)
-            waiting_jobs = m_all_jobs[m_all_jobs["เธชเธ–เธฒเธเธฐเธเธฒเธ"].str.contains("เธฃเธญเธเธดเธง")]
-            running_jobs = m_all_jobs[m_all_jobs["เธชเธ–เธฒเธเธฐเธเธฒเธ"].str.contains("เธเธณเธฅเธฑเธเธเธฅเธดเธ•")]
+            waiting_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("รอคิว")]
+            running_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
 
             with b_c1:
-                if st.button(f"๐€ Start เธฃเธงเธกเธ—เธธเธเธเธฒเธเธ—เธตเนเธฃเธญเธเธดเธง ({len(waiting_jobs)} เธเธดเธง)", disabled=(len(waiting_jobs) == 0), type="primary", use_container_width=True):
+                if st.button(f"🚀 Start รวมทุกงานที่รอคิว ({len(waiting_jobs)} คิว)", disabled=(len(waiting_jobs) == 0), type="primary", use_container_width=True):
                     now_str = get_bangkok_str()
                     for _, r in waiting_jobs.iterrows():
-                        update_supabase_job(int(r["ID"]), {"status": "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•", "actual_start": now_str})
-                    st.toast("เน€เธฃเธดเนเธกเธเธฑเธเน€เธงเธฅเธฒเธเธฃเธดเธเธ—เธธเธเธเธดเธงเธเธฃเนเธญเธกเธเธฑเธเน€เธฃเธตเธขเธเธฃเนเธญเธข!", icon="๐€")
+                        update_supabase_job(int(r["ID"]), {"status": "🟦 กำลังผลิต", "actual_start": now_str})
+                    st.toast("เริ่มจับเวลาจริงทุกคิวพร้อมกันเรียบร้อย!", icon="🚀")
                     st.rerun()
 
             with b_c2:
-                if st.button(f"๐ Finish เธฃเธงเธกเธ—เธธเธเธเธฒเธเธ—เธตเนเธเธณเธฅเธฑเธเธฃเธฑเธ ({len(running_jobs)} เธเธดเธง)", disabled=(len(running_jobs) == 0), type="secondary", use_container_width=True):
+                if st.button(f"🏁 Finish รวมทุกงานที่กำลังรัน ({len(running_jobs)} คิว)", disabled=(len(running_jobs) == 0), type="secondary", use_container_width=True):
                     now_str = get_bangkok_str()
                     for _, r in running_jobs.iterrows():
-                        update_supabase_job(int(r["ID"]), {"status": "๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง", "actual_finish": now_str})
-                    st.toast("เธเธฑเธเธ—เธถเธเธเธเธเธฒเธเธเธฃเธดเธเธ—เธธเธเธเธดเธงเน€เธฃเธตเธขเธเธฃเนเธญเธข!", icon="๐")
+                        update_supabase_job(int(r["ID"]), {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str})
+                    st.toast("บันทึกจบงานจริงทุกคิวเรียบร้อย!", icon="🏁")
                     st.rerun()
 
         def sort_op_jobs(x):
-            st_val = str(x.get("เธชเธ–เธฒเธเธฐเธเธฒเธ", ""))
-            if "เธเธณเธฅเธฑเธเธเธฅเธดเธ•" in st_val:
+            st_val = str(x.get("สถานะงาน", ""))
+            if "กำลังผลิต" in st_val:
                 prio = 0
-            elif "เธเธฑเธเธเธฒเธ" in st_val:
+            elif "พักงาน" in st_val:
                 prio = 1
             else:
                 prio = 2
-            r_dt = parse_flexible_datetime(x.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"))
+            r_dt = parse_flexible_datetime(x.get("วัน-เวลาขึ้นงาน"))
             return (prio, r_dt if r_dt is not None else pd.Timestamp.max, safe_int(x.get("ID")))
 
         m_active = m_all_jobs.copy()
@@ -660,37 +660,37 @@ if st.session_state.current_view == "๐‘ท เนเธซเธกเ�
         m_active = m_active.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
 
         cur_chain_time = None
-        machine_any_running = any("เธเธณเธฅเธฑเธเธเธฅเธดเธ•" in str(r.get("เธชเธ–เธฒเธเธฐเธเธฒเธ", "")) for _, r in m_all_jobs.iterrows())
+        machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
         next_available_start_found = False
 
         for queue_idx, step_row in m_active.iterrows():
             target_id = safe_int(step_row["ID"])
-            plan_code = str(step_row.get("เนเธเธเธเธฒเธ", "-"))
-            drawing_code = str(step_row.get("เธเธทเนเธญ Drawing.", "-"))
-            qty_val = int(step_row.get("เธเธณเธเธงเธ", 1) or 1)
-            mat_val = str(step_row.get("เธงเธฑเธชเธ”เธธ", "-"))
-            raw_s_name = str(step_row.get("เธเธฑเนเธเธ•เธญเธ (Step)", "เธฃเธญเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธเธฃเธฐเธเธธ"))
-            s_name = raw_s_name if raw_s_name not in ["", "None", "nan", "เธฃเธญเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธเธฃเธฐเธเธธ"] else f"OP{(queue_idx+1)*10}"
-            s_status = str(step_row.get("เธชเธ–เธฒเธเธฐเธเธฒเธ", "๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•"))
-            s_start = step_row.get("เน€เธฃเธดเนเธกเธเธฃเธดเธ")
-            s_finish = step_row.get("เน€เธชเธฃเนเธเธเธฃเธดเธ")
+            plan_code = str(step_row.get("แผนงาน", "-"))
+            drawing_code = str(step_row.get("ชื่อ Drawing.", "-"))
+            qty_val = int(step_row.get("จำนวน", 1) or 1)
+            mat_val = str(step_row.get("วัสดุ", "-"))
+            raw_s_name = str(step_row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
+            s_name = raw_s_name if raw_s_name not in ["", "None", "nan", "รอหน้าเครื่องระบุ"] else f"OP{(queue_idx+1)*10}"
+            s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
+            s_start = step_row.get("เริ่มจริง")
+            s_finish = step_row.get("เสร็จจริง")
 
-            is_step_running = "เธเธณเธฅเธฑเธเธเธฅเธดเธ•" in s_status
-            is_step_hold = "เธเธฑเธเธเธฒเธ" in s_status
-            is_step_finished = "เน€เธชเธฃเนเธเธชเธดเนเธ" in s_status
+            is_step_running = "กำลังผลิต" in s_status
+            is_step_hold = "พักงาน" in s_status
+            is_step_finished = "เสร็จสิ้น" in s_status
             is_step_waiting = not is_step_running and not is_step_finished and not is_step_hold
-            is_urgent = "เธ”เนเธงเธเนเธ—เธฃเธ" in str(step_row.get("เธเธฃเธฐเน€เธ เธ—เธเธฒเธ", ""))
+            is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
 
-            s_m = safe_float(step_row.get("Setup (เธ.)"), 10.0)
-            b_m = safe_float(step_row.get("Basic (เธ.)"), 0.0)
-            p_m = safe_float(step_row.get("เนเธเธฃเนเธเธฃเธก (เธ.)"), 120.0)
+            s_m = safe_float(step_row.get("Setup (น.)"), 10.0)
+            b_m = safe_float(step_row.get("Basic (น.)"), 0.0)
+            p_m = safe_float(step_row.get("โปรแกรม (น.)"), 120.0)
             tot_h = (s_m + b_m + p_m) / 60.0
 
             if cur_chain_time is None:
-                r_parsed = parse_flexible_datetime(step_row.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"))
+                r_parsed = parse_flexible_datetime(step_row.get("วัน-เวลาขึ้นงาน"))
                 if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
-                    # เธขเธฑเธเนเธกเนเธกเธตเน€เธงเธฅเธฒเนเธเธ: เนเธชเธ”เธเธงเนเธฒเธเนเธฅเธฐเธฃเธญเนเธซเนเธเธนเนเธงเธฒเธเนเธเธเธเธณเธซเธเธ”
-                    # เธซเนเธฒเธกเนเธเนเน€เธงเธฅเธฒเธเธฑเธเธเธธเธเธฑเธ เน€เธเธฃเธฒเธฐเธเนเธฒเนเธเธเธเธฐเน€เธเธฅเธตเนเธขเธเน€เธญเธเธ—เธธเธเธเธฃเธฑเนเธเธ—เธตเนเธซเธเนเธฒเน€เธงเนเธ rerun
+                    # ยังไม่มีเวลาแผน: แสดงว่างและรอให้ผู้วางแผนกำหนด
+                    # ห้ามใช้เวลาปัจจุบัน เพราะค่าแผนจะเปลี่ยนเองทุกครั้งที่หน้าเว็บ rerun
                     start_w_dt = None
                 else:
                     start_w_dt = get_next_valid_work_time(r_parsed)
@@ -704,8 +704,8 @@ if st.session_state.current_view == "๐‘ท เนเธซเธกเ�
             else:
                 _, finish_w_dt = add_work_time_with_shift(start_w_dt, tot_h)
                 cur_chain_time = finish_w_dt
-                ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M เธ.")
-                finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M เธ.")
+                ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.")
+                finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.")
 
             if "Batch" in run_mode:
                 can_start = is_step_waiting
@@ -718,21 +718,21 @@ if st.session_state.current_view == "๐‘ท เนเธซเธกเ�
             if is_step_hold:
                 header_box_class = "op-job-header op-job-header-hold"
                 badge_gradient = "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)"
-                status_badge_html = '<span class="badge-chip badge-hold">๐‘ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธเนเธซเธกเน)</span>'
+                status_badge_html = '<span class="badge-chip badge-hold">🛑 พักงาน (รอวัสดุใหม่)</span>'
             elif is_step_running:
                 header_box_class = "op-job-header op-job-header-running"
                 badge_gradient = "linear-gradient(135deg, #059669 0%, #10B981 100%)"
-                status_badge_html = '<span class="badge-chip badge-running"><span class="tv-pulse-dot" style="margin-right:6px;"></span> ๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ• (เธฃเธฑเธเธเธฒเธเธญเธขเธนเน โฑ๏ธ)</span>'
+                status_badge_html = '<span class="badge-chip badge-running"><span class="tv-pulse-dot" style="margin-right:6px;"></span> 🟦 กำลังผลิต (รันงานอยู่ ⏱️)</span>'
             elif is_urgent:
                 header_box_class = "op-job-header op-job-header-urgent"
                 badge_gradient = "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)"
-                status_badge_html = '<span class="badge-chip badge-urgent">๐”ฅ ๐”ด เธเธฒเธเธ”เนเธงเธเนเธ—เธฃเธ</span>'
+                status_badge_html = '<span class="badge-chip badge-urgent">🔥 🔴 งานด่วนแทรก</span>'
             else:
                 header_box_class = "op-job-header"
                 badge_gradient = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
                 status_badge_html = ''
 
-            card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">เธเธดเธงเธ—เธตเน {queue_idx+1}</span><span>เนเธเธเธเธฒเธ: {plan_code}</span></div><span class="badge-chip badge-station">๐ญ {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">๐“… <b>เธเธณเธซเธเธ”เธเธถเนเธเธเธฒเธ:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">๐ <b>เธเธณเธซเธเธ”เธเธเธเธฒเธเธ•เธฒเธกเนเธเธ:</b> {finish_plan_display_str}</span><span class="badge-chip badge-drawing">๐“ <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">๐”ข <b>เธเธณเธเธงเธ:</b> {qty_val} เธเธดเนเธ</span><span class="badge-chip badge-mat">๐”ฉ <b>เธงเธฑเธชเธ”เธธ:</b> {mat_val}</span></div></div>'''
+            card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>กำหนดขึ้นงาน:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>กำหนดจบงานตามแผน:</b> {finish_plan_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
             st.markdown(card_header_html, unsafe_allow_html=True)
 
             card_style_class = "step-card"
@@ -746,98 +746,98 @@ if st.session_state.current_view == "๐‘ท เนเธซเธกเ�
                 if is_step_finished:
                     fin_dt = parse_flexible_datetime(s_finish)
                     finish_txt = fin_dt.strftime('%d/%m %H:%M') if (fin_dt is not None and pd.notna(fin_dt)) else '-'
-                    st.caption(f"**เธเธฑเนเธเธ•เธญเธ:** <span style='color:#059669; font-weight:800;'>๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง (เธเธเธเธฒเธ: {finish_txt})</span>", unsafe_allow_html=True)
+                    st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
                 elif is_step_running:
                     st_parsed = parse_flexible_datetime(s_start)
-                    start_txt = st_parsed.strftime('%H:%M เธ.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
+                    start_txt = st_parsed.strftime('%H:%M น.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
                     step_start_epoch = to_bangkok_epoch_ms(s_start)
-                    st.caption(f"""**เธเธฑเนเธเธ•เธญเธ:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> ๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ• (เน€เธฃเธดเนเธกเธฃเธฑเธ: {start_txt}) | โฑ๏ธ เน€เธงเธฅเธฒเน€เธ”เธดเธเธเธฃเธดเธ: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
+                    st.caption(f"""**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินจริง: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                 elif is_step_hold:
-                    st.caption(f"**เธเธฑเนเธเธ•เธญเธ:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>๐จ เธเธฑเธเธเธฒเธเธเธฑเนเธงเธเธฃเธฒเธง (เธเธดเนเธเธเธฒเธเธกเธตเธเธฑเธเธซเธฒ / เธฃเธญเน€เธเธดเธเธงเธฑเธชเธ”เธธเนเธซเธกเน) ๐‘</span>", unsafe_allow_html=True)
+                    st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
                 else:
                     if can_start:
-                        st.caption(f"**เธเธฑเนเธเธ•เธญเธ:** <span style='color:#D97706; font-weight:800;'>๐ง เธเธฃเนเธญเธกเน€เธฃเธดเนเธกเธเธฒเธ (Ready to Start)</span>", unsafe_allow_html=True)
+                        st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800;'>🟧 พร้อมเริ่มงาน (Ready to Start)</span>", unsafe_allow_html=True)
                     else:
-                        st.caption(f"**เธเธฑเนเธเธ•เธญเธ:** <span style='color:#64748B; font-weight:600;'>๐”’ เธฃเธญเธฅเธณเธ”เธฑเธเธเธดเธงเธเนเธญเธเธซเธเนเธฒเธ•เธฒเธกเนเธเธ</span>", unsafe_allow_html=True)
+                        st.caption(f"**ขั้นตอน:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับคิวก่อนหน้าตามแผน</span>", unsafe_allow_html=True)
 
                 if not is_step_finished:
-                    step_val = st.text_input(f"เธเธทเนเธญเธเธฑเนเธเธ•เธญเธเธเธฒเธ (Step):", value=s_name, key=f"op_step_{target_id}")
+                    step_val = st.text_input(f"ชื่อขั้นตอนงาน (Step):", value=s_name, key=f"op_step_{target_id}")
 
                     if is_step_hold:
                         c_btn_save, c_btn_resume = st.columns([1.5, 4])
                         with c_btn_save:
-                            if st.button("๐’พ เธเธฑเธเธ—เธถเธเธเธทเนเธญ", key=f"btn_save_edit_{target_id}", use_container_width=True):
+                            if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{target_id}", use_container_width=True):
                                 update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name)})
-                                st.toast("เธเธฑเธเธ—เธถเธเธเธทเนเธญเธเธฑเนเธเธ•เธญเธเน€เธฃเธตเธขเธเธฃเนเธญเธข!", icon="๐’พ")
+                                st.toast("บันทึกชื่อขั้นตอนเรียบร้อย!", icon="💾")
                                 st.rerun()
                         with c_btn_resume:
-                            if st.button("โ–ถ๏ธ เนเธ”เนเธงเธฑเธชเธ”เธธเนเธซเธกเนเนเธฅเนเธง (Resume เน€เธฃเธดเนเธกเธฃเธฑเธเธ•เนเธญ)", key=f"btn_resume_{target_id}", type="primary", use_container_width=True):
-                                update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name), "status": "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•", "actual_start": get_bangkok_str()})
-                                st.toast("เน€เธฃเธดเนเธกเธฃเธฑเธเธเธฒเธเธ•เนเธญเน€เธฃเธตเธขเธเธฃเนเธญเธข!", icon="๐€")
+                            if st.button("▶️ ได้วัสดุใหม่แล้ว (Resume เริ่มรันต่อ)", key=f"btn_resume_{target_id}", type="primary", use_container_width=True):
+                                update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name), "status": "🟦 กำลังผลิต", "actual_start": get_bangkok_str()})
+                                st.toast("เริ่มรันงานต่อเรียบร้อย!", icon="🚀")
                                 st.rerun()
                     elif is_step_running:
                         c_btn_save, c_btn_hold, c_btn_finish = st.columns([1.5, 2.5, 2])
                         with c_btn_save:
-                            if st.button("๐’พ เธเธฑเธเธ—เธถเธเธเธทเนเธญ", key=f"btn_save_edit_{target_id}", use_container_width=True):
+                            if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{target_id}", use_container_width=True):
                                 update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name)})
-                                st.toast("เธเธฑเธเธ—เธถเธเธเธทเนเธญเธเธฑเนเธเธ•เธญเธเน€เธฃเธตเธขเธเธฃเนเธญเธข!", icon="๐’พ")
+                                st.toast("บันทึกชื่อขั้นตอนเรียบร้อย!", icon="💾")
                                 st.rerun()
                         with c_btn_hold:
-                            if st.button("๐‘ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธเนเธซเธกเน)", key=f"btn_hold_{target_id}", use_container_width=True):
-                                update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name), "status": "๐จ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)"})
-                                st.toast("เธเธฑเธเธเธฒเธเน€เธฃเธตเธขเธเธฃเนเธญเธข!", icon="๐‘")
+                            if st.button("🛑 พักงาน (รอวัสดุใหม่)", key=f"btn_hold_{target_id}", use_container_width=True):
+                                update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name), "status": "🟨 พักงาน (รอวัสดุ)"})
+                                st.toast("พักงานเรียบร้อย!", icon="🛑")
                                 st.rerun()
                         with c_btn_finish:
-                            if st.button("๐ Finish (เธเธเธเธฒเธเธเธฃเธดเธ)", key=f"btn_finish_step_{target_id}", type="primary", use_container_width=True):
-                                update_supabase_job(target_id, {"status": "๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง", "actual_finish": get_bangkok_str()})
-                                st.toast("เธเธฑเธเธ—เธถเธเน€เธงเธฅเธฒเธเธเธเธฃเธดเธเน€เธฃเธตเธขเธเธฃเนเธญเธข!", icon="๐")
+                            if st.button("🏁 Finish (จบงานจริง)", key=f"btn_finish_step_{target_id}", type="primary", use_container_width=True):
+                                update_supabase_job(target_id, {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": get_bangkok_str()})
+                                st.toast("บันทึกเวลาจบจริงเรียบร้อย!", icon="🏁")
                                 st.rerun()
                     else:
                         c_btn_save, c_btn_start, c_btn_finish = st.columns([1.5, 2, 2])
                         with c_btn_save:
-                            if st.button("๐’พ เธเธฑเธเธ—เธถเธเธเธทเนเธญ", key=f"btn_save_edit_{target_id}", use_container_width=True):
+                            if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{target_id}", use_container_width=True):
                                 update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name)})
-                                st.toast("เธเธฑเธเธ—เธถเธเธเธทเนเธญเธเธฑเนเธเธ•เธญเธเน€เธฃเธตเธขเธเธฃเนเธญเธข!", icon="๐’พ")
+                                st.toast("บันทึกชื่อขั้นตอนเรียบร้อย!", icon="💾")
                                 st.rerun()
                         with c_btn_start:
                             if can_start:
-                                if st.button("๐€ Start (เน€เธฃเธดเนเธกเธเธฑเธเน€เธงเธฅเธฒเธเธฃเธดเธ)", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
-                                    update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name), "status": "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•", "actual_start": get_bangkok_str()})
-                                    st.toast("เน€เธฃเธดเนเธกเธเธฅเธดเธ•เนเธฅเนเธง!", icon="๐€")
+                                if st.button("🚀 Start (เริ่มจับเวลาจริง)", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
+                                    update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name), "status": "🟦 กำลังผลิต", "actual_start": get_bangkok_str()})
+                                    st.toast("เริ่มผลิตแล้ว!", icon="🚀")
                                     st.rerun()
                             else:
-                                st.button("๐€ Start", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
+                                st.button("🚀 Start", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
                         with c_btn_finish:
-                            st.button("๐ Finish", key=f"btn_finish_disabled_{target_id}", disabled=True, use_container_width=True)
+                            st.button("🏁 Finish", key=f"btn_finish_disabled_{target_id}", disabled=True, use_container_width=True)
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            with st.expander(f"โ• เน€เธเธดเนเธก Step เธ–เธฑเธ”เนเธเธชเธณเธซเธฃเธฑเธ {plan_code} ({drawing_code})", expanded=False):
-                new_step_input = st.text_input("เธเธทเนเธญ Step เธ–เธฑเธ”เนเธ:", value=f"OP{(queue_idx+2)*10}", placeholder="เน€เธเนเธ OP20, เธเธฅเธถเธ, เน€เธเธตเธขเธฃ, เน€เธเธทเนเธญเธก", key=f"new_step_name_input_{target_id}")
+            with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับ {plan_code} ({drawing_code})", expanded=False):
+                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=f"OP{(queue_idx+2)*10}", placeholder="เช่น OP20, กลึง, เจียร, เชื่อม", key=f"new_step_name_input_{target_id}")
 
-                if st.button(f"โ• เธเธฑเธเธ—เธถเธเน€เธเธดเนเธกเธเธฑเนเธเธ•เธญเธเธ•เนเธญเธ—เนเธฒเธข", key=f"btn_add_step_{target_id}", type="secondary", use_container_width=True):
+                if st.button(f"➕ บันทึกเพิ่มขั้นตอนต่อท้าย", key=f"btn_add_step_{target_id}", type="secondary", use_container_width=True):
                     now_str = get_bangkok_str()
-                    base_setup = safe_float(step_row.get("Setup (เธ.)"), 10.0)
-                    base_basic = safe_float(step_row.get("Basic (เธ.)"), 0.0)
-                    base_prog = safe_float(step_row.get("เนเธเธฃเนเธเธฃเธก (เธ.)"), 120.0)
+                    base_setup = safe_float(step_row.get("Setup (น.)"), 10.0)
+                    base_basic = safe_float(step_row.get("Basic (น.)"), 0.0)
+                    base_prog = safe_float(step_row.get("โปรแกรม (น.)"), 120.0)
                     
                     new_payload = {
                         "plan_code": str(plan_code),
                         "drawing_name": str(drawing_code),
                         "qty": int(qty_val),
                         "material": str(mat_val),
-                        "job_type": str(step_row.get("เธเธฃเธฐเน€เธ เธ—เธเธฒเธ", "๐ข เธเธฒเธเธเธเธ•เธด")),
+                        "job_type": str(step_row.get("ประเภทงาน", "🟢 งานปกติ")),
                         "step_name": new_step_input.strip() if new_step_input.strip() != "" else f"OP{(queue_idx+2)*10}",
                         "machine_name": selected_m,
                         "ready_at": now_str,
                         "setup_mins": base_setup,
                         "basic_hrs": base_basic,
                         "prog_hrs": base_prog,
-                        "status": "๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•"
+                        "status": "🟧 รอคิวผลิต"
                     }
                     if insert_supabase_job(new_payload):
                         st.cache_data.clear()
-                        st.toast(f"เน€เธเธดเนเธกเธเธฑเนเธเธ•เธญเธ {new_step_input} เน€เธฃเธตเธขเธเธฃเนเธญเธขเนเธฅเนเธง!", icon="๐€")
+                        st.toast(f"เพิ่มขั้นตอน {new_step_input} เรียบร้อยแล้ว!", icon="🚀")
                         st.rerun()
             st.write("")
 
@@ -867,19 +867,19 @@ if st.session_state.current_view == "๐‘ท เนเธซเธกเ�
     """, height=0)
 
 # ---------------------------------------------------------
-# VIEW 2: เนเธ”เธเธเธญเธฃเนเธ”เธ เธฒเธเธฃเธงเธกเนเธฃเธเธเธฒเธ (เธฅเนเธญเธ Baseline + เธฃเธฑเธเธฅเธนเธเนเธเน 100%)
+# VIEW 2: แดชบอร์ดภาพรวมโรงงาน (ล็อก Baseline + รันลูกโซ่ 100%)
 # ---------------------------------------------------------
-elif st.session_state.current_view == "๐“ เนเธ”เธเธเธญเธฃเนเธ”เธ เธฒเธเธฃเธงเธกเนเธฃเธเธเธฒเธ":
+elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if st.session_state.user_role is None:
-        st.subheader("๐”’ เธขเธทเธเธขเธฑเธเธ•เธฑเธงเธ•เธเธชเธณเธซเธฃเธฑเธเน€เธเนเธฒเนเธเนเธเธฒเธเนเธ”เธเธเธญเธฃเนเธ”เธ เธฒเธเธฃเธงเธกเนเธฃเธเธเธฒเธ")
-        st.info("เธเธฃเธธเธ“เธฒเธเธฃเธญเธเธฃเธซเธฑเธชเธเนเธฒเธเน€เธเธทเนเธญเน€เธเนเธฒเนเธเนเธเธฒเธ:\n* **เธเธนเนเธเธฃเธดเธซเธฒเธฃ/เธงเธฒเธเนเธเธ (เนเธเนเนเธเนเธ”เน):** เธฃเธซเธฑเธชเธเนเธฒเธเธฃเธฐเธ”เธฑเธ Admin\n* **เน€เธเนเธฒเธเธกเธ—เธฑเนเธงเนเธ (เธ”เธนเธญเธขเนเธฒเธเน€เธ”เธตเธขเธง):** เธฃเธซเธฑเธชเธเนเธฒเธเธ—เธฑเนเธงเนเธ")
+        st.subheader("🔒 ยืนยันตัวตนสำหรับเข้าใช้งานแดชบอร์ดภาพรวมโรงงาน")
+        st.info("กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน:\n* **ผู้บริหาร/วางแผน (แก้ไขได้):** รหัสผ่านระดับ Admin\n* **เข้าชมทั่วไป (ดูอย่างเดียว):** รหัสผ่านทั่วไป")
         col_pwd, col_btn = st.columns([3, 1])
         with col_pwd:
-            input_pwd = st.text_input("เธฃเธซเธฑเธชเธเนเธฒเธ (Password):", type="password")
+            input_pwd = st.text_input("รหัสผ่าน (Password):", type="password")
         with col_btn:
             st.write("")
             st.write("")
-            if st.button("๐”“ เน€เธเนเธฒเธชเธนเนเธฃเธฐเธเธ", type="primary", use_container_width=True):
+            if st.button("🔓 เข้าสู่ระบบ", type="primary", use_container_width=True):
                 if input_pwd == ADMIN_PASSWORD:
                     st.session_state.user_role = "admin"
                     st.rerun()
@@ -887,53 +887,53 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                     st.session_state.user_role = "viewer"
                     st.rerun()
                 else:
-                    st.error("เธฃเธซเธฑเธชเธเนเธฒเธเนเธกเนเธ–เธนเธเธ•เนเธญเธ")
+                    st.error("รหัสผ่านไม่ถูกต้อง")
     else:
         is_admin = (st.session_state.user_role == "admin")
 
         c_head, c_logout = st.columns([8, 2])
         with c_head:
             if is_admin:
-                st.subheader("๐“ เนเธ”เธเธเธญเธฃเนเธ”เธ เธฒเธเธฃเธงเธกเนเธฃเธเธเธฒเธเนเธฅเธฐเธเธฒเธฃเธเธณเธเธงเธ“เธ•เนเธเธ—เธธเธ ๐‘‘ (เนเธซเธกเธ”เธเธนเนเธเธฃเธดเธซเธฒเธฃ - เนเธเนเนเธเนเธ”เน)")
+                st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน 👑 (โหมดผู้บริหาร - แก้ไขได้)")
             else:
-                st.subheader("๐“ เนเธ”เธเธเธญเธฃเนเธ”เธ เธฒเธเธฃเธงเธกเนเธฃเธเธเธฒเธเนเธฅเธฐเธเธฒเธฃเธเธณเธเธงเธ“เธ•เนเธเธ—เธธเธ ๐‘๏ธ (เนเธซเธกเธ”เน€เธเนเธฒเธเธกเธ—เธฑเนเธงเนเธ - เธ”เธนเธญเธขเนเธฒเธเน€เธ”เธตเธขเธง)")
+                st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน 👁️ (โหมดเข้าชมทั่วไป - ดูอย่างเดียว)")
         with c_logout:
-            if st.button("๐ช เธญเธญเธเธเธฒเธเธฃเธฐเธเธ", use_container_width=True):
+            if st.button("🚪 ออกจากระบบ", use_container_width=True):
                 st.session_state.user_role = None
                 st.rerun()
 
         df_db = fetch_jobs_from_supabase()
 
         if is_admin:
-            with st.expander("โ• เธชเธฑเนเธเธเธฅเธดเธ•เธเธฒเธเนเธซเธกเนเน€เธเนเธฒเธฃเธฐเธเธ (Add New Job)", expanded=False):
+            with st.expander("➕ สั่งผลิตงานใหม่เข้าระบบ (Add New Job)", expanded=False):
                 with st.form("form_add_new_job_main", clear_on_submit=True):
                     f_c1, f_c2, f_c_qty, f_c3 = st.columns([1.5, 2.5, 1, 1.2])
                     with f_c1:
-                        new_f_plan = st.text_input("เธฃเธซเธฑเธชเนเธเธเธเธฒเธ (Plan No.):", placeholder="เน€เธเนเธ 26-105")
+                        new_f_plan = st.text_input("รหัสแผนงาน (Plan No.):", placeholder="เช่น 26-105")
                     with f_c2:
-                        new_f_draw = st.text_input("เธเธทเนเธญ Drawing:", placeholder="เน€เธเนเธ P26-PES-105-001-Unit10")
+                        new_f_draw = st.text_input("ชื่อ Drawing:", placeholder="เช่น P26-PES-105-001-Unit10")
                     with f_c_qty:
-                        new_f_qty = st.number_input("เธเธณเธเธงเธ:", min_value=1, max_value=10000, value=1, step=1)
+                        new_f_qty = st.number_input("จำนวน:", min_value=1, max_value=10000, value=1, step=1)
                     with f_c3:
-                        new_f_mat = st.text_input("เธงเธฑเธชเธ”เธธ:", value="SS400")
+                        new_f_mat = st.text_input("วัสดุ:", value="SS400")
 
                     f_c4, f_c5, f_c6 = st.columns([1.5, 2, 2])
                     with f_c4:
-                        new_f_type = st.selectbox("เธเธฃเธฐเน€เธ เธ—เธเธฒเธ:", JOB_TYPES)
+                        new_f_type = st.selectbox("ประเภทงาน:", JOB_TYPES)
                     with f_c5:
-                        st.text_input("เธเธฑเนเธเธ•เธญเธ (Step):", value="เธฃเธญเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธเธฃเธฐเธเธธ", disabled=True, help="เธเนเธญเธเธเธตเนเธ–เธนเธเธฅเนเธญเธเนเธงเน เนเธซเนเธเนเธฒเธเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธเน€เธเนเธเธเธนเนเธฃเธฐเธเธธเธเธทเนเธญเธเธฑเนเธเธ•เธญเธเธเธฃเธดเธ")
+                        st.text_input("ขั้นตอน (Step):", value="รอหน้าเครื่องระบุ", disabled=True, help="ช่องนี้ถูกล็อกไว้ ให้ช่างหน้าเครื่องเป็นผู้ระบุชื่อขั้นตอนจริง")
                     with f_c6:
-                        new_f_machine = st.selectbox("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ:", MACHINE_LIST)
+                        new_f_machine = st.selectbox("เลือกเครื่องจักร / แผนก:", MACHINE_LIST)
 
                     f_c7, f_c8, f_c9 = st.columns([1.5, 1.5, 1.5])
                     with f_c7:
-                        new_f_setup = st.number_input("เน€เธงเธฅเธฒเธ•เธฑเนเธเน€เธเธฃเธทเนเธญเธ Setup (เธเธฒเธ—เธต):", min_value=0, max_value=720, value=10, step=5)
+                        new_f_setup = st.number_input("เวลาตั้งเครื่อง Setup (นาที):", min_value=0, max_value=720, value=10, step=5)
                     with f_c8:
-                        new_f_basic = st.number_input("Basic Machine (เธเธฒเธ—เธต):", min_value=0, max_value=6000, value=0, step=5)
+                        new_f_basic = st.number_input("Basic Machine (นาที):", min_value=0, max_value=6000, value=0, step=5)
                     with f_c9:
-                        new_f_prog = st.number_input("เธฃเธฑเธเนเธเธฃเนเธเธฃเธก/เน€เธงเธฅเธฒเธ—เธณเธเธฒเธเธ•เธฒเธกเนเธเธ (เธเธฒเธ—เธต):", min_value=0, max_value=12000, value=120, step=10)
+                        new_f_prog = st.number_input("รันโปรแกรม/เวลาทำงานตามแผน (นาที):", min_value=0, max_value=12000, value=120, step=10)
 
-                    if st.form_submit_button("๐€ เธเธฑเธเธ—เธถเธเธชเธฑเนเธเธเธฅเธดเธ•เนเธซเธกเนเน€เธเนเธฒเธชเธนเนเธฃเธฐเธเธ", type="primary", use_container_width=True):
+                    if st.form_submit_button("🚀 บันทึกสั่งผลิตใหม่เข้าสู่ระบบ", type="primary", use_container_width=True):
                         if new_f_plan.strip() != "":
                             payload = {
                                 "plan_code": new_f_plan.strip(),
@@ -941,49 +941,49 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                                 "qty": int(new_f_qty),
                                 "material": new_f_mat.strip(),
                                 "job_type": new_f_type,
-                                "step_name": "เธฃเธญเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธเธฃเธฐเธเธธ",
+                                "step_name": "รอหน้าเครื่องระบุ",
                                 "machine_name": new_f_machine,
                                 "ready_at": get_bangkok_str(),
                                 "setup_mins": float(new_f_setup),
                                 "basic_hrs": float(new_f_basic),
                                 "prog_hrs": float(new_f_prog),
-                                "status": "๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•"
+                                "status": "🟧 รอคิวผลิต"
                             }
                             if insert_supabase_job(payload):
                                 st.cache_data.clear()
-                                st.success(f"เน€เธเธดเนเธกเนเธเธเธเธฒเธ {new_f_plan} เน€เธเนเธฒเธชเธนเนเธฃเธฐเธเธเธชเธณเน€เธฃเนเธ!")
+                                st.success(f"เพิ่มแผนงาน {new_f_plan} เข้าสู่ระบบสำเร็จ!")
                                 st.rerun()
                         else:
-                            st.error("เธเธฃเธธเธ“เธฒเธฃเธฐเธเธธเธฃเธซเธฑเธชเนเธเธเธเธฒเธ")
+                            st.error("กรุณาระบุรหัสแผนงาน")
 
         if not df_db.empty:
             calc_df = df_db.copy()
-            calc_df["Setup (เธ.)"] = pd.to_numeric(calc_df["Setup (เธ.)"], errors='coerce').fillna(10.0)
-            calc_df["Basic (เธ.)"] = pd.to_numeric(calc_df["Basic (เธ.)"], errors='coerce').fillna(0.0)
-            calc_df["เนเธเธฃเนเธเธฃเธก (เธ.)"] = pd.to_numeric(calc_df["เนเธเธฃเนเธเธฃเธก (เธ.)"], errors='coerce').fillna(0.0)
-            calc_df["เธฃเธงเธก (เธเธก.)"] = ((calc_df["Setup (เธ.)"] + calc_df["Basic (เธ.)"] + calc_df["เนเธเธฃเนเธเธฃเธก (เธ.)"]) / 60.0).round(2)
+            calc_df["Setup (น.)"] = pd.to_numeric(calc_df["Setup (น.)"], errors='coerce').fillna(10.0)
+            calc_df["Basic (น.)"] = pd.to_numeric(calc_df["Basic (น.)"], errors='coerce').fillna(0.0)
+            calc_df["โปรแกรม (น.)"] = pd.to_numeric(calc_df["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
+            calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
-            st.markdown("### ๐ฏ เนเธเธเธชเธฃเธธเธเธ เธฒเธเธฃเธงเธกเนเธฅเธฐเธเธธเธ”เธงเธดเธเธคเธ•เธเธฒเธฃเธเธฅเธดเธ• (Executive Overview)")
+            st.markdown("### 🎯 แผงสรุปภาพรวมและจุดวิกฤตการผลิต (Executive Overview)")
             
             ov_col1, ov_col2 = st.columns([1.2, 1.8])
 
             with ov_col1:
-                status_counts = calc_df["เธชเธ–เธฒเธเธฐเธเธฒเธ"].value_counts().reset_index()
-                status_counts.columns = ["เธชเธ–เธฒเธเธฐ", "เธเธณเธเธงเธ"]
+                status_counts = calc_df["สถานะงาน"].value_counts().reset_index()
+                status_counts.columns = ["สถานะ", "จำนวน"]
                 donut_color_map = {
-                    "๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง": "#10B981",
-                    "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•": "#2563EB",
-                    "๐จ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)": "#F59E0B",
-                    "๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•": "#94A3B8"
+                    "🟩 เสร็จสิ้นแล้ว": "#10B981",
+                    "🟦 กำลังผลิต": "#2563EB",
+                    "🟨 พักงาน (รอวัสดุ)": "#F59E0B",
+                    "🟧 รอคิวผลิต": "#94A3B8"
                 }
                 fig_donut = px.pie(
                     status_counts, 
-                    values="เธเธณเธเธงเธ", 
-                    names="เธชเธ–เธฒเธเธฐ", 
+                    values="จำนวน", 
+                    names="สถานะ", 
                     hole=0.55,
-                    color="เธชเธ–เธฒเธเธฐ",
+                    color="สถานะ",
                     color_discrete_map=donut_color_map,
-                    title="๐“ เธชเธฑเธ”เธชเนเธงเธเธชเธ–เธฒเธเธฐเธเธฒเธเธ—เธฑเนเธเธซเธกเธ”เนเธเธฃเธฐเธเธ"
+                    title="📊 สัดส่วนสถานะงานทั้งหมดในระบบ"
                 )
                 fig_donut.update_traces(textposition='inside', textinfo='percent+value')
                 fig_donut.update_layout(
@@ -995,81 +995,81 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                 st.plotly_chart(fig_donut, use_container_width=True)
 
             with ov_col2:
-                st.markdown("**โ ๏ธ 3 เธญเธฑเธเธ”เธฑเธเธชเธ–เธฒเธเธตเธเธญเธเธงเธ”เธชเธนเธเธชเธธเธ” (เธเธดเธงเธเธฒเธเธเนเธฒเธเธฃเธญเธเธฒเธเธ—เธตเนเธชเธธเธ”):**")
-                waiting_sub = calc_df[calc_df["เธชเธ–เธฒเธเธฐเธเธฒเธ"] == "๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•"]
+                st.markdown("**⚠️ 3 อันดับสถานีคอขวดสูงสุด (คิวงานค้างรอนานที่สุด):**")
+                waiting_sub = calc_df[calc_df["สถานะงาน"] == "🟧 รอคิวผลิต"]
                 if not waiting_sub.empty:
-                    m_load = waiting_sub.groupby("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ").agg(
-                        เธเธดเธงเธฃเธญ=('ID', 'count'),
-                        เธเธฑเนเธงเนเธกเธเธฃเธงเธก=('เธฃเธงเธก (เธเธก.)', 'sum')
-                    ).reset_index().sort_values(by="เธเธดเธงเธฃเธญ", ascending=False).head(3)
+                    m_load = waiting_sub.groupby("เลือกเครื่องจักร").agg(
+                        คิวรอ=('ID', 'count'),
+                        ชั่วโมงรวม=('รวม (ชม.)', 'sum')
+                    ).reset_index().sort_values(by="คิวรอ", ascending=False).head(3)
 
                     bn_cols = st.columns(3)
                     for idx_b, (_, b_row) in enumerate(m_load.iterrows()):
                         with bn_cols[idx_b]:
                             st.markdown(f"""
                             <div style="background:#FEF2F2; border:1.5px solid #FECACA; border-left:5px solid #DC2626; border-radius:10px; padding:10px 14px;">
-                                <div style="font-size:11px; font-weight:bold; color:#991B1B;">เธญเธฑเธเธ”เธฑเธ {idx_b+1} เธเธฒเธเธเนเธฒเธเธชเธนเธเธชเธธเธ”</div>
-                                <div style="font-size:14px; font-weight:800; color:#1E293B; margin:2px 0;">{b_row['เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ']}</div>
-                                <div style="font-size:12px; color:#475569;">เธเธดเธงเธฃเธญ: <b style="color:#DC2626;">{b_row['เธเธดเธงเธฃเธญ']} เธเธฒเธ</b> ({b_row['เธเธฑเนเธงเนเธกเธเธฃเธงเธก']:.1f} เธเธก.)</div>
+                                <div style="font-size:11px; font-weight:bold; color:#991B1B;">อันดับ {idx_b+1} งานค้างสูงสุด</div>
+                                <div style="font-size:14px; font-weight:800; color:#1E293B; margin:2px 0;">{b_row['เลือกเครื่องจักร']}</div>
+                                <div style="font-size:12px; color:#475569;">คิวรอ: <b style="color:#DC2626;">{b_row['คิวรอ']} งาน</b> ({b_row['ชั่วโมงรวม']:.1f} ชม.)</div>
                             </div>
                             """, unsafe_allow_html=True)
                 else:
-                    st.success("๐ เธ—เธธเธเธชเธ–เธฒเธเธตเนเธกเนเธกเธตเธเธดเธงเธเธฒเธเธเธฑเนเธเธเนเธฒเธ")
+                    st.success("🎉 ทุกสถานีไม่มีคิวงานคั่งค้าง")
 
                 st.write("")
-                hold_sub = calc_df[calc_df["เธชเธ–เธฒเธเธฐเธเธฒเธ"] == "๐จ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)"]
+                hold_sub = calc_df[calc_df["สถานะงาน"] == "🟨 พักงาน (รอวัสดุ)"]
                 total_hold_count = len(hold_sub)
-                total_hold_hrs = hold_sub["เธฃเธงเธก (เธเธก.)"].sum()
+                total_hold_hrs = hold_sub["รวม (ชม.)"].sum()
                 rate_map_quick = DEFAULT_RATES
-                total_hold_val = sum([r.get("เธฃเธงเธก (เธเธก.)", 0.0) * rate_map_quick.get(r.get("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"), 500) for _, r in hold_sub.iterrows()])
+                total_hold_val = sum([r.get("รวม (ชม.)", 0.0) * rate_map_quick.get(r.get("เลือกเครื่องจักร"), 500) for _, r in hold_sub.iterrows()])
 
                 st.markdown(f"""
                 <div style="background:#FFFBEB; border:1.5px dashed #F59E0B; border-radius:10px; padding:10px 16px; display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <span style="font-size:13px; font-weight:800; color:#B45309;">๐‘ เน€เธงเธฅเธฒเนเธฅเธฐเธกเธนเธฅเธเนเธฒเธชเธนเธเน€เธเธฅเนเธฒเธชเธฐเธชเธกเธเธฒเธเธเธฒเธเธ—เธตเนเธเธฑเธเนเธงเน (Downtime Loss):</span><br>
-                        <span style="font-size:11.5px; color:#78350F;">เธกเธตเธเธฒเธเธ•เธดเธ”เธเธฑเธเธซเธฒเธเธฐเธเธฑเธเธฃเธญเน€เธเธดเธเธงเธฑเธชเธ”เธธ <b>{total_hold_count} เธเธฒเธ</b></span>
+                        <span style="font-size:13px; font-weight:800; color:#B45309;">🛑 เวลาและมูลค่าสูญเปล่าสะสมจากงานที่พักไว้ (Downtime Loss):</span><br>
+                        <span style="font-size:11.5px; color:#78350F;">มีงานติดปัญหาชะงักรอเบิกวัสดุ <b>{total_hold_count} งาน</b></span>
                     </div>
                     <div style="text-align:right;">
-                        <span style="font-size:18px; font-weight:900; color:#D97706;">{total_hold_hrs:.1f} เธเธก.</span><br>
-                        <span style="font-size:12px; font-weight:700; color:#B45309;">({total_hold_val:,.2f} เธฟ)</span>
+                        <span style="font-size:18px; font-weight:900; color:#D97706;">{total_hold_hrs:.1f} ชม.</span><br>
+                        <span style="font-size:12px; font-weight:700; color:#B45309;">({total_hold_val:,.2f} ฿)</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
 
-            with st.expander("๐“ เธ•เธฒเธฃเธฒเธเธ•เธดเธ”เธ•เธฒเธกเธเธงเธฒเธกเธเธทเธเธซเธเนเธฒเธฃเธฒเธข Drawing (Drawing Multi-Step Progress Tracker)", expanded=False):
+            with st.expander("📈 ตารางติดตามความคืบหน้าราย Drawing (Drawing Multi-Step Progress Tracker)", expanded=False):
                 drawing_progress_list = []
-                for (p_c, d_c), g_data in calc_df.groupby(["เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing."]):
+                for (p_c, d_c), g_data in calc_df.groupby(["แผนงาน", "ชื่อ Drawing."]):
                     total_steps = len(g_data)
-                    fin_steps = len(g_data[g_data["เธชเธ–เธฒเธเธฐเธเธฒเธ"] == "๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง"])
+                    fin_steps = len(g_data[g_data["สถานะงาน"] == "🟩 เสร็จสิ้นแล้ว"])
                     pct = int((fin_steps / total_steps * 100)) if total_steps > 0 else 0
                     
-                    cur_run = g_data[g_data["เธชเธ–เธฒเธเธฐเธเธฒเธ"] == "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•"]
-                    cur_hold = g_data[g_data["เธชเธ–เธฒเธเธฐเธเธฒเธ"] == "๐จ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)"]
+                    cur_run = g_data[g_data["สถานะงาน"] == "🟦 กำลังผลิต"]
+                    cur_hold = g_data[g_data["สถานะงาน"] == "🟨 พักงาน (รอวัสดุ)"]
                     if not cur_run.empty:
-                        stage = f"๐ฆ เธเธณเธฅเธฑเธเธฃเธฑเธเธ—เธตเน {cur_run.iloc[0]['เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ']} ({cur_run.iloc[0]['เธเธฑเนเธเธ•เธญเธ (Step)']})"
+                        stage = f"🟦 กำลังรันที่ {cur_run.iloc[0]['เลือกเครื่องจักร']} ({cur_run.iloc[0]['ขั้นตอน (Step)']})"
                         cat_status = "RUNNING"
                     elif not cur_hold.empty:
-                        stage = f"๐‘ เธเธฑเธเธเธฒเธเธ—เธตเน {cur_hold.iloc[0]['เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ']} (เธฃเธญเธงเธฑเธชเธ”เธธ)"
+                        stage = f"🛑 พักงานที่ {cur_hold.iloc[0]['เลือกเครื่องจักร']} (รอวัสดุ)"
                         cat_status = "HOLD"
                     elif fin_steps == total_steps:
-                        stage = "๐ฉ เธเธฅเธดเธ•เน€เธชเธฃเนเธเธเธฃเธเธ—เธธเธ Step เนเธฅเนเธง"
+                        stage = "🟩 ผลิตเสร็จครบทุก Step แล้ว"
                         cat_status = "DONE"
                     else:
-                        first_wait = g_data[g_data["เธชเธ–เธฒเธเธฐเธเธฒเธ"] == "๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•"].iloc[0]
-                        stage = f"๐ง เธฃเธญเธเธดเธงเธ—เธตเน {first_wait['เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ']}"
+                        first_wait = g_data[g_data["สถานะงาน"] == "🟧 รอคิวผลิต"].iloc[0]
+                        stage = f"🟧 รอคิวที่ {first_wait['เลือกเครื่องจักร']}"
                         cat_status = "WAITING"
 
                     drawing_progress_list.append({
-                        "เนเธเธเธเธฒเธ": p_c,
-                        "เธเธทเนเธญ Drawing.": d_c,
-                        "เธเธณเธเธงเธ (เธเธดเนเธ)": int(g_data.iloc[0].get("เธเธณเธเธงเธ", 1)),
-                        "เธเธงเธฒเธกเธเธทเธเธซเธเนเธฒ (%)": pct,
-                        "เธเธฑเนเธเธ•เธญเธ (เน€เธชเธฃเนเธ/เธ—เธฑเนเธเธซเธกเธ”)": f"{fin_steps}/{total_steps} Step",
-                        "เธชเธ–เธฒเธเธฐเนเธฅเธฐเธชเธ–เธฒเธเธตเธเธฑเธเธเธธเธเธฑเธ": stage,
+                        "แผนงาน": p_c,
+                        "ชื่อ Drawing.": d_c,
+                        "จำนวน (ชิ้น)": int(g_data.iloc[0].get("จำนวน", 1)),
+                        "ความคืบหน้า (%)": pct,
+                        "ขั้นตอน (เสร็จ/ทั้งหมด)": f"{fin_steps}/{total_steps} Step",
+                        "สถานะและสถานีปัจจุบัน": stage,
                         "status_category": cat_status
                     })
                 
-                df_dp_all = pd.DataFrame(drawing_progress_list).sort_values(by=["เธเธงเธฒเธกเธเธทเธเธซเธเนเธฒ (%)", "เนเธเธเธเธฒเธ"], ascending=[False, True])
+                df_dp_all = pd.DataFrame(drawing_progress_list).sort_values(by=["ความคืบหน้า (%)", "แผนงาน"], ascending=[False, True])
                 
                 cnt_all = len(df_dp_all)
                 cnt_done = len(df_dp_all[df_dp_all["status_category"] == "DONE"])
@@ -1078,34 +1078,34 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
 
                 tk_btn_col, tk_search_col = st.columns([5.5, 4.5])
                 with tk_btn_col:
-                    st.caption("**๐ฏ เธ•เธฑเธงเธเธฃเธญเธเธ”เนเธงเธเธชเธ–เธฒเธเธฐ Drawing:**")
+                    st.caption("**🎯 ตัวกรองด่วนสถานะ Drawing:**")
                     t_b1, t_b2, t_b3, t_b4 = st.columns(4)
                     cur_tracker_filter = st.session_state.get("drawing_tracker_filter", "ALL")
                     with t_b1:
                         b_type_all = "primary" if cur_tracker_filter == "ALL" else "secondary"
-                        if st.button(f"๐ เธ—เธฑเนเธเธซเธกเธ” ({cnt_all})", type=b_type_all, use_container_width=True, key="btn_tk_all"):
+                        if st.button(f"🌐 ทั้งหมด ({cnt_all})", type=b_type_all, use_container_width=True, key="btn_tk_all"):
                             st.session_state.drawing_tracker_filter = "ALL"
                             st.rerun()
                     with t_b2:
                         b_type_done = "primary" if cur_tracker_filter == "DONE" else "secondary"
-                        if st.button(f"๐ข เธเธฅเธดเธ•เน€เธชเธฃเนเธ ({cnt_done})", type=b_type_done, use_container_width=True, key="btn_tk_done"):
+                        if st.button(f"🟢 ผลิตเสร็จ ({cnt_done})", type=b_type_done, use_container_width=True, key="btn_tk_done"):
                             st.session_state.drawing_tracker_filter = "DONE"
                             st.rerun()
                     with t_b3:
                         b_type_run = "primary" if cur_tracker_filter == "RUNNING" else "secondary"
-                        if st.button(f"๐ฆ เธเธณเธฅเธฑเธเธฃเธฑเธ ({cnt_run})", type=b_type_run, use_container_width=True, key="btn_tk_run"):
+                        if st.button(f"🟦 กำลังรัน ({cnt_run})", type=b_type_run, use_container_width=True, key="btn_tk_run"):
                             st.session_state.drawing_tracker_filter = "RUNNING"
                             st.rerun()
                     with t_b4:
                         b_type_wait = "primary" if cur_tracker_filter == "WAITING" else "secondary"
-                        if st.button(f"๐ง เธฃเธญเธเธดเธง ({cnt_wait})", type=b_type_wait, use_container_width=True, key="btn_tk_wait"):
+                        if st.button(f"🟧 รอคิว ({cnt_wait})", type=b_type_wait, use_container_width=True, key="btn_tk_wait"):
                             st.session_state.drawing_tracker_filter = "WAITING"
                             st.rerun()
 
                 with tk_search_col:
                     search_query_tracker = st.text_input(
-                        "๐” เธเนเธเธซเธฒเนเธเธ•เธฒเธฃเธฒเธเธเธงเธฒเธกเธเธทเธเธซเธเนเธฒ (เนเธเธเธเธฒเธ, Drawing):",
-                        placeholder="เธเธดเธกเธเนเน€เธเธทเนเธญเธเนเธเธซเธฒ เน€เธเนเธ 26-108, AS256...",
+                        "🔍 ค้นหาในตารางความคืบหน้า (แผนงาน, Drawing):",
+                        placeholder="พิมพ์เพื่อค้นหา เช่น 26-108, AS256...",
                         key="search_drawing_tracker_input"
                     )
 
@@ -1121,19 +1121,19 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                 if search_query_tracker.strip() != "":
                     q_tk = search_query_tracker.strip().lower()
                     df_dp = df_dp[
-                        df_dp["เนเธเธเธเธฒเธ"].astype(str).str.lower().str.contains(q_tk) |
-                        df_dp["เธเธทเนเธญ Drawing."].astype(str).str.lower().str.contains(q_tk)
+                        df_dp["แผนงาน"].astype(str).str.lower().str.contains(q_tk) |
+                        df_dp["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_tk)
                     ]
 
                 st.dataframe(
                     df_dp[[c for c in df_dp.columns if c != "status_category"]],
                     column_config={
-                        "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=90),
-                        "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("เธเธทเนเธญ Drawing.", width=200),
-                        "เธเธณเธเธงเธ (เธเธดเนเธ)": st.column_config.NumberColumn("เธเธณเธเธงเธ", width=70),
-                        "เธเธงเธฒเธกเธเธทเธเธซเธเนเธฒ (%)": st.column_config.ProgressColumn("เธเธงเธฒเธกเธเธทเธเธซเธเนเธฒ", width=150, min_value=0, max_value=100, format="%d%%"),
-                        "เธเธฑเนเธเธ•เธญเธ (เน€เธชเธฃเนเธ/เธ—เธฑเนเธเธซเธกเธ”)": st.column_config.TextColumn("เธชเน€เธ•เนเธเธเธฒเธ", width=110),
-                        "เธชเธ–เธฒเธเธฐเนเธฅเธฐเธชเธ–เธฒเธเธตเธเธฑเธเธเธธเธเธฑเธ": st.column_config.TextColumn("เธชเธ–เธฒเธเธฐเนเธฅเธฐเธชเธ–เธฒเธเธตเธเธฑเธเธเธธเธเธฑเธ", width=250),
+                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=90),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=200),
+                        "จำนวน (ชิ้น)": st.column_config.NumberColumn("จำนวน", width=70),
+                        "ความคืบหน้า (%)": st.column_config.ProgressColumn("ความคืบหน้า", width=150, min_value=0, max_value=100, format="%d%%"),
+                        "ขั้นตอน (เสร็จ/ทั้งหมด)": st.column_config.TextColumn("สเต็ปงาน", width=110),
+                        "สถานะและสถานีปัจจุบัน": st.column_config.TextColumn("สถานะและสถานีปัจจุบัน", width=250),
                     },
                     hide_index=True,
                     use_container_width=True
@@ -1142,33 +1142,33 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
             st.divider()
 
             # =========================================================================
-            # ๐”— เธฃเธฐเธเธเธฅเธนเธเนเธเนเธชเธกเธเธนเธฃเธ“เน: เธฅเนเธญเธ Baseline เธ•เธฑเนเธเธ•เนเธ + เธชเนเธเธ•เนเธญเน€เธงเธฅเธฒเธเธดเธงเธเธฒเธ (Auto-Chain)
+            # 🔗 ระบบลูกโซ่สมบูรณ์: ล็อก Baseline ตั้งต้น + ส่งต่อเวลาคิวงาน (Auto-Chain)
             # =========================================================================
             column_order = [
-                "ID", "เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", "เธเธณเธเธงเธ", "เธงเธฑเธชเธ”เธธ", "เธเธฃเธฐเน€เธ เธ—เธเธฒเธ", "เธเธฑเนเธเธ•เธญเธ (Step)",
-                "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ", "Setup (เธ.)",
-                "Basic (เธ.)", "เนเธเธฃเนเธเธฃเธก (เธ.)", "เธฃเธงเธก (เธเธก.)", "เธชเธ–เธฒเธเธฐเธเธฒเธ",
+                "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
+                "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน",
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
-            active_jobs_editor_df = calc_df[calc_df["เธชเธ–เธฒเธเธฐเธเธฒเธ"].isin(["๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•", "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•", "๐จ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)"])].copy()
+            active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
 
-            # เน€เธเนเธเธเนเธฒเน€เธงเธฅเธฒเธ•เธฑเนเธเธ•เนเธเน€เธ”เธดเธกเนเธงเนเน€เธเนเธ Baseline เธชเธณเธซเธฃเธฑเธเธชเธญเธเธเธฅเธฑเธ เนเธกเนเนเธ•เธฐเธ•เนเธญเธ
-            active_jobs_editor_df["เธเธณเธซเธเธ”เธเธฃเนเธญเธกเธเธถเนเธเธเธฒเธ (Baseline)"] = active_jobs_editor_df["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"]
+            # เก็บค่าเวลาตั้งต้นเดิมไว้เป็น Baseline สำหรับสอบกลับ ไม่แตะต้อง
+            active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"]
 
-            # เธเธฑเธ”เธฅเธณเธ”เธฑเธเธเธงเธฒเธกเธชเธณเธเธฑเธ: เธเธณเธฅเธฑเธเธเธฅเธดเธ• (0) -> เธเธฑเธเธเธฒเธ (1) -> เธฃเธญเธเธดเธง (2) เธ•เธฒเธกเน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธเน€เธ”เธดเธก
+            # จัดลำดับความสำคัญ: กำลังผลิต (0) -> พักงาน (1) -> รอคิว (2) ตามเวลาขึ้นงานเดิม
             def get_queue_priority(r):
-                st_val = str(r.get("เธชเธ–เธฒเธเธฐเธเธฒเธ", ""))
-                prio = 0 if "เธเธณเธฅเธฑเธเธเธฅเธดเธ•" in st_val else (1 if "เธเธฑเธเธเธฒเธ" in st_val else 2)
-                dt_p = parse_flexible_datetime(r.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"))
-                return (str(r.get("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ")), prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
+                st_val = str(r.get("สถานะงาน", ""))
+                prio = 0 if "กำลังผลิต" in st_val else (1 if "พักงาน" in st_val else 2)
+                dt_p = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
+                return (str(r.get("เลือกเครื่องจักร")), prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
 
             active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
             active_jobs_editor_df = active_jobs_editor_df.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
 
             editor_state = st.session_state.get("editor_cnc_jobs_grid_main", {})
             edited_rows = editor_state.get("edited_rows", {})
-            # edited_rows เนเธเนเน€เธฅเธเนเธ–เธงเธเธญเธเธ•เธฒเธฃเธฒเธเธ—เธตเนเธเธนเนเนเธเนเน€เธซเนเธ (เธเธถเนเธเธญเธฒเธเธเนเธฒเธเธเธฒเธฃเธเนเธเธซเธฒ/เธเธฃเธญเธเนเธฅเนเธง)
-            # เธเธถเธเธ•เนเธญเธเนเธเธฅเธเธเธฅเธฑเธเธ”เนเธงเธข ID เธซเนเธฒเธกเธเธณเน€เธฅเธเนเธ–เธงเธเธฑเนเธเนเธเธเธตเน active_jobs_editor_df เนเธ”เธขเธ•เธฃเธ
+            # edited_rows ใช้เลขแถวของตารางที่ผู้ใช้เห็น (ซึ่งอาจผ่านการค้นหา/กรองแล้ว)
+            # จึงต้องแปลงกลับด้วย ID ห้ามนำเลขแถวนั้นไปชี้ active_jobs_editor_df โดยตรง
             previous_editor_row_ids = st.session_state.get("editor_cnc_jobs_grid_main_row_ids", [])
             if edited_rows:
                 for row_idx_str, changes in edited_rows.items():
@@ -1181,7 +1181,7 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                         ].tolist()
                         if id_matches:
                             target_idx = id_matches[0]
-                    # เธฃเธญเธเธฃเธฑเธเธซเธเนเธฒเนเธฃเธเธเนเธญเธเธ—เธตเนเธเธฐเธกเธตเธฃเธฒเธขเธเธฒเธฃ ID เนเธ session (เธเธฃเธ“เธตเนเธกเนเธเธฃเธญเธเธ•เธฒเธฃเธฒเธ)
+                    # รองรับหน้าแรกก่อนที่จะมีรายการ ID ใน session (กรณีไม่กรองตาราง)
                     elif r_i < len(active_jobs_editor_df):
                         target_idx = r_i
 
@@ -1190,21 +1190,21 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                             if col_name in active_jobs_editor_df.columns:
                                 active_jobs_editor_df.at[target_idx, col_name] = new_val
 
-            # เธเธณเธเธงเธ“เธฃเธฐเธเธเธฅเธนเธเนเธเน (Auto-Chain): เธเธดเธงเนเธฃเธเธ•เธฑเนเธเธ•เนเธ -> เธเธดเธงเธ–เธฑเธ”เนเธเธฃเธฑเธเน€เธงเธฅเธฒเธเธเธเธฒเธเธเธดเธงเธเนเธญเธเธซเธเนเธฒ
+            # คำนวณระบบลูกโซ่ (Auto-Chain): คิวแรกตั้งต้น -> คิวถัดไปรับเวลาจบจากคิวก่อนหน้า
             m_available_tracker = {}
             chained_start_dates = []
             chained_finish_dates = []
 
             for _, r in active_jobs_editor_df.iterrows():
-                m_target = str(r["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"])
-                s_m = safe_float(r.get("Setup (เธ.)"), 10.0)
-                b_m = safe_float(r.get("Basic (เธ.)"), 0.0)
-                p_m = safe_float(r.get("เนเธเธฃเนเธเธฃเธก (เธ.)"), 120.0)
+                m_target = str(r["เลือกเครื่องจักร"])
+                s_m = safe_float(r.get("Setup (น.)"), 10.0)
+                b_m = safe_float(r.get("Basic (น.)"), 0.0)
+                p_m = safe_float(r.get("โปรแกรม (น.)"), 120.0)
                 tot_h = (s_m + b_m + p_m) / 60.0
 
                 if m_target not in m_available_tracker:
-                    r_parsed = parse_flexible_datetime(r["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"])
-                    # เธซเนเธฒเธกเนเธเนเน€เธงเธฅเธฒเธเธฑเธเธเธธเธเธฑเธเนเธ—เธเธเนเธฒ เน€เธเธฃเธฒเธฐเธเธฐเธ—เธณเนเธซเนเน€เธงเธฅเธฒเนเธเธเน€เธฅเธทเนเธญเธเน€เธญเธเธ—เธธเธเธเธฃเธฑเนเธเธ—เธตเน rerun
+                    r_parsed = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
+                    # ห้ามใช้เวลาปัจจุบันแทนค่า เพราะจะทำให้เวลาแผนเลื่อนเองทุกครั้งที่ rerun
                     if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
                         m_available_tracker[m_target] = None
                         chained_start_dates.append("")
@@ -1213,7 +1213,7 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                     start_work_dt = get_next_valid_work_time(r_parsed)
                 else:
                     previous_finish = m_available_tracker[m_target]
-                    # เธ–เนเธฒเธเธดเธงเนเธฃเธเธขเธฑเธเนเธกเนเธกเธตเน€เธงเธฅเธฒ เธเธดเธงเธ–เธฑเธ”เนเธเธ•เนเธญเธเธฃเธญ เนเธกเนเธชเธฃเนเธฒเธเน€เธงเธฅเธฒเนเธซเธกเนเน€เธญเธ
+                    # ถ้าคิวแรกยังไม่มีเวลา คิวถัดไปต้องรอ ไม่สร้างเวลาใหม่เอง
                     if previous_finish is None:
                         chained_start_dates.append("")
                         chained_finish_dates.append("")
@@ -1226,53 +1226,53 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                 chained_start_dates.append(start_work_dt.strftime("%d/%m/%Y %H:%M"))
                 chained_finish_dates.append(finish_work_dt.strftime("%d/%m/%Y %H:%M"))
 
-            # เธญเธฑเธเน€เธ”เธ•เน€เธงเธฅเธฒเน€เธเนเธฒเธชเธนเนเธ•เธฒเธฃเธฒเธ (เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ/เธเธเธเธฒเธ เธเธฐเน€เธเนเธเน€เธงเธฅเธฒเธฅเธนเธเนเธเนเธเธฃเธดเธ)
-            active_jobs_editor_df["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"] = chained_start_dates
-            active_jobs_editor_df["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธเธเธฒเธ"] = chained_finish_dates
-            active_jobs_editor_df["เธฃเธงเธก (เธเธก.)"] = ((active_jobs_editor_df["Setup (เธ.)"] + active_jobs_editor_df["Basic (เธ.)"] + active_jobs_editor_df["เนเธเธฃเนเธเธฃเธก (เธ.)"]) / 60.0).round(2)
-            active_jobs_editor_df["เธฅเธ"] = st.session_state.active_select_all
+            # อัปเดตเวลาเข้าสู่ตาราง (วัน-เวลาขึ้นงาน/จบงาน จะเป็นเวลาลูกโซ่จริง)
+            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = chained_start_dates
+            active_jobs_editor_df["วัน-เวลาจบงาน"] = chained_finish_dates
+            active_jobs_editor_df["รวม (ชม.)"] = ((active_jobs_editor_df["Setup (น.)"] + active_jobs_editor_df["Basic (น.)"] + active_jobs_editor_df["โปรแกรม (น.)"]) / 60.0).round(2)
+            active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
-            with st.expander("๐“ เธฃเธฒเธขเธเธฒเธฃเธชเธฑเนเธเธเธฅเธดเธ•เนเธเธฃเธฐเธเธ (เธ•เธฒเธฃเธฒเธเธชเธฑเนเธเธเธฒเธฃเธเธฅเธดเธ• - เธฅเธดเธเธเนเน€เธงเธฅเธฒเธฅเธนเธเนเธเนเธญเธฑเธ•เนเธเธกเธฑเธ•เธด)", expanded=True):
+            with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ลิงก์เวลาลูกโซ่อัตโนมัติ)", expanded=True):
                 if is_admin:
                     tool_col1, tool_col2, tool_search = st.columns([2.5, 4.5, 3])
                     with tool_col1:
                         b_c1, b_c2 = st.columns(2)
                         with b_c1:
-                            if st.button("โ… เน€เธฅเธทเธญเธเธซเธกเธ”", key="btn_sel_all_active", use_container_width=True):
+                            if st.button("✅ เลือกหมด", key="btn_sel_all_active", use_container_width=True):
                                 st.session_state.active_select_all = True
                                 st.rerun()
                         with b_c2:
-                            if st.button("โ เธขเธเน€เธฅเธดเธ", key="btn_unsel_all_active", use_container_width=True):
+                            if st.button("❌ ยกเลิก", key="btn_unsel_all_active", use_container_width=True):
                                 st.session_state.active_select_all = False
                                 st.rerun()
                     with tool_col2:
-                        st.caption("๐”— **เธฃเธฐเธเธเธฅเธนเธเนเธเนเธ—เธณเธเธฒเธเธญเธขเธนเน:** เธเธดเธงเธ—เธตเน 1 เน€เธเนเธเธ•เธฑเธงเธ•เธฑเนเธ เธเธดเธงเธ–เธฑเธ”เนเธเธเธฐเธฃเธฑเธเน€เธงเธฅเธฒเธเธเธกเธฒเน€เธเนเธเน€เธงเธฅเธฒเน€เธฃเธดเนเธกเนเธซเนเธญเธฑเธ•เนเธเธกเธฑเธ•เธด เนเธ”เธขเธกเธตเน€เธงเธฅเธฒ Baseline เนเธงเนเธชเธญเธเธเธฅเธฑเธ")
+                        st.caption("🔗 **ระบบลูกโซ่ทำงานอยู่:** คิวที่ 1 เป็นตัวตั้ง คิวถัดไปจะรับเวลาจบมาเป็นเวลาเริ่มให้อัตโนมัติ โดยมีเวลา Baseline ไว้สอบกลับ")
                     with tool_search:
                         search_query_editor = st.text_input(
-                            "๐” เธเนเธเธซเธฒเนเธเธ•เธฒเธฃเธฒเธเธชเธฑเนเธเธเธฅเธดเธ• (เนเธเธเธเธฒเธ, Drawing, เธงเธฑเธชเธ”เธธ, เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ, เธชเธ–เธฒเธเธฐ):",
-                            placeholder="เธเธดเธกเธเนเน€เธเธทเนเธญเธเธฃเธญเธเธเนเธญเธกเธนเธฅ เน€เธเนเธ SS400, No.1, เธฃเธญเธเธดเธงเธเธฅเธดเธ•...",
+                            "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
+                            placeholder="พิมพ์เพื่อกรองข้อมูล เช่น SS400, No.1, รอคิวผลิต...",
                             key="search_active_editor_input"
                         )
                 else:
                     search_query_editor = st.text_input(
-                        "๐” เธเนเธเธซเธฒเนเธเธ•เธฒเธฃเธฒเธเธชเธฑเนเธเธเธฅเธดเธ• (เนเธเธเธเธฒเธ, Drawing, เธงเธฑเธชเธ”เธธ, เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ, เธชเธ–เธฒเธเธฐ):",
-                        placeholder="เธเธดเธกเธเนเน€เธเธทเนเธญเธเธฃเธญเธเธเนเธญเธกเธนเธฅ เน€เธเนเธ SS400, No.1, เธฃเธญเธเธดเธงเธเธฅเธดเธ•...",
+                        "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
+                        placeholder="พิมพ์เพื่อกรองข้อมูล เช่น SS400, No.1, รอคิวผลิต...",
                         key="search_active_editor_input_viewer"
                     )
 
                 if search_query_editor.strip() != "":
                     q = search_query_editor.strip().lower()
                     display_editor_df = active_jobs_editor_df[
-                        active_jobs_editor_df["เนเธเธเธเธฒเธ"].astype(str).str.lower().str.contains(q) |
-                        active_jobs_editor_df["เธเธทเนเธญ Drawing."].astype(str).str.lower().str.contains(q) |
-                        active_jobs_editor_df["เธงเธฑเธชเธ”เธธ"].astype(str).str.lower().str.contains(q) |
-                        active_jobs_editor_df["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"].astype(str).str.lower().str.contains(q) |
-                        active_jobs_editor_df["เธชเธ–เธฒเธเธฐเธเธฒเธ"].astype(str).str.lower().str.contains(q)
+                        active_jobs_editor_df["แผนงาน"].astype(str).str.lower().str.contains(q) |
+                        active_jobs_editor_df["ชื่อ Drawing."].astype(str).str.lower().str.contains(q) |
+                        active_jobs_editor_df["วัสดุ"].astype(str).str.lower().str.contains(q) |
+                        active_jobs_editor_df["เลือกเครื่องจักร"].astype(str).str.lower().str.contains(q) |
+                        active_jobs_editor_df["สถานะงาน"].astype(str).str.lower().str.contains(q)
                     ].copy().reset_index(drop=True)
                 else:
                     display_editor_df = active_jobs_editor_df.copy().reset_index(drop=True)
 
-                # เน€เธเนเธเธฅเธณเธ”เธฑเธ ID เธเธญเธเธ•เธฒเธฃเธฒเธเธ—เธตเนเนเธชเธ”เธเธเธฃเธดเธเนเธงเนเนเธเนเธเธฑเธเธเธนเน edited_rows เนเธเธฃเธญเธ rerun เธ–เธฑเธ”เนเธ
+                # เก็บลำดับ ID ของตารางที่แสดงจริงไว้ใช้จับคู่ edited_rows ในรอบ rerun ถัดไป
                 st.session_state.editor_cnc_jobs_grid_main_row_ids = display_editor_df["ID"].tolist()
 
                 if is_admin:
@@ -1281,36 +1281,36 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                         key="editor_cnc_jobs_grid_main",
                         num_rows="dynamic",
                         column_order=[
-                            "เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", "เธเธณเธเธงเธ", "เธงเธฑเธชเธ”เธธ", "เธเธฃเธฐเน€เธ เธ—เธเธฒเธ", "เธเธฑเนเธเธ•เธญเธ (Step)",
-                            "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ", "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธเธเธฒเธ", "Setup (เธ.)",
-                            "Basic (เธ.)", "เนเธเธฃเนเธเธฃเธก (เธ.)", "เธฃเธงเธก (เธเธก.)", "เธชเธ–เธฒเธเธฐเธเธฒเธ", "เธฅเธ"
+                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                            "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "วัน-เวลาจบงาน", "Setup (น.)",
+                            "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                         ],
                         column_config={
                             "ID": None,
-                            "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=85),
-                            "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("เธเธทเนเธญ Drawing.", width=180),
-                            "เธเธณเธเธงเธ": st.column_config.NumberColumn("เธเธณเธเธงเธ", width=65, min_value=1, max_value=10000, step=1, format="%d", default=1),
-                            "เธงเธฑเธชเธ”เธธ": st.column_config.TextColumn("เธงเธฑเธชเธ”เธธ", width=75, default="SS400"),
-                            "เธเธฃเธฐเน€เธ เธ—เธเธฒเธ": st.column_config.SelectboxColumn("เธเธฃเธฐเน€เธ เธ—เธเธฒเธ", width=125, options=JOB_TYPES, default="๐ข เธเธฒเธเธเธเธ•เธด"),
-                            "เธเธฑเนเธเธ•เธญเธ (Step)": st.column_config.TextColumn("เธเธฑเนเธเธ•เธญเธ (Step)", width=130, disabled=True, default="เธฃเธญเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธเธฃเธฐเธเธธ"),
-                            "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.SelectboxColumn("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
-                            "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ": st.column_config.TextColumn(
-                                "เน€เธฃเธดเนเธกเธเธถเนเธเธเธฒเธ (เธฅเธนเธเนเธเน)", 
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, min_value=1, max_value=10000, step=1, format="%d", default=1),
+                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, default="SS400"),
+                            "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130, disabled=True, default="รอหน้าเครื่องระบุ"),
+                            "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
+                                "เริ่มขึ้นงาน (ลูกโซ่)", 
                                 width=155,
-                                help="เนเธ–เธงเนเธฃเธเธ•เธฑเนเธเธ•เนเธ เนเธ–เธงเธ–เธฑเธ”เนเธเธฃเธฑเธเน€เธงเธฅเธฒเธเธเธเธฒเธเนเธ–เธงเธเธเธกเธฒเธ•เนเธญเน€เธเธทเนเธญเธเธญเธฑเธ•เนเธเธกเธฑเธ•เธด"
+                                help="แถวแรกตั้งต้น แถวถัดไปรับเวลาจบจากแถวบนมาต่อเนื่องอัตโนมัติ"
                             ),
-                            "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธเธเธฒเธ": st.column_config.TextColumn(
-                                "เธเธเธเธฒเธเธ•เธฒเธกเนเธเธ (เธฅเธนเธเนเธเน)",
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn(
+                                "จบงานตามแผน (ลูกโซ่)",
                                 width=155,
                                 disabled=True,
-                                help="เน€เธงเธฅเธฒเธเธเธเธณเธเธงเธ“เธ•เธฒเธกเนเธเธเนเธฅเธฐเธเธฐเนเธฃเธเธเธฒเธ"
+                                help="เวลาจบคำนวณตามแผนและกะโรงงาน"
                             ),
-                            "Setup (เธ.)": st.column_config.NumberColumn("Setup (เธ.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=10),
-                            "Basic (เธ.)": st.column_config.NumberColumn("Basic (เธ.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
-                            "เนเธเธฃเนเธเธฃเธก (เธ.)": st.column_config.NumberColumn("เนเธเธฃเนเธเธฃเธก (เธ.)", width=100, min_value=0, max_value=12000, step=10, format="%d", default=120),
-                            "เธฃเธงเธก (เธเธก.)": st.column_config.NumberColumn("เธฃเธงเธก (เธเธก.)", width=85, format="%.2f", disabled=True),
-                            "เธชเธ–เธฒเธเธฐเธเธฒเธ": st.column_config.SelectboxColumn("เธชเธ–เธฒเธเธฐเธเธฒเธ", width=145, options=JOB_STATUS, default="๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•"),
-                            "เธฅเธ": st.column_config.CheckboxColumn("๐—‘๏ธ", width=55, default=False),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, min_value=0, max_value=720, step=5, format="%d", default=10),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, min_value=0, max_value=6000, step=5, format="%d", default=0),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, min_value=0, max_value=12000, step=10, format="%d", default=120),
+                            "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f", disabled=True),
+                            "สถานะงาน": st.column_config.SelectboxColumn("สถานะงาน", width=145, options=JOB_STATUS, default="🟧 รอคิวผลิต"),
+                            "ลบ": st.column_config.CheckboxColumn("🗑️", width=55, default=False),
                         },
                         hide_index=True,
                         use_container_width=True
@@ -1318,22 +1318,22 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                 else:
                     edited_jobs = display_editor_df.copy()
                     st.dataframe(
-                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "เธฅเธ", "เธเธณเธซเธเธ”เธเธฃเนเธญเธกเธเธถเนเธเธเธฒเธ (Baseline)"]]],
+                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ", "กำหนดพร้อมขึ้นงาน (Baseline)"]]],
                         column_config={
-                            "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=85),
-                            "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("เธเธทเนเธญ Drawing.", width=180),
-                            "เธเธณเธเธงเธ": st.column_config.NumberColumn("เธเธณเธเธงเธ", width=65, format="%d"),
-                            "เธงเธฑเธชเธ”เธธ": st.column_config.TextColumn("เธงเธฑเธชเธ”เธธ", width=75),
-                            "เธเธฃเธฐเน€เธ เธ—เธเธฒเธ": st.column_config.TextColumn("เธเธฃเธฐเน€เธ เธ—เธเธฒเธ", width=125),
-                            "เธเธฑเนเธเธ•เธญเธ (Step)": st.column_config.TextColumn("เธเธฑเนเธเธ•เธญเธ (Step)", width=130),
-                            "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.TextColumn("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", width=160),
-                            "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ": st.column_config.TextColumn("เน€เธฃเธดเนเธกเธเธถเนเธเธเธฒเธ (เธฅเธนเธเนเธเน)", width=155),
-                            "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธเธเธฒเธ": st.column_config.TextColumn("เธเธเธเธฒเธเธ•เธฒเธกเนเธเธ (เธฅเธนเธเนเธเน)", width=155),
-                            "Setup (เธ.)": st.column_config.NumberColumn("Setup (เธ.)", width=85, format="%d"),
-                            "Basic (เธ.)": st.column_config.NumberColumn("Basic (เธ.)", width=85, format="%d"),
-                            "เนเธเธฃเนเธเธฃเธก (เธ.)": st.column_config.NumberColumn("เนเธเธฃเนเธเธฃเธก (เธ.)", width=100, format="%d"),
-                            "เธฃเธงเธก (เธเธก.)": st.column_config.NumberColumn("เธฃเธงเธก (เธเธก.)", width=85, format="%.2f"),
-                            "เธชเธ–เธฒเธเธฐเธเธฒเธ": st.column_config.TextColumn("เธชเธ–เธฒเธเธฐเธเธฒเธ", width=145),
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
+                            "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=125),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เลือกเครื่องจักร", width=160),
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("เริ่มขึ้นงาน (ลูกโซ่)", width=155),
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn("จบงานตามแผน (ลูกโซ่)", width=155),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, format="%d"),
+                            "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
+                            "สถานะงาน": st.column_config.TextColumn("สถานะงาน", width=145),
                         },
                         hide_index=True,
                         use_container_width=True
@@ -1343,40 +1343,40 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
 
                 if is_admin:
                     active_to_delete = edited_jobs[
-                        (edited_jobs["เธฅเธ"] == True) & 
-                        (edited_jobs["เนเธเธเธเธฒเธ"].notna()) & 
-                        (edited_jobs["เนเธเธเธเธฒเธ"].astype(str).str.strip() != "") & 
-                        (edited_jobs["เนเธเธเธเธฒเธ"].astype(str).str.strip() != "None")
+                        (edited_jobs["ลบ"] == True) & 
+                        (edited_jobs["แผนงาน"].notna()) & 
+                        (edited_jobs["แผนงาน"].astype(str).str.strip() != "") & 
+                        (edited_jobs["แผนงาน"].astype(str).str.strip() != "None")
                     ]
                     delete_count = len(active_to_delete)
 
                     c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
                     with c_save:
-                        if st.button("๐’พ เธเธฑเธเธ—เธถเธเธเนเธญเธกเธนเธฅเธฅเธ Supabase", type="primary", use_container_width=True):
+                        if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
                             for _, row in edited_jobs.iterrows():
-                                p_code = safe_str(row.get("เนเธเธเธเธฒเธ"), "")
+                                p_code = safe_str(row.get("แผนงาน"), "")
                                 if not p_code: 
                                     continue
                                 
-                                # เธเนเธฒเธเธตเนเน€เธเนเธเน€เธงเธฅเธฒเน€เธฃเธดเนเธกเธ—เธตเนเธเนเธฒเธเธเธฒเธฃเธ•เนเธญเธฅเธนเธเนเธเนเนเธฅเนเธง เธเธถเธเธเธฑเธเธ—เธถเธเธ—เธธเธเนเธ–เธงเธฅเธ ready_at
-                                # เน€เธกเธทเนเธญเน€เธเธดเธ”เธซเธเนเธฒเนเธซเธกเนเธเธฐเนเธ”เนเธเนเธฒเน€เธ”เธดเธก เนเธกเนเธญเธดเธเน€เธงเธฅเธฒเธเธฑเธเธเธธเธเธฑเธ
-                                raw_ready = row.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ")
+                                # ค่านี้เป็นเวลาเริ่มที่ผ่านการต่อลูกโซ่แล้ว จึงบันทึกทุกแถวลง ready_at
+                                # เมื่อเปิดหน้าใหม่จะได้ค่าเดิม ไม่อิงเวลาปัจจุบัน
+                                raw_ready = row.get("วัน-เวลาขึ้นงาน")
                                 dt_parsed = parse_flexible_datetime(raw_ready)
                                 ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if (dt_parsed is not None and pd.notna(dt_parsed)) else None
 
                                 payload = {
                                     "plan_code": p_code,
-                                    "drawing_name": safe_str(row.get("เธเธทเนเธญ Drawing."), ""),
-                                    "qty": safe_int(row.get("เธเธณเธเธงเธ"), 1),
-                                    "material": safe_str(row.get("เธงเธฑเธชเธ”เธธ"), "SS400"),
-                                    "job_type": safe_str(row.get("เธเธฃเธฐเน€เธ เธ—เธเธฒเธ"), "๐ข เธเธฒเธเธเธเธ•เธด"),
-                                    "step_name": safe_str(row.get("เธเธฑเนเธเธ•เธญเธ (Step)"), "เธฃเธญเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธเธฃเธฐเธเธธ"),
-                                    "machine_name": safe_str(row.get("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"), "No.1 Awea"),
+                                    "drawing_name": safe_str(row.get("ชื่อ Drawing."), ""),
+                                    "qty": safe_int(row.get("จำนวน"), 1),
+                                    "material": safe_str(row.get("วัสดุ"), "SS400"),
+                                    "job_type": safe_str(row.get("ประเภทงาน"), "🟢 งานปกติ"),
+                                    "step_name": safe_str(row.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ"),
+                                    "machine_name": safe_str(row.get("เลือกเครื่องจักร"), "No.1 Awea"),
                                     "ready_at": ready_str,
-                                    "setup_mins": safe_float(row.get("Setup (เธ.)"), 10.0),
-                                    "basic_hrs": safe_float(row.get("Basic (เธ.)"), 0.0),
-                                    "prog_hrs": safe_float(row.get("เนเธเธฃเนเธเธฃเธก (เธ.)"), 120.0),
-                                    "status": safe_str(row.get("เธชเธ–เธฒเธเธฐเธเธฒเธ"), "๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•")
+                                    "setup_mins": safe_float(row.get("Setup (น.)"), 10.0),
+                                    "basic_hrs": safe_float(row.get("Basic (น.)"), 0.0),
+                                    "prog_hrs": safe_float(row.get("โปรแกรม (น.)"), 120.0),
+                                    "status": safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
                                 }
                                 
                                 row_id = row.get("ID")
@@ -1387,11 +1387,11 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
 
                             st.cache_data.clear()
                             st.session_state.scroll_to_bottom = True
-                            st.toast("เธเธฑเธเธ—เธถเธเธเนเธญเธกเธนเธฅเธเธดเธงเธเธฒเธเธฅเธนเธเนเธเนเธชเธณเน€เธฃเนเธ!", icon="๐’พ")
+                            st.toast("บันทึกข้อมูลคิวงานลูกโซ่สำเร็จ!", icon="💾")
                             st.rerun()
 
                     with c_del_top:
-                        btn_del_label = f"๐—‘๏ธ เธฅเธเธฃเธฒเธขเธเธฒเธฃเธ—เธตเนเน€เธฅเธทเธญเธ ({delete_count} เธฃเธฒเธขเธเธฒเธฃ)" if delete_count > 0 else "๐—‘๏ธ เธฅเธเธฃเธฒเธขเธเธฒเธฃเธ—เธตเนเน€เธฅเธทเธญเธ (0 เธฃเธฒเธขเธเธฒเธฃ)"
+                        btn_del_label = f"🗑️ ลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ลบรายการที่เลือก (0 รายการ)"
                         if st.button(btn_del_label, type="secondary", disabled=(delete_count == 0), use_container_width=True):
                             del_success = True
                             for _, row in active_to_delete.iterrows():
@@ -1404,50 +1404,50 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                                 st.session_state.active_select_all = False
                                 st.cache_data.clear()
                                 st.session_state.scroll_to_bottom = True
-                                st.toast("เธฅเธเธฃเธฒเธขเธเธฒเธฃเธ—เธตเนเน€เธฅเธทเธญเธเน€เธฃเธตเธขเธเธฃเนเธญเธขเนเธฅเนเธง", icon="๐—‘๏ธ")
+                                st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
                                 st.rerun()
                             else:
-                                st.error("เน€เธเธดเธ”เธเนเธญเธเธดเธ”เธเธฅเธฒเธ”เนเธเธเธฒเธฃเธฅเธเธเนเธญเธกเธนเธฅเธเธฒเธ Supabase")
+                                st.error("เกิดข้อผิดพลาดในการลบข้อมูลจาก Supabase")
 
-            finished_jobs_df = df_db[df_db["เธชเธ–เธฒเธเธฐเธเธฒเธ"].isin(["๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง", "โ… เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง"])].copy()
-            active_jobs_count = len(edited_jobs[edited_jobs["เธชเธ–เธฒเธเธฐเธเธฒเธ"].isin(["๐ง เธฃเธญเธเธดเธงเธเธฅเธดเธ•", "๐ฆ เธเธณเธฅเธฑเธเธเธฅเธดเธ•", "๐จ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)"])])
-            total_plan_hrs = active_jobs_editor_df["เธฃเธงเธก (เธเธก.)"].sum()
+            finished_jobs_df = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
+            active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])])
+            total_plan_hrs = active_jobs_editor_df["รวม (ชม.)"].sum()
 
-            kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">โ… เธเธฒเธเน€เธชเธฃเนเธเธชเธดเนเธ</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">เธฃเธฒเธขเธเธฒเธฃ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">โ๏ธ เธเธฒเธเนเธเนเธเธ</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">เธฃเธฒเธขเธเธฒเธฃ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">โฑ๏ธ เน€เธงเธฅเธฒเธ—เธณเธเธฒเธเธฃเธงเธก</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">เธเธก.</span></div></div></div>'''
+            kpi_html = f'''<div class="kpi-container"><div class="kpi-card kpi-green"><div class="kpi-title">✅ งานเสร็จสิ้น</div><div class="kpi-value">{len(finished_jobs_df)} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-blue"><div class="kpi-title">⚙️ งานในแผน</div><div class="kpi-value">{active_jobs_count} <span style="font-size:15px; font-weight:600;">รายการ</span></div></div><div class="kpi-card kpi-orange"><div class="kpi-title">⏱️ เวลาทำงานรวม</div><div class="kpi-value">{total_plan_hrs:.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div></div></div>'''
             st.markdown(kpi_html, unsafe_allow_html=True)
 
             st.divider()
 
             # =====================================================
-            # 2. เนเธเธเนเธฒเธขเธเธดเธงเธเธฒเธเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธ (Work Order Sheet)
+            # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)
             # =====================================================
-            st.subheader("๐“ เนเธเธเนเธฒเธขเธเธดเธงเธเธฒเธเธซเธเนเธฒเน€เธเธฃเธทเนเธญเธ (Work Order Sheet)")
+            st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
 
             df_wo_direct = active_jobs_editor_df.copy()
-            df_wo_direct["_dt_start"] = df_wo_direct["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"].apply(parse_flexible_datetime)
-            df_wo_direct["_dt_finish"] = df_wo_direct["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธเธเธฒเธ"].apply(parse_flexible_datetime)
+            df_wo_direct["_dt_start"] = df_wo_direct["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
+            df_wo_direct["_dt_finish"] = df_wo_direct["วัน-เวลาจบงาน"].apply(parse_flexible_datetime)
 
             def get_wo_queue_order(r):
-                st_val = str(r.get("เธชเธ–เธฒเธเธฐเธเธฒเธ", r.get("เธชเธ–เธฒเธเธฐ", "")))
-                prio = 0 if "เธเธณเธฅเธฑเธเธเธฅเธดเธ•" in st_val else (1 if "เธเธฑเธเธเธฒเธ" in st_val else 2)
-                dt_p = parse_flexible_datetime(r.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"))
+                st_val = str(r.get("สถานะงาน", r.get("สถานะ", "")))
+                prio = 0 if "กำลังผลิต" in st_val else (1 if "พักงาน" in st_val else 2)
+                dt_p = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
                 return (prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
 
             df_wo_direct["_wo_order"] = df_wo_direct.apply(get_wo_queue_order, axis=1)
-            df_wo_direct = df_wo_direct.sort_values(by=["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "_wo_order"]).drop(columns=["_wo_order"]).reset_index(drop=True)
+            df_wo_direct = df_wo_direct.sort_values(by=["เลือกเครื่องจักร", "_wo_order"]).drop(columns=["_wo_order"]).reset_index(drop=True)
 
-            df_wo_direct["เธฅเธณเธ”เธฑเธเธเธดเธง"] = df_wo_direct.groupby("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ").cumcount() + 1
-            df_wo_direct["เธฅเธณเธ”เธฑเธเธเธดเธง"] = df_wo_direct["เธฅเธณเธ”เธฑเธเธเธดเธง"].apply(lambda q: f"เธเธดเธงเธ—เธตเน {q}")
+            df_wo_direct["ลำดับคิว"] = df_wo_direct.groupby("เลือกเครื่องจักร").cumcount() + 1
+            df_wo_direct["ลำดับคิว"] = df_wo_direct["ลำดับคิว"].apply(lambda q: f"คิวที่ {q}")
 
-            df_wo_direct["เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ"] = df_wo_direct["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"]
-            df_wo_direct["เธชเธ–เธฒเธเธฐ"] = df_wo_direct["เธชเธ–เธฒเธเธฐเธเธฒเธ"]
+            df_wo_direct["เครื่องจักร / แผนก"] = df_wo_direct["เลือกเครื่องจักร"]
+            df_wo_direct["สถานะ"] = df_wo_direct["สถานะงาน"]
             
-            # เธเนเธญเธเธเธตเนเนเธชเธ”เธเน€เธงเธฅเธฒ Baseline เน€เธ”เธดเธกเธ—เธตเนเธฅเนเธญเธเนเธงเนเน€เธเธทเนเธญเธชเธญเธเธเธฅเธฑเธ
-            df_wo_direct["เธเธณเธซเธเธ”เธเธฃเนเธญเธกเธเธถเนเธเธเธฒเธ"] = df_wo_direct["เธเธณเธซเธเธ”เธเธฃเนเธญเธกเธเธถเนเธเธเธฒเธ (Baseline)"]
+            # ช่องนี้แสดงเวลา Baseline เดิมที่ล็อกไว้เพื่อสอบกลับ
+            df_wo_direct["กำหนดพร้อมขึ้นงาน"] = df_wo_direct["กำหนดพร้อมขึ้นงาน (Baseline)"]
             
-            # เธเนเธญเธเธเธตเนเนเธชเธ”เธเน€เธงเธฅเธฒเธฅเธนเธเนเธเนเธ—เธตเนเธ•เนเธญเน€เธเธทเนเธญเธเธเธฑเธเธเธฃเธดเธ
-            df_wo_direct["เน€เธฃเธดเนเธกเธเธถเนเธเธเธฒเธเธ•เธฒเธกเนเธเธ"] = df_wo_direct["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"]
-            df_wo_direct["เธเธเธเธฒเธเธ•เธฒเธกเนเธเธ"] = df_wo_direct["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธเธเธฒเธ"]
+            # ช่องนี้แสดงเวลาลูกโซ่ที่ต่อเนื่องกันจริง
+            df_wo_direct["เริ่มขึ้นงานตามแผน"] = df_wo_direct["วัน-เวลาขึ้นงาน"]
+            df_wo_direct["จบงานตามแผน"] = df_wo_direct["วัน-เวลาจบงาน"]
 
             wo_finish_map = dict(zip(df_wo_direct["ID"].astype(str), df_wo_direct["_dt_finish"]))
 
@@ -1455,7 +1455,7 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
             warn_count = 0
             late_count = 0
             for _, r in df_wo_direct.iterrows():
-                if "เธเธณเธฅเธฑเธเธเธฅเธดเธ•" in str(r.get("เธชเธ–เธฒเธเธฐ", "")):
+                if "กำลังผลิต" in str(r.get("สถานะ", "")):
                     f_dt = wo_finish_map.get(str(r.get("ID")))
                     if pd.notna(f_dt):
                         diff_m = (f_dt - now_check).total_seconds() / 60.0
@@ -1467,28 +1467,28 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
             wo_search_col, wo_filter_btn_col = st.columns([4, 6])
             with wo_search_col:
                 search_query_wo = st.text_input(
-                    "๐” เธเนเธเธซเธฒเนเธเนเธเธเนเธฒเธขเธเธดเธงเธเธฒเธ (เนเธเธเธเธฒเธ, Drawing, เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ, เธชเธ–เธฒเธเธฐ):",
-                    placeholder="เธเธดเธกเธเนเน€เธเธทเนเธญเธเนเธเธซเธฒเธเธดเธงเธเธฒเธ เน€เธเนเธ เธฃเธญเธเธดเธงเธเธฅเธดเธ•, เธเธณเธฅเธฑเธเธเธฅเธดเธ•...",
+                    "🔍 ค้นหาในใบจ่ายคิวงาน (แผนงาน, Drawing, เครื่องจักร, สถานะ):",
+                    placeholder="พิมพ์เพื่อค้นหาคิวงาน เช่น รอคิวผลิต, กำลังผลิต...",
                     key="search_wo_sheet_input"
                 )
 
             with wo_filter_btn_col:
-                st.caption("**๐ฏ เธ•เธฑเธงเธเธฃเธญเธเธ”เนเธงเธเธชเธ–เธฒเธเธฐเน€เธ•เธทเธญเธเน€เธงเธฅเธฒ:**")
+                st.caption("**🎯 ตัวกรองด่วนสถานะเตือนเวลา:**")
                 f_b1, f_b2, f_b3 = st.columns([1.5, 2.2, 2.2])
                 cur_wo_filter = st.session_state.get("wo_color_filter", "ALL")
                 with f_b1:
                     btn_all_type = "primary" if cur_wo_filter == "ALL" else "secondary"
-                    if st.button("๐ เธ—เธฑเนเธเธซเธกเธ”", type=btn_all_type, use_container_width=True, key="btn_wo_filter_all"):
+                    if st.button("🌐 ทั้งหมด", type=btn_all_type, use_container_width=True, key="btn_wo_filter_all"):
                         st.session_state.wo_color_filter = "ALL"
                         st.rerun()
                 with f_b2:
                     btn_warn_type = "primary" if cur_wo_filter == "WARN" else "secondary"
-                    if st.button(f"๐ก เนเธเธฅเนเน€เธชเธฃเนเธ ({warn_count})", type=btn_warn_type, use_container_width=True, help="เน€เธซเธฅเธทเธญเธเนเธญเธขเธเธงเนเธฒ 1 เธเธก.", key="btn_wo_filter_warn"):
+                    if st.button(f"🟡 ใกล้เสร็จ ({warn_count})", type=btn_warn_type, use_container_width=True, help="เหลือน้อยกว่า 1 ชม.", key="btn_wo_filter_warn"):
                         st.session_state.wo_color_filter = "WARN"
                         st.rerun()
                 with f_b3:
                     btn_late_type = "primary" if cur_wo_filter == "LATE" else "secondary"
-                    if st.button(f"๐”ด เน€เธเธดเธเนเธเธ ({late_count})", type=btn_late_type, use_container_width=True, help="เน€เธฅเธขเธเธณเธซเธเธ”เน€เธงเธฅเธฒเนเธเธ", key="btn_wo_filter_late"):
+                    if st.button(f"🔴 เกินแผน ({late_count})", type=btn_late_type, use_container_width=True, help="เลยกำหนดเวลาแผน", key="btn_wo_filter_late"):
                         st.session_state.wo_color_filter = "LATE"
                         st.rerun()
 
@@ -1497,7 +1497,7 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
             selected_wo_filter = st.session_state.get("wo_color_filter", "ALL")
             if selected_wo_filter == "WARN":
                 def is_warn_row(r):
-                    if "เธเธณเธฅเธฑเธเธเธฅเธดเธ•" not in str(r.get("เธชเธ–เธฒเธเธฐ", "")): return False
+                    if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
                     f_dt = wo_finish_map.get(str(r.get("ID")))
                     if pd.notna(f_dt):
                         diff_m = (f_dt - now_check).total_seconds() / 60.0
@@ -1507,7 +1507,7 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
 
             elif selected_wo_filter == "LATE":
                 def is_late_row(r):
-                    if "เธเธณเธฅเธฑเธเธเธฅเธดเธ•" not in str(r.get("เธชเธ–เธฒเธเธฐ", "")): return False
+                    if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
                     f_dt = wo_finish_map.get(str(r.get("ID")))
                     if pd.notna(f_dt):
                         diff_m = (f_dt - now_check).total_seconds() / 60.0
@@ -1518,13 +1518,13 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
             if search_query_wo.strip() != "":
                 q_wo = search_query_wo.strip().lower()
                 df_display = df_display[
-                    df_display["เนเธเธเธเธฒเธ"].astype(str).str.lower().str.contains(q_wo) |
-                    df_display["เธเธทเนเธญ Drawing."].astype(str).str.lower().str.contains(q_wo) |
-                    df_display["เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ"].astype(str).str.lower().str.contains(q_wo) |
-                    df_display["เธชเธ–เธฒเธเธฐ"].astype(str).str.lower().str.contains(q_wo)
+                    df_display["แผนงาน"].astype(str).str.lower().str.contains(q_wo) |
+                    df_display["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_wo) |
+                    df_display["เครื่องจักร / แผนก"].astype(str).str.lower().str.contains(q_wo) |
+                    df_display["สถานะ"].astype(str).str.lower().str.contains(q_wo)
                 ]
 
-            display_cols = [c for c in df_display.columns if c not in ["_dt_start", "_dt_finish", "_sort_key", "เธเธณเธซเธเธ”เธเธฃเนเธญเธกเธเธถเนเธเธเธฒเธ (Baseline)"]]
+            display_cols = [c for c in df_display.columns if c not in ["_dt_start", "_dt_finish", "_sort_key", "กำหนดพร้อมขึ้นงาน (Baseline)"]]
 
             styled_df_display = df_display[display_cols].style.apply(
                 highlight_running_deadlines,
@@ -1535,28 +1535,28 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
             st.dataframe(
                 styled_df_display,
                 column_order=[
-                    "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ", "เธฅเธณเธ”เธฑเธเธเธดเธง", "เธชเธ–เธฒเธเธฐ", "เธเธฃเธฐเน€เธ เธ—เธเธฒเธ", "เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", 
-                    "เธเธณเธเธงเธ", "เธงเธฑเธชเธ”เธธ", "เธเธฑเนเธเธ•เธญเธ (Step)", "เธเธณเธซเธเธ”เธเธฃเนเธญเธกเธเธถเนเธเธเธฒเธ", 
-                    "เน€เธฃเธดเนเธกเธเธถเนเธเธเธฒเธเธ•เธฒเธกเนเธเธ", "เธเธเธเธฒเธเธ•เธฒเธกเนเธเธ", "Setup (เธ.)", "Basic (เธ.)", "เนเธเธฃเนเธเธฃเธก (เธ.)", "เธฃเธงเธก (เธเธก.)"
+                    "เครื่องจักร / แผนก", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.", 
+                    "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", 
+                    "เริ่มขึ้นงานตามแผน", "จบงานตามแผน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)"
                 ],
                 column_config={
                     "ID": None,
-                    "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ": st.column_config.TextColumn("เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ", width=140),
-                    "เธฅเธณเธ”เธฑเธเธเธดเธง": st.column_config.TextColumn("เธฅเธณเธ”เธฑเธเธเธดเธง", width=95),
-                    "เธชเธ–เธฒเธเธฐ": st.column_config.TextColumn("เธชเธ–เธฒเธเธฐ", width=105),
-                    "เธเธฃเธฐเน€เธ เธ—เธเธฒเธ": st.column_config.TextColumn("เธเธฃเธฐเน€เธ เธ—เธเธฒเธ", width=100),
-                    "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=80),
-                    "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("เธเธทเนเธญ Drawing.", width=170),
-                    "เธเธณเธเธงเธ": st.column_config.NumberColumn("เธเธณเธเธงเธ", width=65, format="%d"),
-                    "เธงเธฑเธชเธ”เธธ": st.column_config.TextColumn("เธงเธฑเธชเธ”เธธ", width=70),
-                    "เธเธฑเนเธเธ•เธญเธ (Step)": st.column_config.TextColumn("เธเธฑเนเธเธ•เธญเธ (Step)", width=120),
-                    "เธเธณเธซเธเธ”เธเธฃเนเธญเธกเธเธถเนเธเธเธฒเธ": st.column_config.TextColumn("เธเธณเธซเธเธ”เธเธฃเนเธญเธกเธเธถเนเธเธเธฒเธ (Baseline)", width=165),
-                    "เน€เธฃเธดเนเธกเธเธถเนเธเธเธฒเธเธ•เธฒเธกเนเธเธ": st.column_config.TextColumn("เน€เธฃเธดเนเธกเธเธถเนเธเธเธฒเธเธ•เธฒเธกเนเธเธ (เธฅเธนเธเนเธเน)", width=155),
-                    "เธเธเธเธฒเธเธ•เธฒเธกเนเธเธ": st.column_config.TextColumn("เธเธเธเธฒเธเธ•เธฒเธกเนเธเธ (เธฅเธนเธเนเธเน)", width=155),
-                    "Setup (เธ.)": st.column_config.NumberColumn("Setup (เธ.)", width=80, format="%d"),
-                    "Basic (เธ.)": st.column_config.NumberColumn("Basic (เธ.)", width=80, format="%d"),
-                    "เนเธเธฃเนเธเธฃเธก (เธ.)": st.column_config.NumberColumn("เนเธเธฃเนเธเธฃเธก (เธ.)", width=95, format="%d"),
-                    "เธฃเธงเธก (เธเธก.)": st.column_config.NumberColumn("เธฃเธงเธก (เธเธก.)", width=85, format="%.2f"),
+                    "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร / แผนก", width=140),
+                    "ลำดับคิว": st.column_config.TextColumn("ลำดับคิว", width=95),
+                    "สถานะ": st.column_config.TextColumn("สถานะ", width=105),
+                    "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=100),
+                    "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
+                    "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=170),
+                    "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                    "วัสดุ": st.column_config.TextColumn("วัสดุ", width=70),
+                    "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=120),
+                    "กำหนดพร้อมขึ้นงาน": st.column_config.TextColumn("กำหนดพร้อมขึ้นงาน (Baseline)", width=165),
+                    "เริ่มขึ้นงานตามแผน": st.column_config.TextColumn("เริ่มขึ้นงานตามแผน (ลูกโซ่)", width=155),
+                    "จบงานตามแผน": st.column_config.TextColumn("จบงานตามแผน (ลูกโซ่)", width=155),
+                    "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=80, format="%d"),
+                    "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=80, format="%d"),
+                    "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
+                    "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
                 },
                 use_container_width=True,
                 hide_index=True
@@ -1565,7 +1565,7 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
             st.divider()
 
             # =====================================================
-            # 3. เธเธฑเธเน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ (Gantt Chart Timeline)
+            # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline)
             # =====================================================
             today_date = get_bangkok_now().date()
             today_dt = get_bangkok_now().replace(tzinfo=None)
@@ -1575,8 +1575,8 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
             valid_end_dates = []
 
             for _, r_g in active_jobs_editor_df.iterrows():
-                st_raw = r_g.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ")
-                fn_raw = r_g.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธเธเธฒเธ")
+                st_raw = r_g.get("วัน-เวลาขึ้นงาน")
+                fn_raw = r_g.get("วัน-เวลาจบงาน")
                 
                 st_dt = parse_flexible_datetime(st_raw)
                 fn_dt = parse_flexible_datetime(fn_raw)
@@ -1584,38 +1584,38 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                 if st_dt is None or pd.isna(st_dt):
                     st_dt = today_dt
                 if fn_dt is None or pd.isna(fn_dt) or fn_dt <= st_dt:
-                    tot_mins = safe_float(r_g.get("เนเธเธฃเนเธเธฃเธก (เธ.)"), 120.0) + safe_float(r_g.get("Setup (เธ.)"), 10.0)
+                    tot_mins = safe_float(r_g.get("โปรแกรม (น.)"), 120.0) + safe_float(r_g.get("Setup (น.)"), 10.0)
                     fn_dt = st_dt + timedelta(minutes=max(tot_mins, 30.0))
 
-                p_name = str(r_g.get("เนเธเธเธเธฒเธ", "-"))
-                dw_name = str(r_g.get("เธเธทเนเธญ Drawing.", "-"))
-                step_name = str(r_g.get("เธเธฑเนเธเธ•เธญเธ (Step)", "-"))
-                m_name = str(r_g.get("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "-"))
-                mat_name = str(r_g.get("เธงเธฑเธชเธ”เธธ", "-"))
-                qty_val = str(r_g.get("เธเธณเธเธงเธ", 1))
-                tot_hrs = safe_float(r_g.get("เธฃเธงเธก (เธเธก.)"), 0.0)
+                p_name = str(r_g.get("แผนงาน", "-"))
+                dw_name = str(r_g.get("ชื่อ Drawing.", "-"))
+                step_name = str(r_g.get("ขั้นตอน (Step)", "-"))
+                m_name = str(r_g.get("เลือกเครื่องจักร", "-"))
+                mat_name = str(r_g.get("วัสดุ", "-"))
+                qty_val = str(r_g.get("จำนวน", 1))
+                tot_hrs = safe_float(r_g.get("รวม (ชม.)"), 0.0)
 
                 valid_start_dates.append(st_dt.date())
                 valid_end_dates.append(fn_dt.date())
 
                 gantt_records.append({
-                    "เธเนเธญเธเธงเธฒเธกเธเธเนเธ—เนเธเธเธฃเธฒเธ": f"{p_name}",
-                    "เนเธเธเธเธฒเธ": p_name,
-                    "เธเธทเนเธญ Drawing.": dw_name,
-                    "เธเธณเธเธงเธ": qty_val,
-                    "เธเธฑเนเธเธ•เธญเธ (Step)": step_name,
-                    "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": m_name,
-                    "เธงเธฑเธชเธ”เธธ": mat_name,
-                    "เน€เธงเธฅเธฒเน€เธฃเธดเนเธก": st_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                    "เน€เธงเธฅเธฒเน€เธชเธฃเนเธ": fn_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                    "เธฃเธฐเธขเธฐเน€เธงเธฅเธฒ": f"{tot_hrs:.2f} เธเธก.",
-                    "เธเธดเธเธเธฃเธฃเธก": "โ๏ธ เธเธฒเธเธเธเธ•เธด" if "เธเธเธ•เธด" in str(r_g.get("เธเธฃเธฐเน€เธ เธ—เธเธฒเธ", "")) else "๐”ด เธเธฒเธเธ”เนเธงเธ"
+                    "ข้อความบนแท่งกราฟ": f"{p_name}",
+                    "แผนงาน": p_name,
+                    "ชื่อ Drawing.": dw_name,
+                    "จำนวน": qty_val,
+                    "ขั้นตอน (Step)": step_name,
+                    "เครื่องจักร": m_name,
+                    "วัสดุ": mat_name,
+                    "เวลาเริ่ม": st_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "เวลาเสร็จ": fn_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "ระยะเวลา": f"{tot_hrs:.2f} ชม.",
+                    "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
                 })
 
             df_gantt = pd.DataFrame(gantt_records)
 
             if not df_gantt.empty:
-                st.subheader("๐“ เธเธฑเธเน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธเธ—เธตเนเธเธณเธฅเธฑเธเธเธฅเธดเธ•เนเธฅเธฐเธฃเธญเธเธดเธง (Gantt Chart Timeline)")
+                st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
 
                 gantt_min_date = min(valid_start_dates) if valid_start_dates else today_date
                 gantt_max_date = max(valid_end_dates) if valid_end_dates else (today_date + timedelta(days=14))
@@ -1623,28 +1623,28 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                 gantt_f1, gantt_f2, gantt_f3 = st.columns([2.2, 3.2, 1.8])
                 with gantt_f1:
                     m_filter_mode = st.radio(
-                        "๐” เธเธฃเธญเธเธเธฅเธธเนเธกเธชเธ–เธฒเธเธตเธเธฒเธ:",
-                        ["๐ เธ—เธธเธเธชเธ–เธฒเธเธต (22 เน€เธเธฃเธทเนเธญเธ)", "โ๏ธ CNC (No.1 - No.9)", "๐”ง เน€เธเธตเธขเธฃ/เธกเธดเธฅเธฅเธดเนเธ/เธเธฅเธถเธ (No.10 - No.16)", "๐”ฅ เนเธเธเธเน€เธเธทเนเธญเธก (6 เน€เธเธฃเธทเนเธญเธ)"],
+                        "🔍 กรองกลุ่มสถานีงาน:",
+                        ["🌐 ทุกสถานี (22 เครื่อง)", "⚙️ CNC (No.1 - No.9)", "🔧 เจียร/มิลลิ่ง/กลึง (No.10 - No.16)", "🔥 แผนกเชื่อม (6 เครื่อง)"],
                         horizontal=True
                     )
 
                 with gantt_f2:
-                    st.markdown("**๐“… เธเนเธงเธเธงเธฑเธเธ—เธตเนเธ•เนเธญเธเธเธฒเธฃเธ”เธนเธเธฑเธเธเธฒเธ:**")
+                    st.markdown("**📅 ช่วงวันที่ต้องการดูผังงาน:**")
                     btn_q1, btn_q2, btn_q3, btn_q4 = st.columns(4)
                     with btn_q1:
-                        if st.button("๐” เธงเธฑเธเธเธตเน", key="btn_gantt_today", use_container_width=True):
+                        if st.button("🔍 วันนี้", key="btn_gantt_today", use_container_width=True):
                             st.session_state.gantt_date_range = (today_date, today_date)
                             st.rerun()
                     with btn_q2:
-                        if st.button("๐“… 3 เธงเธฑเธ", key="btn_gantt_3d", use_container_width=True):
+                        if st.button("📅 3 วัน", key="btn_gantt_3d", use_container_width=True):
                             st.session_state.gantt_date_range = (today_date, today_date + timedelta(days=2))
                             st.rerun()
                     with btn_q3:
-                        if st.button("๐“ 7 เธงเธฑเธ", key="btn_gantt_7d", use_container_width=True):
+                        if st.button("📆 7 วัน", key="btn_gantt_7d", use_container_width=True):
                             st.session_state.gantt_date_range = (today_date, today_date + timedelta(days=6))
                             st.rerun()
                     with btn_q4:
-                        if st.button("๐ เธ—เธฑเนเธเธซเธกเธ”", key="btn_gantt_all", use_container_width=True):
+                        if st.button("🌐 ทั้งหมด", key="btn_gantt_all", use_container_width=True):
                             st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
                             st.rerun()
 
@@ -1655,7 +1655,7 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                     st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
 
                 selected_date_range = st.date_input(
-                    "เน€เธฅเธทเธญเธเธเนเธงเธเธงเธฑเธเธ—เธตเนเธเธณเธซเธเธ”เน€เธญเธ:",
+                    "เลือกช่วงวันที่กำหนดเอง:",
                     value=st.session_state.gantt_date_range,
                     min_value=min_cal,
                     max_value=max_cal,
@@ -1664,40 +1664,40 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                 st.session_state.gantt_date_range = selected_date_range
 
                 with gantt_f3:
-                    color_by_option = st.selectbox("๐จ เนเธขเธเธชเธตเธ•เธฒเธก:", ["เนเธเธเธเธฒเธ (Plan Code)", "เธเธดเธเธเธฃเธฃเธก (Setup/เธ•เธฑเธ”เน€เธเธทเธญเธ)"])
+                    color_by_option = st.selectbox("🎨 แยกสีตาม:", ["แผนงาน (Plan Code)", "กิจกรรม (Setup/ตัดเฉือน)"])
 
                 if "CNC" in m_filter_mode:
                     display_machines = MACHINE_LIST[:9]
-                elif "เน€เธเธตเธขเธฃ" in m_filter_mode:
+                elif "เจียร" in m_filter_mode:
                     display_machines = MACHINE_LIST[9:16]
-                elif "เน€เธเธทเนเธญเธก" in m_filter_mode:
+                elif "เชื่อม" in m_filter_mode:
                     display_machines = MACHINE_LIST[16:]
                 else:
                     display_machines = MACHINE_LIST
 
-                plot_gantt_df = df_gantt[df_gantt["เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"].isin(display_machines)].copy()
+                plot_gantt_df = df_gantt[df_gantt["เครื่องจักร"].isin(display_machines)].copy()
 
                 if not plot_gantt_df.empty:
-                    plot_gantt_df["เน€เธฃเธดเนเธกเนเธชเธ”เธ"] = pd.to_datetime(plot_gantt_df["เน€เธงเธฅเธฒเน€เธฃเธดเนเธก"]).dt.strftime("%d/%m/%Y %H:%M เธ.")
-                    plot_gantt_df["เน€เธชเธฃเนเธเนเธชเธ”เธ"] = pd.to_datetime(plot_gantt_df["เน€เธงเธฅเธฒเน€เธชเธฃเนเธ"]).dt.strftime("%d/%m/%Y %H:%M เธ.")
+                    plot_gantt_df["เริ่มแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเริ่ม"]).dt.strftime("%d/%m/%Y %H:%M น.")
+                    plot_gantt_df["เสร็จแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเสร็จ"]).dt.strftime("%d/%m/%Y %H:%M น.")
 
-                    color_target = "เนเธเธเธเธฒเธ" if color_by_option == "เนเธเธเธเธฒเธ (Plan Code)" else "เธเธดเธเธเธฃเธฃเธก"
-                    distinct_plans = list(plot_gantt_df["เนเธเธเธเธฒเธ"].unique())
+                    color_target = "แผนงาน" if color_by_option == "แผนงาน (Plan Code)" else "กิจกรรม"
+                    distinct_plans = list(plot_gantt_df["แผนงาน"].unique())
                     palette = px.colors.qualitative.Bold
                     plan_color_map = {p_name: palette[i % len(palette)] for i, p_name in enumerate(distinct_plans)}
 
                     fig = px.timeline(
                         plot_gantt_df,
-                        x_start="เน€เธงเธฅเธฒเน€เธฃเธดเนเธก",
-                        x_end="เน€เธงเธฅเธฒเน€เธชเธฃเนเธ",
-                        y="เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ",
+                        x_start="เวลาเริ่ม",
+                        x_end="เวลาเสร็จ",
+                        y="เครื่องจักร",
                         color=color_target,
-                        text="เธเนเธญเธเธงเธฒเธกเธเธเนเธ—เนเธเธเธฃเธฒเธ",
-                        custom_data=["เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", "เธเธณเธเธงเธ", "เธเธฑเนเธเธ•เธญเธ (Step)", "เธงเธฑเธชเธ”เธธ", "เน€เธฃเธดเนเธกเนเธชเธ”เธ", "เน€เธชเธฃเนเธเนเธชเธ”เธ", "เธฃเธฐเธขเธฐเน€เธงเธฅเธฒ"],
-                        category_orders={"เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": display_machines},
-                        color_discrete_map=plan_color_map if color_target == "เนเธเธเธเธฒเธ" else {
-                            "โ๏ธ เธเธฒเธเธเธเธ•เธด": "#0284C7",
-                            "๐”ด เธเธฒเธเธ”เนเธงเธ": "#EF4444"
+                        text="ข้อความบนแท่งกราฟ",
+                        custom_data=["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "วัสดุ", "เริ่มแสดง", "เสร็จแสดง", "ระยะเวลา"],
+                        category_orders={"เครื่องจักร": display_machines},
+                        color_discrete_map=plan_color_map if color_target == "แผนงาน" else {
+                            "⚙️ งานปกติ": "#0284C7",
+                            "🔴 งานด่วน": "#EF4444"
                         }
                     )
                     
@@ -1707,10 +1707,10 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                         marker_line_color="#FFFFFF",
                         marker_line_width=1.2,
                         hovertemplate="""
-                        <b>๐“ เนเธเธเธเธฒเธ: %{customdata[0]}</b> | %{customdata[1]}<br>
-                        โ๏ธ <b>เธเธฑเนเธเธ•เธญเธ:</b> %{customdata[3]} | ๐”ข <b>เธเธณเธเธงเธ:</b> %{customdata[2]} เธเธดเนเธ (%{customdata[4]})<br>
-                        โฑ๏ธ <b>เน€เธฃเธดเนเธก:</b> %{customdata[5]}<br>
-                        ๐ <b>เน€เธชเธฃเนเธ:</b> %{customdata[6]} (เธฃเธงเธก %{customdata[7]})
+                        <b>📌 แผนงาน: %{customdata[0]}</b> | %{customdata[1]}<br>
+                        ⚙️ <b>ขั้นตอน:</b> %{customdata[3]} | 🔢 <b>จำนวน:</b> %{customdata[2]} ชิ้น (%{customdata[4]})<br>
+                        ⏱️ <b>เริ่ม:</b> %{customdata[5]}<br>
+                        🏁 <b>เสร็จ:</b> %{customdata[6]} (รวม %{customdata[7]})
                         <extra></extra>
                         """
                     )
@@ -1728,8 +1728,8 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
 
                     fig.update_layout(
                         height=max(450, len(display_machines) * 35),
-                        xaxis_title="เธงเธฑเธเนเธฅเธฐเน€เธงเธฅเธฒเธ—เธณเธเธฒเธ",
-                        yaxis_title="เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ",
+                        xaxis_title="วันและเวลาทำงาน",
+                        yaxis_title="เครื่องจักร / แผนก",
                         uniformtext_minsize=8,
                         uniformtext_mode='hide',
                         plot_bgcolor="#FFFFFF",
@@ -1739,45 +1739,45 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.warning("โ ๏ธ เนเธกเนเธกเธตเธเธดเธงเธเธฒเธเนเธเธเธฅเธธเนเธกเธชเธ–เธฒเธเธตเธ—เธตเนเน€เธฅเธทเธญเธเธเธตเน")
+                    st.warning("⚠️ ไม่มีคิวงานในกลุ่มสถานีที่เลือกนี้")
 
                 st.markdown("""
                 <div class="schedule-info-box">
                     <div class="schedule-pill">
-                        <span style="font-size:16px;">โฑ๏ธ</span>
-                        <span><b>เธเธฑเธเธ—เธฃเน โ€“ เธจเธธเธเธฃเน:</b> 08:30 โ€“ 12:00 เธ. เนเธฅเธฐ 13:00 โ€“ 20:00 เธ. (เธเธฑเธเน€เธขเนเธ 17:00 โ€“ 17:30 เธ.)</span>
+                        <span style="font-size:16px;">⏱️</span>
+                        <span><b>จันทร์ – ศุกร์:</b> 08:30 – 12:00 น. และ 13:00 – 20:00 น. (พักเย็น 17:00 – 17:30 น.)</span>
                     </div>
                     <div class="schedule-pill">
-                        <span style="font-size:16px;">โฑ๏ธ</span>
-                        <span><b>เธงเธฑเธเน€เธชเธฒเธฃเน:</b> 08:30 โ€“ 12:00 เธ. เนเธฅเธฐ 13:00 โ€“ 17:00 เธ. (7.17 เธเธก./เธงเธฑเธ)</span>
+                        <span style="font-size:16px;">⏱️</span>
+                        <span><b>วันเสาร์:</b> 08:30 – 12:00 น. และ 13:00 – 17:00 น. (7.17 ชม./วัน)</span>
                     </div>
                     <div class="schedule-pill">
-                        <span style="font-size:16px;">โ•</span>
-                        <span style="color:#D97706;"><b>เน€เธเธฃเธเน€เธเนเธฒ/เธเนเธฒเธข (เธ.-เธช.):</b> 10:00 โ€“ 10:10 เธ. เนเธฅเธฐ 15:00 โ€“ 15:10 เธ.</span>
+                        <span style="font-size:16px;">☕</span>
+                        <span style="color:#D97706;"><b>เบรกเช้า/บ่าย (จ.-ส.):</b> 10:00 – 10:10 น. และ 15:00 – 15:10 น.</span>
                     </div>
                     <div class="schedule-pill">
-                        <span style="font-size:16px;">๐ฑ</span>
-                        <span style="color:#D97706;"><b>เธเธฑเธเน€เธ—เธตเนเธขเธ:</b> 12:00 โ€“ 13:00 เธ.</span>
+                        <span style="font-size:16px;">🍱</span>
+                        <span style="color:#D97706;"><b>พักเที่ยง:</b> 12:00 – 13:00 น.</span>
                     </div>
                     <div class="schedule-pill">
-                        <span style="color:#DC2626;"><b>เธงเธฑเธเธญเธฒเธ—เธดเธ•เธขเน:</b> เธซเธขเธธเธ”เธ—เธณเธเธฒเธฃ</span>
+                        <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
 
                 st.divider()
             else:
-                st.info("โน๏ธ เธขเธฑเธเนเธกเนเธกเธตเธเนเธญเธกเธนเธฅเธเธดเธงเธเธฒเธเธชเธณเธซเธฃเธฑเธเนเธชเธ”เธเธเธฑเธเน€เธงเธฅเธฒ Gantt Chart")
+                st.info("ℹ️ ยังไม่มีข้อมูลคิวงานสำหรับแสดงผังเวลา Gantt Chart")
 
             # =====================================================
-            # 4. เธญเธฑเธ•เธฃเธฒเธเธฒเธฃเนเธเนเธเธฒเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ (% Machine Utilization)
+            # 4. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
             # =====================================================
-            st.subheader("๐“ เธญเธฑเธ•เธฃเธฒเธเธฒเธฃเนเธเนเธเธฒเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃเนเธฅเธฐเนเธเธเธเธเธฅเธดเธ• (% Utilization)")
+            st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
             
             m_busy_map = {m: 0.0 for m in MACHINE_LIST}
             for _, r_u in active_jobs_editor_df.iterrows():
-                m_name = str(r_u.get("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", ""))
-                tot_h = safe_float(r_u.get("เธฃเธงเธก (เธเธก.)"), 0.0)
+                m_name = str(r_u.get("เลือกเครื่องจักร", ""))
+                tot_h = safe_float(r_u.get("รวม (ชม.)"), 0.0)
                 if m_name in m_busy_map:
                     m_busy_map[m_name] += tot_h
 
@@ -1798,84 +1798,84 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                 busy = m_busy_map[m]
                 util_pct = min((busy / total_horizon_work_hrs) * 100.0, 100.0) if total_horizon_work_hrs > 0 else 0.0
                 util_list.append({
-                    "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": m,
-                    "เธเธฑเนเธงเนเธกเธเธ—เธณเธเธฒเธ (เธเธก.)": round(busy, 2),
-                    "เธญเธฑเธ•เธฃเธฒเธเธฒเธฃเนเธเนเธเธฒเธ (%)": round(util_pct, 1),
-                    "เธเนเธญเธเธงเธฒเธกเนเธชเธ”เธ": f"{util_pct:.1f}% ({busy:.2f} เธเธก.)"
+                    "เครื่องจักร": m,
+                    "ชั่วโมงทำงาน (ชม.)": round(busy, 2),
+                    "อัตราการใช้งาน (%)": round(util_pct, 1),
+                    "ข้อความแสดง": f"{util_pct:.1f}% ({busy:.2f} ชม.)"
                 })
             df_util = pd.DataFrame(util_list)
 
             fig_bar = px.bar(
                 df_util,
-                x="เธญเธฑเธ•เธฃเธฒเธเธฒเธฃเนเธเนเธเธฒเธ (%)",
-                y="เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ",
+                x="อัตราการใช้งาน (%)",
+                y="เครื่องจักร",
                 orientation="h",
-                color="เธญเธฑเธ•เธฃเธฒเธเธฒเธฃเนเธเนเธเธฒเธ (%)",
+                color="อัตราการใช้งาน (%)",
                 color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
-                text="เธเนเธญเธเธงเธฒเธกเนเธชเธ”เธ",
+                text="ข้อความแสดง",
                 range_x=[0, 105],
-                category_orders={"เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": MACHINE_LIST}
+                category_orders={"เครื่องจักร": MACHINE_LIST}
             )
             fig_bar.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=MACHINE_LIST)
             fig_bar.update_traces(marker_line_color="#0F172A", marker_line_width=1.2, textposition="outside", cliponaxis=False)
             fig_bar.update_layout(
                 height=max(600, len(MACHINE_LIST) * 30),
                 margin=dict(l=40, r=40, t=10, b=30),
-                xaxis_title="เธญเธฑเธ•เธฃเธฒเธเธฒเธฃเนเธเนเธเธฒเธ (%)",
-                yaxis_title="เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ",
+                xaxis_title="อัตราการใช้งาน (%)",
+                yaxis_title="เครื่องจักร / แผนก",
                 xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
                 coloraxis_showscale=False,
                 plot_bgcolor="#FFFFFF",
                 paper_bgcolor="#FFFFFF"
             )
-            fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เน€เธเนเธฒเธซเธกเธฒเธข (85%)", annotation_position="top right", annotation_font_color="#EF4444")
+            fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
             st.plotly_chart(fig_bar, use_container_width=True)
 
             st.divider()
 
             # =====================================================
-            # 5. เธ•เธฒเธฃเธฒเธเธชเธฃเธธเธเธเธฃเธฐเธงเธฑเธ•เธดเธเธฒเธเธ—เธตเนเน€เธชเธฃเนเธเธชเธดเนเธ (Finished Production History)
+            # 5. ตารางสรุปประวัติงานที่เสร็จสิ้น (Finished Production History)
             # =====================================================
-            st.subheader("โ… เธ•เธฒเธฃเธฒเธเธชเธฃเธธเธเธเธฃเธฐเธงเธฑเธ•เธดเธเธฒเธเธ—เธตเนเธเธฅเธดเธ•เน€เธชเธฃเนเธเธชเธดเนเธ (Finished History - เน€เธฃเธดเนเธกเธเธฃเธดเธ / เน€เธชเธฃเนเธเธเธฃเธดเธ)")
+            st.subheader("✅ ตารางสรุปประวัติงานที่ผลิตเสร็จสิ้น (Finished History - เริ่มจริง / เสร็จจริง)")
 
             if not finished_jobs_df.empty:
                 fin_display_df = finished_jobs_df.copy()
-                fin_display_df["_sort_fin"] = fin_display_df["เน€เธชเธฃเนเธเธเธฃเธดเธ"].apply(parse_flexible_datetime)
+                fin_display_df["_sort_fin"] = fin_display_df["เสร็จจริง"].apply(parse_flexible_datetime)
                 fin_display_df = fin_display_df.sort_values(by="_sort_fin", ascending=False).drop(columns=["_sort_fin"]).reset_index(drop=True)
 
                 act_hrs_list = []
                 for _, r in fin_display_df.iterrows():
-                    st_p = parse_flexible_datetime(r.get("เน€เธฃเธดเนเธกเธเธฃเธดเธ"))
-                    fn_p = parse_flexible_datetime(r.get("เน€เธชเธฃเนเธเธเธฃเธดเธ"))
+                    st_p = parse_flexible_datetime(r.get("เริ่มจริง"))
+                    fn_p = parse_flexible_datetime(r.get("เสร็จจริง"))
                     if st_p and fn_p:
                         act_hrs_list.append(round((fn_p - st_p).total_seconds() / 3600.0, 2))
                     else:
-                        act_hrs_list.append(round((safe_float(r.get("Setup (เธ.)")) + safe_float(r.get("Basic (เธ.)")) + safe_float(r.get("เนเธเธฃเนเธเธฃเธก (เธ.)"))) / 60.0, 2))
+                        act_hrs_list.append(round((safe_float(r.get("Setup (น.)")) + safe_float(r.get("Basic (น.)")) + safe_float(r.get("โปรแกรม (น.)"))) / 60.0, 2))
 
-                fin_display_df["เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"] = act_hrs_list
-                fin_display_df["เธฅเธเธเธฃเธฐเธงเธฑเธ•เธด"] = st.session_state.finish_select_all
+                fin_display_df["เวลาจริง (ชม.)"] = act_hrs_list
+                fin_display_df["ลบประวัติ"] = st.session_state.finish_select_all
 
                 fin_tool1, fin_tool2 = st.columns([3, 4])
                 with fin_tool1:
                     if is_admin:
                         fb_c1, fb_c2 = st.columns(2)
                         with fb_c1:
-                            if st.button("โ… เน€เธฅเธทเธญเธเธซเธกเธ” (เน€เธชเธฃเนเธ)", key="btn_sel_all_fin", use_container_width=True):
+                            if st.button("✅ เลือกหมด (เสร็จ)", key="btn_sel_all_fin", use_container_width=True):
                                 st.session_state.finish_select_all = True
                                 st.rerun()
                         with fb_c2:
-                            if st.button("โ เธขเธเน€เธฅเธดเธ (เน€เธชเธฃเนเธ)", key="btn_unsel_all_fin", use_container_width=True):
+                            if st.button("❌ ยกเลิก (เสร็จ)", key="btn_unsel_all_fin", use_container_width=True):
                                 st.session_state.finish_select_all = False
                                 st.rerun()
                 with fin_tool2:
-                    search_fin = st.text_input("๐” เธเนเธเธซเธฒเนเธเธเธฃเธฐเธงเธฑเธ•เธดเธเธฒเธเน€เธชเธฃเนเธเธชเธดเนเธ (เนเธเธเธเธฒเธ, Drawing, เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ):", key="search_finished_history_input")
+                    search_fin = st.text_input("🔍 ค้นหาในประวัติงานเสร็จสิ้น (แผนงาน, Drawing, เครื่องจักร):", key="search_finished_history_input")
 
                 if search_fin.strip() != "":
                     q_f = search_fin.strip().lower()
                     fin_display_df = fin_display_df[
-                        fin_display_df["เนเธเธเธเธฒเธ"].astype(str).str.lower().str.contains(q_f) |
-                        fin_display_df["เธเธทเนเธญ Drawing."].astype(str).str.lower().str.contains(q_f) |
-                        fin_display_df["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"].astype(str).str.lower().str.contains(q_f)
+                        fin_display_df["แผนงาน"].astype(str).str.lower().str.contains(q_f) |
+                        fin_display_df["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_f) |
+                        fin_display_df["เลือกเครื่องจักร"].astype(str).str.lower().str.contains(q_f)
                     ]
 
                 if is_admin:
@@ -1883,176 +1883,176 @@ elif st.session_state.current_view == "๐“ เนเธ”เธเ�
                         fin_display_df,
                         key="editor_finished_jobs_history",
                         column_order=[
-                            "เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", "เธเธณเธเธงเธ", "เธงเธฑเธชเธ”เธธ", "เธเธฑเนเธเธ•เธญเธ (Step)",
-                            "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ", "เน€เธฃเธดเนเธกเธเธฃเธดเธ", "เน€เธชเธฃเนเธเธเธฃเธดเธ",
-                            "Setup (เธ.)", "Basic (เธ.)", "เนเธเธฃเนเธเธฃเธก (เธ.)", "เธฃเธงเธก (เธเธก.)", "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", "เธชเธ–เธฒเธเธฐเธเธฒเธ", "เธฅเธเธเธฃเธฐเธงเธฑเธ•เธด"
+                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)",
+                            "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "เริ่มจริง", "เสร็จจริง",
+                            "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "เวลาจริง (ชม.)", "สถานะงาน", "ลบประวัติ"
                         ],
                         column_config={
                             "ID": None,
-                            "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=85, disabled=True),
-                            "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("เธเธทเนเธญ Drawing.", width=180, disabled=True),
-                            "เธเธณเธเธงเธ": st.column_config.NumberColumn("เธเธณเธเธงเธ", width=65, format="%d", disabled=True),
-                            "เธงเธฑเธชเธ”เธธ": st.column_config.TextColumn("เธงเธฑเธชเธ”เธธ", width=75, disabled=True),
-                            "เธเธฑเนเธเธ•เธญเธ (Step)": st.column_config.TextColumn("เธเธฑเนเธเธ•เธญเธ (Step)", width=120, disabled=True),
-                            "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.TextColumn("เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", width=140, disabled=True),
-                            "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ": st.column_config.DatetimeColumn("เธเธณเธซเธเธ”เธเธถเนเธเธเธฒเธ (เนเธเธ)", width=145, format="DD/MM/YYYY HH:mm", disabled=True),
-                            "เน€เธฃเธดเนเธกเธเธฃเธดเธ": st.column_config.DatetimeColumn("เน€เธฃเธดเนเธกเธเธถเนเธเธเธฒเธเธเธฃเธดเธ", width=145, format="DD/MM/YYYY HH:mm"),
-                            "เน€เธชเธฃเนเธเธเธฃเธดเธ": st.column_config.DatetimeColumn("เน€เธชเธฃเนเธเธชเธดเนเธเธเธฃเธดเธ", width=145, format="DD/MM/YYYY HH:mm"),
-                            "Setup (เธ.)": st.column_config.NumberColumn("Setup (เธ.)", width=80, format="%d", disabled=True),
-                            "Basic (เธ.)": st.column_config.NumberColumn("Basic (เธ.)", width=80, format="%d", disabled=True),
-                            "เนเธเธฃเนเธเธฃเธก (เธ.)": st.column_config.NumberColumn("เนเธเธฃเนเธเธฃเธก (เธ.)", width=95, format="%d", disabled=True),
-                            "เธฃเธงเธก (เธเธก.)": st.column_config.NumberColumn("เนเธเธ (เธเธก.)", width=85, format="%.2f", disabled=True),
-                            "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฃเธดเธ (เธเธก.)", width=85, format="%.2f", disabled=True),
-                            "เธชเธ–เธฒเธเธฐเธเธฒเธ": st.column_config.TextColumn("เธชเธ–เธฒเธเธฐ", width=120, disabled=True),
-                            "เธฅเธเธเธฃเธฐเธงเธฑเธ•เธด": st.column_config.CheckboxColumn("๐—‘๏ธ", width=55, default=False),
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85, disabled=True),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180, disabled=True),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d", disabled=True),
+                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75, disabled=True),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=120, disabled=True),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=140, disabled=True),
+                            "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("กำหนดขึ้นงาน (แผน)", width=145, format="DD/MM/YYYY HH:mm", disabled=True),
+                            "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มขึ้นงานจริง", width=145, format="DD/MM/YYYY HH:mm"),
+                            "เสร็จจริง": st.column_config.DatetimeColumn("เสร็จสิ้นจริง", width=145, format="DD/MM/YYYY HH:mm"),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=80, format="%d", disabled=True),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=80, format="%d", disabled=True),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d", disabled=True),
+                            "รวม (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f", disabled=True),
+                            "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f", disabled=True),
+                            "สถานะงาน": st.column_config.TextColumn("สถานะ", width=120, disabled=True),
+                            "ลบประวัติ": st.column_config.CheckboxColumn("🗑️", width=55, default=False),
                         },
                         hide_index=True,
                         use_container_width=True
                     )
 
-                    fin_to_del = edited_fin[edited_fin["เธฅเธเธเธฃเธฐเธงเธฑเธ•เธด"] == True]
+                    fin_to_del = edited_fin[edited_fin["ลบประวัติ"] == True]
                     del_fin_count = len(fin_to_del)
-                    if st.button(f"๐—‘๏ธ เธฅเธเธฃเธฒเธขเธเธฒเธฃเธเธฃเธฐเธงเธฑเธ•เธดเธเธฒเธเน€เธชเธฃเนเธเธชเธดเนเธ ({del_fin_count} เธฃเธฒเธขเธเธฒเธฃ)", key="btn_del_finished_records", type="secondary", disabled=(del_fin_count == 0)):
+                    if st.button(f"🗑️ ลบรายการประวัติงานเสร็จสิ้น ({del_fin_count} รายการ)", key="btn_del_finished_records", type="secondary", disabled=(del_fin_count == 0)):
                         for _, r in fin_to_del.iterrows():
                             if pd.notna(r.get("ID")):
                                 delete_supabase_job(int(float(r["ID"])))
                         st.session_state.finish_select_all = False
                         st.cache_data.clear()
-                        st.toast("เธฅเธเธเธฃเธฐเธงเธฑเธ•เธดเธเธฒเธเน€เธฃเธตเธขเธเธฃเนเธญเธขเนเธฅเนเธง!", icon="๐—‘๏ธ")
+                        st.toast("ลบประวัติงานเรียบร้อยแล้ว!", icon="🗑️")
                         st.rerun()
                 else:
                     st.dataframe(
-                        fin_display_df[[c for c in fin_display_df.columns if c not in ["ID", "เธฅเธเธเธฃเธฐเธงเธฑเธ•เธด"]]],
+                        fin_display_df[[c for c in fin_display_df.columns if c not in ["ID", "ลบประวัติ"]]],
                         column_config={
-                            "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=85),
-                            "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("เธเธทเนเธญ Drawing.", width=180),
-                            "เธเธณเธเธงเธ": st.column_config.NumberColumn("เธเธณเธเธงเธ", width=65, format="%d"),
-                            "เธงเธฑเธชเธ”เธธ": st.column_config.TextColumn("เธงเธฑเธชเธ”เธธ", width=75),
-                            "เธเธฑเนเธเธ•เธญเธ (Step)": st.column_config.TextColumn("เธเธฑเนเธเธ•เธญเธ (Step)", width=120),
-                            "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.TextColumn("เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", width=140),
-                            "เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ": st.column_config.DatetimeColumn("เธเธณเธซเธเธ”เธเธถเนเธเธเธฒเธ (เนเธเธ)", width=145, format="DD/MM/YYYY HH:mm"),
-                            "เน€เธฃเธดเนเธกเธเธฃเธดเธ": st.column_config.DatetimeColumn("เน€เธฃเธดเนเธกเธเธถเนเธเธเธฒเธเธเธฃเธดเธ", width=145, format="DD/MM/YYYY HH:mm"),
-                            "เน€เธชเธฃเนเธเธเธฃเธดเธ": st.column_config.DatetimeColumn("เน€เธชเธฃเนเธเธชเธดเนเธเธเธฃเธดเธ", width=145, format="DD/MM/YYYY HH:mm"),
-                            "เธฃเธงเธก (เธเธก.)": st.column_config.NumberColumn("เนเธเธ (เธเธก.)", width=85, format="%.2f"),
-                            "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฃเธดเธ (เธเธก.)", width=85, format="%.2f"),
-                            "เธชเธ–เธฒเธเธฐเธเธฒเธ": st.column_config.TextColumn("เธชเธ–เธฒเธเธฐ", width=120),
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=120),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=140),
+                            "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("กำหนดขึ้นงาน (แผน)", width=145, format="DD/MM/YYYY HH:mm"),
+                            "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มขึ้นงานจริง", width=145, format="DD/MM/YYYY HH:mm"),
+                            "เสร็จจริง": st.column_config.DatetimeColumn("เสร็จสิ้นจริง", width=145, format="DD/MM/YYYY HH:mm"),
+                            "รวม (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                            "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                            "สถานะงาน": st.column_config.TextColumn("สถานะ", width=120),
                         },
                         hide_index=True,
                         use_container_width=True
                     )
             else:
-                st.info("โน๏ธ เธขเธฑเธเนเธกเนเธกเธตเธฃเธฒเธขเธเธฒเธฃเธ—เธตเนเธเธถเนเธเธชเธ–เธฒเธเธฐ 'โ… เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง'")
+                st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว'")
 
             st.divider()
 
             # =====================================================
-            # 6. เธ•เธฒเธฃเธฒเธเธเธณเธเธงเธ“เธกเธนเธฅเธเนเธฒเนเธฅเธฐเธ•เนเธเธ—เธธเธเธเนเธฒเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ (Machining Cost Calculation)
+            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)
             # =====================================================
-            st.subheader("๐’ฐ เธ•เธฒเธฃเธฒเธเธเธณเธเธงเธ“เธกเธนเธฅเธเนเธฒเนเธฅเธฐเธ•เนเธเธ—เธธเธเธเนเธฒเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ (Machining Cost Calculation)")
+            st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
 
             current_rates_df = pd.DataFrame([
-                {"เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": m, "เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)": DEFAULT_RATES.get(m, 500)}
+                {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES.get(m, 500)}
                 for m in MACHINE_LIST
             ])
             
             if "machine_rates" not in st.session_state or len(st.session_state.machine_rates) != len(MACHINE_LIST):
                 st.session_state.machine_rates = current_rates_df
             else:
-                existing_map = dict(zip(st.session_state.machine_rates["เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"], st.session_state.machine_rates["เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)"]))
+                existing_map = dict(zip(st.session_state.machine_rates["เครื่องจักร"], st.session_state.machine_rates["เรตราคา (บาท/ชม.)"]))
                 for m in MACHINE_LIST:
                     if m not in existing_map:
                         existing_map[m] = DEFAULT_RATES.get(m, 500)
                 st.session_state.machine_rates = pd.DataFrame([
-                    {"เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": m, "เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)": existing_map[m]} for m in MACHINE_LIST
+                    {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": existing_map[m]} for m in MACHINE_LIST
                 ])
 
             cost_col1, cost_col2 = st.columns([1.1, 2.9])
 
             with cost_col1:
-                st.markdown("**โ๏ธ เธ•เธฑเนเธเธเนเธฒเน€เธฃเธ•เธฃเธฒเธเธฒเธเนเธฒเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ (เธเธฒเธ—/เธเธก.)**")
+                st.markdown("**⚙️ ตั้งค่าเรตราคาค่าเครื่องจักร (บาท/ชม.)**")
                 if is_admin:
                     edited_rates = st.data_editor(
                         st.session_state.machine_rates,
                         key="editor_machine_rates_full_22_v14",
                         column_config={
-                            "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.TextColumn("เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ", disabled=True),
-                            "เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)": st.column_config.NumberColumn("เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)", min_value=0, max_value=50000, step=50, format="%d เธฟ", required=True)
+                            "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", disabled=True),
+                            "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
                         },
                         use_container_width=True,
                         hide_index=True
                     )
                     st.session_state.machine_rates = edited_rates
-                    rate_map = dict(zip(edited_rates["เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"], edited_rates["เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)"]))
+                    rate_map = dict(zip(edited_rates["เครื่องจักร"], edited_rates["เรตราคา (บาท/ชม.)"]))
                 else:
                     st.dataframe(
                         st.session_state.machine_rates,
                         column_config={
-                            "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.TextColumn("เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ"),
-                            "เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)": st.column_config.NumberColumn("เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)", format="%d เธฟ")
+                            "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก"),
+                            "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา (บาท/ชม.)", format="%d ฿")
                         },
                         use_container_width=True,
                         hide_index=True
                     )
-                    rate_map = dict(zip(st.session_state.machine_rates["เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"], st.session_state.machine_rates["เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)"]))
+                    rate_map = dict(zip(st.session_state.machine_rates["เครื่องจักร"], st.session_state.machine_rates["เรตราคา (บาท/ชม.)"]))
 
             with cost_col2:
                 if not finished_jobs_df.empty:
                     cost_df = finished_jobs_df.copy()
-                    cost_df["เธฃเธงเธก (เธเธก.)"] = ((cost_df["Setup (เธ.)"] + cost_df["Basic (เธ.)"] + cost_df["เนเธเธฃเนเธเธฃเธก (เธ.)"]) / 60.0).round(2)
-                    cost_df["เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)"] = cost_df["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"].map(rate_map).fillna(500)
-                    cost_df["เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)"] = cost_df["เธฃเธงเธก (เธเธก.)"] * cost_df["เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)"]
+                    cost_df["รวม (ชม.)"] = ((cost_df["Setup (น.)"] + cost_df["Basic (น.)"] + cost_df["โปรแกรม (น.)"]) / 60.0).round(2)
+                    cost_df["เรตราคา (บาท/ชม.)"] = cost_df["เลือกเครื่องจักร"].map(rate_map).fillna(500)
+                    cost_df["มูลค่ารวม (บาท)"] = cost_df["รวม (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]
                     
-                    total_finished_cost = cost_df["เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)"].sum()
-                    total_finished_hrs = cost_df["เธฃเธงเธก (เธเธก.)"].sum()
+                    total_finished_cost = cost_df["มูลค่ารวม (บาท)"].sum()
+                    total_finished_hrs = cost_df["รวม (ชม.)"].sum()
                     
-                    st.markdown(f"**๐“ เธฃเธฒเธขเธเธฒเธฃเธชเธฃเธธเธเธกเธนเธฅเธเนเธฒเธเธฒเธเธ—เธตเนเน€เธชเธฃเนเธเธชเธดเนเธ (เธฃเธงเธกเธ—เธฑเนเธเธซเธกเธ”: :green[{total_finished_cost:,.2f} เธเธฒเธ—] / {total_finished_hrs:.2f} เธเธก.)**")
+                    st.markdown(f"**📊 รายการสรุปมูลค่างานที่เสร็จสิ้น (รวมทั้งหมด: :green[{total_finished_cost:,.2f} บาท] / {total_finished_hrs:.2f} ชม.)**")
                     st.dataframe(
-                        cost_df.sort_values(by="เนเธเธเธเธฒเธ", ascending=True)[["เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", "เธเธณเธเธงเธ", "เธเธฑเนเธเธ•เธญเธ (Step)", "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "Setup (เธ.)", "Basic (เธ.)", "เนเธเธฃเนเธเธฃเธก (เธ.)", "เธฃเธงเธก (เธเธก.)", "เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)", "เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)"]],
+                        cost_df.sort_values(by="แผนงาน", ascending=True)[["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"]],
                         column_config={
-                            "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=85),
-                            "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("เธเธทเนเธญ Drawing.", width=180),
-                            "เธเธณเธเธงเธ": st.column_config.NumberColumn("เธเธณเธเธงเธ", width=65, format="%d"),
-                            "เธเธฑเนเธเธ•เธญเธ (Step)": st.column_config.TextColumn("เธเธฑเนเธเธ•เธญเธ", width=120),
-                            "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.TextColumn("เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ", width=140),
-                            "Setup (เธ.)": st.column_config.NumberColumn("Setup (เธ.)", width=85, format="%d"),
-                            "Basic (เธ.)": st.column_config.NumberColumn("Basic (เธ.)", width=85, format="%d"),
-                            "เนเธเธฃเนเธเธฃเธก (เธ.)": st.column_config.NumberColumn("เนเธเธฃเนเธเธฃเธก (เธ.)", width=95, format="%d"),
-                            "เธฃเธงเธก (เธเธก.)": st.column_config.NumberColumn("เธฃเธงเธก (เธเธก.)", width=85, format="%.2f"),
-                            "เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)": st.column_config.NumberColumn("เน€เธฃเธ•เธฃเธฒเธเธฒ", width=110, format="%d เธฟ"),
-                            "เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)": st.column_config.NumberColumn("เธฃเธงเธกเน€เธเนเธเน€เธเธดเธ", width=130, format="%.2f เธฟ"),
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=120),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร / แผนก", width=140),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
+                            "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
+                            "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("เรตราคา", width=110, format="%d ฿"),
+                            "มูลค่ารวม (บาท)": st.column_config.NumberColumn("รวมเป็นเงิน", width=130, format="%.2f ฿"),
                         },
                         use_container_width=True,
                         hide_index=True
                     )
                 else:
-                    st.info("โน๏ธ เธขเธฑเธเนเธกเนเธกเธตเธฃเธฒเธขเธเธฒเธฃเธ—เธตเนเธเธถเนเธเธชเธ–เธฒเธเธฐ 'โ… เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง' เธเธถเธเธขเธฑเธเนเธกเนเธกเธตเธเธฒเธฃเธเธณเธเธงเธ“เธกเธนเธฅเธเนเธฒเธ•เนเธเธ—เธธเธ")
+                    st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
 # ---------------------------------------------------------
-# VIEW 3: เธงเธดเน€เธเธฃเธฒเธฐเธซเนเธเธฃเธฐเธชเธดเธ—เธเธดเธ เธฒเธเธฃเธฒเธข Drawing
+# VIEW 3: วิเคราะห์ประสิทธิภาพราย Drawing
 # ---------------------------------------------------------
-elif st.session_state.current_view == "๐“ เธงเธดเน€เธเธฃเธฒเธฐเธซเนเธเธฃเธฐเธชเธดเธ—เธเธดเธ เธฒเธเธฃเธฒเธข Drawing":
-    st.subheader("๐“ เธงเธดเน€เธเธฃเธฒเธฐเธซเนเนเธฅเธฐเน€เธเธฃเธตเธขเธเน€เธ—เธตเธขเธเน€เธงเธฅเธฒเธ—เธณเธเธฒเธเธเธฃเธดเธเธฃเธฒเธข Drawing (Drawing Performance Analysis)")
+elif st.session_state.current_view == "📈 วิเคราะห์ประสิทธิภาพราย Drawing":
+    st.subheader("📈 วิเคราะห์และเปรียบเทียบเวลาทำงานจริงราย Drawing (Drawing Performance Analysis)")
     
     df_db = fetch_jobs_from_supabase()
 
     current_now = get_bangkok_now()
-    month_names = ["เธกเธเธฃเธฒเธเธก (1)", "เธเธธเธกเธ เธฒเธเธฑเธเธเน (2)", "เธกเธตเธเธฒเธเธก (3)", "เน€เธกเธฉเธฒเธขเธ (4)", "เธเธคเธฉเธ เธฒเธเธก (5)", "เธกเธดเธ–เธธเธเธฒเธขเธ (6)", "เธเธฃเธเธเธฒเธเธก (7)", "เธชเธดเธเธซเธฒเธเธก (8)", "เธเธฑเธเธขเธฒเธขเธ (9)", "เธ•เธธเธฅเธฒเธเธก (10)", "เธเธคเธจเธเธดเธเธฒเธขเธ (11)", "เธเธฑเธเธงเธฒเธเธก (12)"]
+    month_names = ["มกราคม (1)", "กุมภาพันธ์ (2)", "มีนาคม (3)", "เมษายน (4)", "พฤษภาคม (5)", "มิถุนายน (6)", "กรกฎาคม (7)", "สิงหาคม (8)", "กันยายน (9)", "ตุลาคม (10)", "พฤศจิกายน (11)", "ธันวาคม (12)"]
 
     m_col1, m_col2, m_col3 = st.columns([2, 2, 3])
     with m_col1:
-        sel_dw_month = st.selectbox("๐“… เน€เธฅเธทเธญเธเน€เธ”เธทเธญเธเธ—เธตเนเธ•เนเธญเธเธเธฒเธฃเธงเธดเน€เธเธฃเธฒเธฐเธซเน:", range(1, 13), index=current_now.month - 1, format_func=lambda x: month_names[x-1], key="dw_month_sel")
+        sel_dw_month = st.selectbox("📅 เลือกเดือนที่ต้องการวิเคราะห์:", range(1, 13), index=current_now.month - 1, format_func=lambda x: month_names[x-1], key="dw_month_sel")
     with m_col2:
-        sel_dw_year = st.selectbox("๐“ เน€เธฅเธทเธญเธเธเธต (เธ.เธจ.):", [current_now.year - 1, current_now.year, current_now.year + 1], index=1, key="dw_year_sel")
+        sel_dw_year = st.selectbox("📆 เลือกปี (ค.ศ.):", [current_now.year - 1, current_now.year, current_now.year + 1], index=1, key="dw_year_sel")
     with m_col3:
-        sel_dw_limit = st.selectbox("๐ฏ เธเธฒเธฃเนเธชเธ”เธเธเธฅเธเธฃเธฒเธเนเธ—เนเธเธเธนเน:", ["๐ เนเธชเธ”เธเธ—เธฑเนเธเธซเธกเธ”เนเธเน€เธ”เธทเธญเธเธเธตเน", "๐”ด Top 10 เธเนเธฒเธเธงเนเธฒเนเธเธเธชเธนเธเธชเธธเธ” (Critical Delays)", "๐ข Top 10 เน€เธฃเนเธงเธเธงเนเธฒเนเธเธเธชเธนเธเธชเธธเธ” (High Efficiency)"])
+        sel_dw_limit = st.selectbox("🎯 การแสดงผลกราฟแท่งคู่:", ["🌐 แสดงทั้งหมดในเดือนนี้", "🔴 Top 10 ช้ากว่าแผนสูงสุด (Critical Delays)", "🟢 Top 10 เร็วกว่าแผนสูงสุด (High Efficiency)"])
 
     if not df_db.empty:
-        finished_all = df_db[df_db["เธชเธ–เธฒเธเธฐเธเธฒเธ"].isin(["๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง", "โ… เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง"])].copy()
+        finished_all = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
         
         if not finished_all.empty:
-            finished_all["เน€เธชเธฃเนเธเธเธฃเธดเธ_DT"] = pd.to_datetime(finished_all["เน€เธชเธฃเนเธเธเธฃเธดเธ"], errors='coerce')
-            finished_all["เธงเธฑเธเธเธถเนเธเธเธฒเธ_DT"] = pd.to_datetime(finished_all["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"], errors='coerce')
-            finished_all["Target_Date"] = finished_all["เน€เธชเธฃเนเธเธเธฃเธดเธ_DT"].fillna(finished_all["เธงเธฑเธเธเธถเนเธเธเธฒเธ_DT"])
+            finished_all["เสร็จจริง_DT"] = pd.to_datetime(finished_all["เสร็จจริง"], errors='coerce')
+            finished_all["วันขึ้นงาน_DT"] = pd.to_datetime(finished_all["วัน-เวลาขึ้นงาน"], errors='coerce')
+            finished_all["Target_Date"] = finished_all["เสร็จจริง_DT"].fillna(finished_all["วันขึ้นงาน_DT"])
             
             monthly_dw_jobs = finished_all[
                 (finished_all["Target_Date"].dt.month == sel_dw_month) &
@@ -2060,29 +2060,29 @@ elif st.session_state.current_view == "๐“ เธงเธดเน€เ
             ].copy()
 
             if not monthly_dw_jobs.empty:
-                monthly_dw_jobs["Setup (เธ.)"] = pd.to_numeric(monthly_dw_jobs["Setup (เธ.)"], errors='coerce').fillna(10.0)
-                monthly_dw_jobs["Basic (เธ.)"] = pd.to_numeric(monthly_dw_jobs["Basic (เธ.)"], errors='coerce').fillna(0.0)
-                monthly_dw_jobs["เนเธเธฃเนเธเธฃเธก (เธ.)"] = pd.to_numeric(monthly_dw_jobs["เนเธเธฃเนเธเธฃเธก (เธ.)"], errors='coerce').fillna(0.0)
-                monthly_dw_jobs["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"] = ((monthly_dw_jobs["Setup (เธ.)"] + monthly_dw_jobs["Basic (เธ.)"] + monthly_dw_jobs["เนเธเธฃเนเธเธฃเธก (เธ.)"]) / 60.0).round(2)
+                monthly_dw_jobs["Setup (น.)"] = pd.to_numeric(monthly_dw_jobs["Setup (น.)"], errors='coerce').fillna(10.0)
+                monthly_dw_jobs["Basic (น.)"] = pd.to_numeric(monthly_dw_jobs["Basic (น.)"], errors='coerce').fillna(0.0)
+                monthly_dw_jobs["โปรแกรม (น.)"] = pd.to_numeric(monthly_dw_jobs["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
+                monthly_dw_jobs["เวลาแผน (ชม.)"] = ((monthly_dw_jobs["Setup (น.)"] + monthly_dw_jobs["Basic (น.)"] + monthly_dw_jobs["โปรแกรม (น.)"]) / 60.0).round(2)
                 
                 actual_hrs_list = []
                 for _, r in monthly_dw_jobs.iterrows():
-                    s_real, f_real = r.get("เน€เธฃเธดเนเธกเธเธฃเธดเธ"), r.get("เน€เธชเธฃเนเธเธเธฃเธดเธ")
+                    s_real, f_real = r.get("เริ่มจริง"), r.get("เสร็จจริง")
                     act_st = parse_flexible_datetime(s_real)
                     act_fn = parse_flexible_datetime(f_real)
                     if act_st is not None and act_fn is not None:
                         diff_sec = (act_fn - act_st).total_seconds()
                         actual_hrs_list.append(round(diff_sec / 3600.0, 2))
                     else:
-                        actual_hrs_list.append(r["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"])
-                monthly_dw_jobs["เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"] = actual_hrs_list
+                        actual_hrs_list.append(r["เวลาแผน (ชม.)"])
+                monthly_dw_jobs["เวลาจริง (ชม.)"] = actual_hrs_list
 
                 drawing_agg = []
-                for (p_c, d_c), g_data in monthly_dw_jobs.groupby(["เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing."]):
-                    d_plan = g_data["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"].sum()
-                    d_act = g_data["เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"].sum()
-                    d_qty = int(g_data.iloc[0].get("เธเธณเธเธงเธ", 1)) or 1
-                    d_mat = g_data.iloc[0].get("เธงเธฑเธชเธ”เธธ", "-")
+                for (p_c, d_c), g_data in monthly_dw_jobs.groupby(["แผนงาน", "ชื่อ Drawing."]):
+                    d_plan = g_data["เวลาแผน (ชม.)"].sum()
+                    d_act = g_data["เวลาจริง (ชม.)"].sum()
+                    d_qty = int(g_data.iloc[0].get("จำนวน", 1)) or 1
+                    d_mat = g_data.iloc[0].get("วัสดุ", "-")
                     d_diff = round(d_act - d_plan, 2)
                     d_diff_mins = round(d_diff * 60)
                     
@@ -2090,7 +2090,7 @@ elif st.session_state.current_view == "๐“ เธงเธดเน€เ
                     d_act_per_pc = round(d_act / d_qty, 2)
                     accuracy_pct = round((d_plan / d_act * 100), 1) if d_act > 0 else 100.0
 
-                    machines_used = g_data["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"].dropna().unique()
+                    machines_used = g_data["เลือกเครื่องจักร"].dropna().unique()
                     machines_str = ", ".join([str(m) for m in machines_used if str(m).strip() != ""])
                     if not machines_str:
                         machines_str = "-"
@@ -2098,92 +2098,92 @@ elif st.session_state.current_view == "๐“ เธงเธดเน€เ
                     pct_diff = ((d_act - d_plan) / d_plan * 100) if d_plan > 0 else 0
                     if pct_diff < -5:
                         cat_status = "FAST"
-                        eval_str = f"๐ข เน€เธฃเนเธงเธเธถเนเธ {abs(d_diff_mins)} เธเธฒเธ—เธต"
+                        eval_str = f"🟢 เร็วขึ้น {abs(d_diff_mins)} นาที"
                     elif -5 <= pct_diff <= 5:
                         cat_status = "ON_TARGET"
-                        eval_str = f"๐ก เธ•เธฃเธเธ•เธฒเธกเนเธเธ (ยฑ5%)"
+                        eval_str = f"🟡 ตรงตามแผน (±5%)"
                     else:
                         cat_status = "LATE"
-                        eval_str = f"๐”ด เธเนเธฒเธเธงเนเธฒเนเธเธ +{d_diff_mins} เธเธฒเธ—เธต"
+                        eval_str = f"🔴 ช้ากว่าแผน +{d_diff_mins} นาที"
 
                     drawing_agg.append({
-                        "เนเธเธเธเธฒเธ": p_c,
-                        "เธเธทเนเธญ Drawing.": d_c,
-                        "เธซเธฑเธงเธเนเธญ Drawing": f"[{p_c}] {d_c} ({machines_str})",
-                        "เธเธณเธเธงเธ": d_qty,
-                        "เธงเธฑเธชเธ”เธธ": d_mat,
-                        "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃเธ—เธตเนเธเธฅเธดเธ•": machines_str,
-                        "เธเธณเธเธงเธ Step": len(g_data),
-                        "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)": round(d_plan, 2),
-                        "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": round(d_act, 2),
-                        "เนเธเธ/เธเธดเนเธ (เธเธก.)": d_plan_per_pc,
-                        "เธเธฃเธดเธ/เธเธดเนเธ (เธเธก.)": d_act_per_pc,
-                        "เธเธงเธฒเธกเนเธกเนเธเธขเธณ (%)": accuracy_pct,
-                        "เธเธฅเธ•เนเธฒเธ (เธเธก.)": d_diff,
-                        "เธชเธ–เธฒเธเธฐเธเธฅเธธเนเธก": cat_status,
-                        "เธเธฒเธฃเธเธฃเธฐเน€เธกเธดเธ": eval_str
+                        "แผนงาน": p_c,
+                        "ชื่อ Drawing.": d_c,
+                        "หัวข้อ Drawing": f"[{p_c}] {d_c} ({machines_str})",
+                        "จำนวน": d_qty,
+                        "วัสดุ": d_mat,
+                        "เครื่องจักรที่ผลิต": machines_str,
+                        "จำนวน Step": len(g_data),
+                        "เวลาแผน (ชม.)": round(d_plan, 2),
+                        "เวลาจริง (ชม.)": round(d_act, 2),
+                        "แผน/ชิ้น (ชม.)": d_plan_per_pc,
+                        "จริง/ชิ้น (ชม.)": d_act_per_pc,
+                        "ความแม่นยำ (%)": accuracy_pct,
+                        "ผลต่าง (ชม.)": d_diff,
+                        "สถานะกลุ่ม": cat_status,
+                        "การประเมิน": eval_str
                     })
                 df_draw_full = pd.DataFrame(drawing_agg)
 
-                count_fast = len(df_draw_full[df_draw_full["เธชเธ–เธฒเธเธฐเธเธฅเธธเนเธก"] == "FAST"])
-                count_target = len(df_draw_full[df_draw_full["เธชเธ–เธฒเธเธฐเธเธฅเธธเนเธก"] == "ON_TARGET"])
-                count_late = len(df_draw_full[df_draw_full["เธชเธ–เธฒเธเธฐเธเธฅเธธเนเธก"] == "LATE"])
-                total_late_hrs = df_draw_full[df_draw_full["เธเธฅเธ•เนเธฒเธ (เธเธก.)"] > 0]["เธเธฅเธ•เนเธฒเธ (เธเธก.)"].sum()
+                count_fast = len(df_draw_full[df_draw_full["สถานะกลุ่ม"] == "FAST"])
+                count_target = len(df_draw_full[df_draw_full["สถานะกลุ่ม"] == "ON_TARGET"])
+                count_late = len(df_draw_full[df_draw_full["สถานะกลุ่ม"] == "LATE"])
+                total_late_hrs = df_draw_full[df_draw_full["ผลต่าง (ชม.)"] > 0]["ผลต่าง (ชม.)"].sum()
 
                 st.markdown(f"""
                 <div class="kpi-container">
                     <div class="kpi-card kpi-green">
-                        <div class="kpi-title">๐ข เธเธฅเธดเธ•เน€เธฃเนเธงเธเธงเนเธฒเนเธเธ (>5%)</div>
+                        <div class="kpi-title">🟢 ผลิตเร็วกว่าแผน (>5%)</div>
                         <div class="kpi-value">{count_fast} <span style="font-size:15px; font-weight:600;">Drawings</span></div>
-                        <div class="kpi-sub">เธเธฃเธฐเธชเธดเธ—เธเธดเธ เธฒเธเธเธฒเธฃเธ•เธฑเธ”เน€เธเธทเธญเธเธชเธนเธเธเธงเนเธฒเน€เธเธ“เธ‘เน</div>
+                        <div class="kpi-sub">ประสิทธิภาพการตัดเฉือนสูงกว่าเกณฑ์</div>
                     </div>
                     <div class="kpi-card kpi-orange">
-                        <div class="kpi-title">๐ก เธ•เธฃเธเธ•เธฒเธกเน€เธเธ“เธ‘เนเน€เธเนเธฒเธซเธกเธฒเธข (ยฑ5%)</div>
+                        <div class="kpi-title">🟡 ตรงตามเกณฑ์เป้าหมาย (±5%)</div>
                         <div class="kpi-value">{count_target} <span style="font-size:15px; font-weight:600;">Drawings</span></div>
-                        <div class="kpi-sub">เธเธฒเธฃเธเธฃเธฐเธกเธฒเธ“เน€เธงเธฅเธฒเนเธกเนเธเธขเธณเธกเธฒเธ•เธฃเธเธฒเธ</div>
+                        <div class="kpi-sub">การประมาณเวลาแม่นยำมาตรฐาน</div>
                     </div>
                     <div class="kpi-card kpi-red">
-                        <div class="kpi-title">๐”ด เธเธฅเธดเธ•เธเนเธฒเธเธงเนเธฒเนเธเธ (>5%)</div>
+                        <div class="kpi-title">🔴 ผลิตช้ากว่าแผน (>5%)</div>
                         <div class="kpi-value">{count_late} <span style="font-size:15px; font-weight:600;">Drawings</span></div>
-                        <div class="kpi-sub">เธเนเธฒเธชเธฐเธชเธกเธฃเธงเธก +{total_late_hrs:.2f} เธเธก.</div>
+                        <div class="kpi-sub">ช้าสะสมรวม +{total_late_hrs:.2f} ชม.</div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
 
                 f_col1, f_col2 = st.columns([2.5, 4])
                 with f_col1:
-                    plan_list = ["๐ เธ—เธธเธเนเธเธเธเธฒเธ"] + sorted(list(df_draw_full["เนเธเธเธเธฒเธ"].unique()))
-                    selected_plan_filter = st.selectbox("๐” เธเธฃเธญเธเธ•เธฒเธกเธฃเธซเธฑเธชเนเธเธเธเธฒเธ (เนเธเธเธ เธนเธกเธดเธเธฃเธฒเธ):", plan_list)
+                    plan_list = ["🌐 ทุกแผนงาน"] + sorted(list(df_draw_full["แผนงาน"].unique()))
+                    selected_plan_filter = st.selectbox("🔍 กรองตามรหัสแผนงาน (แผนภูมิกราฟ):", plan_list)
                 with f_col2:
-                    search_dw = st.text_input("๐” เธเนเธเธซเธฒเธเธทเนเธญ Drawing เธซเธฃเธทเธญ เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ (เนเธเธเธ เธนเธกเธดเธเธฃเธฒเธ):", placeholder="เธเธดเธกเธเนเธเธทเนเธญ Drawing เธซเธฃเธทเธญเธเธทเนเธญเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃเน€เธเธทเนเธญเธเธฃเธญเธเธเธฃเธฒเธ...")
+                    search_dw = st.text_input("🔍 ค้นหาชื่อ Drawing หรือ เครื่องจักร (แผนภูมิกราฟ):", placeholder="พิมพ์ชื่อ Drawing หรือชื่อเครื่องจักรเพื่อกรองกราฟ...")
 
                 df_draw_filtered = df_draw_full.copy()
-                if selected_plan_filter != "๐ เธ—เธธเธเนเธเธเธเธฒเธ":
-                    df_draw_filtered = df_draw_filtered[df_draw_filtered["เนเธเธเธเธฒเธ"] == selected_plan_filter]
+                if selected_plan_filter != "🌐 ทุกแผนงาน":
+                    df_draw_filtered = df_draw_filtered[df_draw_filtered["แผนงาน"] == selected_plan_filter]
                 if search_dw.strip() != "":
                     q_dw_s = search_dw.strip().lower()
                     df_draw_filtered = df_draw_filtered[
-                        df_draw_filtered["เธเธทเนเธญ Drawing."].str.lower().str.contains(q_dw_s) |
-                        df_draw_filtered["เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃเธ—เธตเนเธเธฅเธดเธ•"].str.lower().str.contains(q_dw_s)
+                        df_draw_filtered["ชื่อ Drawing."].str.lower().str.contains(q_dw_s) |
+                        df_draw_filtered["เครื่องจักรที่ผลิต"].str.lower().str.contains(q_dw_s)
                     ]
 
-                if "Top 10 เธเนเธฒเธเธงเนเธฒเนเธเธ" in sel_dw_limit:
-                    df_draw_filtered = df_draw_filtered.sort_values(by="เธเธฅเธ•เนเธฒเธ (เธเธก.)", ascending=False).head(10).sort_values(by="เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", ascending=True)
-                elif "Top 10 เน€เธฃเนเธงเธเธงเนเธฒเนเธเธ" in sel_dw_limit:
-                    df_draw_filtered = df_draw_filtered.sort_values(by="เธเธฅเธ•เนเธฒเธ (เธเธก.)", ascending=True).head(10).sort_values(by="เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", ascending=True)
+                if "Top 10 ช้ากว่าแผน" in sel_dw_limit:
+                    df_draw_filtered = df_draw_filtered.sort_values(by="ผลต่าง (ชม.)", ascending=False).head(10).sort_values(by="เวลาจริง (ชม.)", ascending=True)
+                elif "Top 10 เร็วกว่าแผน" in sel_dw_limit:
+                    df_draw_filtered = df_draw_filtered.sort_values(by="ผลต่าง (ชม.)", ascending=True).head(10).sort_values(by="เวลาจริง (ชม.)", ascending=True)
                 else:
-                    df_draw_filtered = df_draw_filtered.sort_values(by="เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", ascending=True)
+                    df_draw_filtered = df_draw_filtered.sort_values(by="เวลาจริง (ชม.)", ascending=True)
 
                 if not df_draw_filtered.empty:
                     chart_h = max(420, len(df_draw_filtered) * 36)
                     fig_dw = px.bar(
                         df_draw_filtered,
-                        y="เธซเธฑเธงเธเนเธญ Drawing",
-                        x=["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)", "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"],
+                        y="หัวข้อ Drawing",
+                        x=["เวลาแผน (ชม.)", "เวลาจริง (ชม.)"],
                         orientation="h",
                         barmode="group",
-                        title=f"โฑ๏ธ เน€เธเธฃเธตเธขเธเน€เธ—เธตเธขเธเน€เธงเธฅเธฒเธ—เธณเธเธฒเธเนเธเธ vs เน€เธงเธฅเธฒเธเธฃเธดเธ เธเธฃเธฐเธเธณเน€เธ”เธทเธญเธ {month_names[sel_dw_month-1]} {sel_dw_year} ({len(df_draw_filtered)} เธฃเธฒเธขเธเธฒเธฃ)",
-                        color_discrete_map={"เน€เธงเธฅเธฒเนเธเธ (เธเธก.)": "#94A3B8", "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": "#2563EB"},
+                        title=f"⏱️ เปรียบเทียบเวลาทำงานแผน vs เวลาจริง ประจำเดือน {month_names[sel_dw_month-1]} {sel_dw_year} ({len(df_draw_filtered)} รายการ)",
+                        color_discrete_map={"เวลาแผน (ชม.)": "#94A3B8", "เวลาจริง (ชม.)": "#2563EB"},
                         text_auto='.2f'
                     )
                     fig_dw.update_traces(textposition='outside', cliponaxis=False)
@@ -2192,53 +2192,53 @@ elif st.session_state.current_view == "๐“ เธงเธดเน€เ
                         plot_bgcolor="#FFFFFF",
                         paper_bgcolor="#FFFFFF",
                         margin=dict(l=20, r=20, t=40, b=20),
-                        yaxis_title="[เธฃเธซเธฑเธชเนเธเธเธเธฒเธ] เธเธทเนเธญ Drawing (เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃเธ—เธตเนเธเธฅเธดเธ•)",
-                        xaxis_title="เน€เธงเธฅเธฒเนเธเธเธฒเธฃเธเธฅเธดเธ• (เธเธฑเนเธงเนเธกเธ)",
+                        yaxis_title="[รหัสแผนงาน] ชื่อ Drawing (เครื่องจักรที่ผลิต)",
+                        xaxis_title="เวลาในการผลิต (ชั่วโมง)",
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
                     st.plotly_chart(fig_dw, use_container_width=True)
 
                     st.divider()
 
-                    st.markdown(f"#### ๐“ เธ•เธฒเธฃเธฒเธเธชเธฃเธธเธเน€เธงเธฅเธฒเน€เธเธฃเธตเธขเธเน€เธ—เธตเธขเธเธฃเธฒเธข Drawing เธเธฃเธฐเธเธณเน€เธ”เธทเธญเธ {month_names[sel_dw_month-1]} {sel_dw_year}")
+                    st.markdown(f"#### 📋 ตารางสรุปเวลาเปรียบเทียบราย Drawing ประจำเดือน {month_names[sel_dw_month-1]} {sel_dw_year}")
                     
                     search_dw_table = st.text_input(
-                        "๐” เธเนเธเธซเธฒเนเธเธ•เธฒเธฃเธฒเธเน€เธเธฃเธตเธขเธเน€เธ—เธตเธขเธเธฃเธฒเธข Drawing (เนเธเธเธเธฒเธ, Drawing, เธงเธฑเธชเธ”เธธ, เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ, เธเธฅเธเธฃเธฐเน€เธกเธดเธ):",
-                        placeholder="เธเธดเธกเธเนเน€เธเธทเนเธญเธเนเธเธซเธฒเธเนเธญเธกเธนเธฅเนเธเธ•เธฒเธฃเธฒเธ เน€เธเนเธ SS400, No.1, เน€เธฃเนเธงเธเธถเนเธ, เธเนเธฒเธเธงเนเธฒเนเธเธ...",
+                        "🔍 ค้นหาในตารางเปรียบเทียบราย Drawing (แผนงาน, Drawing, วัสดุ, เครื่องจักร, ผลประเมิน):",
+                        placeholder="พิมพ์เพื่อค้นหาข้อมูลในตาราง เช่น SS400, No.1, เร็วขึ้น, ช้ากว่าแผน...",
                         key="search_drawing_table_input"
                     )
 
-                    df_table_display = df_draw_full.copy().sort_values(by="เนเธเธเธเธฒเธ")
+                    df_table_display = df_draw_full.copy().sort_values(by="แผนงาน")
                     if search_dw_table.strip() != "":
                         q_dt = search_dw_table.strip().lower()
                         df_table_display = df_table_display[
-                            df_table_display["เนเธเธเธเธฒเธ"].astype(str).str.lower().str.contains(q_dt) |
-                            df_table_display["เธเธทเนเธญ Drawing."].astype(str).str.lower().str.contains(q_dt) |
-                            df_table_display["เธงเธฑเธชเธ”เธธ"].astype(str).str.lower().str.contains(q_dt) |
-                            df_table_display["เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃเธ—เธตเนเธเธฅเธดเธ•"].astype(str).str.lower().str.contains(q_dt) |
-                            df_table_display["เธเธฒเธฃเธเธฃเธฐเน€เธกเธดเธ"].astype(str).str.lower().str.contains(q_dt)
+                            df_table_display["แผนงาน"].astype(str).str.lower().str.contains(q_dt) |
+                            df_table_display["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_dt) |
+                            df_table_display["วัสดุ"].astype(str).str.lower().str.contains(q_dt) |
+                            df_table_display["เครื่องจักรที่ผลิต"].astype(str).str.lower().str.contains(q_dt) |
+                            df_table_display["การประเมิน"].astype(str).str.lower().str.contains(q_dt)
                         ]
 
                     st.dataframe(
                         df_table_display[[
-                            "เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", "เธเธณเธเธงเธ", "เธงเธฑเธชเธ”เธธ", "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃเธ—เธตเนเธเธฅเธดเธ•", 
-                            "เธเธณเธเธงเธ Step", "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)", "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", "เนเธเธ/เธเธดเนเธ (เธเธก.)", "เธเธฃเธดเธ/เธเธดเนเธ (เธเธก.)",
-                            "เธเธงเธฒเธกเนเธกเนเธเธขเธณ (%)", "เธเธฅเธ•เนเธฒเธ (เธเธก.)", "เธเธฒเธฃเธเธฃเธฐเน€เธกเธดเธ"
+                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "เครื่องจักรที่ผลิต", 
+                            "จำนวน Step", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "แผน/ชิ้น (ชม.)", "จริง/ชิ้น (ชม.)",
+                            "ความแม่นยำ (%)", "ผลต่าง (ชม.)", "การประเมิน"
                         ]],
                         column_config={
-                            "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=80),
-                            "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("เธเธทเนเธญ Drawing.", width=170),
-                            "เธเธณเธเธงเธ": st.column_config.NumberColumn("เธเธณเธเธงเธ", width=60, format="%d"),
-                            "เธงเธฑเธชเธ”เธธ": st.column_config.TextColumn("เธงเธฑเธชเธ”เธธ", width=75),
-                            "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃเธ—เธตเนเธเธฅเธดเธ•": st.column_config.TextColumn("เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ", width=140),
-                            "เธเธณเธเธงเธ Step": st.column_config.NumberColumn("Step", width=60, format="%d"),
-                            "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)": st.column_config.NumberColumn("เนเธเธ (เธเธก.)", width=85, format="%.2f"),
-                            "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฃเธดเธ (เธเธก.)", width=85, format="%.2f"),
-                            "เนเธเธ/เธเธดเนเธ (เธเธก.)": st.column_config.NumberColumn("เนเธเธ/เธเธดเนเธ", width=80, format="%.2f"),
-                            "เธเธฃเธดเธ/เธเธดเนเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฃเธดเธ/เธเธดเนเธ", width=80, format="%.2f"),
-                            "เธเธงเธฒเธกเนเธกเนเธเธขเธณ (%)": st.column_config.ProgressColumn("เธเธงเธฒเธกเนเธกเนเธเธขเธณ", width=100, min_value=0, max_value=150, format="%d%%"),
-                            "เธเธฅเธ•เนเธฒเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฅเธ•เนเธฒเธ (เธเธก.)", width=85, format="%.2f"),
-                            "เธเธฒเธฃเธเธฃเธฐเน€เธกเธดเธ": st.column_config.TextColumn("เธเธฅเธเธฃเธฐเน€เธกเธดเธ", width=145),
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=80),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=170),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=60, format="%d"),
+                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
+                            "เครื่องจักรที่ผลิต": st.column_config.TextColumn("เครื่องจักร / แผนก", width=140),
+                            "จำนวน Step": st.column_config.NumberColumn("Step", width=60, format="%d"),
+                            "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                            "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                            "แผน/ชิ้น (ชม.)": st.column_config.NumberColumn("แผน/ชิ้น", width=80, format="%.2f"),
+                            "จริง/ชิ้น (ชม.)": st.column_config.NumberColumn("จริง/ชิ้น", width=80, format="%.2f"),
+                            "ความแม่นยำ (%)": st.column_config.ProgressColumn("ความแม่นยำ", width=100, min_value=0, max_value=150, format="%d%%"),
+                            "ผลต่าง (ชม.)": st.column_config.NumberColumn("ผลต่าง (ชม.)", width=85, format="%.2f"),
+                            "การประเมิน": st.column_config.TextColumn("ผลประเมิน", width=145),
                         },
                         hide_index=True,
                         use_container_width=True
@@ -2246,76 +2246,76 @@ elif st.session_state.current_view == "๐“ เธงเธดเน€เ
 
                     st.divider()
 
-                    st.markdown("#### ๐”ฌ เน€เธเธฒเธฐเธฅเธถเธเธเธงเธฒเธกเธ•เนเธฒเธเธฃเธฐเธ”เธฑเธเธเธฑเนเธเธ•เธญเธเธขเนเธญเธข (Step Breakdown Inspector)")
-                    drawing_options = [f"[{r['เนเธเธเธเธฒเธ']}] {r['เธเธทเนเธญ Drawing.']}" for _, r in df_draw_full.iterrows()]
-                    selected_inspect = st.selectbox("เน€เธฅเธทเธญเธ Drawing เธ—เธตเนเธ•เนเธญเธเธเธฒเธฃเน€เธเธฒเธฐเธฅเธถเธเธ”เธนเธฃเธฒเธขเธเธฑเนเธเธ•เธญเธ:", drawing_options)
+                    st.markdown("#### 🔬 เจาะลึกความต่างระดับขั้นตอนย่อย (Step Breakdown Inspector)")
+                    drawing_options = [f"[{r['แผนงาน']}] {r['ชื่อ Drawing.']}" for _, r in df_draw_full.iterrows()]
+                    selected_inspect = st.selectbox("เลือก Drawing ที่ต้องการเจาะลึกดูรายขั้นตอน:", drawing_options)
 
                     if selected_inspect:
                         ins_plan = selected_inspect.split("] ")[0].replace("[", "").strip()
                         ins_dw = selected_inspect.split("] ")[1].strip()
-                        step_details = monthly_dw_jobs[(monthly_dw_jobs["เนเธเธเธเธฒเธ"] == ins_plan) & (monthly_dw_jobs["เธเธทเนเธญ Drawing."] == ins_dw)].copy()
+                        step_details = monthly_dw_jobs[(monthly_dw_jobs["แผนงาน"] == ins_plan) & (monthly_dw_jobs["ชื่อ Drawing."] == ins_dw)].copy()
 
                         if not step_details.empty:
                             step_diffs, step_evals = [], []
                             for _, sr in step_details.iterrows():
-                                s_st, s_fn = sr.get("เน€เธฃเธดเนเธกเธเธฃเธดเธ"), sr.get("เน€เธชเธฃเนเธเธเธฃเธดเธ")
+                                s_st, s_fn = sr.get("เริ่มจริง"), sr.get("เสร็จจริง")
                                 act_st = parse_flexible_datetime(s_st)
                                 act_fn = parse_flexible_datetime(s_fn)
                                 if act_st is not None and act_fn is not None:
                                     d_sec = (act_fn - act_st).total_seconds()
                                     a_h = round(d_sec / 3600.0, 2)
-                                    v_h = round(a_h - sr["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"], 2)
+                                    v_h = round(a_h - sr["เวลาแผน (ชม.)"], 2)
                                     step_diffs.append(v_h)
                                     d_mins = round(v_h * 60)
-                                    step_evals.append(f"๐ข เน€เธฃเนเธงเธเธถเนเธ {abs(d_mins)} เธเธฒเธ—เธต" if v_h <= 0 else f"๐”ด เธเนเธฒเธเธงเนเธฒเนเธเธ +{d_mins} เธเธฒเธ—เธต")
+                                    step_evals.append(f"🟢 เร็วขึ้น {abs(d_mins)} นาที" if v_h <= 0 else f"🔴 ช้ากว่าแผน +{d_mins} นาที")
                                 else:
                                     step_diffs.append(0.0)
                                     step_evals.append("-")
                             
-                            step_details["เธเธฅเธ•เนเธฒเธ (เธเธก.)"] = step_diffs
-                            step_details["เธเธฒเธฃเธเธฃเธฐเน€เธกเธดเธ"] = step_evals
+                            step_details["ผลต่าง (ชม.)"] = step_diffs
+                            step_details["การประเมิน"] = step_evals
 
                             st.dataframe(
-                                step_details[["เธเธฑเนเธเธ•เธญเธ (Step)", "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "เน€เธฃเธดเนเธกเธเธฃเธดเธ", "เน€เธชเธฃเนเธเธเธฃเธดเธ", "Setup (เธ.)", "Basic (เธ.)", "เนเธเธฃเนเธเธฃเธก (เธ.)", "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)", "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", "เธเธฅเธ•เนเธฒเธ (เธเธก.)", "เธเธฒเธฃเธเธฃเธฐเน€เธกเธดเธ"]],
+                                step_details[["ขั้นตอน (Step)", "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "การประเมิน"]],
                                 column_config={
-                                    "เธเธฑเนเธเธ•เธญเธ (Step)": st.column_config.TextColumn("เธเธฑเนเธเธ•เธญเธ (Step)", width=120),
-                                    "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.TextColumn("เธชเธ–เธฒเธเธตเธเธฅเธดเธ•", width=140),
-                                    "เน€เธฃเธดเนเธกเธเธฃเธดเธ": st.column_config.DatetimeColumn("เน€เธฃเธดเนเธกเธเธฃเธดเธ", width=130, format="DD/MM HH:mm"),
-                                    "เน€เธชเธฃเนเธเธเธฃเธดเธ": st.column_config.DatetimeColumn("เน€เธชเธฃเนเธเธเธฃเธดเธ", width=130, format="DD/MM HH:mm"),
-                                    "Setup (เธ.)": st.column_config.NumberColumn("Setup", width=70, format="%d เธ."),
-                                    "Basic (เธ.)": st.column_config.NumberColumn("Basic", width=70, format="%d เธ."),
-                                    "เนเธเธฃเนเธเธฃเธก (เธ.)": st.column_config.NumberColumn("เนเธเธฃเนเธเธฃเธก", width=75, format="%d เธ."),
-                                    "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)": st.column_config.NumberColumn("เนเธเธ (เธเธก.)", width=85, format="%.2f"),
-                                    "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฃเธดเธ (เธเธก.)", width=85, format="%.2f"),
-                                    "เธเธฅเธ•เนเธฒเธ (เธเธก.)": st.column_config.NumberColumn("Diff", width=75, format="%.2f"),
-                                    "เธเธฒเธฃเธเธฃเธฐเน€เธกเธดเธ": st.column_config.TextColumn("เธเธฅเธเธฃเธฐเน€เธกเธดเธ", width=140),
+                                    "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=120),
+                                    "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", width=140),
+                                    "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", width=130, format="DD/MM HH:mm"),
+                                    "เสร็จจริง": st.column_config.DatetimeColumn("เสร็จจริง", width=130, format="DD/MM HH:mm"),
+                                    "Setup (น.)": st.column_config.NumberColumn("Setup", width=70, format="%d น."),
+                                    "Basic (น.)": st.column_config.NumberColumn("Basic", width=70, format="%d น."),
+                                    "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, format="%d น."),
+                                    "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                                    "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                                    "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", width=75, format="%.2f"),
+                                    "การประเมิน": st.column_config.TextColumn("ผลประเมิน", width=140),
                                 },
                                 hide_index=True,
                                 use_container_width=True
                             )
                 else:
-                    st.warning("โ ๏ธ เนเธกเนเธเธเธเนเธญเธกเธนเธฅ Drawing เธ•เธฒเธกเน€เธเธทเนเธญเธเนเธเธ—เธตเนเธเนเธเธซเธฒ")
+                    st.warning("⚠️ ไม่พบข้อมูล Drawing ตามเงื่อนไขที่ค้นหา")
             else:
-                st.info(f"โน๏ธ เธขเธฑเธเนเธกเนเธกเธตเธฃเธฒเธขเธเธฒเธฃ Drawing เธ—เธตเนเธเธฅเธดเธ•เน€เธชเธฃเนเธเธชเธดเนเธเนเธเน€เธ”เธทเธญเธ {month_names[sel_dw_month-1]} {sel_dw_year}")
+                st.info(f"ℹ️ ยังไม่มีรายการ Drawing ที่ผลิตเสร็จสิ้นในเดือน {month_names[sel_dw_month-1]} {sel_dw_year}")
         else:
-            st.info("โน๏ธ เธขเธฑเธเนเธกเนเธกเธต Drawing เธ—เธตเนเธเธถเนเธเธชเธ–เธฒเธเธฐ 'โ… เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง'")
+            st.info("ℹ️ ยังไม่มี Drawing ที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว'")
     else:
-        st.info("โน๏ธ เธขเธฑเธเนเธกเนเธกเธตเธเนเธญเธกเธนเธฅเนเธเธฃเธฐเธเธ")
+        st.info("ℹ️ ยังไม่มีข้อมูลในระบบ")
 
 # ---------------------------------------------------------
-# VIEW 4: เธฃเธฒเธขเธเธฒเธเธชเธฃเธธเธเธเธฃเธฐเธเธณเน€เธ”เธทเธญเธ
+# VIEW 4: รายงานสรุปประจำเดือน
 # ---------------------------------------------------------
-elif st.session_state.current_view == "๐“‘ เธฃเธฒเธขเธเธฒเธเธชเธฃเธธเธเธเธฃเธฐเธเธณเน€เธ”เธทเธญเธ":
+elif st.session_state.current_view == "📑 รายงานสรุปประจำเดือน":
     if st.session_state.user_role is None:
-        st.subheader("๐”’ เธขเธทเธเธขเธฑเธเธ•เธฑเธงเธ•เธเธชเธณเธซเธฃเธฑเธเน€เธเนเธฒเนเธเนเธเธฒเธเธฃเธฒเธขเธเธฒเธเธชเธฃเธธเธเธเธฃเธฐเธเธณเน€เธ”เธทเธญเธ")
-        st.info("เธเธฃเธธเธ“เธฒเธเธฃเธญเธเธฃเธซเธฑเธชเธเนเธฒเธเน€เธเธทเนเธญเน€เธเนเธฒเนเธเนเธเธฒเธ:\n* **เธเธนเนเธเธฃเธดเธซเธฒเธฃ/เธงเธฒเธเนเธเธ:** เธฃเธซเธฑเธชเธเนเธฒเธเธฃเธฐเธ”เธฑเธ Admin เธซเธฃเธทเธญ เธฃเธซเธฑเธชเธเนเธฒเธเธ—เธฑเนเธงเนเธ")
+        st.subheader("🔒 ยืนยันตัวตนสำหรับเข้าใช้งานรายงานสรุปประจำเดือน")
+        st.info("กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน:\n* **ผู้บริหาร/วางแผน:** รหัสผ่านระดับ Admin หรือ รหัสผ่านทั่วไป")
         col_pwd, col_btn = st.columns([3, 1])
         with col_pwd:
-            input_pwd = st.text_input("เธฃเธซเธฑเธชเธเนเธฒเธ (Password):", type="password", key="pwd_monthly_report")
+            input_pwd = st.text_input("รหัสผ่าน (Password):", type="password", key="pwd_monthly_report")
         with col_btn:
             st.write("")
             st.write("")
-            if st.button("๐”“ เน€เธเนเธฒเธชเธนเนเธฃเธฐเธเธ", type="primary", use_container_width=True, key="btn_login_monthly"):
+            if st.button("🔓 เข้าสู่ระบบ", type="primary", use_container_width=True, key="btn_login_monthly"):
                 if input_pwd == ADMIN_PASSWORD:
                     st.session_state.user_role = "admin"
                     st.rerun()
@@ -2323,13 +2323,13 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
                     st.session_state.user_role = "viewer"
                     st.rerun()
                 else:
-                    st.error("เธฃเธซเธฑเธชเธเนเธฒเธเนเธกเนเธ–เธนเธเธ•เนเธญเธ")
+                    st.error("รหัสผ่านไม่ถูกต้อง")
     else:
         c_head, c_logout = st.columns([8, 2])
         with c_head:
-            st.subheader("๐“‘ เธฃเธฒเธขเธเธฒเธเธชเธฃเธธเธเธเธฅเธเธฒเธฃเธเธฅเธดเธ•เนเธฅเธฐเธเธฃเธฐเธชเธดเธ—เธเธดเธ เธฒเธเธเธฃเธฐเธเธณเน€เธ”เธทเธญเธ (Monthly Production Report)")
+            st.subheader("📑 รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production Report)")
         with c_logout:
-            if st.button("๐ช เธญเธญเธเธเธฒเธเธฃเธฐเธเธ", use_container_width=True, key="btn_logout_monthly"):
+            if st.button("🚪 ออกจากระบบ", use_container_width=True, key="btn_logout_monthly"):
                 st.session_state.user_role = None
                 st.rerun()
 
@@ -2340,16 +2340,16 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
         r_col1, r_col2, r_col_exp = st.columns([2, 2, 4])
         
         with r_col1:
-            month_names = ["เธกเธเธฃเธฒเธเธก (1)", "เธเธธเธกเธ เธฒเธเธฑเธเธเน (2)", "เธกเธตเธเธฒเธเธก (3)", "เน€เธกเธฉเธฒเธขเธ (4)", "เธเธคเธฉเธ เธฒเธเธก (5)", "เธกเธดเธ–เธธเธเธฒเธขเธ (6)", "เธเธฃเธเธเธฒเธเธก (7)", "เธชเธดเธเธซเธฒเธเธก (8)", "เธเธฑเธเธขเธฒเธขเธ (9)", "เธ•เธธเธฅเธฒเธเธก (10)", "เธเธคเธจเธเธดเธเธฒเธขเธ (11)", "เธเธฑเธเธงเธฒเธเธก (12)"]
-            selected_month_idx = st.selectbox("๐“… เน€เธฅเธทเธญเธเน€เธ”เธทเธญเธ:", range(1, 13), index=current_now.month - 1, format_func=lambda x: month_names[x-1])
+            month_names = ["มกราคม (1)", "กุมภาพันธ์ (2)", "มีนาคม (3)", "เมษายน (4)", "พฤษภาคม (5)", "มิถุนายน (6)", "กรกฎาคม (7)", "สิงหาคม (8)", "กันยายน (9)", "ตุลาคม (10)", "พฤศจิกายน (11)", "ธันวาคม (12)"]
+            selected_month_idx = st.selectbox("📅 เลือกเดือน:", range(1, 13), index=current_now.month - 1, format_func=lambda x: month_names[x-1])
         with r_col2:
-            selected_year = st.selectbox("๐“ เน€เธฅเธทเธญเธเธเธต (เธ.เธจ.):", [current_now.year - 1, current_now.year, current_now.year + 1], index=1)
+            selected_year = st.selectbox("📆 เลือกปี (ค.ศ.):", [current_now.year - 1, current_now.year, current_now.year + 1], index=1)
 
         if not df_db.empty:
-            finished_all = df_db[df_db["เธชเธ–เธฒเธเธฐเธเธฒเธ"].isin(["๐ฉ เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง", "โ… เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง"])].copy()
-            finished_all["เน€เธชเธฃเนเธเธเธฃเธดเธ_DT"] = pd.to_datetime(finished_all["เน€เธชเธฃเนเธเธเธฃเธดเธ"], errors='coerce')
-            finished_all["เธงเธฑเธเธเธถเนเธเธเธฒเธ_DT"] = pd.to_datetime(finished_all["เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"], errors='coerce')
-            finished_all["Target_Date"] = finished_all["เน€เธชเธฃเนเธเธเธฃเธดเธ_DT"].fillna(finished_all["เธงเธฑเธเธเธถเนเธเธเธฒเธ_DT"])
+            finished_all = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
+            finished_all["เสร็จจริง_DT"] = pd.to_datetime(finished_all["เสร็จจริง"], errors='coerce')
+            finished_all["วันขึ้นงาน_DT"] = pd.to_datetime(finished_all["วัน-เวลาขึ้นงาน"], errors='coerce')
+            finished_all["Target_Date"] = finished_all["เสร็จจริง_DT"].fillna(finished_all["วันขึ้นงาน_DT"])
             
             monthly_jobs = finished_all[
                 (finished_all["Target_Date"].dt.month == selected_month_idx) &
@@ -2367,79 +2367,79 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
             prev_monthly_jobs = pd.DataFrame()
 
         if not monthly_jobs.empty:
-            monthly_jobs["Setup (เธ.)"] = pd.to_numeric(monthly_jobs["Setup (เธ.)"], errors='coerce').fillna(10.0)
-            monthly_jobs["Basic (เธ.)"] = pd.to_numeric(monthly_jobs["Basic (เธ.)"], errors='coerce').fillna(0.0)
-            monthly_jobs["เนเธเธฃเนเธเธฃเธก (เธ.)"] = pd.to_numeric(monthly_jobs["เนเธเธฃเนเธเธฃเธก (เธ.)"], errors='coerce').fillna(0.0)
-            monthly_jobs["เธเธณเธเธงเธ"] = pd.to_numeric(monthly_jobs["เธเธณเธเธงเธ"], errors='coerce').fillna(1).astype(int)
-            monthly_jobs["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"] = ((monthly_jobs["Setup (เธ.)"] + monthly_jobs["Basic (เธ.)"] + monthly_jobs["เนเธเธฃเนเธเธฃเธก (เธ.)"]) / 60.0).round(2)
+            monthly_jobs["Setup (น.)"] = pd.to_numeric(monthly_jobs["Setup (น.)"], errors='coerce').fillna(10.0)
+            monthly_jobs["Basic (น.)"] = pd.to_numeric(monthly_jobs["Basic (น.)"], errors='coerce').fillna(0.0)
+            monthly_jobs["โปรแกรม (น.)"] = pd.to_numeric(monthly_jobs["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
+            monthly_jobs["จำนวน"] = pd.to_numeric(monthly_jobs["จำนวน"], errors='coerce').fillna(1).astype(int)
+            monthly_jobs["เวลาแผน (ชม.)"] = ((monthly_jobs["Setup (น.)"] + monthly_jobs["Basic (น.)"] + monthly_jobs["โปรแกรม (น.)"]) / 60.0).round(2)
             
             actual_hrs_list, diff_hrs_list, on_time_list = [], [], []
             for _, r in monthly_jobs.iterrows():
-                s_real, f_real = r.get("เน€เธฃเธดเนเธกเธเธฃเธดเธ"), r.get("เน€เธชเธฃเนเธเธเธฃเธดเธ")
+                s_real, f_real = r.get("เริ่มจริง"), r.get("เสร็จจริง")
                 act_st = parse_flexible_datetime(s_real)
                 act_fn = parse_flexible_datetime(f_real)
                 if act_st is not None and act_fn is not None:
                     diff_sec = (act_fn - act_st).total_seconds()
                     act_hrs = round(diff_sec / 3600.0, 2)
-                    v_hrs = round(act_hrs - r["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"], 2)
+                    v_hrs = round(act_hrs - r["เวลาแผน (ชม.)"], 2)
                     actual_hrs_list.append(act_hrs)
                     diff_hrs_list.append(v_hrs)
-                    on_time_list.append(1 if act_hrs <= r["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"] else 0)
+                    on_time_list.append(1 if act_hrs <= r["เวลาแผน (ชม.)"] else 0)
                 else:
-                    actual_hrs_list.append(r["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"])
+                    actual_hrs_list.append(r["เวลาแผน (ชม.)"])
                     diff_hrs_list.append(0.0)
                     on_time_list.append(1)
                     
-            monthly_jobs["เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"] = actual_hrs_list
-            monthly_jobs["เธเธฅเธ•เนเธฒเธ (เธเธก.)"] = diff_hrs_list
-            monthly_jobs["เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)"] = monthly_jobs["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"].map(rate_map).fillna(500)
-            monthly_jobs["เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)"] = monthly_jobs["เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"] * monthly_jobs["เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)"]
+            monthly_jobs["เวลาจริง (ชม.)"] = actual_hrs_list
+            monthly_jobs["ผลต่าง (ชม.)"] = diff_hrs_list
+            monthly_jobs["เรตราคา (บาท/ชม.)"] = monthly_jobs["เลือกเครื่องจักร"].map(rate_map).fillna(500)
+            monthly_jobs["มูลค่ารวม (บาท)"] = monthly_jobs["เวลาจริง (ชม.)"] * monthly_jobs["เรตราคา (บาท/ชม.)"]
 
             total_jobs_count = len(monthly_jobs)
-            total_qty_pieces = monthly_jobs["เธเธณเธเธงเธ"].sum()
-            total_running_hrs = monthly_jobs["เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"].sum()
-            total_plan_hrs_m = monthly_jobs["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"].sum()
-            total_variance_hrs = monthly_jobs["เธเธฅเธ•เนเธฒเธ (เธเธก.)"].sum()
-            total_output_val = monthly_jobs["เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)"].sum()
+            total_qty_pieces = monthly_jobs["จำนวน"].sum()
+            total_running_hrs = monthly_jobs["เวลาจริง (ชม.)"].sum()
+            total_plan_hrs_m = monthly_jobs["เวลาแผน (ชม.)"].sum()
+            total_variance_hrs = monthly_jobs["ผลต่าง (ชม.)"].sum()
+            total_output_val = monthly_jobs["มูลค่ารวม (บาท)"].sum()
             on_time_rate = (sum(on_time_list) / total_jobs_count * 100.0) if total_jobs_count > 0 else 100.0
 
             if not prev_monthly_jobs.empty:
-                prev_qty = prev_monthly_jobs["เธเธณเธเธงเธ"].sum()
-                prev_monthly_jobs["Setup (เธ.)"] = pd.to_numeric(prev_monthly_jobs["Setup (เธ.)"], errors='coerce').fillna(10.0)
-                prev_monthly_jobs["Basic (เธ.)"] = pd.to_numeric(prev_monthly_jobs["Basic (เธ.)"], errors='coerce').fillna(0.0)
-                prev_monthly_jobs["เนเธเธฃเนเธเธฃเธก (เธ.)"] = pd.to_numeric(prev_monthly_jobs["เนเธเธฃเนเธเธฃเธก (เธ.)"], errors='coerce').fillna(0.0)
-                prev_monthly_jobs["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"] = ((prev_monthly_jobs["Setup (เธ.)"] + prev_monthly_jobs["Basic (เธ.)"] + prev_monthly_jobs["เนเธเธฃเนเธเธฃเธก (เธ.)"]) / 60.0).round(2)
-                prev_val = sum([r.get("เน€เธงเธฅเธฒเนเธเธ (เธเธก.)", 0.0) * rate_map.get(r.get("เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"), 500) for _, r in prev_monthly_jobs.iterrows()])
+                prev_qty = prev_monthly_jobs["จำนวน"].sum()
+                prev_monthly_jobs["Setup (น.)"] = pd.to_numeric(prev_monthly_jobs["Setup (น.)"], errors='coerce').fillna(10.0)
+                prev_monthly_jobs["Basic (น.)"] = pd.to_numeric(prev_monthly_jobs["Basic (น.)"], errors='coerce').fillna(0.0)
+                prev_monthly_jobs["โปรแกรม (น.)"] = pd.to_numeric(prev_monthly_jobs["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
+                prev_monthly_jobs["เวลาแผน (ชม.)"] = ((prev_monthly_jobs["Setup (น.)"] + prev_monthly_jobs["Basic (น.)"] + prev_monthly_jobs["โปรแกรม (น.)"]) / 60.0).round(2)
+                prev_val = sum([r.get("เวลาแผน (ชม.)", 0.0) * rate_map.get(r.get("เลือกเครื่องจักร"), 500) for _, r in prev_monthly_jobs.iterrows()])
                 
                 growth_qty = ((total_qty_pieces - prev_qty) / prev_qty * 100) if prev_qty > 0 else 0.0
                 growth_val = ((total_output_val - prev_val) / prev_val * 100) if prev_val > 0 else 0.0
-                growth_qty_str = f"{'+' if growth_qty >= 0 else ''}{growth_qty:.1f}% เน€เธ—เธตเธขเธเน€เธ”เธทเธญเธเธเนเธญเธ"
-                growth_val_str = f"{'+' if growth_val >= 0 else ''}{growth_val:.1f}% เน€เธ—เธตเธขเธเน€เธ”เธทเธญเธเธเนเธญเธ"
+                growth_qty_str = f"{'+' if growth_qty >= 0 else ''}{growth_qty:.1f}% เทียบเดือนก่อน"
+                growth_val_str = f"{'+' if growth_val >= 0 else ''}{growth_val:.1f}% เทียบเดือนก่อน"
             else:
-                growth_qty_str = "เนเธกเนเธกเธตเธเนเธญเธกเธนเธฅเน€เธ”เธทเธญเธเธเนเธญเธเธซเธเนเธฒ"
-                growth_val_str = "เนเธกเนเธกเธตเธเนเธญเธกเธนเธฅเน€เธ”เธทเธญเธเธเนเธญเธเธซเธเนเธฒ"
+                growth_qty_str = "ไม่มีข้อมูลเดือนก่อนหน้า"
+                growth_val_str = "ไม่มีข้อมูลเดือนก่อนหน้า"
 
-            var_title_txt = f"โก เน€เธฃเนเธงเธเธงเนเธฒเนเธเธเธฃเธงเธก {abs(total_variance_hrs):.1f} เธเธก." if total_variance_hrs <= 0 else f"โ ๏ธ เธเนเธฒเธเธงเนเธฒเนเธเธเธฃเธงเธก +{total_variance_hrs:.1f} เธเธก."
+            var_title_txt = f"⚡ เร็วกว่าแผนรวม {abs(total_variance_hrs):.1f} ชม." if total_variance_hrs <= 0 else f"⚠️ ช้ากว่าแผนรวม +{total_variance_hrs:.1f} ชม."
 
             st.markdown(f"""
             <div class="kpi-container">
                 <div class="kpi-card kpi-green">
-                    <div class="kpi-title">โ… เธเธดเนเธเธเธฒเธเธ—เธตเนเธเธฅเธดเธ•เน€เธชเธฃเนเธ</div>
-                    <div class="kpi-value">{total_qty_pieces:,} <span style="font-size:15px; font-weight:600;">เธเธดเนเธ</span></div>
-                    <div class="kpi-sub">๐“ {growth_qty_str} ({total_jobs_count} เธเธดเธง)</div>
+                    <div class="kpi-title">✅ ชิ้นงานที่ผลิตเสร็จ</div>
+                    <div class="kpi-value">{total_qty_pieces:,} <span style="font-size:15px; font-weight:600;">ชิ้น</span></div>
+                    <div class="kpi-sub">📊 {growth_qty_str} ({total_jobs_count} คิว)</div>
                 </div>
                 <div class="kpi-card kpi-blue">
-                    <div class="kpi-title">โฑ๏ธ เธเธฑเนเธงเนเธกเธเน€เธ”เธดเธเน€เธเธฃเธทเนเธญเธเธเธฃเธดเธ</div>
-                    <div class="kpi-value">{total_running_hrs:,.1f} <span style="font-size:15px; font-weight:600;">เธเธก.</span></div>
-                    <div class="kpi-sub">เนเธเธเธ—เธตเนเธ•เธฑเนเธเนเธงเน: {total_plan_hrs_m:,.1f} เธเธก.</div>
+                    <div class="kpi-title">⏱️ ชั่วโมงเดินเครื่องจริง</div>
+                    <div class="kpi-value">{total_running_hrs:,.1f} <span style="font-size:15px; font-weight:600;">ชม.</span></div>
+                    <div class="kpi-sub">แผนที่ตั้งไว้: {total_plan_hrs_m:,.1f} ชม.</div>
                 </div>
                 <div class="kpi-card kpi-orange">
-                    <div class="kpi-title">๐’ฐ เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ•เธฃเธงเธก</div>
-                    <div class="kpi-value">{total_output_val:,.2f} <span style="font-size:15px; font-weight:600;">เธฟ</span></div>
-                    <div class="kpi-sub">๐“ {growth_val_str}</div>
+                    <div class="kpi-title">💰 มูลค่าผลผลิตรวม</div>
+                    <div class="kpi-value">{total_output_val:,.2f} <span style="font-size:15px; font-weight:600;">฿</span></div>
+                    <div class="kpi-sub">📈 {growth_val_str}</div>
                 </div>
                 <div class="kpi-card kpi-purple">
-                    <div class="kpi-title">๐ฏ เธชเนเธเธกเธญเธเธ•เธฃเธเนเธเธ (On-Time)</div>
+                    <div class="kpi-title">🎯 ส่งมอบตรงแผน (On-Time)</div>
                     <div class="kpi-value">{on_time_rate:.1f} %</div>
                     <div class="kpi-sub">{var_title_txt}</div>
                 </div>
@@ -2448,55 +2448,55 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
 
             machine_summary = []
             for m in MACHINE_LIST:
-                m_sub = monthly_jobs[monthly_jobs["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"] == m]
+                m_sub = monthly_jobs[monthly_jobs["เลือกเครื่องจักร"] == m]
                 if not m_sub.empty:
-                    m_qty = m_sub["เธเธณเธเธงเธ"].sum()
+                    m_qty = m_sub["จำนวน"].sum()
                     m_jobs = len(m_sub)
-                    m_plan_hrs = m_sub["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)"].sum()
-                    m_act_hrs = m_sub["เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"].sum()
-                    m_val = m_sub["เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)"].sum()
+                    m_plan_hrs = m_sub["เวลาแผน (ชม.)"].sum()
+                    m_act_hrs = m_sub["เวลาจริง (ชม.)"].sum()
+                    m_val = m_sub["มูลค่ารวม (บาท)"].sum()
                     m_contrib = (m_val / total_output_val * 100.0) if total_output_val > 0 else 0.0
                     diff_hrs = round(m_act_hrs - m_plan_hrs, 2)
-                    eval_txt = f"๐ข เน€เธฃเนเธงเธเธถเนเธ {abs(diff_hrs):.2f} เธเธก." if diff_hrs <= 0 else f"๐”ด เธเนเธฒเธเธงเนเธฒเนเธเธ +{diff_hrs:.2f} เธเธก."
+                    eval_txt = f"🟢 เร็วขึ้น {abs(diff_hrs):.2f} ชม." if diff_hrs <= 0 else f"🔴 ช้ากว่าแผน +{diff_hrs:.2f} ชม."
                     
                     machine_summary.append({
-                        "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ": m,
-                        "เธเธณเธเธงเธเธเธดเธงเธเธฒเธ": m_jobs,
-                        "เธเธดเนเธเธเธฒเธเธฃเธงเธก (เธเธดเนเธ)": m_qty,
-                        "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)": round(m_plan_hrs, 2),
-                        "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": round(m_act_hrs, 2),
-                        "เธเธฅเธ•เนเธฒเธ": eval_txt,
-                        "เน€เธฃเธ•เธฃเธฒเธเธฒ": f"{rate_map.get(m, 500):,} เธฟ",
-                        "เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)": round(m_val, 2),
-                        "เธชเธฑเธ”เธชเนเธงเธเธกเธนเธฅเธเนเธฒ (%)": round(m_contrib, 1)
+                        "เครื่องจักร / แผนก": m,
+                        "จำนวนคิวงาน": m_jobs,
+                        "ชิ้นงานรวม (ชิ้น)": m_qty,
+                        "เวลาแผน (ชม.)": round(m_plan_hrs, 2),
+                        "เวลาจริง (ชม.)": round(m_act_hrs, 2),
+                        "ผลต่าง": eval_txt,
+                        "เรตราคา": f"{rate_map.get(m, 500):,} ฿",
+                        "มูลค่าผลผลิต (บาท)": round(m_val, 2),
+                        "สัดส่วนมูลค่า (%)": round(m_contrib, 1)
                     })
-            df_m_sum = pd.DataFrame(machine_summary).sort_values(by="เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)", ascending=False)
+            df_m_sum = pd.DataFrame(machine_summary).sort_values(by="มูลค่าผลผลิต (บาท)", ascending=False)
 
             mat_summary = []
-            for mat_name, mat_sub in monthly_jobs.groupby("เธงเธฑเธชเธ”เธธ"):
-                mat_qty = mat_sub["เธเธณเธเธงเธ"].sum()
+            for mat_name, mat_sub in monthly_jobs.groupby("วัสดุ"):
+                mat_qty = mat_sub["จำนวน"].sum()
                 mat_jobs = len(mat_sub)
-                mat_act_hrs = mat_sub["เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"].sum()
-                mat_val = mat_sub["เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)"].sum()
+                mat_act_hrs = mat_sub["เวลาจริง (ชม.)"].sum()
+                mat_val = mat_sub["มูลค่ารวม (บาท)"].sum()
                 mat_summary.append({
-                    "เธเธเธดเธ”เธงเธฑเธชเธ”เธธ": mat_name if str(mat_name).strip() != "" else "เนเธกเนเธฃเธฐเธเธธ",
-                    "เธเธณเธเธงเธเธเธดเธง": mat_jobs,
-                    "เธเธณเธเธงเธเธเธดเนเธเธเธฒเธ (เธเธดเนเธ)": mat_qty,
-                    "เธเธฑเนเธงเนเธกเธเธเธฅเธดเธ•เธเธฃเธดเธ (เธเธก.)": round(mat_act_hrs, 2),
-                    "เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)": round(mat_val, 2),
-                    "เธชเธฑเธ”เธชเนเธงเธ (%)": round((mat_val / total_output_val * 100.0), 1) if total_output_val > 0 else 0.0
+                    "ชนิดวัสดุ": mat_name if str(mat_name).strip() != "" else "ไม่ระบุ",
+                    "จำนวนคิว": mat_jobs,
+                    "จำนวนชิ้นงาน (ชิ้น)": mat_qty,
+                    "ชั่วโมงผลิตจริง (ชม.)": round(mat_act_hrs, 2),
+                    "มูลค่าผลผลิต (บาท)": round(mat_val, 2),
+                    "สัดส่วน (%)": round((mat_val / total_output_val * 100.0), 1) if total_output_val > 0 else 0.0
                 })
-            df_mat_sum = pd.DataFrame(mat_summary).sort_values(by="เธเธฑเนเธงเนเธกเธเธเธฅเธดเธ•เธเธฃเธดเธ (เธเธก.)", ascending=False)
+            df_mat_sum = pd.DataFrame(mat_summary).sort_values(by="ชั่วโมงผลิตจริง (ชม.)", ascending=False)
 
-            delayed_jobs = monthly_jobs[monthly_jobs["เธเธฅเธ•เนเธฒเธ (เธเธก.)"] > 0].sort_values(by="เธเธฅเธ•เนเธฒเธ (เธเธก.)", ascending=False).head(5)
+            delayed_jobs = monthly_jobs[monthly_jobs["ผลต่าง (ชม.)"] > 0].sort_values(by="ผลต่าง (ชม.)", ascending=False).head(5)
 
             fig_m_val = px.bar(
-                df_m_sum.sort_values(by="เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)", ascending=True),
-                x="เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)",
-                y="เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ",
+                df_m_sum.sort_values(by="มูลค่าผลผลิต (บาท)", ascending=True),
+                x="มูลค่าผลผลิต (บาท)",
+                y="เครื่องจักร / แผนก",
                 orientation="h",
-                title="๐’ฐ เธญเธฑเธเธ”เธฑเธเธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ•เนเธขเธเธ•เธฒเธกเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ (เธเธฒเธ—)",
-                color="เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)",
+                title="💰 อันดับมูลค่าผลผลิตแยกตามเครื่องจักร (บาท)",
+                color="มูลค่าผลผลิต (บาท)",
                 color_continuous_scale="Blues",
                 text_auto='.2f'
             )
@@ -2504,13 +2504,13 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
             fig_m_val.update_layout(height=max(380, len(df_m_sum) * 26), plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF", margin=dict(l=20, r=20, t=40, b=20))
 
             fig_compare = px.bar(
-                df_m_sum.sort_values(by="เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", ascending=True),
-                x=["เน€เธงเธฅเธฒเนเธเธ (เธเธก.)", "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)"],
-                y="เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ",
+                df_m_sum.sort_values(by="เวลาจริง (ชม.)", ascending=True),
+                x=["เวลาแผน (ชม.)", "เวลาจริง (ชม.)"],
+                y="เครื่องจักร / แผนก",
                 orientation="h",
                 barmode="group",
-                title="โฑ๏ธ เน€เธเธฃเธตเธขเธเน€เธ—เธตเธขเธเน€เธงเธฅเธฒเธ—เธณเธเธฒเธ: เนเธเธเธเธฒเธ vs เธ—เธณเธเธฒเธเธเธฃเธดเธ เนเธ•เนเธฅเธฐเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ (เธเธก.)",
-                color_discrete_map={"เน€เธงเธฅเธฒเนเธเธ (เธเธก.)": "#94A3B8", "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": "#2563EB"},
+                title="⏱️ เปรียบเทียบเวลาทำงาน: แผนงาน vs ทำงานจริง แต่ละเครื่องจักร (ชม.)",
+                color_discrete_map={"เวลาแผน (ชม.)": "#94A3B8", "เวลาจริง (ชม.)": "#2563EB"},
                 text_auto='.2f'
             )
             fig_compare.update_traces(textposition='outside', cliponaxis=False)
@@ -2522,13 +2522,13 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
 
-            rows_m_html = "".join([f"<tr><td>{r['เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ']}</td><td style='text-align:center;'>{r['เธเธณเธเธงเธเธเธดเธงเธเธฒเธ']}</td><td style='text-align:center;'>{r['เธเธดเนเธเธเธฒเธเธฃเธงเธก (เธเธดเนเธ)']}</td><td style='text-align:center;'>{r['เน€เธงเธฅเธฒเนเธเธ (เธเธก.)']:.2f}</td><td style='text-align:center;'>{r['เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)']:.2f}</td><td style='text-align:center;'>{r['เธเธฅเธ•เนเธฒเธ']}</td><td style='text-align:right;'>{r['เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)']:,.2f} เธฟ</td><td style='text-align:right; font-weight:bold;'>{r['เธชเธฑเธ”เธชเนเธงเธเธกเธนเธฅเธเนเธฒ (%)']:.1f}%</td></tr>" for _, r in df_m_sum.iterrows()])
-            rows_mat_html = "".join([f"<tr><td>{r['เธเธเธดเธ”เธงเธฑเธชเธ”เธธ']}</td><td style='text-align:center;'>{r['เธเธณเธเธงเธเธเธดเธง']}</td><td style='text-align:center;'>{r['เธเธณเธเธงเธเธเธดเนเธเธเธฒเธ (เธเธดเนเธ)']}</td><td style='text-align:center;'>{r['เธเธฑเนเธงเนเธกเธเธเธฅเธดเธ•เธเธฃเธดเธ (เธเธก.)']:.2f}</td><td style='text-align:right;'>{r['เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)']:,.2f} เธฟ</td><td style='text-align:right; font-weight:bold;'>{r['เธชเธฑเธ”เธชเนเธงเธ (%)']:.1f}%</td></tr>" for _, r in df_mat_sum.iterrows()])
-            rows_job_html = "".join([f"<tr><td>{r['เนเธเธเธเธฒเธ']}</td><td>{r['เธเธทเนเธญ Drawing.']}</td><td style='text-align:center;'>{r['เธเธณเธเธงเธ']}</td><td style='text-align:center;'>{r['เธงเธฑเธชเธ”เธธ']}</td><td>{r['เธเธฑเนเธเธ•เธญเธ (Step)']}</td><td>{r['เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ']}</td><td style='text-align:center;'>{pd.to_datetime(r['เน€เธฃเธดเนเธกเธเธฃเธดเธ']).strftime('%d/%m %H:%M') if pd.notna(r['เน€เธฃเธดเนเธกเธเธฃเธดเธ']) else '-'}</td><td style='text-align:center;'>{pd.to_datetime(r['เน€เธชเธฃเนเธเธเธฃเธดเธ']).strftime('%d/%m %H:%M') if pd.notna(r['เน€เธชเธฃเนเธเธเธฃเธดเธ']) else '-'}</td><td style='text-align:center;'>{r['เน€เธงเธฅเธฒเนเธเธ (เธเธก.)']:.2f}</td><td style='text-align:center;'>{r['เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)']:.2f}</td><td style='text-align:right;'>{r['เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)']:,.2f} เธฟ</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
+            rows_m_html = "".join([f"<tr><td>{r['เครื่องจักร / แผนก']}</td><td style='text-align:center;'>{r['จำนวนคิวงาน']}</td><td style='text-align:center;'>{r['ชิ้นงานรวม (ชิ้น)']}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:center;'>{r['ผลต่าง']}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วนมูลค่า (%)']:.1f}%</td></tr>" for _, r in df_m_sum.iterrows()])
+            rows_mat_html = "".join([f"<tr><td>{r['ชนิดวัสดุ']}</td><td style='text-align:center;'>{r['จำนวนคิว']}</td><td style='text-align:center;'>{r['จำนวนชิ้นงาน (ชิ้น)']}</td><td style='text-align:center;'>{r['ชั่วโมงผลิตจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วน (%)']:.1f}%</td></tr>" for _, r in df_mat_sum.iterrows()])
+            rows_job_html = "".join([f"<tr><td>{r['แผนงาน']}</td><td>{r['ชื่อ Drawing.']}</td><td style='text-align:center;'>{r['จำนวน']}</td><td style='text-align:center;'>{r['วัสดุ']}</td><td>{r['ขั้นตอน (Step)']}</td><td>{r['เลือกเครื่องจักร']}</td><td style='text-align:center;'>{pd.to_datetime(r['เริ่มจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เริ่มจริง']) else '-'}</td><td style='text-align:center;'>{pd.to_datetime(r['เสร็จจริง']).strftime('%d/%m %H:%M') if pd.notna(r['เสร็จจริง']) else '-'}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่ารวม (บาท)']:,.2f} ฿</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
 
             report_data_dict = {
                 "month_str": f"{month_names[selected_month_idx-1]} {selected_year}",
-                "print_date": get_bangkok_now().strftime('%d/%m/%Y %H:%M เธ.'),
+                "print_date": get_bangkok_now().strftime('%d/%m/%Y %H:%M น.'),
                 "total_qty": f"{total_qty_pieces:,}",
                 "total_hours": f"{total_running_hrs:,.1f}",
                 "total_value": f"{total_output_val:,.2f}",
@@ -2545,7 +2545,7 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
                 with b_col_pdf:
                     components.html(f"""
                     <button onclick="captureAndPrint()" style="width:100%; background:linear-gradient(135deg, #DC2626 0%, #EF4444 100%); color:white; border:none; padding:9px 14px; border-radius:8px; font-weight:bold; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(220,38,38,0.25);">
-                        ๐“ เธเธดเธกเธเน / เธเธฑเธเธ—เธถเธ PDF (เธเธฃเนเธญเธกเธฃเธนเธเธเธฃเธฒเธ)
+                        📄 พิมพ์ / บันทึก PDF (พร้อมรูปกราฟ)
                     </button>
                     <script>
                         async function captureAndPrint() {{
@@ -2595,50 +2595,50 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
                             <body>
                                 <div class="header-box">
                                     <div class="title-text">
-                                        <h2>เธเธเธ. เธเธฅเธงเธฑเธ’เธเน เน€เธญเนเธเธเธดเน€เธเธตเธขเธฃเธดเนเธ เธเธฑเธเธเธฅเธฒเธข (PES)</h2>
-                                        <p>เธฃเธฒเธขเธเธฒเธเธชเธฃเธธเธเธเธฅเธเธฒเธฃเธเธฅเธดเธ•เนเธฅเธฐเธเธฃเธฐเธชเธดเธ—เธเธดเธ เธฒเธเธเธฃเธฐเธเธณเน€เธ”เธทเธญเธ (Monthly Production Report)</p>
+                                        <h2>บจก. พลวัฒน์ เอ็นจิเนียริ่ง ซัพพลาย (PES)</h2>
+                                        <p>รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production Report)</p>
                                     </div>
                                     <div style="text-align: right; font-size: 10px;">
-                                        <b>เธเธฃเธฐเธเธณเน€เธ”เธทเธญเธ:</b> ${{reportData.month_str}}<br>
-                                        <b>เธงเธฑเธเธ—เธตเนเธญเธญเธเธฃเธฒเธขเธเธฒเธ:</b> ${{reportData.print_date}}
+                                        <b>ประจำเดือน:</b> ${{reportData.month_str}}<br>
+                                        <b>วันที่ออกรายงาน:</b> ${{reportData.print_date}}
                                     </div>
                                 </div>
 
                                 <div class="kpi-grid">
-                                    <div class="kpi-item"><div class="kpi-item-title">เธเธดเนเธเธเธฒเธเธ—เธตเนเธเธฅเธดเธ•เน€เธชเธฃเนเธ</div><div class="kpi-item-val">${{reportData.total_qty}} เธเธดเนเธ</div></div>
-                                    <div class="kpi-item"><div class="kpi-item-title">เธเธฑเนเธงเนเธกเธเน€เธ”เธดเธเน€เธเธฃเธทเนเธญเธเธเธฃเธดเธ</div><div class="kpi-item-val">${{reportData.total_hours}} เธเธก.</div></div>
-                                    <div class="kpi-item"><div class="kpi-item-title">เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ•เธฃเธงเธก</div><div class="kpi-item-val">${{reportData.total_value}} เธฟ</div></div>
-                                    <div class="kpi-item"><div class="kpi-item-title">เธ•เธฃเธเธ•เธฒเธกเนเธเธ (On-Time)</div><div class="kpi-item-val">${{reportData.on_time}} %</div></div>
+                                    <div class="kpi-item"><div class="kpi-item-title">ชิ้นงานที่ผลิตเสร็จ</div><div class="kpi-item-val">${{reportData.total_qty}} ชิ้น</div></div>
+                                    <div class="kpi-item"><div class="kpi-item-title">ชั่วโมงเดินเครื่องจริง</div><div class="kpi-item-val">${{reportData.total_hours}} ชม.</div></div>
+                                    <div class="kpi-item"><div class="kpi-item-title">มูลค่าผลผลิตรวม</div><div class="kpi-item-val">${{reportData.total_value}} ฿</div></div>
+                                    <div class="kpi-item"><div class="kpi-item-title">ตรงตามแผน (On-Time)</div><div class="kpi-item-val">${{reportData.on_time}} %</div></div>
                                 </div>
 
-                                <h3>1. เธเธฃเธฒเธเธงเธดเน€เธเธฃเธฒเธฐเธซเนเธเธฃเธฐเธชเธดเธ—เธเธดเธ เธฒเธเนเธฅเธฐเธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ•</h3>
+                                <h3>1. กราฟวิเคราะห์ประสิทธิภาพและมูลค่าผลผลิต</h3>
                                 <div class="chart-grid">
                                     <div>${{chart1Html}}</div>
                                     <div>${{chart2Html}}</div>
                                 </div>
 
-                                <h3>2. เธชเธฃเธธเธเธเธฅเธเธฒเธฃเธ—เธณเธเธฒเธเนเธฅเธฐเธชเธฑเธ”เธชเนเธงเธเธฃเธฒเธขเนเธ”เนเนเธขเธเธ•เธฒเธกเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ</h3>
+                                <h3>2. สรุปผลการทำงานและสัดส่วนรายได้แยกตามเครื่องจักร / แผนก</h3>
                                 <table>
-                                    <thead><tr><th>เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ</th><th>เธเธดเธง</th><th>เธเธดเนเธเธเธฒเธ</th><th>เนเธเธ (เธเธก.)</th><th>เธเธฃเธดเธ (เธเธก.)</th><th>เธเธฅเธ•เนเธฒเธ</th><th>เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธฟ)</th><th>เธชเธฑเธ”เธชเนเธงเธ (%)</th></tr></thead>
+                                    <thead><tr><th>เครื่องจักร / แผนก</th><th>คิว</th><th>ชิ้นงาน</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>ผลต่าง</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
                                     <tbody>${{reportData.rows_m}}</tbody>
                                 </table>
 
-                                <h3>3. เธชเธฃเธธเธเธเธฒเธฃเนเธเนเธงเธฑเธชเธ”เธธเนเธฅเธฐเน€เธงเธฅเธฒเธเธฅเธดเธ• (Material Insights)</h3>
+                                <h3>3. สรุปการใช้วัสดุและเวลาผลิต (Material Insights)</h3>
                                 <table>
-                                    <thead><tr><th>เธเธเธดเธ”เธงเธฑเธชเธ”เธธ</th><th>เธเธดเธง</th><th>เธเธดเนเธเธเธฒเธ</th><th>เธเธฑเนเธงเนเธกเธเธเธฅเธดเธ•เธเธฃเธดเธ (เธเธก.)</th><th>เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธฟ)</th><th>เธชเธฑเธ”เธชเนเธงเธ (%)</th></tr></thead>
+                                    <thead><tr><th>ชนิดวัสดุ</th><th>คิว</th><th>ชิ้นงาน</th><th>ชั่วโมงผลิตจริง (ชม.)</th><th>มูลค่าผลผลิต (฿)</th><th>สัดส่วน (%)</th></tr></thead>
                                     <tbody>${{reportData.rows_mat}}</tbody>
                                 </table>
 
-                                <h3>4. เธฃเธฒเธขเธเธฒเธฃเธเธดเนเธเธเธฒเธเธ—เธตเนเธเธฅเธดเธ•เน€เธชเธฃเนเธเธชเธดเนเธเธ—เธฑเนเธเธซเธกเธ”</h3>
+                                <h3>4. รายการชิ้นงานที่ผลิตเสร็จสิ้นทั้งหมด</h3>
                                 <table>
-                                    <thead><tr><th>เนเธเธเธเธฒเธ</th><th>เธเธทเนเธญ Drawing</th><th>เธเธณเธเธงเธ</th><th>เธงเธฑเธชเธ”เธธ</th><th>เธเธฑเนเธเธ•เธญเธ</th><th>เธชเธ–เธฒเธเธต</th><th>เน€เธฃเธดเนเธกเธเธฃเธดเธ</th><th>เน€เธชเธฃเนเธเธเธฃเธดเธ</th><th>เนเธเธ (เธเธก.)</th><th>เธเธฃเธดเธ (เธเธก.)</th><th>เธกเธนเธฅเธเนเธฒ (เธฟ)</th></tr></thead>
+                                    <thead><tr><th>แผนงาน</th><th>ชื่อ Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>สถานี</th><th>เริ่มจริง</th><th>เสร็จจริง</th><th>แผน (ชม.)</th><th>จริง (ชม.)</th><th>มูลค่า (฿)</th></tr></thead>
                                     <tbody>${{reportData.rows_job}}</tbody>
                                 </table>
 
                                 <div class="sign-box">
-                                    <div class="sign-col">เธเธนเนเธเธฑเธ”เธ—เธณเธฃเธฒเธขเธเธฒเธ / เธเนเธฒเธขเธงเธฒเธเนเธเธ<br><br><br>( .................................................... )</div>
-                                    <div class="sign-col">เธซเธฑเธงเธซเธเนเธฒเนเธเธเธเธเธฅเธดเธ• / เธเธนเนเธ•เธฃเธงเธเธชเธญเธ<br><br><br>( .................................................... )</div>
-                                    <div class="sign-col">เธเธนเนเธเธฑเธ”เธเธฒเธฃเนเธฃเธเธเธฒเธ / เธเธนเนเธญเธเธธเธกเธฑเธ•เธด<br><br><br>( .................................................... )</div>
+                                    <div class="sign-col">ผู้จัดทำรายงาน / ฝ่ายวางแผน<br><br><br>( .................................................... )</div>
+                                    <div class="sign-col">หัวหน้าแผนกผลิต / ผู้ตรวจสอบ<br><br><br>( .................................................... )</div>
+                                    <div class="sign-col">ผู้จัดการโรงงาน / ผู้อนุมัติ<br><br><br>( .................................................... )</div>
                                 </div>
                             </body>
                             </html>
@@ -2656,13 +2656,13 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
 
                 with b_col_csv:
                     csv_data = monthly_jobs[[
-                        "เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", "เธเธณเธเธงเธ", "เธงเธฑเธชเธ”เธธ", "เธเธฑเนเธเธ•เธญเธ (Step)", 
-                        "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "เน€เธฃเธดเนเธกเธเธฃเธดเธ", "เน€เธชเธฃเนเธเธเธฃเธดเธ", "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)", 
-                        "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", "เธเธฅเธ•เนเธฒเธ (เธเธก.)", "เน€เธฃเธ•เธฃเธฒเธเธฒ (เธเธฒเธ—/เธเธก.)", "เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)"
+                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
+                        "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", 
+                        "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"
                     ]].to_csv(index=False).encode('utf-8-sig')
                     
                     st.download_button(
-                        label="๐“ฅ เธ”เธฒเธงเธเนเนเธซเธฅเธ”เน€เธเนเธ CSV/Excel",
+                        label="📥 ดาวน์โหลดเป็น CSV/Excel",
                         data=csv_data,
                         file_name=f"PES_Monthly_Report_{selected_year}_{selected_month_idx:02d}.csv",
                         mime="text/csv",
@@ -2675,34 +2675,34 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
             col_sec1, col_sec2 = st.columns([1.5, 1])
 
             with col_sec1:
-                st.markdown("#### ๐ญ เธชเธฃเธธเธเธเธฃเธฐเธชเธดเธ—เธเธดเธ เธฒเธเนเธฅเธฐเธชเธฑเธ”เธชเนเธงเธเธฃเธฒเธขเนเธ”เนเนเธขเธเธ•เธฒเธกเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ (Machine ROI & Revenue)")
+                st.markdown("#### 🏭 สรุปประสิทธิภาพและสัดส่วนรายได้แยกตามเครื่องจักร (Machine ROI & Revenue)")
                 st.dataframe(
                     df_m_sum,
                     column_config={
-                        "เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ / เนเธเธเธ": st.column_config.TextColumn("เน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", width=150),
-                        "เธเธณเธเธงเธเธเธดเธงเธเธฒเธ": st.column_config.NumberColumn("เธเธดเธง", width=70, format="%d"),
-                        "เธเธดเนเธเธเธฒเธเธฃเธงเธก (เธเธดเนเธ)": st.column_config.NumberColumn("เธเธดเนเธเธเธฒเธ", width=85, format="%d"),
-                        "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)": st.column_config.NumberColumn("เนเธเธ (เธเธก.)", width=85, format="%.2f"),
-                        "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฃเธดเธ (เธเธก.)", width=85, format="%.2f"),
-                        "เธเธฅเธ•เนเธฒเธ": st.column_config.TextColumn("เธเธฅเธ•เนเธฒเธเน€เธงเธฅเธฒ", width=125),
-                        "เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)": st.column_config.NumberColumn("เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)", width=130, format="%.2f เธฟ"),
-                        "เธชเธฑเธ”เธชเนเธงเธเธกเธนเธฅเธเนเธฒ (%)": st.column_config.ProgressColumn("เธชเธฑเธ”เธชเนเธงเธ", width=110, min_value=0, max_value=100, format="%d%%")
+                        "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=150),
+                        "จำนวนคิวงาน": st.column_config.NumberColumn("คิว", width=70, format="%d"),
+                        "ชิ้นงานรวม (ชิ้น)": st.column_config.NumberColumn("ชิ้นงาน", width=85, format="%d"),
+                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                        "ผลต่าง": st.column_config.TextColumn("ผลต่างเวลา", width=125),
+                        "มูลค่าผลผลิต (บาท)": st.column_config.NumberColumn("มูลค่ารวม (บาท)", width=130, format="%.2f ฿"),
+                        "สัดส่วนมูลค่า (%)": st.column_config.ProgressColumn("สัดส่วน", width=110, min_value=0, max_value=100, format="%d%%")
                     },
                     hide_index=True,
                     use_container_width=True
                 )
 
             with col_sec2:
-                st.markdown("#### ๐”ฉ เธเธฃเธฐเธชเธดเธ—เธเธดเธ เธฒเธเนเธขเธเธ•เธฒเธกเธเธเธดเธ”เธงเธฑเธชเธ”เธธ (Material Insights)")
+                st.markdown("#### 🔩 ประสิทธิภาพแยกตามชนิดวัสดุ (Material Insights)")
                 st.dataframe(
                     df_mat_sum,
                     column_config={
-                        "เธเธเธดเธ”เธงเธฑเธชเธ”เธธ": st.column_config.TextColumn("เธงเธฑเธชเธ”เธธ", width=100),
-                        "เธเธณเธเธงเธเธเธดเธง": st.column_config.NumberColumn("เธเธดเธง", width=65),
-                        "เธเธณเธเธงเธเธเธดเนเธเธเธฒเธ (เธเธดเนเธ)": st.column_config.NumberColumn("เธเธดเนเธ", width=75),
-                        "เธเธฑเนเธงเนเธกเธเธเธฅเธดเธ•เธเธฃเธดเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฑเนเธงเนเธกเธเธเธฃเธดเธ", width=100, format="%.1f เธเธก."),
-                        "เธกเธนเธฅเธเนเธฒเธเธฅเธเธฅเธดเธ• (เธเธฒเธ—)": st.column_config.NumberColumn("เธกเธนเธฅเธเนเธฒ (เธเธฒเธ—)", width=120, format="%.2f เธฟ"),
-                        "เธชเธฑเธ”เธชเนเธงเธ (%)": st.column_config.ProgressColumn("เธชเธฑเธ”เธชเนเธงเธ", width=95, min_value=0, max_value=100, format="%d%%")
+                        "ชนิดวัสดุ": st.column_config.TextColumn("วัสดุ", width=100),
+                        "จำนวนคิว": st.column_config.NumberColumn("คิว", width=65),
+                        "จำนวนชิ้นงาน (ชิ้น)": st.column_config.NumberColumn("ชิ้น", width=75),
+                        "ชั่วโมงผลิตจริง (ชม.)": st.column_config.NumberColumn("ชั่วโมงจริง", width=100, format="%.1f ชม."),
+                        "มูลค่าผลผลิต (บาท)": st.column_config.NumberColumn("มูลค่า (บาท)", width=120, format="%.2f ฿"),
+                        "สัดส่วน (%)": st.column_config.ProgressColumn("สัดส่วน", width=95, min_value=0, max_value=100, format="%d%%")
                     },
                     hide_index=True,
                     use_container_width=True
@@ -2710,7 +2710,7 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
 
             st.divider()
 
-            st.markdown("#### ๐“ เธเธฃเธฒเธเธงเธดเน€เธเธฃเธฒเธฐเธซเนเธกเธนเธฅเธเนเธฒเนเธฅเธฐเน€เธงเธฅเธฒเธเธฒเธฃเธเธฅเธดเธ•เนเธขเธเธ•เธฒเธกเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ")
+            st.markdown("#### 📈 กราฟวิเคราะห์มูลค่าและเวลาการผลิตแยกตามเครื่องจักร")
             chart_c1, chart_c2 = st.columns(2)
             with chart_c1:
                 st.plotly_chart(fig_m_val, use_container_width=True)
@@ -2719,59 +2719,59 @@ elif st.session_state.current_view == "๐“‘ เธฃเธฒเธข�
 
             st.divider()
 
-            st.markdown("#### โ ๏ธ 5 เธญเธฑเธเธ”เธฑเธเธเธฒเธเธ—เธตเนเธเธฅเธดเธ•เธเนเธฒเธเธงเนเธฒเนเธเธเธกเธฒเธเธ—เธตเนเธชเธธเธ” (Top 5 Delays)")
+            st.markdown("#### ⚠️ 5 อันดับงานที่ผลิตช้ากว่าแผนมากที่สุด (Top 5 Delays)")
             if not delayed_jobs.empty:
                 st.dataframe(
-                    delayed_jobs[["เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", "เธเธฑเนเธเธ•เธญเธ (Step)", "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)", "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", "เธเธฅเธ•เนเธฒเธ (เธเธก.)"]],
+                    delayed_jobs[["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "เวลาแผน (ชม.)", "เวลาจริง (ชม.)", "ผลต่าง (ชม.)"]],
                     column_config={
-                        "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=85),
-                        "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("Drawing", width=180),
-                        "เธเธฑเนเธเธ•เธญเธ (Step)": st.column_config.TextColumn("เธเธฑเนเธเธ•เธญเธ", width=120),
-                        "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.TextColumn("เธชเธ–เธฒเธเธต", width=140),
-                        "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)": st.column_config.NumberColumn("เนเธเธ (เธเธก.)", width=90, format="%.2f"),
-                        "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฃเธดเธ (เธเธก.)", width=90, format="%.2f"),
-                        "เธเธฅเธ•เนเธฒเธ (เธเธก.)": st.column_config.NumberColumn("เน€เธเธดเธเนเธเธ (+เธเธก.)", width=110, format="+%.2f เธเธก."),
+                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                        "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=180),
+                        "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=120),
+                        "เลือกเครื่องจักร": st.column_config.TextColumn("สถานี", width=140),
+                        "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=90, format="%.2f"),
+                        "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=90, format="%.2f"),
+                        "ผลต่าง (ชม.)": st.column_config.NumberColumn("เกินแผน (+ชม.)", width=110, format="+%.2f ชม."),
                     },
                     hide_index=True,
                     use_container_width=True
                 )
             else:
-                st.success("๐ เนเธกเนเธกเธตเธเธฒเธเนเธ”เธ—เธตเนเธเธฅเธดเธ•เธเนเธฒเธเธงเนเธฒเน€เธงเธฅเธฒเนเธเธเธ—เธตเนเธ•เธฑเนเธเนเธงเนเนเธเน€เธ”เธทเธญเธเธเธตเน")
+                st.success("🎉 ไม่มีงานใดที่ผลิตช้ากว่าเวลาแผนที่ตั้งไว้ในเดือนนี้")
 
             st.divider()
 
-            st.markdown(f"#### ๐“ เธฃเธฒเธขเธฅเธฐเน€เธญเธตเธขเธ”เธเธดเนเธเธเธฒเธเธ—เธฑเนเธเธซเธกเธ”เธ—เธตเนเน€เธชเธฃเนเธเธชเธดเนเธเนเธเน€เธ”เธทเธญเธ {month_names[selected_month_idx-1]} {selected_year}")
+            st.markdown(f"#### 📋 รายละเอียดชิ้นงานทั้งหมดที่เสร็จสิ้นในเดือน {month_names[selected_month_idx-1]} {selected_year}")
             st.dataframe(
                 monthly_jobs.sort_values(by="Target_Date", ascending=True)[[
-                    "เนเธเธเธเธฒเธ", "เธเธทเนเธญ Drawing.", "เธเธณเธเธงเธ", "เธงเธฑเธชเธ”เธธ", "เธเธฑเนเธเธ•เธญเธ (Step)", 
-                    "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ", "เน€เธฃเธดเนเธกเธเธฃเธดเธ", "เน€เธชเธฃเนเธเธเธฃเธดเธ", "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)", 
-                    "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)", "เธเธฅเธ•เนเธฒเธ (เธเธก.)", "เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)"
+                    "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
+                    "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", 
+                    "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "มูลค่ารวม (บาท)"
                 ]],
                 column_config={
-                    "เนเธเธเธเธฒเธ": st.column_config.TextColumn("เนเธเธเธเธฒเธ", width=85),
-                    "เธเธทเนเธญ Drawing.": st.column_config.TextColumn("เธเธทเนเธญ Drawing.", width=180),
-                    "เธเธณเธเธงเธ": st.column_config.NumberColumn("เธเธณเธเธงเธ", width=70, format="%d"),
-                    "เธงเธฑเธชเธ”เธธ": st.column_config.TextColumn("เธงเธฑเธชเธ”เธธ", width=80),
-                    "เธเธฑเนเธเธ•เธญเธ (Step)": st.column_config.TextColumn("เธเธฑเนเธเธ•เธญเธ", width=120),
-                    "เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ": st.column_config.TextColumn("เธชเธ–เธฒเธเธตเธเธฅเธดเธ•", width=140),
-                    "เน€เธฃเธดเนเธกเธเธฃเธดเธ": st.column_config.DatetimeColumn("เน€เธฃเธดเนเธกเธเธฃเธดเธ", width=140, format="DD/MM HH:mm"),
-                    "เน€เธชเธฃเนเธเธเธฃเธดเธ": st.column_config.DatetimeColumn("เน€เธชเธฃเนเธเธเธฃเธดเธ", width=140, format="DD/MM HH:mm"),
-                    "เน€เธงเธฅเธฒเนเธเธ (เธเธก.)": st.column_config.NumberColumn("เนเธเธ (เธเธก.)", width=85, format="%.2f"),
-                    "เน€เธงเธฅเธฒเธเธฃเธดเธ (เธเธก.)": st.column_config.NumberColumn("เธเธฃเธดเธ (เธเธก.)", width=85, format="%.2f"),
-                    "เธเธฅเธ•เนเธฒเธ (เธเธก.)": st.column_config.NumberColumn("Diff", width=80, format="%.2f"),
-                    "เธกเธนเธฅเธเนเธฒเธฃเธงเธก (เธเธฒเธ—)": st.column_config.NumberColumn("เธกเธนเธฅเธเนเธฒ (เธเธฒเธ—)", width=120, format="%.2f เธฟ"),
+                    "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                    "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                    "จำนวน": st.column_config.NumberColumn("จำนวน", width=70, format="%d"),
+                    "วัสดุ": st.column_config.TextColumn("วัสดุ", width=80),
+                    "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=120),
+                    "เลือกเครื่องจักร": st.column_config.TextColumn("สถานีผลิต", width=140),
+                    "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", width=140, format="DD/MM HH:mm"),
+                    "เสร็จจริง": st.column_config.DatetimeColumn("เสร็จจริง", width=140, format="DD/MM HH:mm"),
+                    "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน (ชม.)", width=85, format="%.2f"),
+                    "เวลาจริง (ชม.)": st.column_config.NumberColumn("จริง (ชม.)", width=85, format="%.2f"),
+                    "ผลต่าง (ชม.)": st.column_config.NumberColumn("Diff", width=80, format="%.2f"),
+                    "มูลค่ารวม (บาท)": st.column_config.NumberColumn("มูลค่า (บาท)", width=120, format="%.2f ฿"),
                 },
                 hide_index=True,
                 use_container_width=True
             )
 
         else:
-            st.info(f"โน๏ธ เธขเธฑเธเนเธกเนเธกเธตเธเธฃเธฐเธงเธฑเธ•เธดเธเธฒเธเธ—เธตเนเธเธถเนเธเธชเธ–เธฒเธเธฐ 'โ… เน€เธชเธฃเนเธเธชเธดเนเธเนเธฅเนเธง' เนเธเน€เธ”เธทเธญเธ {month_names[selected_month_idx-1]} {selected_year}")
+            st.info(f"ℹ️ ยังไม่มีประวัติงานที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' ในเดือน {month_names[selected_month_idx-1]} {selected_year}")
 
 # ---------------------------------------------------------
-# VIEW 5: เธเธญเธ—เธตเธงเธตเธเธฅเธฒเธเนเธฃเธเธเธฒเธ (Shop Floor TV Live Dashboard)
+# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
 # ---------------------------------------------------------
-elif st.session_state.current_view == "๐“บ เธเธญเธ—เธตเธงเธตเธเธฅเธฒเธเนเธฃเธเธเธฒเธ (TV Live)":
+elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
     df_live = fetch_jobs_from_supabase()
 
@@ -2784,32 +2784,32 @@ elif st.session_state.current_view == "๐“บ เธเธญเธ—เ
     idle_machines_count = 0
 
     for idx_m, m in enumerate(MACHINE_LIST):
-        m_jobs = df_live[df_live["เน€เธฅเธทเธญเธเน€เธเธฃเธทเนเธญเธเธเธฑเธเธฃ"] == m] if not df_live.empty else pd.DataFrame()
+        m_jobs = df_live[df_live["เลือกเครื่องจักร"] == m] if not df_live.empty else pd.DataFrame()
         
-        running_job = m_jobs[m_jobs["เธชเธ–เธฒเธเธฐเธเธฒเธ"].str.contains("เธเธณเธฅเธฑเธเธเธฅเธดเธ•")]
-        hold_job = m_jobs[m_jobs["เธชเธ–เธฒเธเธฐเธเธฒเธ"].str.contains("เธเธฑเธเธเธฒเธ")]
-        waiting_jobs = m_jobs[m_jobs["เธชเธ–เธฒเธเธฐเธเธฒเธ"].str.contains("เธฃเธญเธเธดเธง")]
+        running_job = m_jobs[m_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
+        hold_job = m_jobs[m_jobs["สถานะงาน"].str.contains("พักงาน")]
+        waiting_jobs = m_jobs[m_jobs["สถานะงาน"].str.contains("รอคิว")]
 
         hold_alert_html = ""
         if not hold_job.empty:
             hold_machines_count += 1
             h_first = hold_job.iloc[0]
-            h_start = h_first.get("เน€เธฃเธดเนเธกเธเธฃเธดเธ")
+            h_start = h_first.get("เริ่มจริง")
             h_start_txt = ""
             h_dt_parsed = parse_flexible_datetime(h_start)
             if h_dt_parsed is not None and pd.notna(h_dt_parsed):
-                h_start_txt = f" [เน€เธฃเธดเนเธก {h_dt_parsed.strftime('%H:%M เธ.')}]"
-            hold_alert_html = f'<div style="margin-top:4px; padding:3px 6px; background:rgba(217, 119, 6, 0.35); border:1px dashed #FCD34D; border-radius:6px; font-size:10.5px; color:#FEF08A;">๐‘ <b>เธเธฑเธเธเธฒเธเธฃเธญ:</b> {h_first.get("เนเธเธเธเธฒเธ", "-")} ({h_first.get("เธเธทเนเธญ Drawing.", "-")}){h_start_txt}</div>'
+                h_start_txt = f" [เริ่ม {h_dt_parsed.strftime('%H:%M น.')}]"
+            hold_alert_html = f'<div style="margin-top:4px; padding:3px 6px; background:rgba(217, 119, 6, 0.35); border:1px dashed #FCD34D; border-radius:6px; font-size:10.5px; color:#FEF08A;">🛑 <b>พักงานรอ:</b> {h_first.get("แผนงาน", "-")} ({h_first.get("ชื่อ Drawing.", "-")}){h_start_txt}</div>'
 
         if not running_job.empty:
             running_machines_count += 1
             r_info = running_job.iloc[0]
-            s_start = r_info.get("เน€เธฃเธดเนเธกเธเธฃเธดเธ")
-            p_code = str(r_info.get("เนเธเธเธเธฒเธ", "-"))
-            d_code = str(r_info.get("เธเธทเนเธญ Drawing.", "-"))
-            step_name = str(r_info.get("เธเธฑเนเธเธ•เธญเธ (Step)", "-"))
+            s_start = r_info.get("เริ่มจริง")
+            p_code = str(r_info.get("แผนงาน", "-"))
+            d_code = str(r_info.get("ชื่อ Drawing.", "-"))
+            step_name = str(r_info.get("ขั้นตอน (Step)", "-"))
             
-            r_ready_dt = parse_flexible_datetime(r_info.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"))
+            r_ready_dt = parse_flexible_datetime(r_info.get("วัน-เวลาขึ้นงาน"))
             ready_display_txt = r_ready_dt.strftime("%d/%m %H:%M") if (r_ready_dt is not None and pd.notna(r_ready_dt)) else "-"
 
             start_disp_txt = "-"
@@ -2821,19 +2821,19 @@ elif st.session_state.current_view == "๐“บ เธเธญเธ—เ
                 start_epoch = to_bangkok_epoch_ms(r_ready_dt)
 
             if r_start_parsed is not None and pd.notna(r_start_parsed):
-                start_disp_txt = r_start_parsed.strftime("%H:%M เธ.")
+                start_disp_txt = r_start_parsed.strftime("%H:%M น.")
             
             tv_card_cls = "tv-card tv-card-running"
-            badge_html = '<span class="tv-pulse-dot" style="margin-right:6px;"></span> <b style="color:#A7F3D0;">เธเธณเธฅเธฑเธเธฃเธฑเธเธเธฒเธ</b>'
+            badge_html = '<span class="tv-pulse-dot" style="margin-right:6px;"></span> <b style="color:#A7F3D0;">กำลังรันงาน</b>'
 
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span>๐€ <b>เน€เธฃเธดเนเธก:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
-                    <span>โฑ๏ธ <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</span></span>
+                    <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
+                    <span>⏱️ <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</span></span>
                 </div>
                 <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px;">
-                    <span>๐“… <b>เธเธถเนเธ:</b> {ready_display_txt}</span>
+                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
                 </div>
             </div>{hold_alert_html}
             '''
@@ -2850,24 +2850,24 @@ elif st.session_state.current_view == "๐“บ เธเธญเธ—เ
             })
         elif not hold_job.empty:
             h_info = hold_job.iloc[0]
-            h_start = h_info.get("เน€เธฃเธดเนเธกเธเธฃเธดเธ")
-            p_code = str(h_info.get("เนเธเธเธเธฒเธ", "-"))
-            d_code = str(h_info.get("เธเธทเนเธญ Drawing.", "-"))
-            step_name = str(h_info.get("เธเธฑเนเธเธ•เธญเธ (Step)", "-"))
+            h_start = h_info.get("เริ่มจริง")
+            p_code = str(h_info.get("แผนงาน", "-"))
+            d_code = str(h_info.get("ชื่อ Drawing.", "-"))
+            step_name = str(h_info.get("ขั้นตอน (Step)", "-"))
             
-            h_ready_dt = parse_flexible_datetime(h_info.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"))
+            h_ready_dt = parse_flexible_datetime(h_info.get("วัน-เวลาขึ้นงาน"))
             ready_display_txt = h_ready_dt.strftime("%d/%m %H:%M") if (h_ready_dt is not None and pd.notna(h_ready_dt)) else "-"
 
             h_start_txt = ""
             h_st_parsed = parse_flexible_datetime(h_start)
             if h_st_parsed is not None and pd.notna(h_st_parsed):
-                h_start_txt = f" (เน€เธฃเธดเนเธกเนเธงเน: {h_st_parsed.strftime('%H:%M เธ.')})"
+                h_start_txt = f" (เริ่มไว้: {h_st_parsed.strftime('%H:%M น.')})"
 
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FEF3C7; line-height:1.4;">
-                <div>โ ๏ธ <b>เน€เธเธฃเธทเนเธญเธเธซเธขเธธเธ”:</b> เธฃเธญเน€เธเธดเธเธงเธฑเธชเธ”เธธเนเธซเธกเน{h_start_txt}</div>
+                <div>⚠️ <b>เครื่องหยุด:</b> รอเบิกวัสดุใหม่{h_start_txt}</div>
                 <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.9; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
-                    <span>๐“… <b>เธเธถเนเธ:</b> {ready_display_txt}</span>
+                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
                 </div>
             </div>
             '''
@@ -2876,7 +2876,7 @@ elif st.session_state.current_view == "๐“บ เธเธญเธ—เ
                 "machine": m,
                 "status": "HOLD",
                 "card_class": "tv-card tv-card-hold",
-                "badge_html": '<b style="color:#FDE68A;">๐‘ เธเธฑเธเธเธฒเธ (เธฃเธญเธงเธฑเธชเธ”เธธ)</b>',
+                "badge_html": '<b style="color:#FDE68A;">🛑 พักงาน (รอวัสดุ)</b>',
                 "plan": p_code,
                 "drawing": d_code,
                 "step": step_name,
@@ -2884,21 +2884,21 @@ elif st.session_state.current_view == "๐“บ เธเธญเธ—เ
             })
         else:
             idle_machines_count += 1
-            next_txt = "เนเธกเนเธกเธตเธเธดเธงเธฃเธญ"
+            next_txt = "ไม่มีคิวรอ"
             next_dates_html = ""
             if not waiting_jobs.empty:
                 w_first = waiting_jobs.iloc[0]
-                p_code = str(w_first.get('เนเธเธเธเธฒเธ', '-'))
-                d_code = str(w_first.get('เธเธทเนเธญ Drawing.', '-'))
-                step_name = str(w_first.get('เธเธฑเนเธเธ•เธญเธ (Step)', '-'))
-                next_txt = f"เธเธดเธงเธ–เธฑเธ”เนเธ: {p_code} ({d_code})"
+                p_code = str(w_first.get('แผนงาน', '-'))
+                d_code = str(w_first.get('ชื่อ Drawing.', '-'))
+                step_name = str(w_first.get('ขั้นตอน (Step)', '-'))
+                next_txt = f"คิวถัดไป: {p_code} ({d_code})"
                 
-                w_ready_dt = parse_flexible_datetime(w_first.get("เธงเธฑเธ-เน€เธงเธฅเธฒเธเธถเนเธเธเธฒเธ"))
+                w_ready_dt = parse_flexible_datetime(w_first.get("วัน-เวลาขึ้นงาน"))
                 ready_display_txt = w_ready_dt.strftime("%d/%m %H:%M") if (w_ready_dt is not None and pd.notna(w_ready_dt)) else "-"
                 
                 next_dates_html = f'''
                 <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:10.5px; color:#94A3B8; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
-                    <span>๐“… <b>เธเธถเนเธ:</b> {ready_display_txt}</span>
+                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
                 </div>
                 '''
 
@@ -2906,30 +2906,30 @@ elif st.session_state.current_view == "๐“บ เธเธญเธ—เ
                 "machine": m,
                 "status": "IDLE",
                 "card_class": "tv-card tv-card-idle",
-                "badge_html": '<b style="color:#94A3B8;">โช เน€เธเธฃเธทเนเธญเธเธงเนเธฒเธ (IDLE)</b>',
-                "plan": "เธเธฃเนเธญเธกเธฃเธฑเธเธเธฒเธ",
+                "badge_html": '<b style="color:#94A3B8;">⚪ เครื่องว่าง (IDLE)</b>',
+                "plan": "พร้อมรับงาน",
                 "drawing": next_txt,
                 "step": "-",
-                "time_info": f"<div style='font-size:11.5px; font-weight:600; color:#CBD5E1;'>๐“ เธเธดเธงเธฃเธญ: {len(waiting_jobs)} เธเธฒเธ</div>{next_dates_html}"
+                "time_info": f"<div style='font-size:11.5px; font-weight:600; color:#CBD5E1;'>📋 คิวรอ: {len(waiting_jobs)} งาน</div>{next_dates_html}"
             })
 
     st.markdown(f"""
     <div style="background:#0F172A; border:2px solid #1E3A8A; border-radius:16px; padding:12px 20px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
         <div>
             <div style="font-size:21px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
-                <span>๐“บ PES SHOP FLOOR LIVE MONITOR (22 เธชเธ–เธฒเธเธต)</span>
+                <span>📺 PES SHOP FLOOR LIVE MONITOR (22 สถานี)</span>
                 <span style="font-size:11.5px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:2px 8px; border-radius:16px;">Auto 30s</span>
             </div>
             <div style="color:#94A3B8; font-size:12.5px; margin-top:2px;">
-                เธชเธ–เธฒเธเธฐเธเธฒเธฃเธเธฅเธดเธ• 22 เธชเธ–เธฒเธเธตเธเธฒเธเนเธเธ Real-time | เธเธฃเธฐเธเธณเธงเธฑเธเธ—เธตเน <b>{cur_date_str}</b>
+                สถานะการผลิต 22 สถานีงานแบบ Real-time | ประจำวันที่ <b>{cur_date_str}</b>
             </div>
         </div>
         <div style="text-align:right;">
-            <div id="live-tv-clock" style="font-size:26px; font-weight:900; color:#F8FAFC; font-family:monospace; letter-spacing:1px;">--:--:-- เธ.</div>
+            <div id="live-tv-clock" style="font-size:26px; font-weight:900; color:#F8FAFC; font-family:monospace; letter-spacing:1px;">--:--:-- น.</div>
             <div style="font-size:12.5px; font-weight:bold;">
-                <span style="color:#34D399;">๐ข เธเธณเธฅเธฑเธเธฃเธฑเธ {running_machines_count}</span> | 
-                <span style="color:#FBBF24;">๐ก เธเธฑเธเธเธฒเธ {hold_machines_count}</span> | 
-                <span style="color:#94A3B8;">โช เธงเนเธฒเธ {idle_machines_count}</span>
+                <span style="color:#34D399;">🟢 กำลังรัน {running_machines_count}</span> | 
+                <span style="color:#FBBF24;">🟡 พักงาน {hold_machines_count}</span> | 
+                <span style="color:#94A3B8;">⚪ ว่าง {idle_machines_count}</span>
             </div>
         </div>
     </div>
@@ -2944,9 +2944,9 @@ elif st.session_state.current_view == "๐“บ เธเธญเธ—เ
             f'<div style="font-size:10.5px;">{c["badge_html"]}</div>'
             f'</div>'
             f'<div style="margin: 3px 0;">'
-            f'<div style="font-size:13px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">๐“ {c["plan"]}</div>'
-            f'<div style="font-size:11.5px; color:rgba(255,255,255,0.88); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px;">๐“ {c["drawing"]}</div>'
-            f'<div style="font-size:11px; color:rgba(255,255,255,0.72); margin-top:1px;">โ๏ธ เธเธฑเนเธเธ•เธญเธ: {c["step"]}</div>'
+            f'<div style="font-size:13px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📌 {c["plan"]}</div>'
+            f'<div style="font-size:11.5px; color:rgba(255,255,255,0.88); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px;">📄 {c["drawing"]}</div>'
+            f'<div style="font-size:11px; color:rgba(255,255,255,0.72); margin-top:1px;">⚙️ ขั้นตอน: {c["step"]}</div>'
             f'</div>'
             f'<div style="margin-top:6px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.15);">'
             f'{c["time_info"]}'
@@ -2959,7 +2959,7 @@ elif st.session_state.current_view == "๐“บ เธเธญเธ—เ
     st.markdown(full_grid_html, unsafe_allow_html=True)
 
 # =========================================================
-# JavaScript เธ—เนเธฒเธขเนเธเธฅเน: เธเธฒเธฌเธดเธเธฒ + Live Stopwatch
+# JavaScript ท้ายไฟล์: นาฬิกา + Live Stopwatch
 # =========================================================
 components.html("""
 <script>
@@ -2973,7 +2973,7 @@ components.html("""
             const secs = String(now.getSeconds()).padStart(2, '0');
             const clockEl = window.parent.document.getElementById('live-tv-clock');
             if (clockEl) {
-                clockEl.innerText = hrs + ":" + mins + ":" + secs + " เธ.";
+                clockEl.innerText = hrs + ":" + mins + ":" + secs + " น.";
             }
 
             const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
