@@ -478,6 +478,21 @@ def update_supabase_job(job_id: int, payload: dict) -> bool:
     except Exception:
         return False
 
+def verify_supabase_ready_at(job_id: int, expected_dt: datetime) -> bool:
+    """อ่านค่ากลับหลังบันทึก ป้องกันการรีเฟรชหน้าถ้าฐานข้อมูลไม่ได้เก็บเวลาจริง"""
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}&select=ready_at"
+        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=8)
+        if res.status_code != 200 or not res.json():
+            return False
+        actual_dt = parse_flexible_datetime(res.json()[0].get("ready_at"))
+        if actual_dt is None or pd.isna(actual_dt):
+            return False
+        return actual_dt.replace(second=0, microsecond=0) == expected_dt.replace(second=0, microsecond=0)
+    except Exception:
+        return False
+
 def delete_supabase_job(job_id: int) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -1168,8 +1183,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
             active_jobs_editor_df = active_jobs_editor_df.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
 
+            # ล้าง event เดิมหลัง Auto-save สำเร็จ ก่อนสร้าง widget รอบใหม่
+            if st.session_state.pop("reset_cnc_editor_after_autosave", False):
+                st.session_state.pop("editor_cnc_jobs_grid_main", None)
+
             editor_state = st.session_state.get("editor_cnc_jobs_grid_main", {})
             edited_rows = editor_state.get("edited_rows", {})
+            autosave_requested = False
+            affected_machines = set()
             # edited_rows ใช้เลขแถวของตารางที่ผู้ใช้เห็น (ซึ่งอาจผ่านการค้นหา/กรองแล้ว)
             # จึงต้องแปลงกลับด้วย ID ห้ามนำเลขแถวนั้นไปชี้ active_jobs_editor_df โดยตรง
             previous_editor_row_ids = st.session_state.get("editor_cnc_jobs_grid_main_row_ids", [])
@@ -1189,9 +1210,18 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         target_idx = r_i
 
                     if target_idx is not None:
+                        old_machine = safe_str(active_jobs_editor_df.at[target_idx, "เลือกเครื่องจักร"], "")
                         for col_name, new_val in changes.items():
                             if col_name in active_jobs_editor_df.columns:
                                 active_jobs_editor_df.at[target_idx, col_name] = new_val
+                            if col_name != "ลบ":
+                                autosave_requested = True
+                        if autosave_requested:
+                            if old_machine:
+                                affected_machines.add(old_machine)
+                            new_machine = safe_str(active_jobs_editor_df.at[target_idx, "เลือกเครื่องจักร"], "")
+                            if new_machine:
+                                affected_machines.add(new_machine)
 
             # คำนวณระบบลูกโซ่ (Auto-Chain): คิวแรกตั้งต้น -> คิวถัดไปรับเวลาจบจากคิวก่อนหน้า
             m_available_tracker = {}
@@ -1353,26 +1383,36 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     ]
                     delete_count = len(active_to_delete)
 
-                    c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
-                    with c_save:
-                        if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
-                            save_success = True
-                            save_errors = []
-                            for _, row in edited_jobs.iterrows():
+                    # Auto-save เฉพาะคิวของเครื่องที่มีการแก้ไข และใช้ค่าหลังคำนวณลูกโซ่แล้ว
+                    if autosave_requested and affected_machines:
+                        rows_to_save = active_jobs_editor_df[
+                            active_jobs_editor_df["เลือกเครื่องจักร"].astype(str).isin(affected_machines)
+                        ].copy()
+                        save_success = True
+                        save_errors = []
+                        parsed_ready_by_id = {}
+
+                        # ตรวจทุกค่าก่อน ห้ามเริ่มส่งข้อมูลหากมีเวลาแถวใดว่าง/ผิดรูปแบบ
+                        for _, row in rows_to_save.iterrows():
+                            p_code = safe_str(row.get("แผนงาน"), "")
+                            raw_ready = row.get("วัน-เวลาขึ้นงาน")
+                            dt_parsed = parse_flexible_datetime(raw_ready)
+                            if dt_parsed is None or pd.isna(dt_parsed):
+                                save_success = False
+                                save_errors.append(f"{p_code}: กรุณากำหนดเวลาเริ่มแถวแรก")
+                            else:
+                                row_id = row.get("ID")
+                                if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"]:
+                                    parsed_ready_by_id[int(float(row_id))] = dt_parsed
+
+                        if save_success:
+                            for _, row in rows_to_save.iterrows():
                                 p_code = safe_str(row.get("แผนงาน"), "")
-                                if not p_code: 
+                                if not p_code:
                                     continue
-                                
-                                # ค่านี้เป็นเวลาเริ่มที่ผ่านการต่อลูกโซ่แล้ว จึงบันทึกทุกแถวลง ready_at
-                                # เมื่อเปิดหน้าใหม่จะได้ค่าเดิม ไม่อิงเวลาปัจจุบัน
                                 raw_ready = row.get("วัน-เวลาขึ้นงาน")
                                 dt_parsed = parse_flexible_datetime(raw_ready)
-                                if safe_str(raw_ready, "") and (dt_parsed is None or pd.isna(dt_parsed)):
-                                    save_success = False
-                                    save_errors.append(f"{p_code}: รูปแบบวัน-เวลาไม่ถูกต้อง")
-                                    continue
-                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if (dt_parsed is not None and pd.notna(dt_parsed)) else None
-
+                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
                                 payload = {
                                     "plan_code": p_code,
                                     "drawing_name": safe_str(row.get("ชื่อ Drawing."), ""),
@@ -1397,14 +1437,24 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     save_success = False
                                     save_errors.append(f"{p_code}: Supabase ไม่รับข้อมูล")
 
-                            if save_success:
-                                st.cache_data.clear()
-                                st.session_state.scroll_to_bottom = True
-                                st.toast("บันทึกข้อมูลคิวงานลูกโซ่สำเร็จ!", icon="💾")
-                                st.rerun()
-                            else:
-                                st.error("บันทึกไม่สำเร็จ: " + " | ".join(save_errors[:5]))
+                        # อ่านค่ากลับมายืนยันก่อนรีเฟรช ป้องกันตารางหายหลัง Auto-save
+                        if save_success:
+                            for row_id, expected_dt in parsed_ready_by_id.items():
+                                if not verify_supabase_ready_at(row_id, expected_dt):
+                                    save_success = False
+                                    save_errors.append(f"ID {row_id}: ตรวจสอบเวลาใน Supabase ไม่ผ่าน")
 
+                        if save_success:
+                            st.cache_data.clear()
+                            st.session_state.reset_cnc_editor_after_autosave = True
+                            st.toast("บันทึกอัตโนมัติเรียบร้อย", icon="✅")
+                            st.rerun()
+                        else:
+                            st.error("Auto-save ไม่สำเร็จ จึงยังไม่รีเฟรชตาราง: " + " | ".join(save_errors[:5]))
+                    else:
+                        st.caption("✅ Auto-save เปิดใช้งาน — แก้ไขข้อมูลแล้วระบบจะบันทึกให้อัตโนมัติ")
+
+                    _, c_del_top, _ = st.columns([2.5, 3.5, 4])
                     with c_del_top:
                         btn_del_label = f"🗑️ ลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ลบรายการที่เลือก (0 รายการ)"
                         if st.button(btn_del_label, type="secondary", disabled=(delete_count == 0), use_container_width=True):
