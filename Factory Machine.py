@@ -1305,6 +1305,29 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         hide_index=True,
                         use_container_width=True
                     )
+                else:
+                    edited_jobs = display_editor_df.copy()
+                    st.dataframe(
+                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ", "กำหนดพร้อมขึ้นงาน (Baseline)", "เริ่มตามลูกโซ่"]]],
+                        column_config={
+                            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
+                            "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=125),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เลือกเครื่องจักร", width=160),
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("วัน-เวลาขึ้นงาน", width=155),
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn("วัน-เวลาจบงานตามแผน", width=155),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, format="%d"),
+                            "รวม (ชม.)": st.column_config.NumberColumn("รวม (ชม.)", width=85, format="%.2f"),
+                            "สถานะงาน": st.column_config.TextColumn("สถานะงาน", width=145),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
                 
                 st.markdown('<div id="editor_table_bottom_mark"></div>', unsafe_allow_html=True)
 
