@@ -860,7 +860,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     """, height=0)
 
 # ---------------------------------------------------------
-# VIEW 2: แดชบอร์ดภาพรวมโรงงาน (ครบ 100% ไม่ซ้ำ ไม่ฟ้อง Error)
+# VIEW 2: แดชบอร์ดภาพรวมโรงงาน (ล็อก Baseline + รันลูกโซ่ 100%)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if st.session_state.user_role is None:
@@ -1135,7 +1135,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =========================================================================
-            # 🔗 ล็อกเวลาขึ้นงานตั้งต้น (Plan Baseline) + คำนวณเวลาจบตามแผน
+            # 🔗 ระบบลูกโซ่สมบูรณ์: ล็อก Baseline ตั้งต้น + ส่งต่อเวลาคิวงาน (Auto-Chain)
             # =========================================================================
             column_order = [
                 "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -1145,6 +1145,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
 
+            # เก็บค่าเวลาตั้งต้นเดิมไว้เป็น Baseline สำหรับสอบกลับ ไม่แตะต้อง
+            active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"]
+
+            # จัดลำดับความสำคัญ: กำลังผลิต (0) -> พักงาน (1) -> รอคิว (2) ตามเวลาขึ้นงานเดิม
             def get_queue_priority(r):
                 st_val = str(r.get("สถานะงาน", ""))
                 prio = 0 if "กำลังผลิต" in st_val else (1 if "พักงาน" in st_val else 2)
@@ -1164,32 +1168,39 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             if col_name in active_jobs_editor_df.columns:
                                 active_jobs_editor_df.at[r_i, col_name] = new_val
 
-            # ล็อกเวลาขึ้นงานตั้งต้นตาม Baseline และคำนวณเวลาจบงานตามแผน
-            locked_ready_dates = []
-            planned_finish_dates = []
+            # คำนวณระบบลูกโซ่ (Auto-Chain): คิวแรกตั้งต้น -> คิวถัดไปรับเวลาจบจากคิวก่อนหน้า
+            m_available_tracker = {}
+            chained_start_dates = []
+            chained_finish_dates = []
 
             for _, r in active_jobs_editor_df.iterrows():
-                raw_ready = r.get("วัน-เวลาขึ้นงาน")
-                r_parsed = parse_flexible_datetime(raw_ready)
-                if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
-                    r_parsed = get_bangkok_now().replace(tzinfo=None)
-                
+                m_target = str(r["เลือกเครื่องจักร"])
                 s_m = safe_float(r.get("Setup (น.)"), 10.0)
                 b_m = safe_float(r.get("Basic (น.)"), 0.0)
                 p_m = safe_float(r.get("โปรแกรม (น.)"), 120.0)
                 tot_h = (s_m + b_m + p_m) / 60.0
 
-                _, finish_work_dt = add_work_time_with_shift(get_next_valid_work_time(r_parsed), tot_h)
+                if m_target not in m_available_tracker:
+                    r_parsed = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
+                    if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
+                        r_parsed = get_bangkok_now().replace(tzinfo=None)
+                    start_work_dt = get_next_valid_work_time(r_parsed)
+                else:
+                    start_work_dt = get_next_valid_work_time(m_available_tracker[m_target])
 
-                locked_ready_dates.append(r_parsed.strftime("%d/%m/%Y %H:%M"))
-                planned_finish_dates.append(finish_work_dt.strftime("%d/%m/%Y %H:%M"))
+                _, finish_work_dt = add_work_time_with_shift(start_work_dt, tot_h)
+                m_available_tracker[m_target] = finish_work_dt
 
-            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = locked_ready_dates
-            active_jobs_editor_df["วัน-เวลาจบงาน"] = planned_finish_dates
+                chained_start_dates.append(start_work_dt.strftime("%d/%m/%Y %H:%M"))
+                chained_finish_dates.append(finish_work_dt.strftime("%d/%m/%Y %H:%M"))
+
+            # อัปเดตเวลาเข้าสู่ตาราง (วัน-เวลาขึ้นงาน/จบงาน จะเป็นเวลาลูกโซ่จริง)
+            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = chained_start_dates
+            active_jobs_editor_df["วัน-เวลาจบงาน"] = chained_finish_dates
             active_jobs_editor_df["รวม (ชม.)"] = ((active_jobs_editor_df["Setup (น.)"] + active_jobs_editor_df["Basic (น.)"] + active_jobs_editor_df["โปรแกรม (น.)"]) / 60.0).round(2)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
-            with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ล็อกเวลาตั้งต้นตามแผน Baseline)", expanded=True):
+            with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ลิงก์เวลาลูกโซ่อัตโนมัติ)", expanded=True):
                 if is_admin:
                     tool_col1, tool_col2, tool_search = st.columns([2.5, 4.5, 3])
                     with tool_col1:
@@ -1203,7 +1214,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 st.session_state.active_select_all = False
                                 st.rerun()
                     with tool_col2:
-                        st.caption("🔒 **ล็อก Baseline เวลาตั้งต้น:** ช่อง 'วัน-เวลาขึ้นงาน' จะยึดตามที่กำหนดไว้ ไม่เปลี่ยนเอง เพื่อใช้เป็นเกณฑ์เทียบกับเวลาจบจริง")
+                        st.caption("🔗 **ระบบลูกโซ่ทำงานอยู่:** คิวที่ 1 เป็นตัวตั้ง คิวถัดไปจะรับเวลาจบมาเป็นเวลาเริ่มให้อัตโนมัติ โดยมีเวลา Baseline ไว้สอบกลับ")
                     with tool_search:
                         search_query_editor = st.text_input(
                             "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
@@ -1249,12 +1260,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130, disabled=True, default="รอหน้าเครื่องระบุ"),
                             "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
                             "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
-                                "วัน-เวลาขึ้นงาน (Baseline)", 
-                                width=165,
-                                help="เวลากำหนดขึ้นงานตั้งต้นตามแผน ล็อกค่าไว้เพื่อสอบกลับ"
+                                "เริ่มขึ้นงาน (ลูกโซ่)", 
+                                width=155,
+                                help="แถวแรกตั้งต้น แถวถัดไปรับเวลาจบจากแถวบนมาต่อเนื่องอัตโนมัติ"
                             ),
                             "วัน-เวลาจบงาน": st.column_config.TextColumn(
-                                "วัน-เวลาจบงานตามแผน",
+                                "จบงานตามแผน (ลูกโซ่)",
                                 width=155,
                                 disabled=True,
                                 help="เวลาจบคำนวณตามแผนและกะโรงงาน"
@@ -1272,7 +1283,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 else:
                     edited_jobs = display_editor_df.copy()
                     st.dataframe(
-                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ"]]],
+                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ", "กำหนดพร้อมขึ้นงาน (Baseline)"]]],
                         column_config={
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
                             "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
@@ -1281,8 +1292,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=125),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เลือกเครื่องจักร", width=160),
-                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("วัน-เวลาขึ้นงาน (Baseline)", width=165),
-                            "วัน-เวลาจบงาน": st.column_config.TextColumn("วัน-เวลาจบงานตามแผน", width=155),
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("เริ่มขึ้นงาน (ลูกโซ่)", width=155),
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn("จบงานตามแผน (ลูกโซ่)", width=155),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, format="%d"),
@@ -1339,7 +1350,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                             st.cache_data.clear()
                             st.session_state.scroll_to_bottom = True
-                            st.toast("บันทึกข้อมูลคิวงานสำเร็จ!", icon="💾")
+                            st.toast("บันทึกข้อมูลคิวงานลูกโซ่สำเร็จ!", icon="💾")
                             st.rerun()
 
                     with c_del_top:
@@ -1393,9 +1404,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             df_wo_direct["เครื่องจักร / แผนก"] = df_wo_direct["เลือกเครื่องจักร"]
             df_wo_direct["สถานะ"] = df_wo_direct["สถานะงาน"]
+            
+            # ช่องนี้แสดงเวลา Baseline เดิมที่ล็อกไว้เพื่อสอบกลับ
+            df_wo_direct["กำหนดพร้อมขึ้นงาน"] = df_wo_direct["กำหนดพร้อมขึ้นงาน (Baseline)"]
+            
+            # ช่องนี้แสดงเวลาลูกโซ่ที่ต่อเนื่องกันจริง
             df_wo_direct["เริ่มขึ้นงานตามแผน"] = df_wo_direct["วัน-เวลาขึ้นงาน"]
             df_wo_direct["จบงานตามแผน"] = df_wo_direct["วัน-เวลาจบงาน"]
-            df_wo_direct["กำหนดพร้อมขึ้นงาน"] = df_wo_direct["วัน-เวลาขึ้นงาน"]
 
             wo_finish_map = dict(zip(df_wo_direct["ID"].astype(str), df_wo_direct["_dt_finish"]))
 
@@ -1472,7 +1487,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     df_display["สถานะ"].astype(str).str.lower().str.contains(q_wo)
                 ]
 
-            display_cols = [c for c in df_display.columns if c not in ["_dt_start", "_dt_finish"]]
+            display_cols = [c for c in df_display.columns if c not in ["_dt_start", "_dt_finish", "_sort_key", "กำหนดพร้อมขึ้นงาน (Baseline)"]]
 
             styled_df_display = df_display[display_cols].style.apply(
                 highlight_running_deadlines,
@@ -1499,8 +1514,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "วัสดุ": st.column_config.TextColumn("วัสดุ", width=70),
                     "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=120),
                     "กำหนดพร้อมขึ้นงาน": st.column_config.TextColumn("กำหนดพร้อมขึ้นงาน (Baseline)", width=165),
-                    "เริ่มขึ้นงานตามแผน": st.column_config.TextColumn("เริ่มขึ้นงานตามแผน", width=155),
-                    "จบงานตามแผน": st.column_config.TextColumn("จบงานตามแผน", width=155),
+                    "เริ่มขึ้นงานตามแผน": st.column_config.TextColumn("เริ่มขึ้นงานตามแผน (ลูกโซ่)", width=155),
+                    "จบงานตามแผน": st.column_config.TextColumn("จบงานตามแผน (ลูกโซ่)", width=155),
                     "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=80, format="%d"),
                     "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=80, format="%d"),
                     "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=95, format="%d"),
