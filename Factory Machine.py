@@ -46,6 +46,10 @@ def safe_str(val, default=""):
     s = str(val).strip()
     return default if s in ["", "None", "nan", "NaN", "null"] else s
 
+def normalize_filter_key(val):
+    """ทำค่าที่ใช้กรองให้เป็นมาตรฐาน เพื่อตัดปัญหาช่องว่าง/ตัวพิมพ์ไม่ตรงกัน"""
+    return " ".join(safe_str(val, "").split()).casefold()
+
 def parse_flexible_datetime(dt_val):
     if pd.isna(dt_val) or dt_val is None:
         return None
@@ -1447,6 +1451,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 with a_sel4:
                     selected_active_material = st.selectbox("🔩 วัสดุ:", active_material_options, key="active_jobs_material_select")
 
+                # อ่านค่าจริงจาก widget state ทุกครั้ง ป้องกันตัวแปรเดิมค้างหลังผู้ใช้เปลี่ยนตัวเลือก
+                selected_active_machine = st.session_state.get("active_jobs_machine_select", "🌐 ทุกเครื่อง")
+                selected_active_plan = st.session_state.get("active_jobs_plan_select", "🌐 ทุกแผนงาน")
+                selected_active_drawing = st.session_state.get("active_jobs_drawing_select", "🌐 ทุก Drawing")
+                selected_active_material = st.session_state.get("active_jobs_material_select", "🌐 ทุกวัสดุ")
+
                 display_editor_df = active_jobs_editor_df.copy()
                 active_status_text = display_editor_df["สถานะงาน"].astype(str)
                 if active_quick_filter == "RUNNING":
@@ -1465,14 +1475,22 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         )
                     ]
 
-                if selected_active_machine != "🌐 ทุกเครื่อง":
-                    display_editor_df = display_editor_df[display_editor_df["เลือกเครื่องจักร"].astype(str) == selected_active_machine]
-                if selected_active_plan != "🌐 ทุกแผนงาน":
-                    display_editor_df = display_editor_df[display_editor_df["แผนงาน"].astype(str) == selected_active_plan]
-                if selected_active_drawing != "🌐 ทุก Drawing":
-                    display_editor_df = display_editor_df[display_editor_df["ชื่อ Drawing."].astype(str) == selected_active_drawing]
-                if selected_active_material != "🌐 ทุกวัสดุ":
-                    display_editor_df = display_editor_df[display_editor_df["วัสดุ"].astype(str) == selected_active_material]
+                if normalize_filter_key(selected_active_machine) != normalize_filter_key("🌐 ทุกเครื่อง"):
+                    display_editor_df = display_editor_df[
+                        display_editor_df["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(selected_active_machine)
+                    ]
+                if normalize_filter_key(selected_active_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
+                    display_editor_df = display_editor_df[
+                        display_editor_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_active_plan)
+                    ]
+                if normalize_filter_key(selected_active_drawing) != normalize_filter_key("🌐 ทุก Drawing"):
+                    display_editor_df = display_editor_df[
+                        display_editor_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_active_drawing)
+                    ]
+                if normalize_filter_key(selected_active_material) != normalize_filter_key("🌐 ทุกวัสดุ"):
+                    display_editor_df = display_editor_df[
+                        display_editor_df["วัสดุ"].map(normalize_filter_key) == normalize_filter_key(selected_active_material)
+                    ]
 
                 display_editor_df = display_editor_df.reset_index(drop=True)
                 st.caption(f"แสดงผล {len(display_editor_df):,} จากทั้งหมด {len(active_jobs_editor_df):,} รายการ")
@@ -1735,6 +1753,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             with wo_sel4:
                 selected_wo_material = st.selectbox("🔩 วัสดุ:", wo_material_options, key="wo_material_select")
 
+            selected_wo_machine = st.session_state.get("wo_machine_select", "🌐 ทุกเครื่อง")
+            selected_wo_plan = st.session_state.get("wo_plan_select", "🌐 ทุกแผนงาน")
+            selected_wo_drawing = st.session_state.get("wo_drawing_select", "🌐 ทุก Drawing")
+            selected_wo_material = st.session_state.get("wo_material_select", "🌐 ทุกวัสดุ")
+
             df_display = df_wo_direct.copy()
             wo_status_text = df_display["สถานะ"].astype(str)
 
@@ -1764,14 +1787,22 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     return False
                 df_display = df_display[df_display.apply(is_late_row, axis=1)]
 
-            if selected_wo_machine != "🌐 ทุกเครื่อง":
-                df_display = df_display[df_display["เครื่องจักร / แผนก"].astype(str) == selected_wo_machine]
-            if selected_wo_plan != "🌐 ทุกแผนงาน":
-                df_display = df_display[df_display["แผนงาน"].astype(str) == selected_wo_plan]
-            if selected_wo_drawing != "🌐 ทุก Drawing":
-                df_display = df_display[df_display["ชื่อ Drawing."].astype(str) == selected_wo_drawing]
-            if selected_wo_material != "🌐 ทุกวัสดุ":
-                df_display = df_display[df_display["วัสดุ"].astype(str) == selected_wo_material]
+            if normalize_filter_key(selected_wo_machine) != normalize_filter_key("🌐 ทุกเครื่อง"):
+                df_display = df_display[
+                    df_display["เครื่องจักร / แผนก"].map(normalize_filter_key) == normalize_filter_key(selected_wo_machine)
+                ]
+            if normalize_filter_key(selected_wo_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
+                df_display = df_display[
+                    df_display["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_wo_plan)
+                ]
+            if normalize_filter_key(selected_wo_drawing) != normalize_filter_key("🌐 ทุก Drawing"):
+                df_display = df_display[
+                    df_display["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_wo_drawing)
+                ]
+            if normalize_filter_key(selected_wo_material) != normalize_filter_key("🌐 ทุกวัสดุ"):
+                df_display = df_display[
+                    df_display["วัสดุ"].map(normalize_filter_key) == normalize_filter_key(selected_wo_material)
+                ]
 
             st.caption(f"แสดงผล {len(df_display):,} จากทั้งหมด {len(df_wo_direct):,} รายการ")
 
