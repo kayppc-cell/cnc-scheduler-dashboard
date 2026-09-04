@@ -160,7 +160,7 @@ def get_next_valid_work_time(dt: datetime) -> datetime:
 
 def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
     segments = []
-    remaining_hours = duration_hours
+    remaining_hours = max(duration_hours, 0.25)
     current_dt = get_next_valid_work_time(start_dt)
 
     while remaining_hours > 0.0001:
@@ -357,7 +357,7 @@ st.markdown("""
     div.stButton > button:disabled { background-color: #F1F5F9 !important; color: #94A3B8 !important; border-color: #CBD5E1 !important; cursor: not-allowed !important; }
 
     .tv-grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-top: 8px; }
-    .tv-card { border-radius: 12px; padding: 12px 14px; color: #FFFFFF !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; flex-direction: column; justify-content: space-between; min-height: 145px; border: 1px solid rgba(255,255,255,0.12); }
+    .tv-card { border-radius: 12px; padding: 12px 14px; color: #FFFFFF !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; flex-direction: column; justify-content: space-between; min-height: 148px; border: 1px solid rgba(255,255,255,0.12); }
     .tv-card-running { background: linear-gradient(135deg, #065F46 0%, #059669 100%) !important; border-left: 7px solid #34D399 !important; }
     .tv-card-warning { background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important; border-left: 7px solid #FDE047 !important; }
     .tv-card-late { background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important; border-left: 7px solid #EF4444 !important; }
@@ -1382,7 +1382,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             df_wo_direct["_wo_order"] = df_wo_direct.apply(get_wo_queue_order, axis=1)
             df_wo_direct = df_wo_direct.sort_values(by=["เลือกเครื่องจักร", "_wo_order"]).drop(columns=["_wo_order"]).reset_index(drop=True)
 
-            # คำนวณเวลาลูกโซ่ต่อเนื่องตามกะโรงงาน
             m_chain_tracker = {}
             wo_chained_start = []
             wo_chained_finish = []
@@ -2739,7 +2738,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.info(f"ℹ️ ยังไม่มีประวัติงานที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' ในเดือน {month_names[selected_month_idx-1]} {selected_year}")
 
 # ---------------------------------------------------------
-# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard - ฟังก์ชันเต็ม 100%)
+# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard - วันจบและระบบลูกโซ่ครบ 100%)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
@@ -2780,7 +2779,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
             step_name = str(r_info.get("ขั้นตอน (Step)", "-"))
             
-            # คำนวณเวลาจบงานตามแผนแบบลูกโซ่
+            # คำนวณเวลาจบงานตามแผนแบบลูกโซ่ (add_work_time_with_shift)
             s_m = safe_float(r_info.get("Setup (น.)"), 10.0)
             b_m = safe_float(r_info.get("Basic (น.)"), 0.0)
             p_m = safe_float(r_info.get("โปรแกรม (น.)"), 120.0)
@@ -2795,7 +2794,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             _, plan_finish_dt = add_work_time_with_shift(get_next_valid_work_time(act_st_parsed), tot_h)
 
             start_disp_txt = act_st_parsed.strftime("%H:%M น.")
-            finish_disp_txt = plan_finish_dt.strftime("%d/%m %H:%M")
+            finish_disp_txt = plan_finish_dt.strftime("%d/%m %H:%M น.")
             start_epoch = to_bangkok_epoch_ms(act_st_parsed)
 
             # ตรวจสอบสถานะเตือนสี 3 ระดับ: เขียว (ปกติ) -> ส้ม (ใกล้เสร็จ <= 60 น.) -> แดง (เลยแผน)
@@ -2816,8 +2815,8 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
                     <span>⏱️ <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</span></span>
                 </div>
-                <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
-                    <span>🏁 <b>แผนเสร็จ:</b> {finish_disp_txt}</span>
+                <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:5px;">
+                    <span>🏁 <b>แผนเสร็จ:</b> <span style="color:#A7F3D0; font-weight:800;">{finish_disp_txt}</span></span>
                 </div>
             </div>{hold_alert_html}
             '''
@@ -2841,7 +2840,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             step_name = str(h_info.get("ขั้นตอน (Step)", "-"))
             
             h_ready_dt = parse_flexible_datetime(h_info.get("วัน-เวลาขึ้นงาน"))
-            ready_display_txt = h_ready_dt.strftime("%d/%m %H:%M") if (h_ready_dt is not None and pd.notna(h_ready_dt)) else "-"
+            ready_display_txt = h_ready_dt.strftime("%d/%m %H:%M น.") if (h_ready_dt is not None and pd.notna(h_ready_dt)) else "-"
 
             h_start_txt = ""
             h_st_parsed = parse_flexible_datetime(h_start)
@@ -2851,7 +2850,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FEF3C7; line-height:1.4;">
                 <div>⚠️ <b>เครื่องหยุด:</b> รอเบิกวัสดุใหม่{h_start_txt}</div>
-                <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.9; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
+                <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:11px; opacity:0.9; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:5px;">
                     <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
                 </div>
             </div>
@@ -2878,12 +2877,26 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 step_name = str(w_first.get('ขั้นตอน (Step)', '-'))
                 next_txt = f"คิวถัดไป: {p_code} ({d_code})"
                 
+                # คำนวณเวลาเริ่มและวันจบตามแผนของคิวถัดไป
+                w_s_m = safe_float(w_first.get("Setup (น.)"), 10.0)
+                w_b_m = safe_float(w_first.get("Basic (น.)"), 0.0)
+                w_p_m = safe_float(w_first.get("โปรแกรม (น.)"), 120.0)
+                w_tot_h = (w_s_m + w_b_m + w_p_m) / 60.0
+
                 w_ready_dt = parse_flexible_datetime(w_first.get("วัน-เวลาขึ้นงาน"))
-                ready_display_txt = w_ready_dt.strftime("%d/%m %H:%M") if (w_ready_dt is not None and pd.notna(w_ready_dt)) else "-"
+                if w_ready_dt is None or pd.isna(w_ready_dt) or w_ready_dt.year < 2020:
+                    w_ready_dt = now_check
+                
+                w_start_valid = get_next_valid_work_time(w_ready_dt)
+                _, w_finish_valid = add_work_time_with_shift(w_start_valid, w_tot_h)
+
+                w_start_disp = w_start_valid.strftime("%d/%m %H:%M")
+                w_finish_disp = w_finish_valid.strftime("%d/%m %H:%M น.")
                 
                 next_dates_html = f'''
-                <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:10.5px; color:#94A3B8; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
-                    <span>📅 <b>กำหนดขึ้น:</b> {ready_display_txt}</span>
+                <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:10.5px; color:#CBD5E1; background:rgba(0,0,0,0.3); padding:3px 6px; border-radius:5px;">
+                    <span>📅 <b>เริ่ม:</b> {w_start_disp}</span>
+                    <span>🏁 <b>เสร็จ:</b> <span style="color:#A7F3D0; font-weight:700;">{w_finish_disp}</span></span>
                 </div>
                 '''
 
