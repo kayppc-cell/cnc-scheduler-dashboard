@@ -1135,7 +1135,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =========================================================================
-            # 🔗 ระบบลูกโซ่สมบูรณ์: ล็อก Baseline ตั้งต้น + ส่งต่อเวลาคิวงาน (Auto-Chain)
+            # 🔗 ระบบลูกโซ่สมบูรณ์: ยึดเวลาแก้ไขจริง + คำนวณส่งต่อเวลาลูกโซ่
             # =========================================================================
             column_order = [
                 "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -1145,19 +1145,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
 
-            # เก็บค่าเวลาตั้งต้นเดิมไว้เป็น Baseline สำหรับสอบกลับ ไม่แตะต้อง
-            active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"]
-
-            # จัดลำดับความสำคัญ: กำลังผลิต (0) -> พักงาน (1) -> รอคิว (2) ตามเวลาขึ้นงานเดิม
-            def get_queue_priority(r):
-                st_val = str(r.get("สถานะงาน", ""))
-                prio = 0 if "กำลังผลิต" in st_val else (1 if "พักงาน" in st_val else 2)
-                dt_p = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
-                return (str(r.get("เลือกเครื่องจักร")), prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
-
-            active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
-            active_jobs_editor_df = active_jobs_editor_df.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
-
+            # ดึงค่าที่ผู้ใช้แก้ไขในตารางสด (data_editor) เข้ามาก่อนคำนวณ เพื่อไม่ให้ค่าที่แก้หาย
             editor_state = st.session_state.get("editor_cnc_jobs_grid_main", {})
             edited_rows = editor_state.get("edited_rows", {})
             if edited_rows:
@@ -1168,7 +1156,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             if col_name in active_jobs_editor_df.columns:
                                 active_jobs_editor_df.at[r_i, col_name] = new_val
 
-            # คำนวณระบบลูกโซ่ (Auto-Chain): คิวแรกตั้งต้น -> คิวถัดไปรับเวลาจบจากคิวก่อนหน้า
+            # เก็บค่าเวลาขึ้นงานตั้งต้น (Baseline)
+            active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"]
+
+            # จัดลำดับ: กำลังผลิต (0) -> พักงาน (1) -> รอคิว (2)
+            def get_queue_priority(r):
+                st_val = str(r.get("สถานะงาน", ""))
+                prio = 0 if "กำลังผลิต" in st_val else (1 if "พักงาน" in st_val else 2)
+                dt_p = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
+                return (str(r.get("เลือกเครื่องจักร")), prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
+
+            active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
+            active_jobs_editor_df = active_jobs_editor_df.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
+
+            # คำนวณส่งต่อเวลาลูกโซ่ (Auto-Chain) แยกเก็บไว้ ไม่เขียนทับเวลาขึ้นงานเดิม
             m_available_tracker = {}
             chained_start_dates = []
             chained_finish_dates = []
@@ -1180,10 +1181,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 p_m = safe_float(r.get("โปรแกรม (น.)"), 120.0)
                 tot_h = (s_m + b_m + p_m) / 60.0
 
+                r_parsed = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
+                if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
+                    r_parsed = get_bangkok_now().replace(tzinfo=None)
+
                 if m_target not in m_available_tracker:
-                    r_parsed = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
-                    if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
-                        r_parsed = get_bangkok_now().replace(tzinfo=None)
                     start_work_dt = get_next_valid_work_time(r_parsed)
                 else:
                     start_work_dt = get_next_valid_work_time(m_available_tracker[m_target])
@@ -1194,8 +1196,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 chained_start_dates.append(start_work_dt.strftime("%d/%m/%Y %H:%M"))
                 chained_finish_dates.append(finish_work_dt.strftime("%d/%m/%Y %H:%M"))
 
-            # อัปเดตเวลาเข้าสู่ตาราง (วัน-เวลาขึ้นงาน/จบงาน จะเป็นเวลาลูกโซ่จริง)
-            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = chained_start_dates
+            # บันทึกเวลาจบงานตามแผน และเวลาเริ่มตามลูกโซ่
+            active_jobs_editor_df["เริ่มตามลูกโซ่"] = chained_start_dates
             active_jobs_editor_df["วัน-เวลาจบงาน"] = chained_finish_dates
             active_jobs_editor_df["รวม (ชม.)"] = ((active_jobs_editor_df["Setup (น.)"] + active_jobs_editor_df["Basic (น.)"] + active_jobs_editor_df["โปรแกรม (น.)"]) / 60.0).round(2)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
@@ -1214,7 +1216,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 st.session_state.active_select_all = False
                                 st.rerun()
                     with tool_col2:
-                        st.caption("🔗 **ระบบลูกโซ่ทำงานอยู่:** คิวที่ 1 เป็นตัวตั้ง คิวถัดไปจะรับเวลาจบมาเป็นเวลาเริ่มให้อัตโนมัติ โดยมีเวลา Baseline ไว้สอบกลับ")
+                        st.caption("🔒 **แก้ไขเวลาได้อิสระ:** แก้ไขเวลาเริ่มที่ช่อง 'วัน-เวลาขึ้นงาน' แล้วกดบันทึก ระบบจะจำค่าจริงและคำนวณลูกโซ่ต่อให้อัตโนมัติ")
                     with tool_search:
                         search_query_editor = st.text_input(
                             "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
@@ -1260,12 +1262,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130, disabled=True, default="รอหน้าเครื่องระบุ"),
                             "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
                             "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
-                                "เริ่มขึ้นงาน (ลูกโซ่)", 
+                                "วัน-เวลาขึ้นงาน", 
                                 width=155,
-                                help="แถวแรกตั้งต้น แถวถัดไปรับเวลาจบจากแถวบนมาต่อเนื่องอัตโนมัติ"
+                                help="สามารถพิมพ์เปลี่ยนวันเวลาเริ่มได้โดยตรง พอกดบันทึกจะคงค่านี้ไว้"
                             ),
                             "วัน-เวลาจบงาน": st.column_config.TextColumn(
-                                "จบงานตามแผน (ลูกโซ่)",
+                                "วัน-เวลาจบงานตามแผน",
                                 width=155,
                                 disabled=True,
                                 help="เวลาจบคำนวณตามแผนและกะโรงงาน"
@@ -1283,7 +1285,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 else:
                     edited_jobs = display_editor_df.copy()
                     st.dataframe(
-                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ", "กำหนดพร้อมขึ้นงาน (Baseline)"]]],
+                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ", "กำหนดพร้อมขึ้นงาน (Baseline)", "เริ่มตามลูกโซ่"]]],
                         column_config={
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
                             "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
@@ -1292,8 +1294,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=125),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เลือกเครื่องจักร", width=160),
-                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("เริ่มขึ้นงาน (ลูกโซ่)", width=155),
-                            "วัน-เวลาจบงาน": st.column_config.TextColumn("จบงานตามแผน (ลูกโซ่)", width=155),
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("วัน-เวลาขึ้นงาน", width=155),
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn("วัน-เวลาจบงานตามแผน", width=155),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, format="%d"),
@@ -1318,7 +1320,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
                     with c_save:
                         if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
-                            for _, row in edited_jobs.iterrows():
+                            # อัปเดตเฉพาะแถวที่มีการเปลี่ยนแปลงจริง เพื่อความรวดเร็ว ไม่กระตุก
+                            editor_diffs = st.session_state.get("editor_cnc_jobs_grid_main", {}).get("edited_rows", {})
+                            for idx_row, row in edited_jobs.iterrows():
                                 p_code = safe_str(row.get("แผนงาน"), "")
                                 if not p_code: 
                                     continue
@@ -1346,29 +1350,26 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan"]:
                                     insert_supabase_job(payload)
                                 else:
-                                    update_supabase_job(int(float(row_id)), payload)
+                                    # บันทึกเมื่อมีการแก้แถวนั้น หรือเป็นรายการใหม่
+                                    if idx_row in editor_diffs or not editor_diffs:
+                                        update_supabase_job(int(float(row_id)), payload)
 
                             st.cache_data.clear()
                             st.session_state.scroll_to_bottom = True
-                            st.toast("บันทึกข้อมูลคิวงานลูกโซ่สำเร็จ!", icon="💾")
                             st.rerun()
 
                     with c_del_top:
                         btn_del_label = f"🗑️ ลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ลบรายการที่เลือก (0 รายการ)"
                         if st.button(btn_del_label, type="secondary", disabled=(delete_count == 0), use_container_width=True):
-                            del_success = True
                             for _, row in active_to_delete.iterrows():
                                 row_id = row.get("ID")
                                 if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
-                                    if not delete_supabase_job(int(float(row_id))):
-                                        del_success = False
+                                    delete_supabase_job(int(float(row_id)))
                                         
-                            if del_success:
-                                st.session_state.active_select_all = False
-                                st.cache_data.clear()
-                                st.session_state.scroll_to_bottom = True
-                                st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
-                                st.rerun()
+                            st.session_state.active_select_all = False
+                            st.cache_data.clear()
+                            st.session_state.scroll_to_bottom = True
+                            st.rerun()
                             else:
                                 st.error("เกิดข้อผิดพลาดในการลบข้อมูลจาก Supabase")
 
@@ -1409,7 +1410,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             df_wo_direct["กำหนดพร้อมขึ้นงาน"] = df_wo_direct["กำหนดพร้อมขึ้นงาน (Baseline)"]
             
             # ช่องนี้แสดงเวลาลูกโซ่ที่ต่อเนื่องกันจริง
-            df_wo_direct["เริ่มขึ้นงานตามแผน"] = df_wo_direct["วัน-เวลาขึ้นงาน"]
+            df_wo_direct["เริ่มขึ้นงานตามแผน"] = df_wo_direct.get("เริ่มตามลูกโซ่", df_wo_direct["วัน-เวลาขึ้นงาน"])
             df_wo_direct["จบงานตามแผน"] = df_wo_direct["วัน-เวลาจบงาน"]
 
             wo_finish_map = dict(zip(df_wo_direct["ID"].astype(str), df_wo_direct["_dt_finish"]))
