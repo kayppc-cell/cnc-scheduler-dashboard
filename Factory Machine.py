@@ -11,7 +11,7 @@ import requests
 import streamlit.components.v1 as components
 
 # =========================================================
-# 0. Timezone Helper (GMT+7) & Shift Calculation
+# 0. Timezone Helper (GMT+7) & Factory Shift Rules & Data Sanitizers
 # =========================================================
 def get_bangkok_now():
     try:
@@ -2738,7 +2738,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.info(f"ℹ️ ยังไม่มีประวัติงานที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' ในเดือน {month_names[selected_month_idx-1]} {selected_year}")
 
 # ---------------------------------------------------------
-# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard - วันจบและระบบลูกโซ่ครบ 100%)
+# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard - แสดงทั้งแผนเริ่มและแผนเสร็จ)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
@@ -2763,6 +2763,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         # จัดการแจ้งเตือนกรณีมีงานพักรอวัสดุ
         hold_alert_html = ""
         if not hold_job.empty:
+            hold_machines_count += 1
             h_first = hold_job.iloc[0]
             h_start = h_first.get("เริ่มจริง")
             h_start_txt = ""
@@ -2779,7 +2780,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
             step_name = str(r_info.get("ขั้นตอน (Step)", "-"))
             
-            # คำนวณเวลาจบงานตามแผนแบบลูกโซ่ (add_work_time_with_shift)
+            # คำนวณเวลาเริ่มและจบงานตามแผน
             s_m = safe_float(r_info.get("Setup (น.)"), 10.0)
             b_m = safe_float(r_info.get("Basic (น.)"), 0.0)
             p_m = safe_float(r_info.get("โปรแกรม (น.)"), 120.0)
@@ -2791,13 +2792,21 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             if act_st_parsed is None or pd.isna(act_st_parsed):
                 act_st_parsed = now_check
 
+            # แผนเริ่มตั้งต้น (Baseline)
+            plan_st_parsed = parse_flexible_datetime(r_info.get("วัน-เวลาขึ้นงาน"))
+            if plan_st_parsed is None or pd.isna(plan_st_parsed) or plan_st_parsed.year < 2020:
+                plan_st_parsed = act_st_parsed
+
+            plan_start_disp_txt = plan_st_parsed.strftime("%d/%m %H:%M")
+
+            # แผนเสร็จคำนวณจากเวลาเริ่มจริง (หรือแผนเริ่ม) บวกกะงาน
             _, plan_finish_dt = add_work_time_with_shift(get_next_valid_work_time(act_st_parsed), tot_h)
 
             start_disp_txt = act_st_parsed.strftime("%H:%M น.")
             finish_disp_txt = plan_finish_dt.strftime("%d/%m %H:%M น.")
             start_epoch = to_bangkok_epoch_ms(act_st_parsed)
 
-            # ตรวจสอบสถานะเตือนสี 3 ระดับ: เขียว (ปกติ) -> ส้ม (ใกล้เสร็จ <= 60 น.) -> แดง (เลยแผน)
+            # ตรวจสอบสถานะเตือนสี 3 ระดับ
             diff_mins = (plan_finish_dt - now_check).total_seconds() / 60.0
             if diff_mins < 0:
                 tv_card_cls = "tv-card tv-card-late"
@@ -2812,10 +2821,11 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
+                    <span>🚀 <b>เริ่มจริง:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
                     <span>⏱️ <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</span></span>
                 </div>
-                <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:5px;">
+                <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:10.5px; opacity:0.95; background:rgba(0,0,0,0.28); padding:3px 6px; border-radius:5px;">
+                    <span>📅 <b>แผนเริ่ม:</b> <span style="color:#E2E8F0;">{plan_start_disp_txt}</span></span>
                     <span>🏁 <b>แผนเสร็จ:</b> <span style="color:#A7F3D0; font-weight:800;">{finish_disp_txt}</span></span>
                 </div>
             </div>{hold_alert_html}
@@ -2851,7 +2861,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             <div style="font-size:11.5px; font-weight:700; color:#FEF3C7; line-height:1.4;">
                 <div>⚠️ <b>เครื่องหยุด:</b> รอเบิกวัสดุใหม่{h_start_txt}</div>
                 <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:11px; opacity:0.9; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:5px;">
-                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
+                    <span>📅 <b>แผนเริ่ม:</b> {ready_display_txt}</span>
                 </div>
             </div>
             '''
