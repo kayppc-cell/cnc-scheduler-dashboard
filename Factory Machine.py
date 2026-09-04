@@ -200,11 +200,18 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
 
     return segments, current_dt
 
+def is_deadline_active_status(status_val):
+    """เกณฑ์กลางเดียวกันสำหรับ TV Live และใบจ่ายคิว: ทุกงานที่ยังไม่เสร็จ"""
+    status = str(status_val)
+    if "เสร็จสิ้น" in status:
+        return False
+    return any(keyword in status for keyword in ["กำลังผลิต", "พักงาน", "รอวัสดุ", "รอคิว"])
+
 def highlight_running_deadlines(row, planned_finish_map):
     status = str(row.get("สถานะ", row.get("สถานะงาน", "")))
     job_id = str(row.get("ID", ""))
 
-    if "กำลังผลิต" in status:
+    if is_deadline_active_status(status):
         finish_dt = planned_finish_map.get(job_id)
         if finish_dt is not None and pd.notna(finish_dt):
             now = get_bangkok_now().replace(tzinfo=None)
@@ -1542,7 +1549,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             warn_count = 0
             late_count = 0
             for _, r in df_wo_direct.iterrows():
-                if "กำลังผลิต" in str(r.get("สถานะ", "")):
+                if is_deadline_active_status(r.get("สถานะ", "")):
                     f_dt = wo_finish_map.get(str(r.get("ID")))
                     if pd.notna(f_dt):
                         diff_m = (f_dt - now_check).total_seconds() / 60.0
@@ -1570,12 +1577,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         st.rerun()
                 with f_b2:
                     btn_warn_type = "primary" if cur_wo_filter == "WARN" else "secondary"
-                    if st.button(f"🟡 ใกล้เสร็จ ({warn_count})", type=btn_warn_type, use_container_width=True, help="เหลือน้อยกว่า 1 ชม.", key="btn_wo_filter_warn"):
+                    if st.button(f"🟡 ใกล้เสร็จ ({warn_count} งาน)", type=btn_warn_type, use_container_width=True, help="งานที่ยังไม่เสร็จและเหลือน้อยกว่า 1 ชม.", key="btn_wo_filter_warn"):
                         st.session_state.wo_color_filter = "WARN"
                         st.rerun()
                 with f_b3:
                     btn_late_type = "primary" if cur_wo_filter == "LATE" else "secondary"
-                    if st.button(f"🔴 เกินแผน ({late_count})", type=btn_late_type, use_container_width=True, help="เลยกำหนดเวลาแผน", key="btn_wo_filter_late"):
+                    if st.button(f"🔴 เกินแผน ({late_count} งาน)", type=btn_late_type, use_container_width=True, help="งานที่ยังไม่เสร็จและเลยกำหนดเวลาแผน", key="btn_wo_filter_late"):
                         st.session_state.wo_color_filter = "LATE"
                         st.rerun()
 
@@ -1584,7 +1591,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             selected_wo_filter = st.session_state.get("wo_color_filter", "ALL")
             if selected_wo_filter == "WARN":
                 def is_warn_row(r):
-                    if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
+                    if not is_deadline_active_status(r.get("สถานะ", "")): return False
                     f_dt = wo_finish_map.get(str(r.get("ID")))
                     if pd.notna(f_dt):
                         diff_m = (f_dt - now_check).total_seconds() / 60.0
@@ -1594,7 +1601,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             elif selected_wo_filter == "LATE":
                 def is_late_row(r):
-                    if "กำลังผลิต" not in str(r.get("สถานะ", "")): return False
+                    if not is_deadline_active_status(r.get("สถานะ", "")): return False
                     f_dt = wo_finish_map.get(str(r.get("ID")))
                     if pd.notna(f_dt):
                         diff_m = (f_dt - now_check).total_seconds() / 60.0
@@ -3059,7 +3066,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 <span style="color:#34D399;">🟢 กำลังรัน {running_machines_count}</span> | 
                 <span style="color:#FBBF24;">🟡 พักงาน {hold_machines_count}</span> | 
                 <span style="color:#94A3B8;">⚪ ว่าง {idle_machines_count}</span> |
-                <span style="color:#FCA5A5;">🚨 หลุดแผน {overdue_machines_count}</span>
+                <span style="color:#FCA5A5;">🚨 หลุดแผน {overdue_machines_count} เครื่อง</span>
             </div>
         </div>
     </div>
