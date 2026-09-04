@@ -367,8 +367,8 @@ st.markdown("""
     .step-card { background: #FFFFFF; padding: 14px 16px; border-radius: 14px; border: 1.5px solid #E2E8F0; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.02); }
     div.stButton > button:disabled { background-color: #F1F5F9 !important; color: #94A3B8 !important; border-color: #CBD5E1 !important; cursor: not-allowed !important; }
 
-    .tv-grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-top: 8px; }
-    .tv-card { border-radius: 12px; padding: 12px 14px; color: #FFFFFF !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; flex-direction: column; justify-content: space-between; min-height: 140px; border: 1px solid rgba(255,255,255,0.12); }
+    .tv-grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-top: 10px; }
+    .tv-card { border-radius: 14px; padding: 16px 18px; color: #FFFFFF !important; box-shadow: 0 6px 18px rgba(0,0,0,0.16); display: flex; flex-direction: column; justify-content: space-between; min-height: 180px; border: 1px solid rgba(255,255,255,0.12); }
     .tv-card-running { background: linear-gradient(135deg, #065F46 0%, #059669 100%) !important; border-left: 7px solid #34D399 !important; }
     .tv-card-warning { background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important; border-left: 7px solid #FDE047 !important; }
     .tv-card-late { background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important; border-left: 7px solid #EF4444 !important; }
@@ -2935,12 +2935,12 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 badge_html = '<span class="tv-overdue-badge">🚨 หลุดแผน</span>'
 
             time_info_combined = f'''
-            <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
+            <div style="font-size:13px; font-weight:700; color:#FFFFFF; line-height:1.5;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
-                    <span>⏱️ <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</span></span>
+                    <span>⏱️ <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span></span>
                 </div>
-                <div style="margin-top:2px; font-size:11px; opacity:0.98; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:4px; line-height:1.45;">
+                <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
                     <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
                 </div>
@@ -2972,9 +2972,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 h_start_txt = f" (เริ่มไว้: {h_st_parsed.strftime('%H:%M น.')})"
 
             time_info_combined = f'''
-            <div style="font-size:11.5px; font-weight:700; color:#FEF3C7; line-height:1.4;">
+            <div style="font-size:13px; font-weight:700; color:#FEF3C7; line-height:1.5;">
                 <div>⚠️ <b>เครื่องหยุด:</b> รอเบิกวัสดุใหม่{h_start_txt}</div>
-                <div style="margin-top:2px; font-size:11px; opacity:0.98; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:4px; line-height:1.45;">
+                <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
                     <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
                 </div>
@@ -3003,7 +3003,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             next_txt = "ไม่มีคิวรอ"
             is_overdue = False
             next_dates_html = '''
-            <div style="margin-top:3px; font-size:10.5px; color:#CBD5E1; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:4px; line-height:1.45;">
+            <div style="margin-top:4px; font-size:12.5px; color:#CBD5E1; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                 <div>📅 <b>เริ่มตามแผน:</b> -</div>
                 <div>🏁 <b>จบตามแผน:</b> -</div>
             </div>
@@ -3018,7 +3018,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 w_ready_dt, w_finish_dt, ready_display_txt, finish_display_txt, is_overdue = get_tv_plan_window(w_first)
                 
                 next_dates_html = f'''
-                <div style="margin-top:3px; font-size:10.5px; color:#FFFFFF; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:4px; line-height:1.45;">
+                <div style="margin-top:4px; font-size:12.5px; color:#FFFFFF; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
                     <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
                 </div>
@@ -3039,7 +3039,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": "พร้อมรับงาน",
                 "drawing": next_txt,
                 "step": "-",
-                "time_info": f"<div style='font-size:11.5px; font-weight:600; color:#CBD5E1;'>📋 คิวรอ: {len(waiting_jobs)} งาน</div>{next_dates_html}"
+                "time_info": f"<div style='font-size:13px; font-weight:600; color:#CBD5E1;'>📋 คิวรอ: {len(waiting_jobs)} งาน</div>{next_dates_html}"
             })
 
     st.markdown(f"""
@@ -3070,15 +3070,15 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         card_item = (
             f'<div class="{c["card_class"]}">'
             f'<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">'
-            f'<div style="font-size:14.5px; font-weight:800; letter-spacing:0.2px;">{c["machine"]}</div>'
-            f'<div style="font-size:10.5px;">{c["badge_html"]}</div>'
+            f'<div style="font-size:17px; font-weight:800; letter-spacing:0.2px;">{c["machine"]}</div>'
+            f'<div style="font-size:12px;">{c["badge_html"]}</div>'
             f'</div>'
             f'<div style="margin: 3px 0;">'
-            f'<div style="font-size:13px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📌 {c["plan"]}</div>'
-            f'<div style="font-size:11.5px; color:rgba(255,255,255,0.88); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px;">📄 {c["drawing"]}</div>'
-            f'<div style="font-size:11px; color:rgba(255,255,255,0.72); margin-top:1px;">⚙️ ขั้นตอน: {c["step"]}</div>'
+            f'<div style="font-size:15px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📌 {c["plan"]}</div>'
+            f'<div style="font-size:13.5px; color:rgba(255,255,255,0.9); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px;">📄 {c["drawing"]}</div>'
+            f'<div style="font-size:12.5px; color:rgba(255,255,255,0.78); margin-top:2px;">⚙️ ขั้นตอน: {c["step"]}</div>'
             f'</div>'
-            f'<div style="margin-top:6px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.15);">'
+            f'<div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.18);">'
             f'{c["time_info"]}'
             f'</div>'
             f'</div>'
