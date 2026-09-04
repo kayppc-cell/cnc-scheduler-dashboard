@@ -357,7 +357,7 @@ st.markdown("""
     div.stButton > button:disabled { background-color: #F1F5F9 !important; color: #94A3B8 !important; border-color: #CBD5E1 !important; cursor: not-allowed !important; }
 
     .tv-grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-top: 8px; }
-    .tv-card { border-radius: 12px; padding: 12px 14px; color: #FFFFFF !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; flex-direction: column; justify-content: space-between; min-height: 140px; border: 1px solid rgba(255,255,255,0.12); }
+    .tv-card { border-radius: 12px; padding: 12px 14px; color: #FFFFFF !important; box-shadow: 0 4px 14px rgba(0,0,0,0.12); display: flex; flex-direction: column; justify-content: space-between; min-height: 145px; border: 1px solid rgba(255,255,255,0.12); }
     .tv-card-running { background: linear-gradient(135deg, #065F46 0%, #059669 100%) !important; border-left: 7px solid #34D399 !important; }
     .tv-card-warning { background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important; border-left: 7px solid #FDE047 !important; }
     .tv-card-late { background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important; border-left: 7px solid #EF4444 !important; }
@@ -1134,7 +1134,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =========================================================================
-            # 1. รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ล็อก Baseline วัน/เดือน/ปี นำหน้า)
+            # 1. รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ล็อก Baseline วัน/เดือน/ปี)
             # =========================================================================
             column_order = [
                 "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -1144,14 +1144,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
 
-            # ฟอร์แมตวันเวลาเป็นสตริง วัน/เดือน/ปี ชั่วโมง:นาที เสมอ
             def to_dmy_str(val):
                 dt_p = parse_flexible_datetime(val)
                 return dt_p.strftime("%d/%m/%Y %H:%M") if dt_p is not None and pd.notna(dt_p) else ""
 
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(to_dmy_str)
 
-            # คำนวณวัน-เวลาจบงานตามแผน Baseline
             plan_finish_dates = []
             for _, r in active_jobs_editor_df.iterrows():
                 dt_s = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
@@ -1182,7 +1180,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 st.session_state.active_select_all = False
                                 st.rerun()
                     with tool_col2:
-                        st.caption("🔒 **ล็อกเวลาตั้งต้น (Plan Baseline):** ดับเบิลคลิกแก้ไขช่อง 'วัน-เวลาขึ้นงาน' ได้อิสระในรูปแบบ 'วัน/เดือน/ปี ชม:นาที' (เช่น 04/09/2026 15:30) พอกดบันทึกจะจำค่านี้ไว้ถาวร")
+                        st.caption("🔒 **ล็อกเวลาตั้งต้น (Plan Baseline):** ดับเบิลคลิกแก้ไขช่อง 'วัน-เวลาขึ้นงาน' ในรูปแบบ 'วัน/เดือน/ปี ชม:นาที' (เช่น 04/09/2026 15:30) พอกดบันทึกจะจำค่านี้ไว้ถาวร")
                     with tool_search:
                         search_query_editor = st.text_input(
                             "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
@@ -1313,7 +1311,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if dt_parsed is not None and pd.notna(dt_parsed):
                                     ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
                                 else:
-                                    # ป้องกันค่าหาย: ถ้าไม่ได้พิมพ์หรือแปลงไม่ผ่าน ให้ใช้ค่าเดิมของแถวใน DB
                                     orig_id = row.get("ID")
                                     db_match = df_db[df_db["ID"] == orig_id] if pd.notna(orig_id) else pd.DataFrame()
                                     if not db_match.empty and pd.notna(db_match.iloc[0]["วัน-เวลาขึ้นงาน"]):
@@ -2742,7 +2739,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.info(f"ℹ️ ยังไม่มีประวัติงานที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' ในเดือน {month_names[selected_month_idx-1]} {selected_year}")
 
 # ---------------------------------------------------------
-# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
+# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard - ฟังก์ชันเต็ม 100%)
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
@@ -2750,6 +2747,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
     now_bangkok = get_bangkok_now()
     cur_date_str = now_bangkok.strftime("%d/%m/%Y")
+    now_check = now_bangkok.replace(tzinfo=None)
 
     machine_status_cards = []
     running_machines_count = 0
@@ -2763,9 +2761,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         hold_job = m_jobs[m_jobs["สถานะงาน"].str.contains("พักงาน")]
         waiting_jobs = m_jobs[m_jobs["สถานะงาน"].str.contains("รอคิว")]
 
+        # จัดการแจ้งเตือนกรณีมีงานพักรอวัสดุ
         hold_alert_html = ""
         if not hold_job.empty:
-            hold_machines_count += 1
             h_first = hold_job.iloc[0]
             h_start = h_first.get("เริ่มจริง")
             h_start_txt = ""
@@ -2782,22 +2780,35 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
             step_name = str(r_info.get("ขั้นตอน (Step)", "-"))
             
-            r_ready_dt = parse_flexible_datetime(r_info.get("วัน-เวลาขึ้นงาน"))
-            ready_display_txt = r_ready_dt.strftime("%d/%m %H:%M") if (r_ready_dt is not None and pd.notna(r_ready_dt)) else "-"
+            # คำนวณเวลาจบงานตามแผนแบบลูกโซ่
+            s_m = safe_float(r_info.get("Setup (น.)"), 10.0)
+            b_m = safe_float(r_info.get("Basic (น.)"), 0.0)
+            p_m = safe_float(r_info.get("โปรแกรม (น.)"), 120.0)
+            tot_h = (s_m + b_m + p_m) / 60.0
 
-            start_disp_txt = "-"
-            start_epoch = to_bangkok_epoch_ms(s_start)
-            r_start_parsed = parse_flexible_datetime(s_start)
+            act_st_parsed = parse_flexible_datetime(s_start)
+            if act_st_parsed is None or pd.isna(act_st_parsed):
+                act_st_parsed = parse_flexible_datetime(r_info.get("วัน-เวลาขึ้นงาน"))
+            if act_st_parsed is None or pd.isna(act_st_parsed):
+                act_st_parsed = now_check
 
-            if r_start_parsed is None and r_ready_dt is not None and pd.notna(r_ready_dt):
-                r_start_parsed = r_ready_dt
-                start_epoch = to_bangkok_epoch_ms(r_ready_dt)
+            _, plan_finish_dt = add_work_time_with_shift(get_next_valid_work_time(act_st_parsed), tot_h)
 
-            if r_start_parsed is not None and pd.notna(r_start_parsed):
-                start_disp_txt = r_start_parsed.strftime("%H:%M น.")
-            
-            tv_card_cls = "tv-card tv-card-running"
-            badge_html = '<span class="tv-pulse-dot" style="margin-right:6px;"></span> <b style="color:#A7F3D0;">กำลังรันงาน</b>'
+            start_disp_txt = act_st_parsed.strftime("%H:%M น.")
+            finish_disp_txt = plan_finish_dt.strftime("%d/%m %H:%M")
+            start_epoch = to_bangkok_epoch_ms(act_st_parsed)
+
+            # ตรวจสอบสถานะเตือนสี 3 ระดับ: เขียว (ปกติ) -> ส้ม (ใกล้เสร็จ <= 60 น.) -> แดง (เลยแผน)
+            diff_mins = (plan_finish_dt - now_check).total_seconds() / 60.0
+            if diff_mins < 0:
+                tv_card_cls = "tv-card tv-card-late"
+                badge_html = '<b style="color:#FCA5A5;">🔴 เกินแผน (' + f"{abs(int(diff_mins))} น.)</b>"
+            elif 0 <= diff_mins <= 60:
+                tv_card_cls = "tv-card tv-card-warning"
+                badge_html = '<b style="color:#FDE047;">🟡 ใกล้เสร็จ (' + f"เหลือ {int(diff_mins)} น.)</b>"
+            else:
+                tv_card_cls = "tv-card tv-card-running"
+                badge_html = '<span class="tv-pulse-dot" style="margin-right:6px;"></span> <b style="color:#A7F3D0;">กำลังผลิต ⏱️</b>'
 
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
@@ -2805,8 +2816,8 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
                     <span>⏱️ <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</span></span>
                 </div>
-                <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px;">
-                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
+                <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
+                    <span>🏁 <b>แผนเสร็จ:</b> {finish_disp_txt}</span>
                 </div>
             </div>{hold_alert_html}
             '''
@@ -2822,6 +2833,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "time_info": time_info_combined
             })
         elif not hold_job.empty:
+            hold_machines_count += 1
             h_info = hold_job.iloc[0]
             h_start = h_info.get("เริ่มจริง")
             p_code = str(h_info.get("แผนงาน", "-"))
@@ -2871,7 +2883,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 
                 next_dates_html = f'''
                 <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:10.5px; color:#94A3B8; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
-                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
+                    <span>📅 <b>กำหนดขึ้น:</b> {ready_display_txt}</span>
                 </div>
                 '''
 
