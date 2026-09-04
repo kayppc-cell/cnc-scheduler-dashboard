@@ -1329,7 +1329,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "สถานะและสถานีปัจจุบัน": st.column_config.TextColumn("สถานะ/สถานีปัจจุบัน", width=190),
                     },
                     hide_index=True,
-                    use_container_width=True,
+                    width=980,
                     row_height=30
                 )
 
@@ -1581,7 +1581,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ลบ": st.column_config.CheckboxColumn("🗑️", width=45, default=False),
                         },
                         hide_index=True,
-                        use_container_width=True,
+                        width=1540,
                         row_height=30
                     )
                 else:
@@ -1605,7 +1605,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "สถานะงาน": st.column_config.TextColumn("สถานะงาน", width=145),
                         },
                         hide_index=True,
-                        use_container_width=True
+                        width=1540
                     )
                 
                 st.markdown('<div id="editor_table_bottom_mark"></div>', unsafe_allow_html=True)
@@ -1886,7 +1886,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, format="%d"),
                     "รวม (ชม.)": st.column_config.NumberColumn("รวม ชม.", width=70, format="%.2f"),
                 },
-                use_container_width=True,
+                width=1500,
                 hide_index=True,
                 row_height=30
             )
@@ -2352,7 +2352,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ลบประวัติ": st.column_config.CheckboxColumn("🗑️", width=45, default=False),
                         },
                         hide_index=True,
-                        use_container_width=True,
+                        width=1780,
                         height=420,
                         row_height=30
                     )
@@ -2390,7 +2390,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "สถานะงาน": st.column_config.TextColumn("สถานะ", width=120),
                         },
                         hide_index=True,
-                        use_container_width=True
+                        width=1780
                     )
             else:
                 st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว'")
@@ -2430,7 +2430,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=125, disabled=True),
                             "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("บาท/ชม.", width=80, min_value=0, max_value=50000, step=50, format="%d ฿", required=True)
                         },
-                        use_container_width=True,
+                        width=330,
                         hide_index=True,
                         height=440,
                         row_height=28
@@ -2444,7 +2444,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=125),
                             "เรตราคา (บาท/ชม.)": st.column_config.NumberColumn("บาท/ชม.", width=80, format="%d ฿")
                         },
-                        use_container_width=True,
+                        width=330,
                         hide_index=True,
                         height=440,
                         row_height=28
@@ -2508,7 +2508,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ต้นทุนจริงสุทธิ (บาท)": st.column_config.NumberColumn("ต้นทุนจริง", width=90, format="%.2f ฿"),
                             "ผลต่างต้นทุน (บาท)": st.column_config.NumberColumn("ผลต่าง", width=85, format="%+.2f ฿"),
                         },
-                        use_container_width=True,
+                        width=1320,
                         hide_index=True,
                         height=440,
                         row_height=28
@@ -2730,7 +2730,7 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                             "การประเมิน": st.column_config.TextColumn("ผลประเมิน", width=145),
                         },
                         hide_index=True,
-                        use_container_width=True
+                        width=1430
                     )
 
                     st.divider()
@@ -2780,7 +2780,7 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                                     "การประเมิน": st.column_config.TextColumn("ผลประเมิน", width=140),
                                 },
                                 hide_index=True,
-                                use_container_width=True
+                                width=1210
                             )
                 else:
                     st.warning("⚠️ ไม่พบข้อมูล Drawing ตามเงื่อนไขที่ค้นหา")
@@ -3178,7 +3178,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                         "สัดส่วนมูลค่า (%)": st.column_config.ProgressColumn("สัดส่วน", width=110, min_value=0, max_value=100, format="%d%%")
                     },
                     hide_index=True,
-                    use_container_width=True
+                    width=900
                 )
 
             with col_sec2:
@@ -3194,7 +3194,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                         "สัดส่วน (%)": st.column_config.ProgressColumn("สัดส่วน", width=95, min_value=0, max_value=100, format="%d%%")
                     },
                     hide_index=True,
-                    use_container_width=True
+                    width=610
                 )
 
             st.divider()
@@ -3222,7 +3222,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                         "ผลต่าง (ชม.)": st.column_config.NumberColumn("เกินแผน (+ชม.)", width=110, format="+%.2f ชม."),
                     },
                     hide_index=True,
-                    use_container_width=True
+                    width=960
                 )
             else:
                 st.success("🎉 ไม่มีงานใดที่ผลิตช้ากว่าเวลาแผนที่ตั้งไว้ในเดือนนี้")
@@ -3251,7 +3251,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                     "มูลค่ารวม (บาท)": st.column_config.NumberColumn("มูลค่า (บาท)", width=120, format="%.2f ฿"),
                 },
                 hide_index=True,
-                use_container_width=True
+                width=1390
             )
 
         else:
