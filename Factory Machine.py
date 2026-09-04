@@ -372,6 +372,17 @@ st.markdown("""
     .tv-card-running { background: linear-gradient(135deg, #065F46 0%, #059669 100%) !important; border-left: 7px solid #34D399 !important; }
     .tv-card-warning { background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important; border-left: 7px solid #FDE047 !important; }
     .tv-card-late { background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important; border-left: 7px solid #EF4444 !important; }
+    @keyframes tvOverduePulse {
+        0%, 100% { transform: scale(1); box-shadow: 0 0 0 2px #FDE047, 0 4px 14px rgba(239,68,68,0.45); filter: brightness(1); }
+        50% { transform: scale(1.012); box-shadow: 0 0 0 5px #EF4444, 0 0 26px rgba(239,68,68,0.95); filter: brightness(1.35); }
+    }
+    .tv-card-overdue {
+        background: linear-gradient(135deg, #7F1D1D 0%, #DC2626 100%) !important;
+        border: 2px solid #FDE047 !important;
+        border-left: 7px solid #FDE047 !important;
+        animation: tvOverduePulse 1.2s ease-in-out infinite;
+    }
+    .tv-overdue-badge { color:#FFFFFF; background:#DC2626; border:1px solid #FDE047; padding:2px 6px; border-radius:6px; font-weight:900; }
     .tv-card-hold { background: linear-gradient(135deg, #92400E 0%, #D97706 100%) !important; border-left: 7px solid #FBBF24 !important; }
     .tv-card-idle { background: linear-gradient(135deg, #1E293B 0%, #334155 100%) !important; border-left: 7px solid #64748B !important; opacity: 0.92; }
 
@@ -2858,6 +2869,24 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     running_machines_count = 0
     hold_machines_count = 0
     idle_machines_count = 0
+    overdue_machines_count = 0
+
+    def get_tv_plan_window(job_row):
+        """คืนเวลาเริ่ม/จบตามแผนของงานบนการ์ด และสถานะหลุดแผน"""
+        plan_start = parse_flexible_datetime(job_row.get("วัน-เวลาขึ้นงาน"))
+        if plan_start is None or pd.isna(plan_start):
+            return None, None, "-", "-", False
+        total_hours = (
+            safe_float(job_row.get("Setup (น.)"), 10.0)
+            + safe_float(job_row.get("Basic (น.)"), 0.0)
+            + safe_float(job_row.get("โปรแกรม (น.)"), 120.0)
+        ) / 60.0
+        plan_start = get_next_valid_work_time(plan_start)
+        _, plan_finish = add_work_time_with_shift(plan_start, total_hours)
+        start_txt = plan_start.strftime("%d/%m/%Y %H:%M")
+        finish_txt = plan_finish.strftime("%d/%m/%Y %H:%M")
+        is_overdue = now_bangkok.replace(tzinfo=None) > plan_finish
+        return plan_start, plan_finish, start_txt, finish_txt, is_overdue
 
     for idx_m, m in enumerate(MACHINE_LIST):
         m_jobs = df_live[df_live["เลือกเครื่องจักร"] == m] if not df_live.empty else pd.DataFrame()
@@ -2885,8 +2914,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
             step_name = str(r_info.get("ขั้นตอน (Step)", "-"))
             
-            r_ready_dt = parse_flexible_datetime(r_info.get("วัน-เวลาขึ้นงาน"))
-            ready_display_txt = r_ready_dt.strftime("%d/%m %H:%M") if (r_ready_dt is not None and pd.notna(r_ready_dt)) else "-"
+            r_ready_dt, r_finish_dt, ready_display_txt, finish_display_txt, is_overdue = get_tv_plan_window(r_info)
 
             start_disp_txt = "-"
             start_epoch = to_bangkok_epoch_ms(s_start)
@@ -2901,6 +2929,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot" style="margin-right:6px;"></span> <b style="color:#A7F3D0;">กำลังรันงาน</b>'
+            if is_overdue:
+                overdue_machines_count += 1
+                tv_card_cls = "tv-card tv-card-overdue"
+                badge_html = '<span class="tv-overdue-badge">🚨 หลุดแผน</span>'
 
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FFFFFF; line-height:1.4;">
@@ -2908,8 +2940,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
                     <span>⏱️ <span class="pes-live-timer" data-start-epoch="{start_epoch}" style="font-family:monospace; font-size:13px; font-weight:900; color:#FDE047;">00:00:00</span></span>
                 </div>
-                <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.95; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px;">
-                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
+                <div style="margin-top:2px; font-size:11px; opacity:0.98; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:4px; line-height:1.45;">
+                    <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
+                    <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
                 </div>
             </div>{hold_alert_html}
             '''
@@ -2931,8 +2964,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             d_code = str(h_info.get("ชื่อ Drawing.", "-"))
             step_name = str(h_info.get("ขั้นตอน (Step)", "-"))
             
-            h_ready_dt = parse_flexible_datetime(h_info.get("วัน-เวลาขึ้นงาน"))
-            ready_display_txt = h_ready_dt.strftime("%d/%m %H:%M") if (h_ready_dt is not None and pd.notna(h_ready_dt)) else "-"
+            h_ready_dt, h_finish_dt, ready_display_txt, finish_display_txt, is_overdue = get_tv_plan_window(h_info)
 
             h_start_txt = ""
             h_st_parsed = parse_flexible_datetime(h_start)
@@ -2942,17 +2974,25 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             time_info_combined = f'''
             <div style="font-size:11.5px; font-weight:700; color:#FEF3C7; line-height:1.4;">
                 <div>⚠️ <b>เครื่องหยุด:</b> รอเบิกวัสดุใหม่{h_start_txt}</div>
-                <div style="margin-top:2px; display:flex; justify-content:space-between; font-size:11px; opacity:0.9; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
-                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
+                <div style="margin-top:2px; font-size:11px; opacity:0.98; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:4px; line-height:1.45;">
+                    <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
+                    <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
                 </div>
             </div>
             '''
 
+            hold_card_cls = "tv-card tv-card-hold"
+            hold_badge_html = '<b style="color:#FDE68A;">🛑 พักงาน (รอวัสดุ)</b>'
+            if is_overdue:
+                overdue_machines_count += 1
+                hold_card_cls = "tv-card tv-card-overdue"
+                hold_badge_html = '<span class="tv-overdue-badge">🚨 หลุดแผน</span>'
+
             machine_status_cards.append({
                 "machine": m,
                 "status": "HOLD",
-                "card_class": "tv-card tv-card-hold",
-                "badge_html": '<b style="color:#FDE68A;">🛑 พักงาน (รอวัสดุ)</b>',
+                "card_class": hold_card_cls,
+                "badge_html": hold_badge_html,
                 "plan": p_code,
                 "drawing": d_code,
                 "step": step_name,
@@ -2961,7 +3001,13 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         else:
             idle_machines_count += 1
             next_txt = "ไม่มีคิวรอ"
-            next_dates_html = ""
+            is_overdue = False
+            next_dates_html = '''
+            <div style="margin-top:3px; font-size:10.5px; color:#CBD5E1; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:4px; line-height:1.45;">
+                <div>📅 <b>เริ่มตามแผน:</b> -</div>
+                <div>🏁 <b>จบตามแผน:</b> -</div>
+            </div>
+            '''
             if not waiting_jobs.empty:
                 w_first = waiting_jobs.iloc[0]
                 p_code = str(w_first.get('แผนงาน', '-'))
@@ -2969,20 +3015,27 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 step_name = str(w_first.get('ขั้นตอน (Step)', '-'))
                 next_txt = f"คิวถัดไป: {p_code} ({d_code})"
                 
-                w_ready_dt = parse_flexible_datetime(w_first.get("วัน-เวลาขึ้นงาน"))
-                ready_display_txt = w_ready_dt.strftime("%d/%m %H:%M") if (w_ready_dt is not None and pd.notna(w_ready_dt)) else "-"
+                w_ready_dt, w_finish_dt, ready_display_txt, finish_display_txt, is_overdue = get_tv_plan_window(w_first)
                 
                 next_dates_html = f'''
-                <div style="margin-top:3px; display:flex; justify-content:space-between; font-size:10.5px; color:#94A3B8; background:rgba(0,0,0,0.25); padding:2px 6px; border-radius:4px;">
-                    <span>📅 <b>ขึ้น:</b> {ready_display_txt}</span>
+                <div style="margin-top:3px; font-size:10.5px; color:#FFFFFF; background:rgba(0,0,0,0.25); padding:3px 6px; border-radius:4px; line-height:1.45;">
+                    <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
+                    <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
                 </div>
                 '''
+
+            idle_card_cls = "tv-card tv-card-idle"
+            idle_badge_html = '<b style="color:#94A3B8;">⚪ เครื่องว่าง (IDLE)</b>'
+            if not waiting_jobs.empty and is_overdue:
+                overdue_machines_count += 1
+                idle_card_cls = "tv-card tv-card-overdue"
+                idle_badge_html = '<span class="tv-overdue-badge">🚨 หลุดแผน</span>'
 
             machine_status_cards.append({
                 "machine": m,
                 "status": "IDLE",
-                "card_class": "tv-card tv-card-idle",
-                "badge_html": '<b style="color:#94A3B8;">⚪ เครื่องว่าง (IDLE)</b>',
+                "card_class": idle_card_cls,
+                "badge_html": idle_badge_html,
                 "plan": "พร้อมรับงาน",
                 "drawing": next_txt,
                 "step": "-",
@@ -3005,7 +3058,8 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             <div style="font-size:12.5px; font-weight:bold;">
                 <span style="color:#34D399;">🟢 กำลังรัน {running_machines_count}</span> | 
                 <span style="color:#FBBF24;">🟡 พักงาน {hold_machines_count}</span> | 
-                <span style="color:#94A3B8;">⚪ ว่าง {idle_machines_count}</span>
+                <span style="color:#94A3B8;">⚪ ว่าง {idle_machines_count}</span> |
+                <span style="color:#FCA5A5;">🚨 หลุดแผน {overdue_machines_count}</span>
             </div>
         </div>
     </div>
