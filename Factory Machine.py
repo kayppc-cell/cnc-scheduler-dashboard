@@ -257,8 +257,8 @@ st.markdown("""
         padding-top: 0.8rem !important;
         padding-bottom: 2.5rem !important;
         padding-left: 0.8rem !important;
-        max-width: 100% !important;
         padding-right: 0.8rem !important;
+        max-width: 100% !important;
     }
 
     .main-header {
@@ -1241,6 +1241,25 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     ].copy().reset_index(drop=True)
                 else:
                     display_editor_df = active_jobs_editor_df.copy().reset_index(drop=True)
+
+                # =========================================================================
+                # 🛡️ Data Type Sanitization ป้องกัน StreamlitAPIException อย่างสมบูรณ์ 100%
+                # =========================================================================
+                display_editor_df["แผนงาน"] = display_editor_df["แผนงาน"].astype(str).fillna("")
+                display_editor_df["ชื่อ Drawing."] = display_editor_df["ชื่อ Drawing."].astype(str).fillna("")
+                display_editor_df["จำนวน"] = pd.to_numeric(display_editor_df["จำนวน"], errors='coerce').fillna(1).astype(int)
+                display_editor_df["วัสดุ"] = display_editor_df["วัสดุ"].astype(str).fillna("SS400")
+                display_editor_df["ประเภทงาน"] = display_editor_df["ประเภทงาน"].astype(str).replace({"nan": "🟢 งานปกติ", "": "🟢 งานปกติ", "None": "🟢 งานปกติ"})
+                display_editor_df["ขั้นตอน (Step)"] = display_editor_df["ขั้นตอน (Step)"].astype(str).fillna("รอหน้าเครื่องระบุ")
+                display_editor_df["เลือกเครื่องจักร"] = display_editor_df["เลือกเครื่องจักร"].astype(str).fillna("No.1 Awea")
+                display_editor_df["วัน-เวลาขึ้นงาน"] = display_editor_df["วัน-เวลาขึ้นงาน"].astype(str).fillna("")
+                display_editor_df["วัน-เวลาจบงาน"] = display_editor_df["วัน-เวลาจบงาน"].astype(str).fillna("")
+                display_editor_df["Setup (น.)"] = pd.to_numeric(display_editor_df["Setup (น.)"], errors='coerce').fillna(10).astype(int)
+                display_editor_df["Basic (น.)"] = pd.to_numeric(display_editor_df["Basic (น.)"], errors='coerce').fillna(0).astype(int)
+                display_editor_df["โปรแกรม (น.)"] = pd.to_numeric(display_editor_df["โปรแกรม (น.)"], errors='coerce').fillna(120).astype(int)
+                display_editor_df["รวม (ชม.)"] = pd.to_numeric(display_editor_df["รวม (ชม.)"], errors='coerce').fillna(0.0).astype(float)
+                display_editor_df["สถานะงาน"] = display_editor_df["สถานะงาน"].astype(str).replace({"nan": "🟧 รอคิวผลิต", "": "🟧 รอคิวผลิต", "None": "🟧 รอคิวผลิต"})
+                display_editor_df["ลบ"] = display_editor_df["ลบ"].fillna(False).astype(bool)
 
                 if is_admin:
                     edited_jobs = st.data_editor(
