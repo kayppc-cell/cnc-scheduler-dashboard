@@ -1400,7 +1400,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ลิงก์เวลาลูกโซ่อัตโนมัติ)", expanded=True):
                 if is_admin:
-                    tool_col1, tool_col2, tool_search = st.columns([2.5, 4.5, 3])
+                    tool_col1, tool_col2 = st.columns([2.5, 7.5])
                     with tool_col1:
                         b_c1, b_c2 = st.columns(2)
                         with b_c1:
@@ -1413,30 +1413,69 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 st.rerun()
                     with tool_col2:
                         st.caption("🔗 **ระบบลูกโซ่ทำงานอยู่:** คิวที่ 1 เป็นตัวตั้ง คิวถัดไปจะรับเวลาจบมาเป็นเวลาเริ่มให้อัตโนมัติ โดยมีเวลา Baseline ไว้สอบกลับ")
-                    with tool_search:
-                        search_query_editor = st.text_input(
-                            "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
-                            placeholder="พิมพ์เพื่อกรองข้อมูล เช่น SS400, No.1, รอคิวผลิต...",
-                            key="search_active_editor_input"
-                        )
-                else:
-                    search_query_editor = st.text_input(
-                        "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
-                        placeholder="พิมพ์เพื่อกรองข้อมูล เช่น SS400, No.1, รอคิวผลิต...",
-                        key="search_active_editor_input_viewer"
-                    )
 
-                if search_query_editor.strip() != "":
-                    q = search_query_editor.strip().lower()
-                    display_editor_df = active_jobs_editor_df[
-                        active_jobs_editor_df["แผนงาน"].astype(str).str.lower().str.contains(q) |
-                        active_jobs_editor_df["ชื่อ Drawing."].astype(str).str.lower().str.contains(q) |
-                        active_jobs_editor_df["วัสดุ"].astype(str).str.lower().str.contains(q) |
-                        active_jobs_editor_df["เลือกเครื่องจักร"].astype(str).str.lower().str.contains(q) |
-                        active_jobs_editor_df["สถานะงาน"].astype(str).str.lower().str.contains(q)
-                    ].copy().reset_index(drop=True)
-                else:
-                    display_editor_df = active_jobs_editor_df.copy().reset_index(drop=True)
+                st.markdown("**🔎 ค้นหาด่วนด้วยปุ่ม:**")
+                active_quick_filter = st.session_state.get("active_jobs_quick_filter", "ALL")
+                active_filter_buttons = [
+                    ("ALL", "🌐 ทั้งหมด"), ("RUNNING", "🟦 กำลังผลิต"),
+                    ("WAITING", "🟧 รอคิว"), ("HOLD", "🟨 พักงาน"),
+                    ("URGENT", "🔥 งานด่วน"), ("LATE", "🚨 หลุดแผน")
+                ]
+                for btn_col, (filter_key, filter_label) in zip(st.columns(6), active_filter_buttons):
+                    with btn_col:
+                        if st.button(
+                            filter_label,
+                            key=f"btn_active_quick_{filter_key}",
+                            type="primary" if active_quick_filter == filter_key else "secondary",
+                            use_container_width=True
+                        ):
+                            st.session_state.active_jobs_quick_filter = filter_key
+                            st.rerun()
+
+                active_machine_options = ["🌐 ทุกเครื่อง"] + sorted(active_jobs_editor_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
+                active_plan_options = ["🌐 ทุกแผนงาน"] + sorted(active_jobs_editor_df["แผนงาน"].dropna().astype(str).unique().tolist())
+                active_drawing_options = ["🌐 ทุก Drawing"] + sorted(active_jobs_editor_df["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
+                active_material_options = ["🌐 ทุกวัสดุ"] + sorted(active_jobs_editor_df["วัสดุ"].dropna().astype(str).unique().tolist())
+
+                a_sel1, a_sel2, a_sel3, a_sel4 = st.columns([1.2, 1, 1.5, 0.9])
+                with a_sel1:
+                    selected_active_machine = st.selectbox("🏭 เครื่องจักร:", active_machine_options, key="active_jobs_machine_select")
+                with a_sel2:
+                    selected_active_plan = st.selectbox("📌 แผนงาน:", active_plan_options, key="active_jobs_plan_select")
+                with a_sel3:
+                    selected_active_drawing = st.selectbox("📄 Drawing:", active_drawing_options, key="active_jobs_drawing_select")
+                with a_sel4:
+                    selected_active_material = st.selectbox("🔩 วัสดุ:", active_material_options, key="active_jobs_material_select")
+
+                display_editor_df = active_jobs_editor_df.copy()
+                active_status_text = display_editor_df["สถานะงาน"].astype(str)
+                if active_quick_filter == "RUNNING":
+                    display_editor_df = display_editor_df[active_status_text.str.contains("กำลังผลิต")]
+                elif active_quick_filter == "WAITING":
+                    display_editor_df = display_editor_df[active_status_text.str.contains("รอคิว")]
+                elif active_quick_filter == "HOLD":
+                    display_editor_df = display_editor_df[active_status_text.str.contains("พักงาน|รอวัสดุ", regex=True)]
+                elif active_quick_filter == "URGENT":
+                    display_editor_df = display_editor_df[display_editor_df["ประเภทงาน"].astype(str).str.contains("ด่วน")]
+                elif active_quick_filter == "LATE":
+                    late_now = get_bangkok_now().replace(tzinfo=None)
+                    display_editor_df = display_editor_df[
+                        display_editor_df["วัน-เวลาจบงาน"].apply(
+                            lambda value: (lambda dt: dt is not None and dt < late_now)(parse_flexible_datetime(value))
+                        )
+                    ]
+
+                if selected_active_machine != "🌐 ทุกเครื่อง":
+                    display_editor_df = display_editor_df[display_editor_df["เลือกเครื่องจักร"].astype(str) == selected_active_machine]
+                if selected_active_plan != "🌐 ทุกแผนงาน":
+                    display_editor_df = display_editor_df[display_editor_df["แผนงาน"].astype(str) == selected_active_plan]
+                if selected_active_drawing != "🌐 ทุก Drawing":
+                    display_editor_df = display_editor_df[display_editor_df["ชื่อ Drawing."].astype(str) == selected_active_drawing]
+                if selected_active_material != "🌐 ทุกวัสดุ":
+                    display_editor_df = display_editor_df[display_editor_df["วัสดุ"].astype(str) == selected_active_material]
+
+                display_editor_df = display_editor_df.reset_index(drop=True)
+                st.caption(f"แสดงผล {len(display_editor_df):,} จากทั้งหมด {len(active_jobs_editor_df):,} รายการ")
 
                 # เก็บลำดับ ID ของตารางที่แสดงจริงไว้ใช้จับคู่ edited_rows ในรอบ rerun ถัดไป
                 st.session_state.editor_cnc_jobs_grid_main_row_ids = display_editor_df["ID"].tolist()
@@ -1663,38 +1702,49 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         elif 0 <= diff_m <= 60:
                             warn_count += 1
 
-            wo_search_col, wo_filter_btn_col = st.columns([4, 6])
-            with wo_search_col:
-                search_query_wo = st.text_input(
-                    "🔍 ค้นหาในใบจ่ายคิวงาน (แผนงาน, Drawing, เครื่องจักร, สถานะ):",
-                    placeholder="พิมพ์เพื่อค้นหาคิวงาน เช่น รอคิวผลิต, กำลังผลิต...",
-                    key="search_wo_sheet_input"
-                )
+            st.markdown("**🔎 ค้นหาด่วนด้วยปุ่ม:**")
+            selected_wo_filter = st.session_state.get("wo_color_filter", "ALL")
+            wo_filter_buttons = [
+                ("ALL", "🌐 ทั้งหมด"), ("RUNNING", "🟦 กำลังผลิต"),
+                ("WAITING", "🟧 รอคิว"), ("HOLD", "🟨 พักงาน"),
+                ("WARN", f"🟡 ใกล้เสร็จ {warn_count}"), ("LATE", f"🔴 เกินแผน {late_count}")
+            ]
+            for btn_col, (filter_key, filter_label) in zip(st.columns(6), wo_filter_buttons):
+                with btn_col:
+                    if st.button(
+                        filter_label,
+                        key=f"btn_wo_quick_{filter_key}",
+                        type="primary" if selected_wo_filter == filter_key else "secondary",
+                        use_container_width=True
+                    ):
+                        st.session_state.wo_color_filter = filter_key
+                        st.rerun()
 
-            with wo_filter_btn_col:
-                st.caption("**🎯 ตัวกรองด่วนสถานะเตือนเวลา:**")
-                f_b1, f_b2, f_b3 = st.columns([1.5, 2.2, 2.2])
-                cur_wo_filter = st.session_state.get("wo_color_filter", "ALL")
-                with f_b1:
-                    btn_all_type = "primary" if cur_wo_filter == "ALL" else "secondary"
-                    if st.button("🌐 ทั้งหมด", type=btn_all_type, use_container_width=True, key="btn_wo_filter_all"):
-                        st.session_state.wo_color_filter = "ALL"
-                        st.rerun()
-                with f_b2:
-                    btn_warn_type = "primary" if cur_wo_filter == "WARN" else "secondary"
-                    if st.button(f"🟡 ใกล้เสร็จ ({warn_count} งาน)", type=btn_warn_type, use_container_width=True, help="งานที่ยังไม่เสร็จและเหลือน้อยกว่า 1 ชม.", key="btn_wo_filter_warn"):
-                        st.session_state.wo_color_filter = "WARN"
-                        st.rerun()
-                with f_b3:
-                    btn_late_type = "primary" if cur_wo_filter == "LATE" else "secondary"
-                    if st.button(f"🔴 เกินแผน ({late_count} งาน)", type=btn_late_type, use_container_width=True, help="งานที่ยังไม่เสร็จและเลยกำหนดเวลาแผน", key="btn_wo_filter_late"):
-                        st.session_state.wo_color_filter = "LATE"
-                        st.rerun()
+            wo_machine_options = ["🌐 ทุกเครื่อง"] + sorted(df_wo_direct["เครื่องจักร / แผนก"].dropna().astype(str).unique().tolist())
+            wo_plan_options = ["🌐 ทุกแผนงาน"] + sorted(df_wo_direct["แผนงาน"].dropna().astype(str).unique().tolist())
+            wo_drawing_options = ["🌐 ทุก Drawing"] + sorted(df_wo_direct["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
+            wo_material_options = ["🌐 ทุกวัสดุ"] + sorted(df_wo_direct["วัสดุ"].dropna().astype(str).unique().tolist())
+
+            wo_sel1, wo_sel2, wo_sel3, wo_sel4 = st.columns([1.2, 1, 1.5, 0.9])
+            with wo_sel1:
+                selected_wo_machine = st.selectbox("🏭 เครื่องจักร:", wo_machine_options, key="wo_machine_select")
+            with wo_sel2:
+                selected_wo_plan = st.selectbox("📌 แผนงาน:", wo_plan_options, key="wo_plan_select")
+            with wo_sel3:
+                selected_wo_drawing = st.selectbox("📄 Drawing:", wo_drawing_options, key="wo_drawing_select")
+            with wo_sel4:
+                selected_wo_material = st.selectbox("🔩 วัสดุ:", wo_material_options, key="wo_material_select")
 
             df_display = df_wo_direct.copy()
+            wo_status_text = df_display["สถานะ"].astype(str)
 
-            selected_wo_filter = st.session_state.get("wo_color_filter", "ALL")
-            if selected_wo_filter == "WARN":
+            if selected_wo_filter == "RUNNING":
+                df_display = df_display[wo_status_text.str.contains("กำลังผลิต")]
+            elif selected_wo_filter == "WAITING":
+                df_display = df_display[wo_status_text.str.contains("รอคิว")]
+            elif selected_wo_filter == "HOLD":
+                df_display = df_display[wo_status_text.str.contains("พักงาน|รอวัสดุ", regex=True)]
+            elif selected_wo_filter == "WARN":
                 def is_warn_row(r):
                     if not is_deadline_active_status(r.get("สถานะ", "")): return False
                     f_dt = wo_finish_map.get(str(r.get("ID")))
@@ -1714,14 +1764,16 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     return False
                 df_display = df_display[df_display.apply(is_late_row, axis=1)]
 
-            if search_query_wo.strip() != "":
-                q_wo = search_query_wo.strip().lower()
-                df_display = df_display[
-                    df_display["แผนงาน"].astype(str).str.lower().str.contains(q_wo) |
-                    df_display["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_wo) |
-                    df_display["เครื่องจักร / แผนก"].astype(str).str.lower().str.contains(q_wo) |
-                    df_display["สถานะ"].astype(str).str.lower().str.contains(q_wo)
-                ]
+            if selected_wo_machine != "🌐 ทุกเครื่อง":
+                df_display = df_display[df_display["เครื่องจักร / แผนก"].astype(str) == selected_wo_machine]
+            if selected_wo_plan != "🌐 ทุกแผนงาน":
+                df_display = df_display[df_display["แผนงาน"].astype(str) == selected_wo_plan]
+            if selected_wo_drawing != "🌐 ทุก Drawing":
+                df_display = df_display[df_display["ชื่อ Drawing."].astype(str) == selected_wo_drawing]
+            if selected_wo_material != "🌐 ทุกวัสดุ":
+                df_display = df_display[df_display["วัสดุ"].astype(str) == selected_wo_material]
+
+            st.caption(f"แสดงผล {len(df_display):,} จากทั้งหมด {len(df_wo_direct):,} รายการ")
 
             display_cols = [c for c in df_display.columns if c not in ["_dt_start", "_dt_finish", "_sort_key", "กำหนดพร้อมขึ้นงาน (Baseline)"]]
 
