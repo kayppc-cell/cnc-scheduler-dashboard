@@ -859,7 +859,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
     """, height=0)
 
 # ---------------------------------------------------------
-# VIEW 2: แดชบอร์ดภาพรวมโรงงาน (สถาปัตยกรรมใหม่แยกขาด 100%)
+# VIEW 2: แดชบอร์ดภาพรวมโรงงาน
 # ---------------------------------------------------------
 elif st.session_state.current_view == "📊 แดชบอร์ดภาพรวมโรงงาน":
     if st.session_state.user_role is None:
@@ -1134,7 +1134,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =========================================================================
-            # 1. รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ล็อก Baseline แท้จริง)
+            # 1. รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ล็อก Baseline วัน/เดือน/ปี นำหน้า)
             # =========================================================================
             column_order = [
                 "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
@@ -1144,13 +1144,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
 
-            # แปลงให้เป็น datetime แท้สำหรับ DatetimeColumn
-            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = pd.to_datetime(active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime))
+            # ฟอร์แมตวันเวลาเป็นสตริง วัน/เดือน/ปี ชั่วโมง:นาที เสมอ
+            def to_dmy_str(val):
+                dt_p = parse_flexible_datetime(val)
+                return dt_p.strftime("%d/%m/%Y %H:%M") if dt_p is not None and pd.notna(dt_p) else ""
 
-            # คำนวณวัน-เวลาจบงานตามแผนแบบอ้างอิง Baseline เดิมของแต่ละงาน
+            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(to_dmy_str)
+
+            # คำนวณวัน-เวลาจบงานตามแผน Baseline
             plan_finish_dates = []
             for _, r in active_jobs_editor_df.iterrows():
-                dt_s = r["วัน-เวลาขึ้นงาน"]
+                dt_s = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
                 if dt_s is None or pd.isna(dt_s) or dt_s.year < 2020:
                     dt_s = get_bangkok_now().replace(tzinfo=None)
                 s_m = safe_float(r.get("Setup (น.)"), 10.0)
@@ -1158,9 +1162,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 p_m = safe_float(r.get("โปรแกรม (น.)"), 120.0)
                 tot_h = (s_m + b_m + p_m) / 60.0
                 _, dt_f = add_work_time_with_shift(get_next_valid_work_time(dt_s), tot_h)
-                plan_finish_dates.append(dt_f)
+                plan_finish_dates.append(dt_f.strftime("%d/%m/%Y %H:%M"))
 
-            active_jobs_editor_df["วัน-เวลาจบงาน"] = pd.to_datetime(plan_finish_dates)
+            active_jobs_editor_df["วัน-เวลาจบงาน"] = plan_finish_dates
             active_jobs_editor_df["รวม (ชม.)"] = ((active_jobs_editor_df["Setup (น.)"] + active_jobs_editor_df["Basic (น.)"] + active_jobs_editor_df["โปรแกรม (น.)"]) / 60.0).round(2)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
@@ -1178,7 +1182,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 st.session_state.active_select_all = False
                                 st.rerun()
                     with tool_col2:
-                        st.caption("🔒 **ล็อกเวลาตั้งต้น (Plan Baseline):** ดับเบิลคลิกแก้ไขช่อง 'วัน-เวลาขึ้นงาน' ได้อิสระ พอกดบันทึกจะจำค่านี้ไว้ถาวรเพื่อสอบกลับ")
+                        st.caption("🔒 **ล็อกเวลาตั้งต้น (Plan Baseline):** ดับเบิลคลิกแก้ไขช่อง 'วัน-เวลาขึ้นงาน' ได้อิสระในรูปแบบ 'วัน/เดือน/ปี ชม:นาที' (เช่น 04/09/2026 15:30) พอกดบันทึกจะจำค่านี้ไว้ถาวร")
                     with tool_search:
                         search_query_editor = st.text_input(
                             "🔍 ค้นหาในตารางสั่งผลิต (แผนงาน, Drawing, วัสดุ, เครื่องจักร, สถานะ):",
@@ -1211,6 +1215,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 display_editor_df["ประเภทงาน"] = display_editor_df["ประเภทงาน"].astype(str).replace({"nan": "🟢 งานปกติ", "": "🟢 งานปกติ", "None": "🟢 งานปกติ"})
                 display_editor_df["ขั้นตอน (Step)"] = display_editor_df["ขั้นตอน (Step)"].astype(str).fillna("รอหน้าเครื่องระบุ")
                 display_editor_df["เลือกเครื่องจักร"] = display_editor_df["เลือกเครื่องจักร"].astype(str).fillna("No.1 Awea")
+                display_editor_df["วัน-เวลาขึ้นงาน"] = display_editor_df["วัน-เวลาขึ้นงาน"].astype(str).fillna("")
+                display_editor_df["วัน-เวลาจบงาน"] = display_editor_df["วัน-เวลาจบงาน"].astype(str).fillna("")
                 display_editor_df["Setup (น.)"] = pd.to_numeric(display_editor_df["Setup (น.)"], errors='coerce').fillna(10).astype(int)
                 display_editor_df["Basic (น.)"] = pd.to_numeric(display_editor_df["Basic (น.)"], errors='coerce').fillna(0).astype(int)
                 display_editor_df["โปรแกรม (น.)"] = pd.to_numeric(display_editor_df["โปรแกรม (น.)"], errors='coerce').fillna(120).astype(int)
@@ -1237,16 +1243,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=125, options=JOB_TYPES, default="🟢 งานปกติ"),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130, disabled=True, default="รอหน้าเครื่องระบุ"),
                             "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เลือกเครื่องจักร", width=160, options=ASSIGN_OPTIONS, default="No.1 Awea"),
-                            "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn(
-                                "วัน-เวลาขึ้นงาน (Baseline)", 
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
+                                "วัน-เวลาขึ้นงาน (วัน/เดือน/ปี)", 
                                 width=175,
-                                format="DD/MM/YYYY HH:mm",
-                                help="สามารถเลือกวันเวลาเริ่มได้โดยตรง พอกดบันทึกจะคงค่านี้ไว้เสมอ"
+                                help="รูปแบบ: วัน/เดือน/ปี ชั่วโมง:นาที เช่น 04/09/2026 15:30"
                             ),
-                            "วัน-เวลาจบงาน": st.column_config.DatetimeColumn(
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn(
                                 "วัน-เวลาจบงานตามแผน",
                                 width=175,
-                                format="DD/MM/YYYY HH:mm",
                                 disabled=True,
                                 help="เวลาจบคำนวณตามแผนและกะโรงงาน"
                             ),
@@ -1272,8 +1276,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width=125),
                             "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=130),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เลือกเครื่องจักร", width=160),
-                            "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("วัน-เวลาขึ้นงาน (Baseline)", width=175, format="DD/MM/YYYY HH:mm"),
-                            "วัน-เวลาจบงาน": st.column_config.DatetimeColumn("วัน-เวลาจบงานตามแผน", width=175, format="DD/MM/YYYY HH:mm"),
+                            "วัน-เวลาขึ้นงาน": st.column_config.TextColumn("วัน-เวลาขึ้นงาน (วัน/เดือน/ปี)", width=175),
+                            "วัน-เวลาจบงาน": st.column_config.TextColumn("วัน-เวลาจบงานตามแผน", width=175),
                             "Setup (น.)": st.column_config.NumberColumn("Setup (น.)", width=85, format="%d"),
                             "Basic (น.)": st.column_config.NumberColumn("Basic (น.)", width=85, format="%d"),
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม (น.)", width=100, format="%d"),
@@ -1303,13 +1307,19 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if not p_code: 
                                     continue
                                 
-                                raw_ready = row.get("วัน-เวลาขึ้นงาน")
+                                raw_ready = str(row.get("วัน-เวลาขึ้นงาน", "")).strip()
                                 dt_parsed = parse_flexible_datetime(raw_ready)
 
                                 if dt_parsed is not None and pd.notna(dt_parsed):
                                     ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
                                 else:
-                                    ready_str = get_bangkok_str()
+                                    # ป้องกันค่าหาย: ถ้าไม่ได้พิมพ์หรือแปลงไม่ผ่าน ให้ใช้ค่าเดิมของแถวใน DB
+                                    orig_id = row.get("ID")
+                                    db_match = df_db[df_db["ID"] == orig_id] if pd.notna(orig_id) else pd.DataFrame()
+                                    if not db_match.empty and pd.notna(db_match.iloc[0]["วัน-เวลาขึ้นงาน"]):
+                                        ready_str = pd.to_datetime(db_match.iloc[0]["วัน-เวลาขึ้นงาน"]).strftime("%Y-%m-%d %H:%M:%S")
+                                    else:
+                                        ready_str = get_bangkok_str()
 
                                 payload = {
                                     "plan_code": p_code,
@@ -1375,6 +1385,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             df_wo_direct["_wo_order"] = df_wo_direct.apply(get_wo_queue_order, axis=1)
             df_wo_direct = df_wo_direct.sort_values(by=["เลือกเครื่องจักร", "_wo_order"]).drop(columns=["_wo_order"]).reset_index(drop=True)
 
+            # คำนวณเวลาลูกโซ่ต่อเนื่องตามกะโรงงาน
             m_chain_tracker = {}
             wo_chained_start = []
             wo_chained_finish = []
@@ -1410,7 +1421,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             df_wo_direct["เครื่องจักร / แผนก"] = df_wo_direct["เลือกเครื่องจักร"]
             df_wo_direct["สถานะ"] = df_wo_direct["สถานะงาน"]
             
-            df_wo_direct["กำหนดพร้อมขึ้นงาน"] = df_wo_direct["วัน-เวลาขึ้นงาน"].apply(lambda d: d.strftime("%d/%m/%Y %H:%M") if pd.notna(d) else "-")
+            df_wo_direct["กำหนดพร้อมขึ้นงาน"] = df_wo_direct["วัน-เวลาขึ้นงาน"]
             df_wo_direct["เริ่มขึ้นงานตามแผน"] = [d.strftime("%d/%m/%Y %H:%M") for d in wo_chained_start]
             df_wo_direct["จบงานตามแผน"] = [d.strftime("%d/%m/%Y %H:%M") for d in wo_chained_finish]
 
