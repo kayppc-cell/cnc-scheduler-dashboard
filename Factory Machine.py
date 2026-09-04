@@ -63,6 +63,7 @@ def parse_flexible_datetime(dt_val):
     s = s.replace('T', ' ').split('+')[0].split('Z')[0].strip()
     current_year = get_bangkok_now().year
 
+    # กรณีเป็นรูปแบบ YYYY-MM-DD
     if "-" in s:
         parts_dash = s.split(" ")[0].split("-")
         if len(parts_dash) == 3 and len(parts_dash[0]) == 4:
@@ -74,9 +75,12 @@ def parse_flexible_datetime(dt_val):
                     dt_parsed = dt_parsed.replace(year=dt_parsed.year - 543)
                 return dt_parsed
 
+    # กรณีเป็นรูปแบบ DD/MM/YYYY หรือ DD/MM
     if "/" in s:
         date_part = s.split(" ")[0]
         time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:30:00"
+        if len(time_part.split(":")) == 2:
+            time_part += ":00"
         parts = date_part.split("/")
         
         if len(parts) == 2:
@@ -1145,14 +1149,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
 
-            # ฟอร์แมตเวลาขึ้นงานที่ดึงมาจากฐานข้อมูลให้อยู่ในรูปสตริงที่อ่านง่ายและแก้ได้
             def format_display_dt(val):
                 dt_p = parse_flexible_datetime(val)
                 return dt_p.strftime("%d/%m/%Y %H:%M") if dt_p is not None and pd.notna(dt_p) else ""
 
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(format_display_dt)
 
-            # คำนวณวัน-เวลาจบงานตามแผนแบบอ้างอิง Baseline เดิมของแต่ละงาน (ไม่ให้ระบบลูกโซ่มาปน)
             plan_finish_dates = []
             for _, r in active_jobs_editor_df.iterrows():
                 dt_s = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
@@ -1209,7 +1211,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 else:
                     display_editor_df = active_jobs_editor_df.copy().reset_index(drop=True)
 
-                # ทำความสะอาด Type ให้ตรงกับ column_config 100% ป้องกัน StreamlitAPIException
                 display_editor_df["แผนงาน"] = display_editor_df["แผนงาน"].astype(str).fillna("")
                 display_editor_df["ชื่อ Drawing."] = display_editor_df["ชื่อ Drawing."].astype(str).fillna("")
                 display_editor_df["จำนวน"] = pd.to_numeric(display_editor_df["จำนวน"], errors='coerce').fillna(1).astype(int)
@@ -1304,56 +1305,50 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
                     with c_save:
                         if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
-                            editor_state_now = st.session_state.get("editor_cnc_jobs_grid_main", {})
-                            editor_diffs = editor_state_now.get("edited_rows", {})
-                            added_rows = editor_state_now.get("added_rows", [])
-
+                            # ดึงค่าจาก DataFrame edited_jobs โดยตรง ซึ่งมีค่าที่พิมพ์แก้ไขสด 100%
                             for idx_row, row in edited_jobs.iterrows():
                                 p_code = safe_str(row.get("แผนงาน"), "")
                                 if not p_code: 
                                     continue
                                 
+                                raw_ready = str(row.get("วัน-เวลาขึ้นงาน", "")).strip()
+                                dt_parsed = parse_flexible_datetime(raw_ready)
+
+                                if dt_parsed is not None and pd.notna(dt_parsed):
+                                    ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
+                                else:
+                                    # ป้องกันการกลายเป็นช่องว่างเปล่า: ถ้าไม่ได้พิมพ์หรือแปลงไม่ผ่าน ให้ใช้เวลาเดิมจากฐานข้อมูล
+                                    orig_id = row.get("ID")
+                                    db_match = df_db[df_db["ID"] == orig_id] if pd.notna(orig_id) else pd.DataFrame()
+                                    if not db_match.empty and pd.notna(db_match.iloc[0]["วัน-เวลาขึ้นงาน"]):
+                                        ready_str = pd.to_datetime(db_match.iloc[0]["วัน-เวลาขึ้นงาน"]).strftime("%Y-%m-%d %H:%M:%S")
+                                    else:
+                                        ready_str = get_bangkok_str()
+
+                                payload = {
+                                    "plan_code": p_code,
+                                    "drawing_name": safe_str(row.get("ชื่อ Drawing."), ""),
+                                    "qty": safe_int(row.get("จำนวน"), 1),
+                                    "material": safe_str(row.get("วัสดุ"), "SS400"),
+                                    "job_type": safe_str(row.get("ประเภทงาน"), "🟢 งานปกติ"),
+                                    "step_name": safe_str(row.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ"),
+                                    "machine_name": safe_str(row.get("เลือกเครื่องจักร"), "No.1 Awea"),
+                                    "ready_at": ready_str,
+                                    "setup_mins": safe_float(row.get("Setup (น.)"), 10.0),
+                                    "basic_hrs": safe_float(row.get("Basic (น.)"), 0.0),
+                                    "prog_hrs": safe_float(row.get("โปรแกรม (น.)"), 120.0),
+                                    "status": safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
+                                }
+
                                 row_id = row.get("ID")
-                                is_new_row = pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan"]
-                                is_edited = (str(idx_row) in editor_diffs) or (idx_row in editor_diffs)
-
-                                # ทำงานเฉพาะแถวที่มีการเพิ่มใหม่ หรือกดแก้จริง เพื่อความเร็วและไม่เกิดกระตุกซ้ำ
-                                if is_new_row or is_edited or not editor_diffs:
-                                    # ดึงค่าเวลาขึ้นงาน ถ้ามีการพิมพ์แก้ไขให้เอาค่าที่พิมพ์แก้สด
-                                    chg = editor_diffs.get(str(idx_row), editor_diffs.get(idx_row, {}))
-                                    raw_ready = chg.get("วัน-เวลาขึ้นงาน", row.get("วัน-เวลาขึ้นงาน"))
-
-                                    dt_parsed = parse_flexible_datetime(raw_ready)
-                                    if dt_parsed is not None and pd.notna(dt_parsed):
-                                        ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
-                                    else:
-                                        # ถ้าพิมพ์ผิดฟอร์แมต ให้ยึดเวลาเดิมของแถวนั้นจากฐานข้อมูล ห้ามเซฟเป็นค่าว่างเด็ดขาด
-                                        db_orig = active_jobs_editor_df.at[idx_row, "วัน-เวลาขึ้นงาน"] if idx_row < len(active_jobs_editor_df) else None
-                                        dt_db = parse_flexible_datetime(db_orig)
-                                        ready_str = dt_db.strftime("%Y-%m-%d %H:%M:%S") if dt_db is not None else get_bangkok_str()
-
-                                    payload = {
-                                        "plan_code": p_code,
-                                        "drawing_name": safe_str(row.get("ชื่อ Drawing."), ""),
-                                        "qty": safe_int(row.get("จำนวน"), 1),
-                                        "material": safe_str(row.get("วัสดุ"), "SS400"),
-                                        "job_type": safe_str(row.get("ประเภทงาน"), "🟢 งานปกติ"),
-                                        "step_name": safe_str(row.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ"),
-                                        "machine_name": safe_str(row.get("เลือกเครื่องจักร"), "No.1 Awea"),
-                                        "ready_at": ready_str,
-                                        "setup_mins": safe_float(row.get("Setup (น.)"), 10.0),
-                                        "basic_hrs": safe_float(row.get("Basic (น.)"), 0.0),
-                                        "prog_hrs": safe_float(row.get("โปรแกรม (น.)"), 120.0),
-                                        "status": safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
-                                    }
-
-                                    if is_new_row:
-                                        insert_supabase_job(payload)
-                                    else:
-                                        update_supabase_job(int(float(row_id)), payload)
+                                if pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan"]:
+                                    insert_supabase_job(payload)
+                                else:
+                                    update_supabase_job(int(float(row_id)), payload)
 
                             st.cache_data.clear()
                             st.session_state.scroll_to_bottom = True
+                            st.toast("บันทึกข้อมูลและเวลาขึ้นงานเรียบร้อยแล้ว!", icon="💾")
                             st.rerun()
 
                     with c_del_top:
@@ -1383,7 +1378,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =====================================================
             st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
 
-            # คำนวณระบบลูกโซ่ที่แท้จริงสำหรับส่งต่อไปยังหน้าเครื่อง และผัง Gantt Chart
             df_wo_direct = active_jobs_editor_df.copy()
 
             def get_wo_queue_order(r):
@@ -1431,10 +1425,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             df_wo_direct["เครื่องจักร / แผนก"] = df_wo_direct["เลือกเครื่องจักร"]
             df_wo_direct["สถานะ"] = df_wo_direct["สถานะงาน"]
             
-            # ยึดเวลา Baseline เดิมที่คนกรอกไว้สอบกลับ
             df_wo_direct["กำหนดพร้อมขึ้นงาน"] = df_wo_direct["วัน-เวลาขึ้นงาน"]
-            
-            # แสดงเวลาลูกโซ่ที่ต่อเนื่องกันจริง
             df_wo_direct["เริ่มขึ้นงานตามแผน"] = [d.strftime("%d/%m/%Y %H:%M") for d in wo_chained_start]
             df_wo_direct["จบงานตามแผน"] = [d.strftime("%d/%m/%Y %H:%M") for d in wo_chained_finish]
 
@@ -1554,7 +1545,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =====================================================
-            # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline - ดึงเวลาลูกโซ่)
+            # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline)
             # =====================================================
             today_date = get_bangkok_now().date()
             today_dt = get_bangkok_now().replace(tzinfo=None)
