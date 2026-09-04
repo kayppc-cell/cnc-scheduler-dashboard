@@ -77,6 +77,9 @@ def parse_flexible_datetime(dt_val):
     if "/" in s:
         date_part = s.split(" ")[0]
         time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:30:00"
+        # ตารางแสดงเวลาเป็น HH:MM แต่รูปแบบเดิมบังคับ HH:MM:SS จึงได้ NaT ตอนบันทึก
+        if len(time_part.split(":")) == 2:
+            time_part = f"{time_part}:00"
         parts = date_part.split("/")
         
         if len(parts) == 2:
@@ -1353,6 +1356,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     c_save, c_del_top, _ = st.columns([2.5, 3.5, 4])
                     with c_save:
                         if st.button("💾 บันทึกข้อมูลลง Supabase", type="primary", use_container_width=True):
+                            save_success = True
+                            save_errors = []
                             for _, row in edited_jobs.iterrows():
                                 p_code = safe_str(row.get("แผนงาน"), "")
                                 if not p_code: 
@@ -1362,6 +1367,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 # เมื่อเปิดหน้าใหม่จะได้ค่าเดิม ไม่อิงเวลาปัจจุบัน
                                 raw_ready = row.get("วัน-เวลาขึ้นงาน")
                                 dt_parsed = parse_flexible_datetime(raw_ready)
+                                if safe_str(raw_ready, "") and (dt_parsed is None or pd.isna(dt_parsed)):
+                                    save_success = False
+                                    save_errors.append(f"{p_code}: รูปแบบวัน-เวลาไม่ถูกต้อง")
+                                    continue
                                 ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if (dt_parsed is not None and pd.notna(dt_parsed)) else None
 
                                 payload = {
@@ -1381,14 +1390,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 
                                 row_id = row.get("ID")
                                 if pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan"]:
-                                    insert_supabase_job(payload)
+                                    row_saved = insert_supabase_job(payload)
                                 else:
-                                    update_supabase_job(int(float(row_id)), payload)
+                                    row_saved = update_supabase_job(int(float(row_id)), payload)
+                                if not row_saved:
+                                    save_success = False
+                                    save_errors.append(f"{p_code}: Supabase ไม่รับข้อมูล")
 
-                            st.cache_data.clear()
-                            st.session_state.scroll_to_bottom = True
-                            st.toast("บันทึกข้อมูลคิวงานลูกโซ่สำเร็จ!", icon="💾")
-                            st.rerun()
+                            if save_success:
+                                st.cache_data.clear()
+                                st.session_state.scroll_to_bottom = True
+                                st.toast("บันทึกข้อมูลคิวงานลูกโซ่สำเร็จ!", icon="💾")
+                                st.rerun()
+                            else:
+                                st.error("บันทึกไม่สำเร็จ: " + " | ".join(save_errors[:5]))
 
                     with c_del_top:
                         btn_del_label = f"🗑️ ลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ลบรายการที่เลือก (0 รายการ)"
