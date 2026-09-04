@@ -1434,7 +1434,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             use_container_width=True
                         ):
                             st.session_state.active_jobs_quick_filter = filter_key
-                            st.rerun()
+                            # การคลิกปุ่มทำให้ Streamlit rerun อยู่แล้ว จึงต้องทำงานต่อจน render
+                            # selectbox ครบ มิฉะนั้น widget state ของเครื่อง/แผนงานจะถูกล้าง
+                            active_quick_filter = filter_key
 
                 active_machine_options = ["🌐 ทุกเครื่อง"] + sorted(active_jobs_editor_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
                 active_plan_options = ["🌐 ทุกแผนงาน"] + sorted(active_jobs_editor_df["แผนงาน"].dropna().astype(str).unique().tolist())
@@ -1736,7 +1738,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         use_container_width=True
                     ):
                         st.session_state.wo_color_filter = filter_key
-                        st.rerun()
+                        # คงค่าตัวกรอง dropdown ไว้ และนำปุ่มสถานะมากรองร่วมกันในรอบนี้
+                        selected_wo_filter = filter_key
 
             wo_machine_options = ["🌐 ทุกเครื่อง"] + sorted(df_wo_direct["เครื่องจักร / แผนก"].dropna().astype(str).unique().tolist())
             wo_plan_options = ["🌐 ทุกแผนงาน"] + sorted(df_wo_direct["แผนงาน"].dropna().astype(str).unique().tolist())
