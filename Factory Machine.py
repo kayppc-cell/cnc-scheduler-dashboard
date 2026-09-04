@@ -689,16 +689,23 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             if cur_chain_time is None:
                 r_parsed = parse_flexible_datetime(step_row.get("วัน-เวลาขึ้นงาน"))
                 if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
-                    r_parsed = get_bangkok_now().replace(tzinfo=None)
-                start_w_dt = get_next_valid_work_time(r_parsed)
+                    # ยังไม่มีเวลาแผน: แสดงว่างและรอให้ผู้วางแผนกำหนด
+                    # ห้ามใช้เวลาปัจจุบัน เพราะค่าแผนจะเปลี่ยนเองทุกครั้งที่หน้าเว็บ rerun
+                    start_w_dt = None
+                else:
+                    start_w_dt = get_next_valid_work_time(r_parsed)
             else:
                 start_w_dt = get_next_valid_work_time(cur_chain_time)
 
-            _, finish_w_dt = add_work_time_with_shift(start_w_dt, tot_h)
-            cur_chain_time = finish_w_dt
-
-            ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.")
-            finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.")
+            if start_w_dt is None:
+                finish_w_dt = None
+                ready_display_str = "-"
+                finish_plan_display_str = "-"
+            else:
+                _, finish_w_dt = add_work_time_with_shift(start_w_dt, tot_h)
+                cur_chain_time = finish_w_dt
+                ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.")
+                finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.")
 
             if "Batch" in run_mode:
                 can_start = is_step_waiting
@@ -1182,11 +1189,21 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 if m_target not in m_available_tracker:
                     r_parsed = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
+                    # ห้ามใช้เวลาปัจจุบันแทนค่า เพราะจะทำให้เวลาแผนเลื่อนเองทุกครั้งที่ rerun
                     if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
-                        r_parsed = get_bangkok_now().replace(tzinfo=None)
+                        m_available_tracker[m_target] = None
+                        chained_start_dates.append("")
+                        chained_finish_dates.append("")
+                        continue
                     start_work_dt = get_next_valid_work_time(r_parsed)
                 else:
-                    start_work_dt = get_next_valid_work_time(m_available_tracker[m_target])
+                    previous_finish = m_available_tracker[m_target]
+                    # ถ้าคิวแรกยังไม่มีเวลา คิวถัดไปต้องรอ ไม่สร้างเวลาใหม่เอง
+                    if previous_finish is None:
+                        chained_start_dates.append("")
+                        chained_finish_dates.append("")
+                        continue
+                    start_work_dt = get_next_valid_work_time(previous_finish)
 
                 _, finish_work_dt = add_work_time_with_shift(start_work_dt, tot_h)
                 m_available_tracker[m_target] = finish_work_dt
@@ -1323,6 +1340,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if not p_code: 
                                     continue
                                 
+                                # ค่านี้เป็นเวลาเริ่มที่ผ่านการต่อลูกโซ่แล้ว จึงบันทึกทุกแถวลง ready_at
+                                # เมื่อเปิดหน้าใหม่จะได้ค่าเดิม ไม่อิงเวลาปัจจุบัน
                                 raw_ready = row.get("วัน-เวลาขึ้นงาน")
                                 dt_parsed = parse_flexible_datetime(raw_ready)
                                 ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S") if (dt_parsed is not None and pd.notna(dt_parsed)) else None
