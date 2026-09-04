@@ -1390,7 +1390,22 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             df_wo_direct["_dt_start"] = df_wo_direct["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
             df_wo_direct["_dt_finish"] = df_wo_direct["วัน-เวลาจบงาน"].apply(parse_flexible_datetime)
 
-            df_wo_direct = df_wo_direct.sort_values(by=["_dt_start", "ID"], ascending=[True, True]).reset_index(drop=True)
+            # จัดลำดับคิวหน้าเครื่องอย่างแม่นยำ: กำลังผลิต (0) -> พักงาน (1) -> รอคิวตามเวลา (2)
+            def get_wo_queue_order(r):
+                st_val = str(r.get("สถานะงาน", r.get("สถานะ", "")))
+                if "กำลังผลิต" in st_val:
+                    prio = 0
+                elif "พักงาน" in st_val:
+                    prio = 1
+                else:
+                    prio = 2
+                dt_p = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
+                return (prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
+
+            df_wo_direct["_wo_order"] = df_wo_direct.apply(get_wo_queue_order, axis=1)
+            df_wo_direct = df_wo_direct.sort_values(by=["เลือกเครื่องจักร", "_wo_order"]).drop(columns=["_wo_order"]).reset_index(drop=True)
+
+            # กำหนดลำดับคิว: เริ่มจาก คิวที่ 1 สำหรับงานที่กำลังรันอยู่เสมอ
             df_wo_direct["ลำดับคิว"] = df_wo_direct.groupby("เลือกเครื่องจักร").cumcount() + 1
             df_wo_direct["ลำดับคิว"] = df_wo_direct["ลำดับคิว"].apply(lambda q: f"คิวที่ {q}")
 
