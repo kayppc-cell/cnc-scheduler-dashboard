@@ -110,6 +110,13 @@ def parse_flexible_datetime(dt_val):
         return dt_parsed
     return None
 
+def format_thai_datetime(dt_val):
+    """แปลงวันเวลาเป็นข้อความ DD/MM/YYYY HH:MM ก่อนเข้า data_editor เพื่อกัน pandas สลับวัน/เดือน"""
+    dt_parsed = parse_flexible_datetime(dt_val)
+    if dt_parsed is None or pd.isna(dt_parsed):
+        return ""
+    return dt_parsed.strftime("%d/%m/%Y %H:%M")
+
 def to_bangkok_epoch_ms(dt_val):
     if dt_val is None or pd.isna(dt_val):
         return 0
@@ -1169,6 +1176,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
+
+            # ต้องเปลี่ยน dtype จาก datetime64 เป็น string ก่อนรับค่าจาก data_editor
+            # ไม่เช่นนั้น pandas อาจแปลง 03/09/2026 เป็น 9 มีนาคมแบบ month-first ทันทีที่แก้เซลล์
+            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(format_thai_datetime).astype("object")
 
             # เก็บค่าเวลาตั้งต้นเดิมไว้เป็น Baseline สำหรับสอบกลับ ไม่แตะต้อง
             active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"]
