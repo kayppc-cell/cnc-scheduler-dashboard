@@ -1145,8 +1145,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
 
-            active_jobs_editor_df["temp_ready_dt"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-            active_jobs_editor_df = active_jobs_editor_df.sort_values(by=["temp_ready_dt", "ID"], ascending=[True, True], na_position="last").drop(columns=["temp_ready_dt"]).reset_index(drop=True)
+            # กำหนดลำดับความสำคัญ: กำลังผลิต (0) -> พักงาน (1) -> รอคิว (2) เรียงตามเครื่องและเวลา
+            def get_queue_priority(r):
+                st_val = str(r.get("สถานะงาน", ""))
+                if "กำลังผลิต" in st_val:
+                    prio = 0
+                elif "พักงาน" in st_val:
+                    prio = 1
+                else:
+                    prio = 2
+                dt_p = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
+                return (str(r.get("เลือกเครื่องจักร")), prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
+
+            active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
+            active_jobs_editor_df = active_jobs_editor_df.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
 
             editor_state = st.session_state.get("editor_cnc_jobs_grid_main", {})
             edited_rows = editor_state.get("edited_rows", {})
