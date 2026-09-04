@@ -200,6 +200,34 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
 
     return segments, current_dt
 
+def get_work_capacity_between(range_start: datetime, range_end: datetime) -> float:
+    """ชั่วโมงที่โรงงานเปิดจริงภายในช่วงเวลา (หักพักและวันหยุด)"""
+    if range_end <= range_start:
+        return 0.0
+    total_hours = 0.0
+    cur_date = range_start.date()
+    while cur_date <= range_end.date():
+        for window_start, window_end in get_day_working_windows(cur_date):
+            overlap_start = max(window_start, range_start)
+            overlap_end = min(window_end, range_end)
+            if overlap_end > overlap_start:
+                total_hours += (overlap_end - overlap_start).total_seconds() / 3600.0
+        cur_date += timedelta(days=1)
+    return total_hours
+
+def get_planned_busy_hours_in_range(start_dt: datetime, duration_hours: float, range_start: datetime, range_end: datetime) -> float:
+    """ชั่วโมงแผนของงานที่ทับกับช่วงวิเคราะห์ โดยใช้กะเดียวกับ Auto-Chain"""
+    if start_dt is None or duration_hours <= 0 or range_end <= range_start:
+        return 0.0
+    segments, _ = add_work_time_with_shift(start_dt, duration_hours)
+    busy_hours = 0.0
+    for seg_start, seg_end in segments:
+        overlap_start = max(seg_start, range_start)
+        overlap_end = min(seg_end, range_end)
+        if overlap_end > overlap_start:
+            busy_hours += (overlap_end - overlap_start).total_seconds() / 3600.0
+    return busy_hours
+
 def is_deadline_active_status(status_val):
     """เกณฑ์กลางเดียวกันสำหรับ TV Live และใบจ่ายคิว: ทุกงานที่ยังไม่เสร็จ"""
     status = str(status_val)
@@ -1663,6 +1691,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =====================================================
             today_date = get_bangkok_now().date()
             today_dt = get_bangkok_now().replace(tzinfo=None)
+            util_period_start = datetime.combine(today_date, dtime(0, 0))
+            util_period_end = datetime.combine(today_date, dtime(23, 59, 59))
 
             gantt_records = []
             valid_start_dates = []
@@ -1675,11 +1705,16 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st_dt = parse_flexible_datetime(st_raw)
                 fn_dt = parse_flexible_datetime(fn_raw)
 
+                # ไม่มีเวลาเริ่มจริงให้ข้าม ห้ามสร้างแท่งงานโดยใช้เวลาปัจจุบัน
                 if st_dt is None or pd.isna(st_dt):
-                    st_dt = today_dt
+                    continue
                 if fn_dt is None or pd.isna(fn_dt) or fn_dt <= st_dt:
-                    tot_mins = safe_float(r_g.get("โปรแกรม (น.)"), 120.0) + safe_float(r_g.get("Setup (น.)"), 10.0)
-                    fn_dt = st_dt + timedelta(minutes=max(tot_mins, 30.0))
+                    tot_mins = (
+                        safe_float(r_g.get("Setup (น.)"), 10.0)
+                        + safe_float(r_g.get("Basic (น.)"), 0.0)
+                        + safe_float(r_g.get("โปรแกรม (น.)"), 120.0)
+                    )
+                    _, fn_dt = add_work_time_with_shift(st_dt, max(tot_mins, 0.0) / 60.0)
 
                 p_name = str(r_g.get("แผนงาน", "-"))
                 dw_name = str(r_g.get("ชื่อ Drawing.", "-"))
@@ -1700,8 +1735,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "ขั้นตอน (Step)": step_name,
                     "เครื่องจักร": m_name,
                     "วัสดุ": mat_name,
-                    "เวลาเริ่ม": st_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                    "เวลาเสร็จ": fn_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "เวลาเริ่ม": st_dt,
+                    "เวลาเสร็จ": fn_dt,
                     "ระยะเวลา": f"{tot_hrs:.2f} ชม.",
                     "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
                 })
@@ -1756,6 +1791,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     label_visibility="collapsed"
                 )
                 st.session_state.gantt_date_range = selected_date_range
+
+                if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
+                    util_period_start = datetime.combine(selected_date_range[0], dtime(0, 0))
+                    util_period_end = datetime.combine(selected_date_range[1], dtime(23, 59, 59))
+                elif isinstance(selected_date_range, (datetime, pd.Timestamp)):
+                    one_date = selected_date_range.date()
+                    util_period_start = datetime.combine(one_date, dtime(0, 0))
+                    util_period_end = datetime.combine(one_date, dtime(23, 59, 59))
+                else:
+                    util_period_start = datetime.combine(gantt_min_date, dtime(0, 0))
+                    util_period_end = datetime.combine(gantt_max_date, dtime(23, 59, 59))
 
                 with gantt_f3:
                     color_by_option = st.selectbox("🎨 แยกสีตาม:", ["แผนงาน (Plan Code)", "กิจกรรม (Setup/ตัดเฉือน)"])
@@ -1867,30 +1913,38 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # 4. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
             # =====================================================
             st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
-            
+
+            # ใช้ช่วงวันที่เดียวกับ Gantt และนับเฉพาะเวลาทำงานจริงในกะ
             m_busy_map = {m: 0.0 for m in MACHINE_LIST}
             for _, r_u in active_jobs_editor_df.iterrows():
                 m_name = str(r_u.get("เลือกเครื่องจักร", ""))
-                tot_h = safe_float(r_u.get("รวม (ชม.)"), 0.0)
-                if m_name in m_busy_map:
-                    m_busy_map[m_name] += tot_h
+                start_dt_u = parse_flexible_datetime(r_u.get("วัน-เวลาขึ้นงาน"))
+                total_minutes_u = (
+                    safe_float(r_u.get("Setup (น.)"), 10.0)
+                    + safe_float(r_u.get("Basic (น.)"), 0.0)
+                    + safe_float(r_u.get("โปรแกรม (น.)"), 120.0)
+                )
+                if m_name in m_busy_map and start_dt_u is not None and pd.notna(start_dt_u):
+                    m_busy_map[m_name] += get_planned_busy_hours_in_range(
+                        start_dt_u,
+                        total_minutes_u / 60.0,
+                        util_period_start,
+                        util_period_end
+                    )
 
-            if valid_start_dates and valid_end_dates:
-                total_factory_work_hours = 0.0
-                i_d = min(valid_start_dates)
-                m_d = max(valid_end_dates)
-                while i_d <= m_d:
-                    for ws, we in get_day_working_windows(i_d):
-                        total_factory_work_hours += (we - ws).total_seconds() / 3600.0
-                    i_d += timedelta(days=1)
-                total_horizon_work_hrs = max(total_factory_work_hours, 8.83)
-            else:
-                total_horizon_work_hrs = 8.83
+            total_horizon_work_hrs = get_work_capacity_between(util_period_start, util_period_end)
+            util_period_txt = f"{util_period_start.strftime('%d/%m/%Y')} – {util_period_end.strftime('%d/%m/%Y')}"
+            st.caption(
+                f"ช่วงคำนวณเดียวกับ Gantt: {util_period_txt} | "
+                f"เวลาที่เครื่องพร้อมทำงานตามกะ: {total_horizon_work_hrs:.2f} ชม./เครื่อง "
+                "(หักเบรก พักเที่ยง และวันอาทิตย์แล้ว)"
+            )
 
             util_list = []
             for m in MACHINE_LIST:
                 busy = m_busy_map[m]
-                util_pct = min((busy / total_horizon_work_hrs) * 100.0, 100.0) if total_horizon_work_hrs > 0 else 0.0
+                # ไม่ตัดที่ 100% เพื่อให้เห็นข้อมูลคิวซ้อนหรือโหลดเกินกำลังจริง
+                util_pct = (busy / total_horizon_work_hrs) * 100.0 if total_horizon_work_hrs > 0 else 0.0
                 util_list.append({
                     "เครื่องจักร": m,
                     "ชั่วโมงทำงาน (ชม.)": round(busy, 2),
@@ -1898,6 +1952,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "ข้อความแสดง": f"{util_pct:.1f}% ({busy:.2f} ชม.)"
                 })
             df_util = pd.DataFrame(util_list)
+            util_axis_max = max(105.0, float(df_util["อัตราการใช้งาน (%)"].max()) + 10.0)
 
             fig_bar = px.bar(
                 df_util,
@@ -1907,7 +1962,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 color="อัตราการใช้งาน (%)",
                 color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
                 text="ข้อความแสดง",
-                range_x=[0, 105],
+                range_x=[0, util_axis_max],
                 category_orders={"เครื่องจักร": MACHINE_LIST}
             )
             fig_bar.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=MACHINE_LIST)
