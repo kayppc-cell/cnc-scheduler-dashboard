@@ -2683,6 +2683,28 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                     filtered_actual_cost = cost_display_df["ต้นทุนจริงสุทธิ (บาท)"].sum()
                     filtered_plan_cost = cost_display_df["ต้นทุนตามแผน (บาท)"].sum()
+                    filtered_actual_hours = cost_display_df["เวลาจริงสุทธิ (ชม.)"].sum()
+                    filtered_cost_diff = filtered_actual_cost - filtered_plan_cost
+
+                    cost_summary_cols = st.columns(4)
+                    cost_summary_cols[0].metric(
+                        "💰 ต้นทุนจริงสุทธิที่เลือก",
+                        f"{filtered_actual_cost:,.2f} บาท"
+                    )
+                    cost_summary_cols[1].metric(
+                        "📋 ต้นทุนตามแผนที่เลือก",
+                        f"{filtered_plan_cost:,.2f} บาท"
+                    )
+                    cost_summary_cols[2].metric(
+                        "📊 ผลต่างต้นทุน",
+                        f"{filtered_cost_diff:+,.2f} บาท",
+                        delta=f"{filtered_cost_diff:+,.2f} บาท",
+                        delta_color="inverse"
+                    )
+                    cost_summary_cols[3].metric(
+                        "⏱️ เวลาเดินจริงสุทธิที่เลือก",
+                        f"{filtered_actual_hours:,.2f} ชม."
+                    )
                     st.caption(
                         f"แสดงผล {len(cost_display_df):,} จากทั้งหมด {len(cost_df):,} รายการ | "
                         f"ต้นทุนจริงที่แสดง {filtered_actual_cost:,.2f} บาท | แผน {filtered_plan_cost:,.2f} บาท"
