@@ -2685,6 +2685,18 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     filtered_plan_cost = cost_display_df["ต้นทุนตามแผน (บาท)"].sum()
                     filtered_actual_hours = cost_display_df["เวลาจริงสุทธิ (ชม.)"].sum()
                     filtered_cost_diff = filtered_actual_cost - filtered_plan_cost
+                    filtered_cost_diff_pct = (
+                        (filtered_cost_diff / filtered_plan_cost) * 100.0
+                        if filtered_plan_cost > 0 else None
+                    )
+                    if filtered_cost_diff_pct is None:
+                        filtered_cost_pct_label = "ไม่มีฐานแผน"
+                    elif filtered_cost_diff_pct > 0.005:
+                        filtered_cost_pct_label = f"เกินแผน {abs(filtered_cost_diff_pct):,.2f}%"
+                    elif filtered_cost_diff_pct < -0.005:
+                        filtered_cost_pct_label = f"ต่ำกว่าแผน {abs(filtered_cost_diff_pct):,.2f}%"
+                    else:
+                        filtered_cost_pct_label = "เท่ากับแผน 0.00%"
 
                     cost_summary_cols = st.columns(4)
                     cost_summary_cols[0].metric(
@@ -2698,7 +2710,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cost_summary_cols[2].metric(
                         "📊 ผลต่างต้นทุน",
                         f"{filtered_cost_diff:+,.2f} บาท",
-                        delta=f"{filtered_cost_diff:+,.2f} บาท",
+                        delta=(f"{filtered_cost_diff_pct:+,.2f}%" if filtered_cost_diff_pct is not None else "ไม่มีฐานแผน"),
                         delta_color="inverse"
                     )
                     cost_summary_cols[3].metric(
@@ -2734,6 +2746,79 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         height=440,
                         row_height=28
                     )
+
+                    cost_pdf_rows = "".join([
+                        "<tr>"
+                        f"<td>{html.escape(safe_str(r.get('แผนงาน'), '-'))}</td>"
+                        f"<td>{html.escape(safe_str(r.get('ชื่อ Drawing.'), '-'))}</td>"
+                        f"<td style='text-align:center'>{safe_int(r.get('จำนวน'), 1)}</td>"
+                        f"<td>{html.escape(safe_str(r.get('ขั้นตอน (Step)'), '-'))}</td>"
+                        f"<td>{html.escape(safe_str(r.get('เลือกเครื่องจักร'), '-'))}</td>"
+                        f"<td style='text-align:right'>{safe_float(r.get('เวลาแผน (ชม.)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(r.get('เวลาจริงสุทธิ (ชม.)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(r.get('เรตราคา (บาท/ชม.)')):,.0f}</td>"
+                        f"<td style='text-align:right'>{safe_float(r.get('ต้นทุนตามแผน (บาท)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(r.get('ต้นทุนจริงสุทธิ (บาท)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(r.get('ผลต่างต้นทุน (บาท)')):+,.2f}</td>"
+                        "</tr>"
+                        for _, r in cost_display_df.sort_values(by="เสร็จจริง", ascending=False).iterrows()
+                    ])
+                    cost_pdf_payload = json.dumps({
+                        "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
+                        "machine": safe_str(cost_machine_filter, "ทุกเครื่อง"),
+                        "plan": safe_str(cost_plan_filter, "ทุกแผนงาน"),
+                        "drawing": safe_str(cost_drawing_filter, "ทุก Drawing"),
+                        "search": safe_str(cost_search, "-"),
+                        "rows_count": len(cost_display_df),
+                        "actual_cost": f"{filtered_actual_cost:,.2f}",
+                        "plan_cost": f"{filtered_plan_cost:,.2f}",
+                        "cost_diff": f"{filtered_cost_diff:+,.2f}",
+                        "cost_diff_pct": filtered_cost_pct_label,
+                        "actual_hours": f"{filtered_actual_hours:,.2f}",
+                        "rows": cost_pdf_rows,
+                    }, ensure_ascii=False).replace("<", "\\u003c")
+
+                    components.html(f"""
+                    <button onclick="printCostReport()" style="width:100%; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:10px 16px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer;">
+                        📄 พิมพ์ / บันทึก PDF รายงานต้นทุนตามข้อมูลที่เลือก
+                    </button>
+                    <script>
+                    function printCostReport() {{
+                        const d = {cost_pdf_payload};
+                        const reportHtml = `<!doctype html><html><head><meta charset="utf-8">
+                        <title>PES Machining Cost Report</title>
+                        <style>
+                        @page {{ size:A4 landscape; margin:9mm; }}
+                        body {{ font-family:Tahoma,'Sarabun',Arial,sans-serif; color:#172033; margin:0; font-size:9px; }}
+                        .head {{ display:flex; justify-content:space-between; border-bottom:3px solid #B91C1C; padding-bottom:7px; margin-bottom:8px; }}
+                        h1 {{ font-size:17px; margin:0; }} .sub {{ color:#64748B; margin-top:3px; }}
+                        .filters {{ background:#F8FAFC; border:1px solid #CBD5E1; border-radius:6px; padding:6px 8px; margin-bottom:8px; }}
+                        .kpis {{ display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:9px; }}
+                        .kpi {{ border:1px solid #CBD5E1; border-radius:6px; padding:7px; text-align:center; background:#FFF; }}
+                        .kpi b {{ display:block; font-size:14px; margin-top:3px; }}
+                        table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+                        th,td {{ border:1px solid #CBD5E1; padding:3px 4px; overflow-wrap:anywhere; }}
+                        th {{ background:#E2E8F0; font-weight:700; }} tr:nth-child(even) {{ background:#F8FAFC; }}
+                        thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }}
+                        .foot {{ margin-top:8px; color:#64748B; text-align:right; }}
+                        </style></head><body>
+                        <div class="head"><div><h1>ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร</h1><div class="sub">Machining Cost Calculation - งานเสร็จสิ้น / ต้นทุนจริงสุทธิ</div></div><div>วันที่ออกรายงาน: ${{d.print_date}}</div></div>
+                        <div class="filters"><b>เงื่อนไข:</b> เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | ค้นหา ${{d.search}} | จำนวน ${{d.rows_count}} รายการ</div>
+                        <div class="kpis">
+                          <div class="kpi">ต้นทุนจริงสุทธิ<b>${{d.actual_cost}} บาท</b></div>
+                          <div class="kpi">ต้นทุนตามแผน<b>${{d.plan_cost}} บาท</b></div>
+                          <div class="kpi">ผลต่างต้นทุน<b>${{d.cost_diff}} บาท</b><span>${{d.cost_diff_pct}}</span></div>
+                          <div class="kpi">เวลาเดินจริงสุทธิ<b>${{d.actual_hours}} ชม.</b></div>
+                        </div>
+                        <table><thead><tr><th>แผนงาน</th><th>Drawing</th><th style="width:4%">จำนวน</th><th style="width:15%">ขั้นตอน</th><th>เครื่องจักร</th><th>แผน ชม.</th><th>จริงสุทธิ</th><th>บาท/ชม.</th><th>ต้นทุนแผน</th><th>ต้นทุนจริง</th><th>ผลต่าง</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+                        <div class="foot">PES Production Monitoring System</div></body></html>`;
+                        const w = window.open('', '_blank');
+                        if (!w) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
+                        w.document.open(); w.document.write(reportHtml); w.document.close(); w.focus();
+                        setTimeout(function() {{ w.print(); }}, 600);
+                    }}
+                    </script>
+                    """, height=50)
                 else:
                     st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
