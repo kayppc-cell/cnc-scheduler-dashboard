@@ -1558,45 +1558,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
             active_jobs_editor_df = active_jobs_editor_df.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
 
-            # ล้าง event เดิมหลัง Auto-save สำเร็จ ก่อนสร้าง widget รอบใหม่
-            if st.session_state.pop("reset_cnc_editor_after_autosave", False):
+            # ล้างสถานะ editor หลังผู้ใช้กดบันทึกสำเร็จ เพื่อโหลดค่าที่คำนวณแล้วกลับจากฐานข้อมูล
+            if st.session_state.pop("reset_cnc_editor_after_manual_save", False):
                 st.session_state.pop("editor_cnc_jobs_grid_main", None)
-
-            editor_state = st.session_state.get("editor_cnc_jobs_grid_main", {})
-            edited_rows = editor_state.get("edited_rows", {})
-            autosave_requested = False
-            affected_machines = set()
-            # edited_rows ใช้เลขแถวของตารางที่ผู้ใช้เห็น (ซึ่งอาจผ่านการค้นหา/กรองแล้ว)
-            # จึงต้องแปลงกลับด้วย ID ห้ามนำเลขแถวนั้นไปชี้ active_jobs_editor_df โดยตรง
-            previous_editor_row_ids = st.session_state.get("editor_cnc_jobs_grid_main_row_ids", [])
-            if edited_rows:
-                for row_idx_str, changes in edited_rows.items():
-                    r_i = int(row_idx_str)
-                    target_idx = None
-                    if r_i < len(previous_editor_row_ids):
-                        edited_id = previous_editor_row_ids[r_i]
-                        id_matches = active_jobs_editor_df.index[
-                            active_jobs_editor_df["ID"].astype(str) == str(edited_id)
-                        ].tolist()
-                        if id_matches:
-                            target_idx = id_matches[0]
-                    # รองรับหน้าแรกก่อนที่จะมีรายการ ID ใน session (กรณีไม่กรองตาราง)
-                    elif r_i < len(active_jobs_editor_df):
-                        target_idx = r_i
-
-                    if target_idx is not None:
-                        old_machine = safe_str(active_jobs_editor_df.at[target_idx, "เลือกเครื่องจักร"], "")
-                        for col_name, new_val in changes.items():
-                            if col_name in active_jobs_editor_df.columns:
-                                active_jobs_editor_df.at[target_idx, col_name] = new_val
-                            if col_name != "ลบ":
-                                autosave_requested = True
-                        if autosave_requested:
-                            if old_machine:
-                                affected_machines.add(old_machine)
-                            new_machine = safe_str(active_jobs_editor_df.at[target_idx, "เลือกเครื่องจักร"], "")
-                            if new_machine:
-                                affected_machines.add(new_machine)
 
             # คำนวณระบบลูกโซ่ (Auto-Chain): คิวแรกตั้งต้น -> คิวถัดไปรับเวลาจบจากคิวก่อนหน้า
             m_available_tracker = {}
@@ -1816,36 +1780,125 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     ]
                     delete_count = len(active_to_delete)
 
-                    # Auto-save เฉพาะคิวของเครื่องที่มีการแก้ไข และใช้ค่าหลังคำนวณลูกโซ่แล้ว
-                    if autosave_requested and affected_machines:
-                        rows_to_save = active_jobs_editor_df[
-                            active_jobs_editor_df["เลือกเครื่องจักร"].astype(str).isin(affected_machines)
-                        ].copy()
-                        save_success = True
+                    st.caption("✍️ แก้ไขหรือเพิ่มหลายช่องให้ครบก่อน แล้วกดบันทึกครั้งเดียว ระบบจึงจะคำนวณรวมชั่วโมงและเวลาลูกโซ่ใหม่")
+                    _, c_save_manual, _ = st.columns([2.5, 3.5, 4])
+                    with c_save_manual:
+                        save_table_clicked = st.button(
+                            "💾 คำนวณเวลาและบันทึกข้อมูล",
+                            key="btn_manual_save_active_jobs",
+                            type="primary",
+                            use_container_width=True
+                        )
+
+                    if save_table_clicked:
+                        save_source = active_jobs_editor_df.copy()
+                        editable_columns = [
+                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน",
+                            "ขั้นตอน (Step)", "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน",
+                            "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "สถานะงาน"
+                        ]
+                        affected_machines = set()
+
+                        def valid_job_id(value):
+                            try:
+                                if pd.isna(value) or str(value).strip() in ["", "None", "nan"]:
+                                    return None
+                                return int(float(value))
+                            except Exception:
+                                return None
+
+                        id_to_index = {
+                            valid_job_id(row_id): idx
+                            for idx, row_id in save_source["ID"].items()
+                            if valid_job_id(row_id) is not None
+                        }
+
+                        # รวมข้อมูลที่ผู้ใช้เห็นใน editor กลับเข้าชุดเต็ม เพื่อให้คิวอื่นของเครื่องเดียวกันต่อเวลาได้ถูกต้อง
+                        for _, edited_row in edited_jobs.iterrows():
+                            if not safe_str(edited_row.get("แผนงาน"), ""):
+                                continue
+                            edited_id = valid_job_id(edited_row.get("ID"))
+                            edited_machine = safe_str(edited_row.get("เลือกเครื่องจักร"), "No.1 Awea")
+                            if edited_id is not None and edited_id in id_to_index:
+                                target_idx = id_to_index[edited_id]
+                                old_machine = safe_str(save_source.at[target_idx, "เลือกเครื่องจักร"], "")
+                                if old_machine:
+                                    affected_machines.add(old_machine)
+                                for col_name in editable_columns:
+                                    if col_name in edited_row.index:
+                                        save_source.at[target_idx, col_name] = edited_row.get(col_name)
+                            else:
+                                new_row = {col_name: edited_row.get(col_name) for col_name in save_source.columns}
+                                new_row["ID"] = None
+                                new_row["กำหนดพร้อมขึ้นงาน (Baseline)"] = safe_str(edited_row.get("วัน-เวลาขึ้นงาน"), "")
+                                save_source = pd.concat([save_source, pd.DataFrame([new_row])], ignore_index=True)
+                            if edited_machine:
+                                affected_machines.add(edited_machine)
+
+                        for numeric_col, default_value in [("Setup (น.)", 10.0), ("Basic (น.)", 0.0), ("โปรแกรม (น.)", 120.0)]:
+                            save_source[numeric_col] = pd.to_numeric(save_source[numeric_col], errors="coerce").fillna(default_value).clip(lower=0)
+                        save_source["จำนวน"] = pd.to_numeric(save_source["จำนวน"], errors="coerce").fillna(1).clip(lower=1).astype(int)
+
+                        # จัดคิวและคำนวณลูกโซ่ใหม่ รวมแถวล่างสุดที่เพิ่งเพิ่มเข้ามาด้วย
+                        save_source["_sort_key"] = save_source.apply(get_queue_priority, axis=1)
+                        save_source = save_source.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
+                        machine_available = {}
+                        calculated_starts, calculated_finishes = [], []
                         save_errors = []
+
+                        for _, save_row in save_source.iterrows():
+                            machine_name = safe_str(save_row.get("เลือกเครื่องจักร"), "No.1 Awea")
+                            duration_hours = (
+                                safe_float(save_row.get("Setup (น.)"), 10.0)
+                                + safe_float(save_row.get("Basic (น.)"), 0.0)
+                                + safe_float(save_row.get("โปรแกรม (น.)"), 120.0)
+                            ) / 60.0
+                            if machine_name not in machine_available:
+                                start_dt = parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
+                                if start_dt is None or pd.isna(start_dt) or start_dt.year < 2020:
+                                    machine_available[machine_name] = None
+                                    calculated_starts.append("")
+                                    calculated_finishes.append("")
+                                    if machine_name in affected_machines:
+                                        save_errors.append(f"{machine_name}: กรุณากำหนดวันเวลาเริ่มของคิวแรก")
+                                    continue
+                                start_dt = get_next_valid_work_time(start_dt)
+                            else:
+                                start_dt = machine_available[machine_name]
+                                if start_dt is None:
+                                    calculated_starts.append("")
+                                    calculated_finishes.append("")
+                                    continue
+                                start_dt = get_next_valid_work_time(start_dt)
+                            _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
+                            machine_available[machine_name] = finish_dt
+                            calculated_starts.append(start_dt.strftime("%d/%m/%Y %H:%M"))
+                            calculated_finishes.append(finish_dt.strftime("%d/%m/%Y %H:%M"))
+
+                        save_source["วัน-เวลาขึ้นงาน"] = calculated_starts
+                        save_source["วัน-เวลาจบงาน"] = calculated_finishes
+                        save_source["รวม (ชม.)"] = (
+                            (save_source["Setup (น.)"] + save_source["Basic (น.)"] + save_source["โปรแกรม (น.)"]) / 60.0
+                        ).round(2)
+                        rows_to_save = save_source[
+                            save_source["เลือกเครื่องจักร"].astype(str).isin(affected_machines)
+                        ].copy()
+                        save_success = bool(affected_machines) and not save_errors
                         parsed_ready_by_id = {}
 
-                        # ตรวจทุกค่าก่อน ห้ามเริ่มส่งข้อมูลหากมีเวลาแถวใดว่าง/ผิดรูปแบบ
-                        for _, row in rows_to_save.iterrows():
-                            p_code = safe_str(row.get("แผนงาน"), "")
-                            raw_ready = row.get("วัน-เวลาขึ้นงาน")
-                            dt_parsed = parse_flexible_datetime(raw_ready)
-                            if dt_parsed is None or pd.isna(dt_parsed):
-                                save_success = False
-                                save_errors.append(f"{p_code}: กรุณากำหนดเวลาเริ่มแถวแรก")
-                            else:
-                                row_id = row.get("ID")
-                                if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"]:
-                                    parsed_ready_by_id[int(float(row_id))] = dt_parsed
+                        if not affected_machines:
+                            save_errors.append("ไม่พบรายการที่ต้องบันทึก")
 
+                        pending_saves = []
                         if save_success:
+                            # ตรวจทุกแถวให้ผ่านก่อนเริ่มเขียน ป้องกันบันทึกสำเร็จเพียงบางรายการ
                             for _, row in rows_to_save.iterrows():
                                 p_code = safe_str(row.get("แผนงาน"), "")
-                                if not p_code:
+                                dt_parsed = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+                                if not p_code or dt_parsed is None or pd.isna(dt_parsed):
+                                    save_success = False
+                                    save_errors.append(f"{p_code or 'แถวใหม่'}: ข้อมูลแผนงานหรือเวลาเริ่มไม่ครบ")
                                     continue
-                                raw_ready = row.get("วัน-เวลาขึ้นงาน")
-                                dt_parsed = parse_flexible_datetime(raw_ready)
-                                ready_str = dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
                                 payload = {
                                     "plan_code": p_code,
                                     "drawing_name": safe_str(row.get("ชื่อ Drawing."), ""),
@@ -1854,38 +1907,37 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     "job_type": safe_str(row.get("ประเภทงาน"), "🟢 งานปกติ"),
                                     "step_name": safe_str(row.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ"),
                                     "machine_name": safe_str(row.get("เลือกเครื่องจักร"), "No.1 Awea"),
-                                    "ready_at": ready_str,
+                                    "ready_at": dt_parsed.strftime("%Y-%m-%d %H:%M:%S"),
                                     "setup_mins": safe_float(row.get("Setup (น.)"), 10.0),
                                     "basic_hrs": safe_float(row.get("Basic (น.)"), 0.0),
                                     "prog_hrs": safe_float(row.get("โปรแกรม (น.)"), 120.0),
                                     "status": safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
                                 }
-                                
-                                row_id = row.get("ID")
-                                if pd.isna(row_id) or str(row_id).strip() in ["", "None", "nan"]:
-                                    row_saved = insert_supabase_job(payload)
-                                else:
-                                    row_saved = update_supabase_job(int(float(row_id)), payload)
-                                if not row_saved:
-                                    save_success = False
-                                    save_errors.append(f"{p_code}: Supabase ไม่รับข้อมูล")
+                                row_id = valid_job_id(row.get("ID"))
+                                pending_saves.append((p_code, row_id, dt_parsed, payload))
 
-                        # อ่านค่ากลับมายืนยันก่อนรีเฟรช ป้องกันตารางหายหลัง Auto-save
+                        if save_success:
+                            for p_code, row_id, dt_parsed, payload in pending_saves:
+                                row_saved = insert_supabase_job(payload) if row_id is None else update_supabase_job(row_id, payload)
+                                if row_saved and row_id is not None:
+                                    parsed_ready_by_id[row_id] = dt_parsed
+                                elif not row_saved:
+                                    save_success = False
+                                    save_errors.append(f"{p_code}: ฐานข้อมูลไม่รับข้อมูล")
+
                         if save_success:
                             for row_id, expected_dt in parsed_ready_by_id.items():
                                 if not verify_supabase_ready_at(row_id, expected_dt):
                                     save_success = False
-                                    save_errors.append(f"ID {row_id}: ตรวจสอบเวลาใน Supabase ไม่ผ่าน")
+                                    save_errors.append(f"ID {row_id}: ตรวจสอบเวลาในฐานข้อมูลไม่ผ่าน")
 
                         if save_success:
                             st.cache_data.clear()
-                            st.session_state.reset_cnc_editor_after_autosave = True
-                            st.toast("บันทึกอัตโนมัติเรียบร้อย", icon="✅")
+                            st.session_state.reset_cnc_editor_after_manual_save = True
+                            st.toast("คำนวณเวลาและบันทึกข้อมูลเรียบร้อย", icon="✅")
                             st.rerun()
                         else:
-                            st.error("Auto-save ไม่สำเร็จ จึงยังไม่รีเฟรชตาราง: " + " | ".join(save_errors[:5]))
-                    else:
-                        st.caption("✅ Auto-save เปิดใช้งาน — แก้ไขข้อมูลแล้วระบบจะบันทึกให้อัตโนมัติ")
+                            st.error("ยังไม่บันทึกข้อมูล: " + " | ".join(dict.fromkeys(save_errors[:6])))
 
                     _, c_del_top, _ = st.columns([2.5, 3.5, 4])
                     with c_del_top:
