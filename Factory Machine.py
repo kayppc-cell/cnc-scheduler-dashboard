@@ -3118,9 +3118,28 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             def report_escape(value):
                 return html.escape(safe_str(value, "-"))
 
+            def report_number(value, digits=2, suffix=""):
+                """จัดรูปตัวเลขในรายงาน HTML และคืน '-' เมื่อเป็นค่าว่าง/NaN"""
+                if value is None or pd.isna(value):
+                    return "-"
+                return f"{safe_float(value):,.{digits}f}{suffix}"
+
             rows_m_html = "".join([f"<tr><td>{report_escape(r['เครื่องจักร / แผนก'])}</td><td style='text-align:center;'>{r['จำนวนคิวงาน']}</td><td style='text-align:center;'>{r['ชิ้นงานรวม (ชิ้น)']}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f}</td><td style='text-align:center;'>{report_escape(r['ผลต่าง'])}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วนมูลค่า (%)']:.1f}%</td></tr>" for _, r in df_m_sum.iterrows()])
             rows_mat_html = "".join([f"<tr><td>{report_escape(r['ชนิดวัสดุ'])}</td><td style='text-align:center;'>{r['จำนวนคิว']}</td><td style='text-align:center;'>{r['จำนวนชิ้นงาน (ชิ้น)']}</td><td style='text-align:center;'>{r['ชั่วโมงผลิตจริง (ชม.)']:.2f}</td><td style='text-align:right;'>{r['มูลค่าผลผลิต (บาท)']:,.2f} ฿</td><td style='text-align:right; font-weight:bold;'>{r['สัดส่วน (%)']:.1f}%</td></tr>" for _, r in df_mat_sum.iterrows()])
-            rows_job_html = "".join([f"<tr><td>{report_escape(r['แผนงาน'])}</td><td>{report_escape(r['ชื่อ Drawing.'])}</td><td style='text-align:center;'>{r['จำนวน']}</td><td style='text-align:center;'>{report_escape(r['วัสดุ'])}</td><td>{report_escape(r['ขั้นตอน (Step)'])}</td><td>{report_escape(r['เลือกเครื่องจักร'])}</td><td style='text-align:center;'>{format_thai_datetime(r['เริ่มจริง']) or '-'}</td><td style='text-align:center;'>{format_thai_datetime(r['เสร็จจริง']) or '-'}</td><td style='text-align:center;'>{r['เวลาแผน (ชม.)']:.2f}</td><td style='text-align:center;'>{r['เวลาจริง (ชม.)']:.2f if pd.notna(r['เวลาจริง (ชม.)']) else '-'}</td><td style='text-align:right;'>{r['มูลค่ารวม (บาท)']:,.2f} ฿</td></tr>" for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()])
+            rows_job_html = "".join([
+                f"<tr><td>{report_escape(r['แผนงาน'])}</td>"
+                f"<td>{report_escape(r['ชื่อ Drawing.'])}</td>"
+                f"<td style='text-align:center;'>{safe_int(r['จำนวน'], 1)}</td>"
+                f"<td style='text-align:center;'>{report_escape(r['วัสดุ'])}</td>"
+                f"<td>{report_escape(r['ขั้นตอน (Step)'])}</td>"
+                f"<td>{report_escape(r['เลือกเครื่องจักร'])}</td>"
+                f"<td style='text-align:center;'>{format_thai_datetime(r['เริ่มจริง']) or '-'}</td>"
+                f"<td style='text-align:center;'>{format_thai_datetime(r['เสร็จจริง']) or '-'}</td>"
+                f"<td style='text-align:center;'>{report_number(r['เวลาแผน (ชม.)'])}</td>"
+                f"<td style='text-align:center;'>{report_number(r['เวลาจริง (ชม.)'])}</td>"
+                f"<td style='text-align:right;'>{report_number(r['มูลค่ารวม (บาท)'], 2, ' ฿')}</td></tr>"
+                for _, r in monthly_jobs.sort_values(by="Target_Date", ascending=True).iterrows()
+            ])
 
             report_data_dict = {
                 "month_str": f"{month_names[selected_month_idx-1]} {selected_year}",
