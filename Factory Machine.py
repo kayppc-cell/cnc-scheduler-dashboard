@@ -1244,13 +1244,23 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.plotly_chart(fig_donut, use_container_width=True)
 
             with ov_col2:
-                st.markdown("**⚠️ 3 อันดับสถานีคอขวดสูงสุด (คิวงานค้างรอนานที่สุด):**")
+                st.markdown("**⚠️ 3 อันดับสถานีคอขวดสูงสุด (ภาระงานค้างตามชั่วโมงแผน):**")
                 waiting_sub = calc_df[calc_df["สถานะงาน"] == "🟧 รอคิวผลิต"]
                 if not waiting_sub.empty:
-                    m_load = waiting_sub.groupby("เลือกเครื่องจักร").agg(
+                    overview_now = get_bangkok_now().replace(tzinfo=None)
+                    waiting_sub = waiting_sub.copy()
+                    waiting_sub["_ชั่วโมงรอ"] = waiting_sub["วัน-เวลาขึ้นงาน"].apply(
+                        lambda ready_dt: get_work_capacity_between(ready_dt, overview_now)
+                        if ready_dt is not None and not pd.isna(ready_dt) and ready_dt < overview_now else 0.0
+                    )
+                    m_load = waiting_sub.groupby("เลือกเครื่องจักร", dropna=False).agg(
                         คิวรอ=('ID', 'count'),
-                        ชั่วโมงรวม=('รวม (ชม.)', 'sum')
-                    ).reset_index().sort_values(by="คิวรอ", ascending=False).head(3)
+                        ชั่วโมงรวม=('รวม (ชม.)', 'sum'),
+                        รอนานสุด=('_ชั่วโมงรอ', 'max')
+                    ).reset_index().sort_values(
+                        by=["ชั่วโมงรวม", "คิวรอ", "รอนานสุด"],
+                        ascending=[False, False, False]
+                    ).head(3)
 
                     bn_cols = st.columns(3)
                     for idx_b, (_, b_row) in enumerate(m_load.iterrows()):
@@ -1258,8 +1268,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.markdown(f"""
                             <div style="background:#FEF2F2; border:1.5px solid #FECACA; border-left:5px solid #DC2626; border-radius:10px; padding:10px 14px;">
                                 <div style="font-size:11px; font-weight:bold; color:#991B1B;">อันดับ {idx_b+1} งานค้างสูงสุด</div>
-                                <div style="font-size:14px; font-weight:800; color:#1E293B; margin:2px 0;">{b_row['เลือกเครื่องจักร']}</div>
-                                <div style="font-size:12px; color:#475569;">คิวรอ: <b style="color:#DC2626;">{b_row['คิวรอ']} งาน</b> ({b_row['ชั่วโมงรวม']:.1f} ชม.)</div>
+                                <div style="font-size:14px; font-weight:800; color:#1E293B; margin:2px 0;">{html.escape(safe_str(b_row['เลือกเครื่องจักร'], 'ไม่ระบุเครื่อง'))}</div>
+                                <div style="font-size:12px; color:#475569;">คิวรอ: <b style="color:#DC2626;">{safe_int(b_row['คิวรอ'], 0)} งาน</b> | ภาระงาน {safe_float(b_row['ชั่วโมงรวม']):.1f} ชม.</div>
+                                <div style="font-size:11px; color:#64748B; margin-top:2px;">คิวที่รอนานสุด {safe_float(b_row['รอนานสุด']):.1f} ชม.ทำการ</div>
                             </div>
                             """, unsafe_allow_html=True)
                 else:
@@ -1268,15 +1279,36 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.write("")
                 hold_sub = calc_df[calc_df["สถานะงาน"] == "🟨 พักงาน (รอวัสดุ)"]
                 total_hold_count = len(hold_sub)
-                total_hold_hrs = hold_sub["รวม (ชม.)"].sum()
-                rate_map_quick = DEFAULT_RATES
-                total_hold_val = sum([r.get("รวม (ชม.)", 0.0) * rate_map_quick.get(r.get("เลือกเครื่องจักร"), 500) for _, r in hold_sub.iterrows()])
+                hold_now = get_bangkok_now().replace(tzinfo=None)
+                hold_actual_hours = []
+                for _, hold_row in hold_sub.iterrows():
+                    accumulated_pause = max(0.0, safe_float(hold_row.get("เวลาพักสะสม (วินาที)"), 0.0))
+                    active_hold_start = parse_flexible_datetime(hold_row.get("เริ่มพักจริง"))
+                    active_hold_seconds = 0.0
+                    if active_hold_start is not None and not pd.isna(active_hold_start) and active_hold_start < hold_now:
+                        active_hold_seconds = max(0.0, (hold_now - active_hold_start).total_seconds())
+                    hold_actual_hours.append((accumulated_pause + active_hold_seconds) / 3600.0)
+                hold_sub = hold_sub.copy()
+                hold_sub["_เวลาพักจริง_ชม"] = hold_actual_hours
+                total_hold_hrs = hold_sub["_เวลาพักจริง_ชม"].sum()
+                rate_map_quick = DEFAULT_RATES.copy()
+                saved_rates = st.session_state.get("machine_rates")
+                if isinstance(saved_rates, pd.DataFrame) and {"เครื่องจักร", "เรตราคา (บาท/ชม.)"}.issubset(saved_rates.columns):
+                    rate_map_quick.update(dict(zip(
+                        saved_rates["เครื่องจักร"],
+                        pd.to_numeric(saved_rates["เรตราคา (บาท/ชม.)"], errors="coerce").fillna(500.0)
+                    )))
+                total_hold_val = sum([
+                    safe_float(r.get("_เวลาพักจริง_ชม"), 0.0)
+                    * safe_float(rate_map_quick.get(r.get("เลือกเครื่องจักร"), 500), 500)
+                    for _, r in hold_sub.iterrows()
+                ])
 
                 st.markdown(f"""
                 <div style="background:#FFFBEB; border:1.5px dashed #F59E0B; border-radius:10px; padding:10px 16px; display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <span style="font-size:13px; font-weight:800; color:#B45309;">🛑 เวลาและมูลค่าสูญเปล่าสะสมจากงานที่พักไว้ (Downtime Loss):</span><br>
-                        <span style="font-size:11.5px; color:#78350F;">มีงานติดปัญหาชะงักรอเบิกวัสดุ <b>{total_hold_count} งาน</b></span>
+                        <span style="font-size:13px; font-weight:800; color:#B45309;">🛑 เวลาพักจริงสะสมและมูลค่าเวลาเครื่องที่หยุด (Downtime Loss):</span><br>
+                        <span style="font-size:11.5px; color:#78350F;">งานที่อยู่ในสถานะพัก <b>{total_hold_count} งาน</b> | ใช้เวลาพักสะสมจริงรวมช่วงที่กำลังพัก</span>
                     </div>
                     <div style="text-align:right;">
                         <span style="font-size:18px; font-weight:900; color:#D97706;">{total_hold_hrs:.1f} ชม.</span><br>
