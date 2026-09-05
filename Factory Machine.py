@@ -2598,8 +2598,97 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         f"**📊 งานเสร็จสิ้น — ต้นทุนจริงสุทธิ: :green[{total_actual_cost:,.2f} บาท] "
                         f"| เวลาเดินสุทธิ {total_actual_hrs:,.2f} ชม. | ต้นทุนตามแผน {total_plan_cost:,.2f} บาท**"
                     )
+
+                    cost_display_df = cost_df.copy()
+                    cost_quick_filter = st.session_state.get("cost_table_quick_filter", "ALL")
+                    cost_missing_mask = cost_display_df["แหล่งเวลา"].astype(str).str.contains("⚠️", regex=False)
+                    cost_valid_mask = ~cost_missing_mask
+                    cost_over_count = int((cost_valid_mask & (cost_display_df["ผลต่างต้นทุน (บาท)"] > 0)).sum())
+                    cost_saving_count = int((cost_valid_mask & (cost_display_df["ผลต่างต้นทุน (บาท)"] < 0)).sum())
+                    cost_equal_count = int((cost_valid_mask & (cost_display_df["ผลต่างต้นทุน (บาท)"].abs() < 0.01)).sum())
+                    cost_missing_count = int(cost_missing_mask.sum())
+
+                    st.markdown("**🔎 ค้นหาด่วนด้วยปุ่ม:**")
+                    cost_quick_buttons = [
+                        ("ALL", f"🌐 ทั้งหมด ({len(cost_display_df)})"),
+                        ("OVER", f"🔴 เกินแผน ({cost_over_count})"),
+                        ("SAVING", f"🟢 ต่ำกว่าแผน ({cost_saving_count})"),
+                        ("EQUAL", f"🟡 เท่าแผน ({cost_equal_count})"),
+                        ("MISSING", f"⚠️ เวลาไม่ครบ ({cost_missing_count})"),
+                    ]
+                    for cost_btn_col, (cost_filter_key, cost_filter_label) in zip(st.columns(5), cost_quick_buttons):
+                        with cost_btn_col:
+                            if st.button(
+                                cost_filter_label,
+                                key=f"btn_cost_quick_{cost_filter_key}",
+                                type="primary" if cost_quick_filter == cost_filter_key else "secondary",
+                                use_container_width=True
+                            ):
+                                st.session_state.cost_table_quick_filter = cost_filter_key
+                                cost_quick_filter = cost_filter_key
+
+                    cost_machine_options = ["🌐 ทุกเครื่อง"] + sorted(cost_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
+                    cost_plan_options = ["🌐 ทุกแผนงาน"] + sorted(cost_df["แผนงาน"].dropna().astype(str).unique().tolist())
+                    cost_drawing_options = ["🌐 ทุก Drawing"] + sorted(cost_df["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
+                    cf1, cf2, cf3, cf4 = st.columns([1.1, 1, 1.4, 1.7])
+                    with cf1:
+                        cost_machine_filter = st.selectbox("🏭 เครื่องจักร:", cost_machine_options, key="cost_machine_filter")
+                    with cf2:
+                        cost_plan_filter = st.selectbox("📌 แผนงาน:", cost_plan_options, key="cost_plan_filter")
+                    with cf3:
+                        cost_drawing_filter = st.selectbox("📄 Drawing:", cost_drawing_options, key="cost_drawing_filter")
+                    with cf4:
+                        cost_search = st.text_input(
+                            "🔍 ค้นหา Drawing / Step / วัสดุ:",
+                            placeholder="พิมพ์รหัสงาน, Drawing, ขั้นตอน, วัสดุ...",
+                            key="cost_table_search"
+                        )
+
+                    if cost_quick_filter == "OVER":
+                        cost_display_df = cost_display_df[
+                            ~cost_display_df["แหล่งเวลา"].astype(str).str.contains("⚠️", regex=False)
+                            & (cost_display_df["ผลต่างต้นทุน (บาท)"] > 0)
+                        ]
+                    elif cost_quick_filter == "SAVING":
+                        cost_display_df = cost_display_df[
+                            ~cost_display_df["แหล่งเวลา"].astype(str).str.contains("⚠️", regex=False)
+                            & (cost_display_df["ผลต่างต้นทุน (บาท)"] < 0)
+                        ]
+                    elif cost_quick_filter == "EQUAL":
+                        cost_display_df = cost_display_df[
+                            ~cost_display_df["แหล่งเวลา"].astype(str).str.contains("⚠️", regex=False)
+                            & (cost_display_df["ผลต่างต้นทุน (บาท)"].abs() < 0.01)
+                        ]
+                    elif cost_quick_filter == "MISSING":
+                        cost_display_df = cost_display_df[cost_display_df["แหล่งเวลา"].astype(str).str.contains("⚠️", regex=False)]
+
+                    if normalize_filter_key(cost_machine_filter) != normalize_filter_key("🌐 ทุกเครื่อง"):
+                        cost_display_df = cost_display_df[
+                            cost_display_df["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(cost_machine_filter)
+                        ]
+                    if normalize_filter_key(cost_plan_filter) != normalize_filter_key("🌐 ทุกแผนงาน"):
+                        cost_display_df = cost_display_df[
+                            cost_display_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(cost_plan_filter)
+                        ]
+                    if normalize_filter_key(cost_drawing_filter) != normalize_filter_key("🌐 ทุก Drawing"):
+                        cost_display_df = cost_display_df[
+                            cost_display_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(cost_drawing_filter)
+                        ]
+                    if cost_search.strip():
+                        cost_query = cost_search.strip().casefold()
+                        cost_search_mask = pd.Series(False, index=cost_display_df.index)
+                        for cost_search_col in ["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "วัสดุ", "แหล่งเวลา"]:
+                            cost_search_mask |= cost_display_df[cost_search_col].astype(str).str.casefold().str.contains(cost_query, regex=False, na=False)
+                        cost_display_df = cost_display_df[cost_search_mask]
+
+                    filtered_actual_cost = cost_display_df["ต้นทุนจริงสุทธิ (บาท)"].sum()
+                    filtered_plan_cost = cost_display_df["ต้นทุนตามแผน (บาท)"].sum()
+                    st.caption(
+                        f"แสดงผล {len(cost_display_df):,} จากทั้งหมด {len(cost_df):,} รายการ | "
+                        f"ต้นทุนจริงที่แสดง {filtered_actual_cost:,.2f} บาท | แผน {filtered_plan_cost:,.2f} บาท"
+                    )
                     st.dataframe(
-                        cost_df.sort_values(by="เสร็จจริง", ascending=False)[[
+                        cost_display_df.sort_values(by="เสร็จจริง", ascending=False)[[
                             "แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "เลือกเครื่องจักร",
                             "เวลาแผน (ชม.)", "เวลาจริงสุทธิ (ชม.)", "แหล่งเวลา", "เรตราคา (บาท/ชม.)",
                             "ต้นทุนตามแผน (บาท)", "ต้นทุนจริงสุทธิ (บาท)", "ผลต่างต้นทุน (บาท)"
@@ -2608,7 +2697,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=70),
                             "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=135),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=50, format="%d"),
-                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=115),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=170),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=110),
                             "เวลาแผน (ชม.)": st.column_config.NumberColumn("แผน ชม.", width=70, format="%.2f"),
                             "เวลาจริงสุทธิ (ชม.)": st.column_config.NumberColumn("จริงสุทธิ", width=75, format="%.2f"),
@@ -2618,7 +2707,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ต้นทุนจริงสุทธิ (บาท)": st.column_config.NumberColumn("ต้นทุนจริง", width=90, format="%.2f ฿"),
                             "ผลต่างต้นทุน (บาท)": st.column_config.NumberColumn("ผลต่าง", width=85, format="%+.2f ฿"),
                         },
-                        width=1320,
+                        width=1380,
                         hide_index=True,
                         height=440,
                         row_height=28
