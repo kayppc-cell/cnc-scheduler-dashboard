@@ -474,7 +474,16 @@ st.markdown("""
     }
     .step-card-overdue { border: 2px solid #DC2626 !important; animation: operatorOverduePulse 1.15s ease-in-out infinite; }
     .op-job-header-overdue { border: 2px solid #DC2626 !important; background: linear-gradient(135deg, #FFF1F2 0%, #FEE2E2 100%) !important; }
-    .badge-overdue { background:#DC2626; color:#FFFFFF; border:1px solid #991B1B; animation: operatorOverduePulse 1.15s ease-in-out infinite; }
+    .badge-overdue {
+        background:#FFFFFF !important;
+        color:#DC2626 !important;
+        -webkit-text-fill-color:#DC2626 !important;
+        border:2px solid #DC2626 !important;
+        font-weight:900 !important;
+        text-shadow:none !important;
+        box-shadow:0 0 0 2px rgba(220,38,38,0.18);
+        animation: operatorOverduePulse 1.15s ease-in-out infinite;
+    }
     div.stButton > button:disabled { background-color: #F1F5F9 !important; color: #94A3B8 !important; border-color: #CBD5E1 !important; cursor: not-allowed !important; }
 
     .tv-grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-top: 10px; }
