@@ -2811,8 +2811,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     }, ensure_ascii=False).replace("<", "\\u003c")
 
                     components.html(f"""
-                    <button onclick="printCostReport()" style="width:100%; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:10px 16px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer;">
-                        📄 พิมพ์ / บันทึก PDF รายงานต้นทุนตามข้อมูลที่เลือก
+                    <button onclick="printCostReport()" title="พิมพ์รายงานต้นทุนตามข้อมูลที่เลือก" style="display:block; width:230px; max-width:100%; margin-left:auto; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:9px 15px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 2px 6px rgba(185,28,28,.22);">
+                        📄 พิมพ์ / บันทึก PDF
                     </button>
                     <script>
                     function printCostReport() {{
