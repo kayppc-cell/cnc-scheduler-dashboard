@@ -468,6 +468,13 @@ st.markdown("""
     .badge-finish-date { background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; font-weight: 800; }
 
     .step-card { background: #FFFFFF; padding: 14px 16px; border-radius: 14px; border: 1.5px solid #E2E8F0; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.02); }
+    @keyframes operatorOverduePulse {
+        0%, 100% { box-shadow: 0 0 0 2px #FCA5A5, 0 3px 10px rgba(220,38,38,0.30); background:#FFF7F7; }
+        50% { box-shadow: 0 0 0 5px #EF4444, 0 0 24px rgba(239,68,68,0.80); background:#FEE2E2; }
+    }
+    .step-card-overdue { border: 2px solid #DC2626 !important; animation: operatorOverduePulse 1.15s ease-in-out infinite; }
+    .op-job-header-overdue { border: 2px solid #DC2626 !important; background: linear-gradient(135deg, #FFF1F2 0%, #FEE2E2 100%) !important; }
+    .badge-overdue { background:#DC2626; color:#FFFFFF; border:1px solid #991B1B; animation: operatorOverduePulse 1.15s ease-in-out infinite; }
     div.stButton > button:disabled { background-color: #F1F5F9 !important; color: #94A3B8 !important; border-color: #CBD5E1 !important; cursor: not-allowed !important; }
 
     .tv-grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-top: 10px; }
@@ -873,14 +880,25 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             else:
                 start_w_dt = get_next_valid_work_time(r_parsed)
 
+            stored_finish_w_dt = parse_flexible_datetime(step_row.get("วัน-เวลาจบงาน"))
             if start_w_dt is None:
                 finish_w_dt = None
                 ready_display_str = "-"
                 finish_plan_display_str = "-"
             else:
-                _, finish_w_dt = add_work_time_with_shift(start_w_dt, tot_h)
+                # ใช้เวลาจบแผนที่บันทึกไว้เป็นหลัก เพื่อให้ทุกหน้าตรวจหลุดแผนจากค่าเดียวกัน
+                if stored_finish_w_dt is not None and pd.notna(stored_finish_w_dt):
+                    finish_w_dt = stored_finish_w_dt
+                else:
+                    _, finish_w_dt = add_work_time_with_shift(start_w_dt, tot_h)
                 ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.")
                 finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.")
+
+            operator_now = get_bangkok_now().replace(tzinfo=None)
+            is_running_overdue = bool(
+                is_step_running and finish_w_dt is not None and pd.notna(finish_w_dt) and operator_now > finish_w_dt
+            )
+            overdue_minutes = int((operator_now - finish_w_dt).total_seconds() // 60) if is_running_overdue else 0
 
             if "Batch" in run_mode:
                 can_start = is_step_waiting
@@ -895,9 +913,14 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 badge_gradient = "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)"
                 status_badge_html = '<span class="badge-chip badge-hold">🛑 พักงาน (รอวัสดุใหม่)</span>'
             elif is_step_running:
-                header_box_class = "op-job-header op-job-header-running"
-                badge_gradient = "linear-gradient(135deg, #059669 0%, #10B981 100%)"
-                status_badge_html = '<span class="badge-chip badge-running"><span class="tv-pulse-dot" style="margin-right:6px;"></span> 🟦 กำลังผลิต (รันงานอยู่ ⏱️)</span>'
+                if is_running_overdue:
+                    header_box_class = "op-job-header op-job-header-overdue"
+                    badge_gradient = "linear-gradient(135deg, #B91C1C 0%, #EF4444 100%)"
+                    status_badge_html = f'<span class="badge-chip badge-overdue">🚨 หลุดแผน {overdue_minutes // 60:02d}:{overdue_minutes % 60:02d} ชม.</span>'
+                else:
+                    header_box_class = "op-job-header op-job-header-running"
+                    badge_gradient = "linear-gradient(135deg, #059669 0%, #10B981 100%)"
+                    status_badge_html = '<span class="badge-chip badge-running"><span class="tv-pulse-dot" style="margin-right:6px;"></span> 🟦 กำลังผลิต (รันงานอยู่ ⏱️)</span>'
             elif is_urgent:
                 header_box_class = "op-job-header op-job-header-urgent"
                 badge_gradient = "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)"
@@ -911,7 +934,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             st.markdown(card_header_html, unsafe_allow_html=True)
 
             card_style_class = "step-card"
-            if is_step_running: card_style_class += " step-card-running"
+            if is_running_overdue: card_style_class += " step-card-overdue"
+            elif is_step_running: card_style_class += " step-card-running"
             elif is_step_hold: card_style_class += " step-card-hold"
             elif can_start: card_style_class += " step-card-ready"
             elif is_step_finished: card_style_class += " step-card-finished"
@@ -927,6 +951,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     start_txt = st_parsed.strftime('%H:%M น.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
                     step_start_epoch = to_bangkok_epoch_ms(s_start)
                     st.caption(f"""**ขั้นตอน:** <span style='color:#059669; font-weight:800; font-size:14px;'><span class='tv-pulse-dot' style='margin-right:6px;'></span> 🟦 กำลังผลิต (เริ่มรัน: {start_txt}) | ⏱️ เวลาเดินสุทธิ: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(s_paused_seconds)}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
+                    if is_running_overdue:
+                        st.error(f"🚨 งานนี้กำลังผลิตและเกินเวลาจบตามแผนแล้ว {overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที")
                 elif is_step_hold:
                     st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
                 else:
@@ -2330,7 +2356,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             use_container_width=True
                         ):
                             st.session_state.finished_history_quick_filter = filter_key
-                            st.rerun()
+                            quick_filter = filter_key
 
                 machine_options = ["🌐 ทุกเครื่อง"] + sorted(fin_display_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
                 plan_options = ["🌐 ทุกแผนงาน"] + sorted(fin_display_df["แผนงาน"].dropna().astype(str).unique().tolist())
@@ -2343,6 +2369,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     selected_fin_plan = st.selectbox("📌 เลือกแผนงาน:", plan_options, key="finished_history_plan_select")
                 with sel_c3:
                     selected_fin_drawing = st.selectbox("📄 เลือก Drawing:", drawing_options, key="finished_history_drawing_select")
+
+                selected_fin_machine = st.session_state.get("finished_history_machine_select", "🌐 ทุกเครื่อง")
+                selected_fin_plan = st.session_state.get("finished_history_plan_select", "🌐 ทุกแผนงาน")
+                selected_fin_drawing = st.session_state.get("finished_history_drawing_select", "🌐 ทุก Drawing")
 
                 total_finished_before_filter = len(fin_display_df)
                 finish_dates = fin_display_df["เสร็จจริง"].apply(parse_flexible_datetime)
@@ -2361,12 +2391,18 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 elif quick_filter == "PAUSED":
                     fin_display_df = fin_display_df[pd.to_numeric(fin_display_df["พักสะสม (ชม.)"], errors="coerce") > 0]
 
-                if selected_fin_machine != "🌐 ทุกเครื่อง":
-                    fin_display_df = fin_display_df[fin_display_df["เลือกเครื่องจักร"].astype(str) == selected_fin_machine]
-                if selected_fin_plan != "🌐 ทุกแผนงาน":
-                    fin_display_df = fin_display_df[fin_display_df["แผนงาน"].astype(str) == selected_fin_plan]
-                if selected_fin_drawing != "🌐 ทุก Drawing":
-                    fin_display_df = fin_display_df[fin_display_df["ชื่อ Drawing."].astype(str) == selected_fin_drawing]
+                if normalize_filter_key(selected_fin_machine) != normalize_filter_key("🌐 ทุกเครื่อง"):
+                    fin_display_df = fin_display_df[
+                        fin_display_df["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(selected_fin_machine)
+                    ]
+                if normalize_filter_key(selected_fin_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
+                    fin_display_df = fin_display_df[
+                        fin_display_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_fin_plan)
+                    ]
+                if normalize_filter_key(selected_fin_drawing) != normalize_filter_key("🌐 ทุก Drawing"):
+                    fin_display_df = fin_display_df[
+                        fin_display_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_fin_drawing)
+                    ]
 
                 st.caption(f"แสดงผล {len(fin_display_df):,} จากทั้งหมด {total_finished_before_filter:,} รายการ")
 
@@ -2394,11 +2430,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         column_config={
                             "ID": None,
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75, disabled=True),
-                            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=145, disabled=True),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=180, disabled=True),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, format="%d", disabled=True),
                             "วัสดุ": st.column_config.TextColumn("วัสดุ", width=60, disabled=True),
-                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=135, disabled=True),
-                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=115, disabled=True),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=240, disabled=True),
+                            "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=140, disabled=True),
                             "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("เริ่มแผน", width=130, format="DD/MM/YYYY HH:mm", disabled=True),
                             "จบตามแผน": st.column_config.DatetimeColumn("จบแผน", width=130, format="DD/MM/YYYY HH:mm", disabled=True),
                             "เริ่มจริง": st.column_config.DatetimeColumn("เริ่มจริง", width=130, format="DD/MM/YYYY HH:mm", disabled=True),
@@ -2416,9 +2452,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ลบประวัติ": st.column_config.CheckboxColumn("🗑️", width=45, default=False),
                         },
                         hide_index=True,
-                        width=1780,
+                        width=2100,
                         height=420,
-                        row_height=30
+                        row_height=34
                     )
 
                     fin_to_del = edited_fin[edited_fin["ลบประวัติ"] == True]
@@ -2436,10 +2472,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         fin_display_df[[c for c in fin_display_df.columns if c not in ["ID", "ลบประวัติ"]]],
                         column_config={
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
-                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=190),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
                             "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
-                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=120),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน (Step)", width=240),
                             "เลือกเครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width=140),
                             "วัน-เวลาขึ้นงาน": st.column_config.DatetimeColumn("กำหนดขึ้นงาน (แผน)", width=145, format="DD/MM/YYYY HH:mm"),
                             "จบตามแผน": st.column_config.DatetimeColumn("จบตามแผน", width=145, format="DD/MM/YYYY HH:mm"),
@@ -2454,7 +2490,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "สถานะงาน": st.column_config.TextColumn("สถานะ", width=120),
                         },
                         hide_index=True,
-                        width=1780
+                        width=2100,
+                        row_height=34
                     )
             else:
                 st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว'")
@@ -3358,8 +3395,82 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.divider()
 
             st.markdown(f"#### 📋 รายละเอียดชิ้นงานทั้งหมดที่เสร็จสิ้นในเดือน {month_names[selected_month_idx-1]} {selected_year}")
+            monthly_detail_df = monthly_jobs.copy()
+            detail_filter = st.session_state.get("monthly_detail_quick_filter", "ALL")
+            monthly_ontime_count = int((monthly_detail_df["ผลตามกำหนด"] == "🟢 จบไม่เกินแผน").sum())
+            monthly_late_count = int((monthly_detail_df["ผลตามกำหนด"] == "🔴 จบเกินแผน").sum())
+            monthly_missing_count = int((monthly_detail_df["แหล่งเวลา"] == "⚠️ เวลาไม่ครบ").sum())
+            monthly_paused_count = int((pd.to_numeric(monthly_detail_df["เวลาพักสะสม (วินาที)"], errors="coerce").fillna(0) > 0).sum())
+
+            st.markdown("**🔎 ค้นหาด่วนด้วยปุ่ม:**")
+            monthly_quick_buttons = [
+                ("ALL", f"🌐 ทั้งหมด ({len(monthly_detail_df)})"),
+                ("ONTIME", f"🟢 ตามแผน ({monthly_ontime_count})"),
+                ("LATE", f"🔴 เกินแผน ({monthly_late_count})"),
+                ("PAUSED", f"⏸️ มีเวลาพัก ({monthly_paused_count})"),
+                ("MISSING", f"⚠️ เวลาไม่ครบ ({monthly_missing_count})"),
+            ]
+            for detail_col, (detail_key, detail_label) in zip(st.columns(5), monthly_quick_buttons):
+                with detail_col:
+                    if st.button(
+                        detail_label,
+                        key=f"btn_monthly_detail_{detail_key}",
+                        type="primary" if detail_filter == detail_key else "secondary",
+                        use_container_width=True
+                    ):
+                        st.session_state.monthly_detail_quick_filter = detail_key
+                        detail_filter = detail_key
+
+            detail_machine_options = ["🌐 ทุกเครื่อง"] + sorted(monthly_detail_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
+            detail_plan_options = ["🌐 ทุกแผนงาน"] + sorted(monthly_detail_df["แผนงาน"].dropna().astype(str).unique().tolist())
+            detail_material_options = ["🌐 ทุกวัสดุ"] + sorted(monthly_detail_df["วัสดุ"].dropna().astype(str).unique().tolist())
+            md_c1, md_c2, md_c3, md_c4 = st.columns([1.2, 1, 1, 1.8])
+            with md_c1:
+                detail_machine = st.selectbox("🏭 เครื่องจักร:", detail_machine_options, key="monthly_detail_machine")
+            with md_c2:
+                detail_plan = st.selectbox("📌 แผนงาน:", detail_plan_options, key="monthly_detail_plan")
+            with md_c3:
+                detail_material = st.selectbox("🔩 วัสดุ:", detail_material_options, key="monthly_detail_material")
+            with md_c4:
+                detail_search = st.text_input(
+                    "🔍 ค้นหา Drawing / Step / เครื่องจักร:",
+                    placeholder="พิมพ์ Drawing, ขั้นตอน หรือชื่อเครื่อง...",
+                    key="monthly_detail_search"
+                )
+
+            if detail_filter == "ONTIME":
+                monthly_detail_df = monthly_detail_df[monthly_detail_df["ผลตามกำหนด"] == "🟢 จบไม่เกินแผน"]
+            elif detail_filter == "LATE":
+                monthly_detail_df = monthly_detail_df[monthly_detail_df["ผลตามกำหนด"] == "🔴 จบเกินแผน"]
+            elif detail_filter == "PAUSED":
+                monthly_detail_df = monthly_detail_df[
+                    pd.to_numeric(monthly_detail_df["เวลาพักสะสม (วินาที)"], errors="coerce").fillna(0) > 0
+                ]
+            elif detail_filter == "MISSING":
+                monthly_detail_df = monthly_detail_df[monthly_detail_df["แหล่งเวลา"] == "⚠️ เวลาไม่ครบ"]
+
+            if normalize_filter_key(detail_machine) != normalize_filter_key("🌐 ทุกเครื่อง"):
+                monthly_detail_df = monthly_detail_df[
+                    monthly_detail_df["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(detail_machine)
+                ]
+            if normalize_filter_key(detail_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
+                monthly_detail_df = monthly_detail_df[
+                    monthly_detail_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(detail_plan)
+                ]
+            if normalize_filter_key(detail_material) != normalize_filter_key("🌐 ทุกวัสดุ"):
+                monthly_detail_df = monthly_detail_df[
+                    monthly_detail_df["วัสดุ"].map(normalize_filter_key) == normalize_filter_key(detail_material)
+                ]
+            if detail_search.strip():
+                detail_q = detail_search.strip().casefold()
+                search_mask = pd.Series(False, index=monthly_detail_df.index)
+                for search_col in ["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "วัสดุ"]:
+                    search_mask |= monthly_detail_df[search_col].astype(str).str.casefold().str.contains(detail_q, regex=False, na=False)
+                monthly_detail_df = monthly_detail_df[search_mask]
+
+            st.caption(f"แสดงผล {len(monthly_detail_df):,} จากทั้งหมด {len(monthly_jobs):,} Step ในเดือนที่เลือก")
             st.dataframe(
-                monthly_jobs.sort_values(by="Target_Date", ascending=True)[[
+                monthly_detail_df.sort_values(by="Target_Date", ascending=True)[[
                     "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
                     "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", 
                     "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "แหล่งเวลา", "ผลตามกำหนด", "มูลค่ารวม (บาท)"
