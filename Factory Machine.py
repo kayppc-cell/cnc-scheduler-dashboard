@@ -898,6 +898,34 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     else:
                         st.error("Finish แบบกลุ่มไม่สำเร็จครบทุกรายการ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
 
+        # หาแผนงาน+Drawing ล่าสุดที่เพิ่ง Finish และยังมี Step ค้างบนเครื่องนี้
+        # เพื่อให้ Step 2, Step 3 อยู่ต่อกัน ไม่ถูกคิวอื่นดันลงไปท้ายหน้า
+        continuation_group = None
+        finished_on_machine = df_all[
+            (df_all["เลือกเครื่องจักร"] == selected_m)
+            & (df_all["สถานะงาน"].astype(str).str.contains("เสร็จสิ้น", na=False))
+        ].copy()
+        if not finished_on_machine.empty:
+            finished_on_machine["_finish_dt"] = finished_on_machine["เสร็จจริง"].apply(parse_flexible_datetime)
+            finished_on_machine = finished_on_machine[
+                finished_on_machine["_finish_dt"].notna()
+            ].sort_values(by=["_finish_dt", "ID"], ascending=[False, False])
+            for _, finished_row in finished_on_machine.iterrows():
+                candidate_group = (
+                    normalize_filter_key(finished_row.get("แผนงาน")),
+                    normalize_filter_key(finished_row.get("ชื่อ Drawing."))
+                )
+                has_remaining_steps = m_all_jobs.apply(
+                    lambda active_row: (
+                        normalize_filter_key(active_row.get("แผนงาน")),
+                        normalize_filter_key(active_row.get("ชื่อ Drawing."))
+                    ) == candidate_group,
+                    axis=1
+                ).any()
+                if has_remaining_steps:
+                    continuation_group = candidate_group
+                    break
+
         def sort_op_jobs(x):
             st_val = str(x.get("สถานะงาน", ""))
             if "กำลังผลิต" in st_val:
@@ -906,8 +934,18 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                 prio = 1
             else:
                 prio = 2
+            row_group = (
+                normalize_filter_key(x.get("แผนงาน")),
+                normalize_filter_key(x.get("ชื่อ Drawing."))
+            )
+            continuation_prio = 0 if continuation_group is not None and row_group == continuation_group else 1
             r_dt = parse_flexible_datetime(x.get("วัน-เวลาขึ้นงาน"))
-            return (prio, r_dt if r_dt is not None else pd.Timestamp.max, safe_int(x.get("ID")))
+            return (
+                prio,
+                continuation_prio,
+                r_dt if r_dt is not None else pd.Timestamp.max,
+                safe_int(x.get("ID"))
+            )
 
         m_active = m_all_jobs.copy()
         m_active["_sort_key"] = m_active.apply(sort_op_jobs, axis=1)
