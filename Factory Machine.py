@@ -296,6 +296,52 @@ def get_planned_busy_hours_in_range(start_dt: datetime, duration_hours: float, r
             busy_hours += (overlap_end - overlap_start).total_seconds() / 3600.0
     return busy_hours
 
+def get_job_planned_finish(job_row):
+    """คืนเวลาจบตามแผนจากค่าที่บันทึกไว้ หรือคำนวณจากเวลาเริ่มและเวลามาตรฐานเมื่อไม่มีค่าเก็บไว้"""
+    stored_finish = parse_flexible_datetime(job_row.get("วัน-เวลาจบงาน"))
+    if stored_finish is not None and not pd.isna(stored_finish):
+        return stored_finish
+    planned_start = parse_flexible_datetime(job_row.get("วัน-เวลาขึ้นงาน"))
+    if planned_start is None or pd.isna(planned_start) or planned_start.year < 2020:
+        return None
+    duration_hours = max(0.0, (
+        safe_float(job_row.get("Setup (น.)"), 10.0)
+        + safe_float(job_row.get("Basic (น.)"), 0.0)
+        + safe_float(job_row.get("โปรแกรม (น.)"), 0.0)
+    ) / 60.0)
+    _, planned_finish = add_work_time_with_shift(get_next_valid_work_time(planned_start), duration_hours)
+    return planned_finish
+
+def build_operator_finish_feedback(finished_rows, actual_finish_dt):
+    """สรุปผล Finish เทียบแผนสำหรับแสดงครั้งเดียวหลังบันทึกสำเร็จ"""
+    on_time_count, late_count, no_plan_count = 0, 0, 0
+    late_minutes_list = []
+    for _, finish_row in finished_rows.iterrows():
+        planned_finish = get_job_planned_finish(finish_row)
+        if planned_finish is None or pd.isna(planned_finish):
+            no_plan_count += 1
+        elif actual_finish_dt <= planned_finish:
+            on_time_count += 1
+        else:
+            late_count += 1
+            late_minutes_list.append(max(0, int((actual_finish_dt - planned_finish).total_seconds() // 60)))
+
+    total_count = on_time_count + late_count + no_plan_count
+    if total_count == 1 and on_time_count == 1:
+        return {"kind": "success", "message": "🎉 ยอดเยี่ยม! งานเสร็จสิ้นได้ตามแผน บันทึกเวลา Finish เรียบร้อยแล้ว"}
+    if total_count == 1 and late_count == 1:
+        late_minutes = late_minutes_list[0]
+        return {"kind": "warning", "message": f"⚠️ บันทึก Finish แล้ว แต่งานเสร็จช้ากว่าแผน {late_minutes // 60} ชม. {late_minutes % 60} นาที กรุณาตรวจสอบสาเหตุความล่าช้า"}
+    if total_count == 1:
+        return {"kind": "info", "message": "🏁 บันทึก Finish เรียบร้อยแล้ว แต่รายการนี้ไม่มีเวลาจบตามแผน จึงยังประเมินผลไม่ได้"}
+    if late_count == 0 and no_plan_count == 0:
+        return {"kind": "success", "message": f"🎉 ยอดเยี่ยม! งาน Batch ทั้งหมด {on_time_count} รายการเสร็จได้ตามแผน"}
+    summary = f"🏁 Finish แบบ Batch แล้ว {total_count} รายการ | ตามแผน {on_time_count} | ช้ากว่าแผน {late_count} | ไม่มีเวลาแผน {no_plan_count}"
+    if late_minutes_list:
+        worst_late = max(late_minutes_list)
+        summary += f" | ช้าที่สุด {worst_late // 60} ชม. {worst_late % 60} นาที"
+    return {"kind": "warning" if late_count else "info", "message": summary}
+
 def is_deadline_active_status(status_val):
     """เกณฑ์กลางเดียวกันสำหรับ TV Live และใบจ่ายคิว: ทุกงานที่ยังไม่เสร็จ"""
     status = str(status_val)
@@ -736,6 +782,19 @@ if selected_tab != st.session_state.current_view:
 # ---------------------------------------------------------
 if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
+
+    operator_finish_feedback = st.session_state.pop("operator_finish_feedback", None)
+    if operator_finish_feedback:
+        feedback_kind = operator_finish_feedback.get("kind", "info")
+        feedback_message = operator_finish_feedback.get("message", "บันทึก Finish เรียบร้อยแล้ว")
+        if feedback_kind == "success":
+            st.balloons()
+            st.success(feedback_message)
+        elif feedback_kind == "warning":
+            st.warning(feedback_message)
+        else:
+            st.info(feedback_message)
+
     df_all = fetch_jobs_from_supabase()
     
     c_m_sel, c_mode_sel = st.columns([2, 2])
@@ -827,13 +886,14 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
             with b_c2:
                 if st.button(f"🏁 Finish รวมทุกงานที่กำลังรัน ({len(running_jobs)} คิว)", disabled=(len(running_jobs) == 0), type="secondary", use_container_width=True):
-                    now_str = get_bangkok_str()
+                    batch_finish_dt = get_bangkok_now().replace(tzinfo=None)
+                    now_str = batch_finish_dt.strftime("%Y-%m-%d %H:%M:%S")
                     update_results = [
                         update_supabase_job(int(r["ID"]), {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str})
                         for _, r in running_jobs.iterrows()
                     ]
                     if update_results and all(update_results):
-                        st.toast("บันทึกจบงานจริงทุกคิวเรียบร้อย!", icon="🏁")
+                        st.session_state.operator_finish_feedback = build_operator_finish_feedback(running_jobs, batch_finish_dt)
                         st.rerun()
                     else:
                         st.error("Finish แบบกลุ่มไม่สำเร็จครบทุกรายการ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
@@ -1020,8 +1080,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                     st.error("เปลี่ยนสถานะพักงานไม่สำเร็จ")
                         with c_btn_finish:
                             if st.button("🏁 Finish (จบงานจริง)", key=f"btn_finish_step_{target_id}", type="primary", use_container_width=True):
-                                if update_supabase_job(target_id, {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": get_bangkok_str()}):
-                                    st.toast("บันทึกเวลาจบจริงเรียบร้อย!", icon="🏁")
+                                step_finish_dt = get_bangkok_now().replace(tzinfo=None)
+                                step_finish_str = step_finish_dt.strftime("%Y-%m-%d %H:%M:%S")
+                                if update_supabase_job(target_id, {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": step_finish_str}):
+                                    st.session_state.operator_finish_feedback = build_operator_finish_feedback(
+                                        pd.DataFrame([step_row]), step_finish_dt
+                                    )
                                     st.rerun()
                                 else:
                                     st.error("บันทึกจบงานจริงไม่สำเร็จ")
