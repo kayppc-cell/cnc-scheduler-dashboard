@@ -1582,15 +1582,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     with tool_col1:
                         b_c1, b_c2 = st.columns(2)
                         with b_c1:
-                            if st.button("✅ เลือกหมด", key="btn_sel_all_active", use_container_width=True):
+                            if st.button("🗑️ เลือกทั้งหมดเพื่อลบ", key="btn_sel_all_active", use_container_width=True):
                                 st.session_state.active_select_all = True
+                                st.session_state.pop("editor_cnc_jobs_grid_main", None)
                                 st.rerun()
                         with b_c2:
-                            if st.button("❌ ยกเลิก", key="btn_unsel_all_active", use_container_width=True):
+                            if st.button("↩️ ยกเลิกการเลือกทั้งหมด", key="btn_unsel_all_active", use_container_width=True):
                                 st.session_state.active_select_all = False
+                                st.session_state.pop("editor_cnc_jobs_grid_main", None)
                                 st.rerun()
                     with tool_col2:
-                        st.caption("🔗 **ระบบลูกโซ่ทำงานอยู่:** คิวที่ 1 เป็นตัวตั้ง คิวถัดไปจะรับเวลาจบมาเป็นเวลาเริ่มให้อัตโนมัติ โดยมีเวลา Baseline ไว้สอบกลับ")
+                        st.caption("🗑️ ปุ่มเลือกเพื่อลบจะเลือกเฉพาะรายการที่กำลังแสดง | 🔗 **ระบบลูกโซ่ทำงานอยู่:** คิวที่ 1 เป็นตัวตั้ง คิวถัดไปจะรับเวลาจบมาเป็นเวลาเริ่มให้อัตโนมัติ โดยมีเวลา Baseline ไว้สอบกลับ")
 
                 st.markdown("**🔎 ค้นหาด่วนด้วยปุ่ม:**")
                 active_quick_filter = st.session_state.get("active_jobs_quick_filter", "ALL")
@@ -1709,7 +1711,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, min_value=0, max_value=12000, step=10, format="%d", default=120),
                             "รวม (ชม.)": st.column_config.NumberColumn("รวม ชม.", width=70, format="%.2f", disabled=True),
                             "สถานะงาน": st.column_config.SelectboxColumn("สถานะ", width=115, options=JOB_STATUS, default="🟧 รอคิวผลิต"),
-                            "ลบ": st.column_config.CheckboxColumn("🗑️", width=45, default=False),
+                            "ลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width=85, default=False),
                         },
                         hide_index=True,
                         width=1540,
@@ -1823,7 +1825,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                     _, c_del_top, _ = st.columns([2.5, 3.5, 4])
                     with c_del_top:
-                        btn_del_label = f"🗑️ ลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ลบรายการที่เลือก (0 รายการ)"
+                        btn_del_label = f"🗑️ ยืนยันลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ยืนยันลบรายการที่เลือก (0 รายการ)"
                         if st.button(btn_del_label, type="secondary", disabled=(delete_count == 0), use_container_width=True):
                             del_success = True
                             for _, row in active_to_delete.iterrows():
@@ -2448,13 +2450,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.caption(f"แสดงผล {len(fin_display_df):,} จากทั้งหมด {total_finished_before_filter:,} รายการ")
 
                 if is_admin:
+                    st.caption("ℹ️ ปุ่มด้านล่างใช้เลือกช่อง ‘เลือกลบ’ ของรายการที่กำลังแสดงในตารางเท่านั้น")
                     fb_c1, fb_c2, _ = st.columns([1.5, 1.5, 4])
                     with fb_c1:
-                        if st.button("✅ เลือกหมด (เสร็จ)", key="btn_sel_all_fin", use_container_width=True):
+                        if st.button("🗑️ เลือกทั้งหมดเพื่อลบ", key="btn_sel_all_fin", use_container_width=True):
                             st.session_state.finish_select_all = True
                             st.rerun()
                     with fb_c2:
-                        if st.button("❌ ยกเลิก (เสร็จ)", key="btn_unsel_all_fin", use_container_width=True):
+                        if st.button("↩️ ยกเลิกการเลือกทั้งหมด", key="btn_unsel_all_fin", use_container_width=True):
                             st.session_state.finish_select_all = False
                             st.rerun()
 
@@ -2490,7 +2493,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "เวลาจริงสุทธิ (ชม.)": st.column_config.NumberColumn("จริงสุทธิ", width=80, format="%.2f", disabled=True),
                             "ผลเทียบแผน": st.column_config.TextColumn("ผลเทียบแผน", width=145, disabled=True),
                             "สถานะงาน": st.column_config.TextColumn("สถานะ", width=100, disabled=True),
-                            "ลบประวัติ": st.column_config.CheckboxColumn("🗑️", width=45, default=False),
+                            "ลบประวัติ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width=85, default=False),
                         },
                         hide_index=True,
                         width=2100,
@@ -2500,7 +2503,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                     fin_to_del = edited_fin[edited_fin["ลบประวัติ"] == True]
                     del_fin_count = len(fin_to_del)
-                    if st.button(f"🗑️ ลบรายการประวัติงานเสร็จสิ้น ({del_fin_count} รายการ)", key="btn_del_finished_records", type="secondary", disabled=(del_fin_count == 0)):
+                    if st.button(f"🗑️ ยืนยันลบรายการที่เลือก ({del_fin_count} รายการ)", key="btn_del_finished_records", type="secondary", disabled=(del_fin_count == 0)):
                         for _, r in fin_to_del.iterrows():
                             if pd.notna(r.get("ID")):
                                 delete_supabase_job(int(float(r["ID"])))
