@@ -2679,6 +2679,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             key="cost_table_search"
                         )
 
+                    # อ่านค่าจริงจาก widget state ทุกครั้ง ป้องกันค่าตัวแปรค้างหลังเปลี่ยนตัวเลือก
+                    # ซึ่งอาจทำให้ช่องแสดง 26-107 แต่ตารางยังใช้ค่า "ทุกแผนงาน" จากรอบก่อน
+                    cost_machine_filter = st.session_state.get("cost_machine_filter", "🌐 ทุกเครื่อง")
+                    cost_plan_filter = st.session_state.get("cost_plan_filter", "🌐 ทุกแผนงาน")
+                    cost_drawing_filter = st.session_state.get("cost_drawing_filter", "🌐 ทุก Drawing")
+                    cost_search = st.session_state.get("cost_table_search", "")
+
                     if cost_quick_filter == "OVER":
                         cost_display_df = cost_display_df[
                             ~cost_display_df["แหล่งเวลา"].astype(str).str.contains("⚠️", regex=False)
