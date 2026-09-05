@@ -1250,25 +1250,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 </div>
                 """, unsafe_allow_html=True)
 
-                valid_drawings = df_draw_full.dropna(subset=["ผลต่าง (ชม.)"])
-                if not valid_drawings.empty:
-                    worst_drawing = valid_drawings.sort_values("ผลต่าง (ชม.)", ascending=False).iloc[0]
-                    best_drawing = valid_drawings.sort_values("ผลต่าง (ชม.)", ascending=True).iloc[0]
-                    i1, i2, i3 = st.columns(3)
-                    i1.info(f"📌 วิเคราะห์แล้ว **{len(valid_drawings):,} Drawings** จากทั้งหมด {len(df_draw_full):,}")
-                    if worst_drawing["ผลต่าง (ชม.)"] > 0:
-                        i2.error(
-                            f"🔴 ช้าสุด: **{worst_drawing['ชื่อ Drawing.']}** "
-                            f"({worst_drawing['ผลต่าง (ชม.)']:+.2f} ชม.)"
-                        )
-                    else:
-                        i2.success("🎉 ไม่มี Drawing ที่ใช้เวลาจริงเกินเวลาแผน")
-                    i3.success(
-                        f"🟢 เร็วสุด: **{best_drawing['ชื่อ Drawing.']}** "
-                        f"({best_drawing['ผลต่าง (ชม.)']:+.2f} ชม.)"
-                    )
-                st.caption("ℹ️ เวลาจริงสุทธิ = Finish − Start − เวลาพักสะสม | ความแม่นยำ = 100 − %ความคลาดเคลื่อนจากเวลาแผน")
-
             with st.expander("📈 ตารางติดตามความคืบหน้าราย Drawing (Drawing Multi-Step Progress Tracker)", expanded=False):
                 drawing_progress_list = []
                 tracker_source = calc_df.copy()
@@ -2722,6 +2703,25 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+
+                valid_drawings = df_draw_full.dropna(subset=["ผลต่าง (ชม.)"])
+                if not valid_drawings.empty:
+                    worst_drawing = valid_drawings.sort_values("ผลต่าง (ชม.)", ascending=False).iloc[0]
+                    best_drawing = valid_drawings.sort_values("ผลต่าง (ชม.)", ascending=True).iloc[0]
+                    i1, i2, i3 = st.columns(3)
+                    i1.info(f"📌 วิเคราะห์แล้ว **{len(valid_drawings):,} Drawings** จากทั้งหมด {len(df_draw_full):,}")
+                    if worst_drawing["ผลต่าง (ชม.)"] > 0:
+                        i2.error(
+                            f"🔴 ช้าสุด: **{worst_drawing['ชื่อ Drawing.']}** "
+                            f"({worst_drawing['ผลต่าง (ชม.)']:+.2f} ชม.)"
+                        )
+                    else:
+                        i2.success("🎉 ไม่มี Drawing ที่ใช้เวลาจริงเกินเวลาแผน")
+                    i3.success(
+                        f"🟢 เร็วสุด: **{best_drawing['ชื่อ Drawing.']}** "
+                        f"({best_drawing['ผลต่าง (ชม.)']:+.2f} ชม.)"
+                    )
+                st.caption("ℹ️ เวลาจริงสุทธิ = Finish − Start − เวลาพักสะสม | ความแม่นยำ = 100 − %ความคลาดเคลื่อนจากเวลาแผน")
 
                 f_col1, f_col2 = st.columns([2.5, 4])
                 with f_col1:
