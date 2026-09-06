@@ -1848,13 +1848,33 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         const grids = parentDoc.querySelectorAll('div[data-testid="stDataFrame"]');
                         const grid = grids.length ? grids[grids.length - 1] : null;
                         if (grid) {
+                            // Streamlit Data Editor ใช้ Glide Data Grid ซึ่งมีตัวเลื่อนภายในชื่อ dvn-scroller
+                            // เลือกตัวเลื่อนนี้โดยตรง เพราะการตั้ง scrollTop ที่ div ชั้นนอกไม่มีผลกับตาราง
+                            const glideScrollers = grid.querySelectorAll('.dvn-scroller, [class*="dvn-scroller"]');
+                            glideScrollers.forEach(function (scroller) {
+                                scroller.scrollTop = scroller.scrollHeight;
+                                scroller.dispatchEvent(new Event('scroll', {bubbles: true}));
+                            });
+
+                            // สำรองสำหรับ Streamlit รุ่นที่เปลี่ยนชื่อ class ของตัวเลื่อน
                             grid.querySelectorAll('div').forEach(function (el) {
-                                if (el.scrollHeight > el.clientHeight + 20) el.scrollTop = el.scrollHeight;
+                                const style = window.parent.getComputedStyle(el);
+                                const canScrollY = /auto|scroll/.test(style.overflowY);
+                                if (canScrollY && el.scrollHeight > el.clientHeight + 5) {
+                                    el.scrollTop = el.scrollHeight;
+                                    el.dispatchEvent(new Event('scroll', {bubbles: true}));
+                                }
                             });
                         }
-                        if (marker) marker.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        if (marker) marker.scrollIntoView({behavior: 'auto', block: 'end'});
                     }
-                    [250, 700, 1200].forEach(function (delay) { setTimeout(keepEditorAtBottom, delay); });
+                    // ตารางถูกวาดแบบ asynchronous หลัง rerun จึงติดตามจนกว่าตารางจะพร้อมจริง
+                    let attempts = 0;
+                    const scrollTimer = setInterval(function () {
+                        keepEditorAtBottom();
+                        attempts += 1;
+                        if (attempts >= 24) clearInterval(scrollTimer);
+                    }, 150);
                     </script>
                     """, height=0)
 
