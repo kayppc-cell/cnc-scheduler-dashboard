@@ -639,39 +639,43 @@ def get_supabase_headers():
         "Prefer": "return=representation"
     }
 
-def insert_supabase_job(payload: dict) -> bool:
+def insert_supabase_job(payload: dict, clear_cache: bool = True) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs"
         res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
         if res.status_code in [200, 201]:
-            st.cache_data.clear()
+            if clear_cache:
+                st.cache_data.clear()
             return True
         else:
             if "qty" in payload:
                 payload_no_qty = {k: v for k, v in payload.items() if k != "qty"}
                 res2 = requests.post(endpoint, headers=get_supabase_headers(), json=payload_no_qty, timeout=8)
                 if res2.status_code in [200, 201]:
-                    st.cache_data.clear()
+                    if clear_cache:
+                        st.cache_data.clear()
                     return True
             return False
     except Exception:
         return False
 
-def update_supabase_job(job_id: int, payload: dict) -> bool:
+def update_supabase_job(job_id: int, payload: dict, clear_cache: bool = True) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{job_id}"
         res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
         if res.status_code in [200, 204]:
-            st.cache_data.clear()
+            if clear_cache:
+                st.cache_data.clear()
             return True
         else:
             if "qty" in payload:
                 payload_no_qty = {k: v for k, v in payload.items() if k != "qty"}
                 res2 = requests.patch(endpoint, headers=get_supabase_headers(), json=payload_no_qty, timeout=8)
                 if res2.status_code in [200, 204]:
-                    st.cache_data.clear()
+                    if clear_cache:
+                        st.cache_data.clear()
                     return True
             return False
     except Exception:
@@ -689,6 +693,33 @@ def verify_supabase_ready_at(job_id: int, expected_dt: datetime) -> bool:
         if actual_dt is None or pd.isna(actual_dt):
             return False
         return actual_dt.replace(second=0, microsecond=0) == expected_dt.replace(second=0, microsecond=0)
+    except Exception:
+        return False
+
+def verify_supabase_ready_times(expected_by_id: dict) -> bool:
+    """ตรวจเวลา ready_at หลายรายการในคำขอเดียว เพื่อลดเวลารอหลังบันทึก"""
+    if not expected_by_id:
+        return True
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        expected_ids = sorted(int(job_id) for job_id in expected_by_id)
+        endpoint = (
+            f"{base_url}/rest/v1/cnc_jobs?"
+            f"id=in.({','.join(str(job_id) for job_id in expected_ids)})&select=id,ready_at"
+        )
+        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=8)
+        if res.status_code != 200:
+            return False
+        returned = {int(row["id"]): parse_flexible_datetime(row.get("ready_at")) for row in res.json()}
+        if set(returned) != set(expected_ids):
+            return False
+        for job_id, expected_dt in expected_by_id.items():
+            actual_dt = returned.get(int(job_id))
+            if actual_dt is None or pd.isna(actual_dt):
+                return False
+            if actual_dt.replace(second=0, microsecond=0) != expected_dt.replace(second=0, microsecond=0):
+                return False
+        return True
     except Exception:
         return False
 
@@ -1756,11 +1787,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ID": None,
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75),
                             "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=145),
-                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, min_value=1, max_value=10000, step=1, format="%d", default=1),
-                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=60, default="SS400"),
-                            "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=105, options=JOB_TYPES, default="🟢 งานปกติ"),
-                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=125, disabled=True, default="รอหน้าเครื่องระบุ"),
-                            "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เครื่องจักร", width=130, options=ASSIGN_OPTIONS, default="No.1 Awea"),
+                            "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, min_value=1, max_value=10000, step=1, format="%d"),
+                            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=60),
+                            "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=105, options=JOB_TYPES),
+                            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=125, disabled=True),
+                            "เลือกเครื่องจักร": st.column_config.SelectboxColumn("เครื่องจักร", width=130, options=ASSIGN_OPTIONS),
                             "วัน-เวลาขึ้นงาน": st.column_config.TextColumn(
                                 "เริ่มขึ้นงาน (ลูกโซ่)", 
                                 width=135,
@@ -1772,12 +1803,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 disabled=True,
                                 help="เวลาจบคำนวณตามแผนและกะโรงงาน"
                             ),
-                            "Setup (น.)": st.column_config.NumberColumn("Setup", width=65, min_value=0, max_value=720, step=5, format="%d", default=10),
-                            "Basic (น.)": st.column_config.NumberColumn("Basic", width=65, min_value=0, max_value=6000, step=5, format="%d", default=0),
-                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, min_value=0, max_value=12000, step=10, format="%d", default=120),
+                            "Setup (น.)": st.column_config.NumberColumn("Setup", width=65, min_value=0, max_value=720, step=5, format="%d"),
+                            "Basic (น.)": st.column_config.NumberColumn("Basic", width=65, min_value=0, max_value=6000, step=5, format="%d"),
+                            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, min_value=0, max_value=12000, step=10, format="%d"),
                             "รวม (ชม.)": st.column_config.NumberColumn("รวม ชม.", width=70, format="%.2f", disabled=True),
-                            "สถานะงาน": st.column_config.SelectboxColumn("สถานะ", width=115, options=JOB_STATUS, default="🟧 รอคิวผลิต"),
-                            "ลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width=85, default=False),
+                            "สถานะงาน": st.column_config.SelectboxColumn("สถานะ", width=115, options=JOB_STATUS),
+                            "ลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width=85),
                         },
                         hide_index=True,
                         width=1540,
@@ -1808,6 +1839,24 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
                 
                 st.markdown('<div id="editor_table_bottom_mark"></div>', unsafe_allow_html=True)
+                if st.session_state.pop("scroll_to_editor_bottom", False):
+                    components.html("""
+                    <script>
+                    function keepEditorAtBottom() {
+                        const parentDoc = window.parent.document;
+                        const marker = parentDoc.getElementById('editor_table_bottom_mark');
+                        const grids = parentDoc.querySelectorAll('div[data-testid="stDataFrame"]');
+                        const grid = grids.length ? grids[grids.length - 1] : null;
+                        if (grid) {
+                            grid.querySelectorAll('div').forEach(function (el) {
+                                if (el.scrollHeight > el.clientHeight + 20) el.scrollTop = el.scrollHeight;
+                            });
+                        }
+                        if (marker) marker.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    }
+                    [250, 700, 1200].forEach(function (delay) { setTimeout(keepEditorAtBottom, delay); });
+                    </script>
+                    """, height=0)
 
                 if is_admin:
                     active_to_delete = edited_jobs[
@@ -1830,12 +1879,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                     if save_table_clicked:
                         save_source = active_jobs_editor_df.copy()
+                        original_source = active_jobs_editor_df.copy()
                         editable_columns = [
                             "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน",
                             "ขั้นตอน (Step)", "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน",
                             "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "สถานะงาน"
                         ]
                         affected_machines = set()
+                        precheck_errors = []
 
                         def valid_job_id(value):
                             try:
@@ -1851,27 +1902,48 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             if valid_job_id(row_id) is not None
                         }
 
+                        def editor_value_changed(column_name, old_value, new_value):
+                            if column_name in ["จำนวน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)"]:
+                                return abs(safe_float(old_value, 0.0) - safe_float(new_value, 0.0)) > 0.0001
+                            if column_name == "วัน-เวลาขึ้นงาน":
+                                old_dt = parse_flexible_datetime(old_value)
+                                new_dt = parse_flexible_datetime(new_value)
+                                if old_dt is None and new_dt is None:
+                                    return False
+                                if old_dt is None or new_dt is None:
+                                    return True
+                                return old_dt.replace(second=0, microsecond=0) != new_dt.replace(second=0, microsecond=0)
+                            return normalize_filter_key(old_value) != normalize_filter_key(new_value)
+
                         # รวมข้อมูลที่ผู้ใช้เห็นใน editor กลับเข้าชุดเต็ม เพื่อให้คิวอื่นของเครื่องเดียวกันต่อเวลาได้ถูกต้อง
                         for _, edited_row in edited_jobs.iterrows():
                             if not safe_str(edited_row.get("แผนงาน"), ""):
                                 continue
                             edited_id = valid_job_id(edited_row.get("ID"))
-                            edited_machine = safe_str(edited_row.get("เลือกเครื่องจักร"), "No.1 Awea")
+                            edited_machine = safe_str(edited_row.get("เลือกเครื่องจักร"), "")
                             if edited_id is not None and edited_id in id_to_index:
                                 target_idx = id_to_index[edited_id]
                                 old_machine = safe_str(save_source.at[target_idx, "เลือกเครื่องจักร"], "")
-                                if old_machine:
-                                    affected_machines.add(old_machine)
+                                row_has_changes = False
                                 for col_name in editable_columns:
                                     if col_name in edited_row.index:
+                                        if editor_value_changed(col_name, save_source.at[target_idx, col_name], edited_row.get(col_name)):
+                                            row_has_changes = True
                                         save_source.at[target_idx, col_name] = edited_row.get(col_name)
+                                if row_has_changes:
+                                    if old_machine:
+                                        affected_machines.add(old_machine)
+                                    if edited_machine:
+                                        affected_machines.add(edited_machine)
                             else:
                                 new_row = {col_name: edited_row.get(col_name) for col_name in save_source.columns}
                                 new_row["ID"] = None
                                 new_row["กำหนดพร้อมขึ้นงาน (Baseline)"] = safe_str(edited_row.get("วัน-เวลาขึ้นงาน"), "")
                                 save_source = pd.concat([save_source, pd.DataFrame([new_row])], ignore_index=True)
-                            if edited_machine:
-                                affected_machines.add(edited_machine)
+                                if edited_machine:
+                                    affected_machines.add(edited_machine)
+                                else:
+                                    precheck_errors.append(f"{safe_str(edited_row.get('แผนงาน'), 'แถวใหม่')}: กรุณาเลือกเครื่องจักร")
 
                         for numeric_col, default_value in [("Setup (น.)", 10.0), ("Basic (น.)", 0.0), ("โปรแกรม (น.)", 120.0)]:
                             save_source[numeric_col] = pd.to_numeric(save_source[numeric_col], errors="coerce").fillna(default_value).clip(lower=0)
@@ -1885,7 +1957,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         save_errors = []
 
                         for _, save_row in save_source.iterrows():
-                            machine_name = safe_str(save_row.get("เลือกเครื่องจักร"), "No.1 Awea")
+                            machine_name = safe_str(save_row.get("เลือกเครื่องจักร"), "")
                             duration_hours = (
                                 safe_float(save_row.get("Setup (น.)"), 10.0)
                                 + safe_float(save_row.get("Basic (น.)"), 0.0)
@@ -1921,11 +1993,34 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         rows_to_save = save_source[
                             save_source["เลือกเครื่องจักร"].astype(str).isin(affected_machines)
                         ].copy()
+                        save_errors.extend(precheck_errors)
                         save_success = bool(affected_machines) and not save_errors
                         parsed_ready_by_id = {}
 
                         if not affected_machines:
                             save_errors.append("ไม่พบรายการที่ต้องบันทึก")
+
+                        original_by_id = {
+                            valid_job_id(row.get("ID")): row
+                            for _, row in original_source.iterrows()
+                            if valid_job_id(row.get("ID")) is not None
+                        }
+
+                        def row_needs_database_save(row, row_id, ready_dt):
+                            if row_id is None or row_id not in original_by_id:
+                                return True
+                            old_row = original_by_id[row_id]
+                            compare_columns = [
+                                "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน",
+                                "ขั้นตอน (Step)", "เลือกเครื่องจักร", "Setup (น.)", "Basic (น.)",
+                                "โปรแกรม (น.)", "สถานะงาน"
+                            ]
+                            if any(editor_value_changed(col, old_row.get(col), row.get(col)) for col in compare_columns):
+                                return True
+                            old_ready = parse_flexible_datetime(old_row.get("วัน-เวลาขึ้นงาน"))
+                            if old_ready is None or pd.isna(old_ready):
+                                return True
+                            return old_ready.replace(second=0, microsecond=0) != ready_dt.replace(second=0, microsecond=0)
 
                         pending_saves = []
                         if save_success:
@@ -1952,11 +2047,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     "status": safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
                                 }
                                 row_id = valid_job_id(row.get("ID"))
-                                pending_saves.append((p_code, row_id, dt_parsed, payload))
+                                if row_needs_database_save(row, row_id, dt_parsed):
+                                    pending_saves.append((p_code, row_id, dt_parsed, payload))
+
+                        if save_success and not pending_saves:
+                            save_success = False
+                            save_errors.append("ไม่มีข้อมูลเปลี่ยนแปลงที่ต้องบันทึก")
 
                         if save_success:
                             for p_code, row_id, dt_parsed, payload in pending_saves:
-                                row_saved = insert_supabase_job(payload) if row_id is None else update_supabase_job(row_id, payload)
+                                row_saved = (
+                                    insert_supabase_job(payload, clear_cache=False)
+                                    if row_id is None
+                                    else update_supabase_job(row_id, payload, clear_cache=False)
+                                )
                                 if row_saved and row_id is not None:
                                     parsed_ready_by_id[row_id] = dt_parsed
                                 elif not row_saved:
@@ -1964,14 +2068,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     save_errors.append(f"{p_code}: ฐานข้อมูลไม่รับข้อมูล")
 
                         if save_success:
-                            for row_id, expected_dt in parsed_ready_by_id.items():
-                                if not verify_supabase_ready_at(row_id, expected_dt):
-                                    save_success = False
-                                    save_errors.append(f"ID {row_id}: ตรวจสอบเวลาในฐานข้อมูลไม่ผ่าน")
+                            if not verify_supabase_ready_times(parsed_ready_by_id):
+                                save_success = False
+                                save_errors.append("ตรวจสอบเวลาในฐานข้อมูลหลังบันทึกไม่ผ่าน")
 
                         if save_success:
                             st.cache_data.clear()
                             st.session_state.reset_cnc_editor_after_manual_save = True
+                            st.session_state.scroll_to_editor_bottom = True
                             st.toast("คำนวณเวลาและบันทึกข้อมูลเรียบร้อย", icon="✅")
                             st.rerun()
                         else:
