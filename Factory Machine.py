@@ -1014,7 +1014,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         if production_start is None or production_finish is None:
             status = "⚪ ยังวางงานไม่ครบ"
         elif late_hours > 0:
-            status = "🔴 เกินกรอบ Production"
+            status = "🔴 เกินแผน Production"
         elif early_hours > 0:
             status = "🟡 เริ่มก่อนกรอบ Production"
         else:
@@ -1068,7 +1068,7 @@ def render_project_master_dashboard(calc_df, is_admin):
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("แผนงานทั้งหมด", len(summary_view), help="จำนวนแผนงานในมุมมองที่เลือก")
     k2.metric("อยู่ในแผน", int(summary_view["สถานะ"].str.contains("อยู่ในแผน").sum()))
-    k3.metric("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("เกินกรอบ Production|ยังวางงานไม่ครบ", regex=True).sum()))
+    k3.metric("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("เกินแผน Production|ยังวางงานไม่ครบ", regex=True).sum()))
     k4.metric("ช่วงเวลาซ้อนกัน", int((summary_view["แผนซ้อนกัน"] > 0).sum()))
 
     if not gantt_view.empty:
@@ -1156,7 +1156,7 @@ def render_project_master_dashboard(calc_df, is_admin):
 
     # กล่องสรุปงานที่ผู้วางแผนควรตัดสินใจและช่วงเวลาที่ซ้อนกัน
     decision_df = summary_view[
-        summary_view["สถานะ"].str.contains("เกินกรอบ Production|ยังวางงานไม่ครบ", regex=True, na=False)
+        summary_view["สถานะ"].str.contains("เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False)
     ].copy()
     visible_plan_codes = set(summary_view["แผนงาน"].astype(str))
     visible_overlaps = [
@@ -1173,7 +1173,7 @@ def render_project_master_dashboard(calc_df, is_admin):
                 late_hours_item = safe_float(item.get("เกินกำหนด (ชม.)"), 0.0)
                 if late_hours_item > 0:
                     late_days = late_hours_item / 24.0
-                    headline = f"⚠️ {safe_str(item.get('แผนงาน'))} เกินกรอบ Production {late_days:.1f} วัน ({late_hours_item:.1f} ชม.)"
+                    headline = f"⚠️ {safe_str(item.get('แผนงาน'))} เกินแผน Production {late_days:.1f} วัน ({late_hours_item:.1f} ชม.)"
                     detail = f"Drawing: {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง: {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
                     st.error(f"{headline}\n\n{detail}")
                 else:
@@ -1220,7 +1220,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         late_value = safe_float(item.get("เกินกำหนด (ชม.)"), 0.0)
         if late_value > 0:
             project_decision_items.append(
-                f"{safe_str(item.get('แผนงาน'))}: เกินกรอบ Production {late_value:,.1f} ชม. | "
+                f"{safe_str(item.get('แผนงาน'))}: เกินแผน Production {late_value:,.1f} ชม. | "
                 f"Drawing {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
             )
         else:
@@ -1234,7 +1234,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         "filter": safe_str(project_filter),
         "total": len(summary_view),
         "on_plan": int(summary_view["สถานะ"].str.contains("อยู่ในแผน", na=False).sum()),
-        "risk": int(summary_view["สถานะ"].str.contains("เกินกรอบ Production|ยังวางงานไม่ครบ", regex=True, na=False).sum()),
+        "risk": int(summary_view["สถานะ"].str.contains("เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False).sum()),
         "overlap": int((summary_view["แผนซ้อนกัน"] > 0).sum()),
         "rows": project_pdf_rows,
         "decisions": "".join(f"<li>{html.escape(value)}</li>" for value in project_decision_items) or "<li>ไม่พบแผนที่ต้องเร่งตัดสินใจ</li>",
