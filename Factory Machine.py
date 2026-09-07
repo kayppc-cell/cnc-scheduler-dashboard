@@ -881,7 +881,8 @@ def render_project_master_dashboard(calc_df, is_admin):
                 with master_delete_col:
                     master_delete_clicked = st.form_submit_button(
                         "🗑️ ลบแผนลูกค้า",
-                        disabled=(current_row is None or not confirm_delete_master),
+                        disabled=(current_row is None),
+                        help="ติ๊กช่องยืนยันก่อน แล้วกดปุ่มนี้เพื่อลบเฉพาะกรอบเวลาแผนลูกค้า",
                         use_container_width=True
                     )
 
@@ -898,7 +899,9 @@ def render_project_master_dashboard(calc_df, is_admin):
                             st.error(f"บันทึกไม่สำเร็จ: {master_error}")
 
                 if master_delete_clicked:
-                    if delete_plan_master(selected_plan):
+                    if not confirm_delete_master:
+                        st.warning("กรุณาติ๊กช่องยืนยันการลบก่อนกดปุ่มลบแผนลูกค้า")
+                    elif delete_plan_master(selected_plan):
                         st.cache_data.clear()
                         st.toast(f"ลบกรอบเวลาแผนลูกค้า {selected_plan} แล้ว โดยไม่กระทบรายการผลิต", icon="🗑️")
                         st.rerun()
