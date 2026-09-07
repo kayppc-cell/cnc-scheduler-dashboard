@@ -852,6 +852,12 @@ def render_project_master_dashboard(calc_df, is_admin):
     if not table_ready:
         st.error("ยังไม่พบตาราง cnc_plan_master กรุณารันไฟล์ create_cnc_plan_master.sql ใน Supabase SQL Editor ก่อนใช้งานครั้งแรก")
         return
+    delete_feedback = st.session_state.pop("project_master_delete_feedback", None)
+    if delete_feedback:
+        if delete_feedback.get("deleted"):
+            st.success(f"ลบกรอบเวลาแผนลูกค้าแล้ว {len(delete_feedback['deleted'])} รายการ: {', '.join(delete_feedback['deleted'])}")
+        if delete_feedback.get("failed"):
+            st.error(f"ลบไม่สำเร็จ: {', '.join(delete_feedback['failed'])} กรุณาตรวจสิทธิ์ DELETE ของตาราง cnc_plan_master")
 
     plan_codes = sorted({safe_str(v) for v in calc_df.get("แผนงาน", pd.Series(dtype=str)) if safe_str(v)})
     if is_admin and plan_codes:
@@ -870,21 +876,11 @@ def render_project_master_dashboard(calc_df, is_admin):
                     due_date = st.date_input("วันที่กำหนดส่งลูกค้า", default_due.date(), format="DD/MM/YYYY")
                     due_time = st.time_input("เวลากำหนดส่ง", default_due.time())
                 note = st.text_input("หมายเหตุ", value=safe_str(current_row.get("note"), "") if current_row is not None else "")
-                confirm_delete_master = st.checkbox(
-                    "ยืนยันว่าต้องการลบกรอบเวลาแผนลูกค้านี้",
-                    disabled=(current_row is None),
-                    help="ลบเฉพาะเวลาแผนลูกค้า ไม่ลบ Drawing, Step หรือประวัติการผลิต"
+                master_save_clicked = st.form_submit_button(
+                    "💾 บันทึก/แก้ไขเวลาแผนหลัก",
+                    type="primary",
+                    use_container_width=True
                 )
-                master_save_col, master_delete_col = st.columns([2, 1])
-                with master_save_col:
-                    master_save_clicked = st.form_submit_button("💾 บันทึก/แก้ไขเวลาแผนหลัก", type="primary", use_container_width=True)
-                with master_delete_col:
-                    master_delete_clicked = st.form_submit_button(
-                        "🗑️ ลบแผนลูกค้า",
-                        disabled=(current_row is None),
-                        help="ติ๊กช่องยืนยันก่อน แล้วกดปุ่มนี้เพื่อลบเฉพาะกรอบเวลาแผนลูกค้า",
-                        use_container_width=True
-                    )
 
                 if master_save_clicked:
                     start_dt = datetime.combine(start_date, start_time)
@@ -897,16 +893,6 @@ def render_project_master_dashboard(calc_df, is_admin):
                             st.cache_data.clear(); st.toast("บันทึกเวลาแผนลูกค้าแล้ว", icon="✅"); st.rerun()
                         else:
                             st.error(f"บันทึกไม่สำเร็จ: {master_error}")
-
-                if master_delete_clicked:
-                    if not confirm_delete_master:
-                        st.warning("กรุณาติ๊กช่องยืนยันการลบก่อนกดปุ่มลบแผนลูกค้า")
-                    elif delete_plan_master(selected_plan):
-                        st.cache_data.clear()
-                        st.toast(f"ลบกรอบเวลาแผนลูกค้า {selected_plan} แล้ว โดยไม่กระทบรายการผลิต", icon="🗑️")
-                        st.rerun()
-                    else:
-                        st.error("ลบแผนลูกค้าไม่สำเร็จ กรุณาตรวจสิทธิ์ DELETE ของตาราง cnc_plan_master")
 
     if master_df.empty:
         st.info("ยังไม่มีแผนงานที่กำหนดเวลาเริ่มและกำหนดส่งของลูกค้า")
@@ -1077,7 +1063,77 @@ def render_project_master_dashboard(calc_df, is_admin):
     display_summary = summary_view.copy()
     for col in ["เริ่มลูกค้า", "กำหนดส่ง", "เริ่มผลิต", "จบผลิต"]:
         display_summary[col] = display_summary[col].apply(lambda v: v.strftime("%d/%m/%Y %H:%M") if v is not None and not pd.isna(v) else "-")
-    st.dataframe(display_summary, hide_index=True, width=1550, column_config={"Drawing เสี่ยง": st.column_config.TextColumn(width=260), "สถานะ": st.column_config.TextColumn(width=150)})
+    if is_admin:
+        st.markdown("#### 📋 ตารางแผนงานลูกค้า")
+        st.caption("ติ๊กช่องเลือกลบได้หลายรายการ แล้วกดปุ่มลบด้านล่าง — ระบบจะลบเฉพาะกรอบเวลาแผนลูกค้า")
+        if "project_master_delete_seed" not in st.session_state:
+            st.session_state.project_master_delete_seed = []
+        if "project_master_delete_editor_version" not in st.session_state:
+            st.session_state.project_master_delete_editor_version = 0
+
+        delete_table = display_summary.copy()
+        selected_seed = set(st.session_state.project_master_delete_seed)
+        delete_table.insert(0, "เลือกลบ", delete_table["แผนงาน"].astype(str).isin(selected_seed))
+        delete_editor_key = f"project_master_delete_editor_{st.session_state.project_master_delete_editor_version}"
+        edited_delete_table = st.data_editor(
+            delete_table,
+            key=delete_editor_key,
+            hide_index=True,
+            width=1550,
+            disabled=[col for col in delete_table.columns if col != "เลือกลบ"],
+            column_config={
+                "เลือกลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width="small"),
+                "Drawing เสี่ยง": st.column_config.TextColumn(width=260),
+                "สถานะ": st.column_config.TextColumn(width=150)
+            }
+        )
+        selected_delete_codes = edited_delete_table.loc[
+            edited_delete_table["เลือกลบ"].fillna(False), "แผนงาน"
+        ].astype(str).tolist()
+
+        select_all_col, clear_all_col, delete_selected_col = st.columns([1, 1, 2])
+        with select_all_col:
+            if st.button("☑️ เลือกทั้งหมด", key="project_master_select_all", use_container_width=True):
+                st.session_state.project_master_delete_seed = delete_table["แผนงาน"].astype(str).tolist()
+                st.session_state.project_master_delete_editor_version += 1
+                st.rerun()
+        with clear_all_col:
+            if st.button("↩️ ยกเลิกทั้งหมด", key="project_master_clear_all", use_container_width=True):
+                st.session_state.project_master_delete_seed = []
+                st.session_state.project_master_delete_editor_version += 1
+                st.rerun()
+        with delete_selected_col:
+            if st.button(
+                f"🗑️ ลบแผนที่เลือก ({len(selected_delete_codes)} รายการ)",
+                key="project_master_delete_selected",
+                type="primary",
+                disabled=(len(selected_delete_codes) == 0),
+                use_container_width=True
+            ):
+                deleted_codes, failed_codes = [], []
+                for plan_code in selected_delete_codes:
+                    if delete_plan_master(plan_code):
+                        deleted_codes.append(plan_code)
+                    else:
+                        failed_codes.append(plan_code)
+                st.session_state.project_master_delete_seed = []
+                st.session_state.project_master_delete_editor_version += 1
+                st.cache_data.clear()
+                if deleted_codes:
+                    st.session_state.project_master_delete_feedback = {
+                        "deleted": deleted_codes,
+                        "failed": failed_codes
+                    }
+                    st.rerun()
+                elif failed_codes:
+                    st.error(f"ลบไม่สำเร็จ: {', '.join(failed_codes)} กรุณาตรวจสิทธิ์ DELETE ของตาราง cnc_plan_master")
+    else:
+        st.dataframe(
+            display_summary,
+            hide_index=True,
+            width=1550,
+            column_config={"Drawing เสี่ยง": st.column_config.TextColumn(width=260), "สถานะ": st.column_config.TextColumn(width=150)}
+        )
 
 # ---------------------------------------------------------
 # แท็บเมนูเปลี่ยนมุมมองหลัก
@@ -1973,6 +2029,21 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = chained_start_dates
             active_jobs_editor_df["วัน-เวลาจบงาน"] = chained_finish_dates
             active_jobs_editor_df["รวม (ชม.)"] = ((active_jobs_editor_df["Setup (น.)"] + active_jobs_editor_df["Basic (น.)"] + active_jobs_editor_df["โปรแกรม (น.)"]) / 60.0).round(2)
+
+            # ลำดับคำนวณด้านบนต้องแยกตามเครื่องเพื่อให้ลูกโซ่ของแต่ละเครื่องถูกต้อง
+            # แต่ลำดับแสดงผลควรเรียงตามเวลาเริ่มจริง เพื่อให้มองภาพรวมเป็นขั้นบันไดจากเก่าไปใหม่
+            active_jobs_editor_df["_display_start"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
+                lambda value: parse_flexible_datetime(value) or pd.Timestamp.max
+            )
+            active_jobs_editor_df["_display_machine"] = active_jobs_editor_df["เลือกเครื่องจักร"].map(
+                lambda value: normalize_filter_key(value)
+            )
+            active_jobs_editor_df = active_jobs_editor_df.sort_values(
+                by=["_display_start", "_display_machine", "ID"],
+                ascending=[True, True, True],
+                kind="stable",
+                na_position="last"
+            ).drop(columns=["_display_start", "_display_machine"]).reset_index(drop=True)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
             with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ลิงก์เวลาลูกโซ่อัตโนมัติ)", expanded=True):
