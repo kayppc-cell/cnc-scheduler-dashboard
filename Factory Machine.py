@@ -1774,7 +1774,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.session_state.editor_cnc_jobs_grid_main_row_ids = display_editor_df["ID"].tolist()
 
                 if is_admin:
-                    edited_jobs = st.data_editor(
+                    # เก็บ Data Editor ไว้ใน form เพื่อไม่ให้ Streamlit rerun ทั้งหน้าทุกครั้งที่ออกจากเซลล์
+                    with st.form("active_jobs_editor_form", clear_on_submit=False):
+                        edited_jobs = st.data_editor(
                         display_editor_df,
                         key="editor_cnc_jobs_grid_main",
                         num_rows="dynamic",
@@ -1814,8 +1816,24 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         width=1540,
                         row_height=30
                     )
+                        st.caption("✍️ แก้ไขหรือเพิ่มหลายช่องให้ครบก่อน แล้วกดบันทึกครั้งเดียว ระบบจึงจะคำนวณรวมชั่วโมงและเวลาลูกโซ่ใหม่")
+                        c_form_save, c_form_delete = st.columns(2)
+                        with c_form_save:
+                            save_table_clicked = st.form_submit_button(
+                                "💾 คำนวณเวลาและบันทึกข้อมูล",
+                                type="primary",
+                                use_container_width=True
+                            )
+                        with c_form_delete:
+                            delete_table_clicked = st.form_submit_button(
+                                "🗑️ ยืนยันลบรายการที่เลือก",
+                                type="secondary",
+                                use_container_width=True
+                            )
                 else:
                     edited_jobs = display_editor_df.copy()
+                    save_table_clicked = False
+                    delete_table_clicked = False
                     st.dataframe(
                         display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ", "กำหนดพร้อมขึ้นงาน (Baseline)"]]],
                         column_config={
@@ -1851,9 +1869,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             // Streamlit Data Editor ใช้ Glide Data Grid ซึ่งมีตัวเลื่อนภายในชื่อ dvn-scroller
                             // เลือกตัวเลื่อนนี้โดยตรง เพราะการตั้ง scrollTop ที่ div ชั้นนอกไม่มีผลกับตาราง
                             const glideScrollers = grid.querySelectorAll('.dvn-scroller, [class*="dvn-scroller"]');
+                            let moved = false;
                             glideScrollers.forEach(function (scroller) {
                                 scroller.scrollTop = scroller.scrollHeight;
                                 scroller.dispatchEvent(new Event('scroll', {bubbles: true}));
+                                moved = true;
                             });
 
                             // สำรองสำหรับ Streamlit รุ่นที่เปลี่ยนชื่อ class ของตัวเลื่อน
@@ -1863,18 +1883,29 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if (canScrollY && el.scrollHeight > el.clientHeight + 5) {
                                     el.scrollTop = el.scrollHeight;
                                     el.dispatchEvent(new Event('scroll', {bubbles: true}));
+                                    moved = true;
                                 }
                             });
+                            const gridRole = grid.querySelector('[role="grid"]');
+                            if (gridRole) {
+                                gridRole.focus({preventScroll: true});
+                                gridRole.dispatchEvent(new KeyboardEvent('keydown', {
+                                    key: 'End', code: 'End', ctrlKey: true, bubbles: true
+                                }));
+                            }
+                            if (moved) {
+                                if (marker) marker.scrollIntoView({behavior: 'auto', block: 'end'});
+                                return true;
+                            }
                         }
-                        if (marker) marker.scrollIntoView({behavior: 'auto', block: 'end'});
+                        return false;
                     }
-                    // ตารางถูกวาดแบบ asynchronous หลัง rerun จึงติดตามจนกว่าตารางจะพร้อมจริง
+                    // รอเฉพาะจนพบตัวเลื่อน แล้วหยุดทันที เพื่อไม่ให้หน้าจอกระพริบ
                     let attempts = 0;
                     const scrollTimer = setInterval(function () {
-                        keepEditorAtBottom();
                         attempts += 1;
-                        if (attempts >= 24) clearInterval(scrollTimer);
-                    }, 150);
+                        if (keepEditorAtBottom() || attempts >= 20) clearInterval(scrollTimer);
+                    }, 100);
                     </script>
                     """, height=0)
 
@@ -1886,16 +1917,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         (edited_jobs["แผนงาน"].astype(str).str.strip() != "None")
                     ]
                     delete_count = len(active_to_delete)
-
-                    st.caption("✍️ แก้ไขหรือเพิ่มหลายช่องให้ครบก่อน แล้วกดบันทึกครั้งเดียว ระบบจึงจะคำนวณรวมชั่วโมงและเวลาลูกโซ่ใหม่")
-                    _, c_save_manual, _ = st.columns([2.5, 3.5, 4])
-                    with c_save_manual:
-                        save_table_clicked = st.button(
-                            "💾 คำนวณเวลาและบันทึกข้อมูล",
-                            key="btn_manual_save_active_jobs",
-                            type="primary",
-                            use_container_width=True
-                        )
 
                     if save_table_clicked:
                         save_source = active_jobs_editor_df.copy()
@@ -2101,10 +2122,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         else:
                             st.error("ยังไม่บันทึกข้อมูล: " + " | ".join(dict.fromkeys(save_errors[:6])))
 
-                    _, c_del_top, _ = st.columns([2.5, 3.5, 4])
-                    with c_del_top:
-                        btn_del_label = f"🗑️ ยืนยันลบรายการที่เลือก ({delete_count} รายการ)" if delete_count > 0 else "🗑️ ยืนยันลบรายการที่เลือก (0 รายการ)"
-                        if st.button(btn_del_label, type="secondary", disabled=(delete_count == 0), use_container_width=True):
+                    if delete_table_clicked:
+                        if delete_count > 0:
                             del_success = True
                             for _, row in active_to_delete.iterrows():
                                 row_id = row.get("ID")
@@ -2120,6 +2139,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 st.rerun()
                             else:
                                 st.error("เกิดข้อผิดพลาดในการลบข้อมูลจาก Supabase")
+                        else:
+                            st.warning("กรุณาเลือกช่อง 🗑️ เลือกลบ อย่างน้อย 1 รายการ")
 
             finished_jobs_df = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
             active_jobs_count = len(edited_jobs[edited_jobs["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])])
