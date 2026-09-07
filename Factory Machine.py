@@ -11,7 +11,7 @@ import requests
 import streamlit.components.v1 as components
 
 # =========================================================
-# 0. Timezone Helper (GMT+7) & Factory Shift Rules & Data Sanitizers
+# 0. Timezone Helper (GMT+7) & Factory Shift Rules & Data Sanitizers Update Factory Machine
 # =========================================================
 def get_bangkok_now():
     try:
