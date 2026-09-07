@@ -3355,6 +3355,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     ]
 
                 st.caption(f"แสดงผล {len(fin_display_df):,} จากทั้งหมด {total_finished_before_filter:,} รายการ")
+                # จองตำแหน่งปุ่มก่อนตาราง เพื่อให้มองเห็นแน่นอนทั้งโหมด Admin และ Viewer
+                finished_pdf_slot = st.empty()
 
                 if is_admin:
                     st.caption("ℹ️ ปุ่มด้านล่างใช้เลือกช่อง ‘เลือกลบ’ ของรายการที่กำลังแสดงในตารางเท่านั้น")
@@ -3444,6 +3446,85 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         width=2100,
                         row_height=34
                     )
+
+                def finished_pdf_datetime(value):
+                    parsed = parse_flexible_datetime(value)
+                    return parsed.strftime("%d/%m/%Y %H:%M") if parsed is not None and not pd.isna(parsed) else "-"
+
+                finished_pdf_rows = "".join([
+                    "<tr>"
+                    f"<td>{html.escape(safe_str(row.get('แผนงาน'), '-'))}</td>"
+                    f"<td>{html.escape(safe_str(row.get('ชื่อ Drawing.'), '-'))}</td>"
+                    f"<td style='text-align:center'>{safe_int(row.get('จำนวน'), 1)}</td>"
+                    f"<td>{html.escape(safe_str(row.get('วัสดุ'), '-'))}</td>"
+                    f"<td>{html.escape(safe_str(row.get('ขั้นตอน (Step)'), '-'))}</td>"
+                    f"<td>{html.escape(safe_str(row.get('เลือกเครื่องจักร'), '-'))}</td>"
+                    f"<td>{finished_pdf_datetime(row.get('วัน-เวลาขึ้นงาน'))}</td>"
+                    f"<td>{finished_pdf_datetime(row.get('จบตามแผน'))}</td>"
+                    f"<td>{finished_pdf_datetime(row.get('เริ่มจริง'))}</td>"
+                    f"<td>{finished_pdf_datetime(row.get('เสร็จจริง'))}</td>"
+                    f"<td style='text-align:right'>{safe_float(row.get('พักสะสม (ชม.)')):,.2f}</td>"
+                    f"<td style='text-align:right'>{safe_float(row.get('รวม (ชม.)')):,.2f}</td>"
+                    f"<td style='text-align:right'>{safe_float(row.get('เวลาจริงสุทธิ (ชม.)')):,.2f}</td>"
+                    f"<td>{html.escape(safe_str(row.get('ผลเทียบแผน'), '-'))}</td>"
+                    "</tr>"
+                    for _, row in fin_display_df.iterrows()
+                ])
+                finished_late_count = int((pd.to_numeric(fin_display_df["จบคลาดเคลื่อน (น.)"], errors="coerce") > 0).sum())
+                finished_ontime_count = int((pd.to_numeric(fin_display_df["จบคลาดเคลื่อน (น.)"], errors="coerce") <= 0).sum())
+                quick_filter_labels = {
+                    "ALL": "ทั้งหมด", "TODAY": "วันนี้", "7D": "7 วัน",
+                    "LATE": "จบช้า", "ONTIME": "ตรง/เร็ว", "PAUSED": "มีพัก"
+                }
+                finished_pdf_payload = json.dumps({
+                    "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
+                    "quick_filter": quick_filter_labels.get(quick_filter, safe_str(quick_filter)),
+                    "machine": safe_str(selected_fin_machine),
+                    "plan": safe_str(selected_fin_plan),
+                    "drawing": safe_str(selected_fin_drawing),
+                    "rows_count": len(fin_display_df),
+                    "late": finished_late_count,
+                    "ontime": finished_ontime_count,
+                    "net_hours": f"{pd.to_numeric(fin_display_df['เวลาจริงสุทธิ (ชม.)'], errors='coerce').fillna(0).sum():,.2f}",
+                    "pause_hours": f"{pd.to_numeric(fin_display_df['พักสะสม (ชม.)'], errors='coerce').fillna(0).sum():,.2f}",
+                    "rows": finished_pdf_rows
+                }, ensure_ascii=False).replace("<", "\\u003c")
+
+                with finished_pdf_slot.container():
+                    st.caption("🖨️ รายงานจะใช้รายการตามตัวกรองที่กำลังแสดงในตาราง")
+                    components.html(f"""
+                <button onclick="printFinishedHistory()" title="พิมพ์ประวัติงานที่เสร็จสิ้นหรือบันทึกเป็น PDF" style="display:block; width:300px; max-width:100%; margin:2px auto 4px auto; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:11px 18px; border-radius:8px; font-weight:700; font-size:14px; cursor:pointer; box-shadow:0 3px 8px rgba(185,28,28,.24);">
+                    🖨️ พิมพ์ / บันทึก PDF
+                </button>
+                <script>
+                function printFinishedHistory() {{
+                    const d = {finished_pdf_payload};
+                    const reportHtml = `<!doctype html><html><head><meta charset="utf-8"><title>PES Finished History</title>
+                    <style>
+                    @page {{ size:A3 landscape; margin:9mm; }}
+                    body {{ font-family:Tahoma,'Sarabun',Arial,sans-serif; color:#172033; margin:0; font-size:8.5px; line-height:1.3; }}
+                    .head {{ display:flex; justify-content:space-between; align-items:flex-end; border-bottom:3px solid #047857; padding-bottom:7px; margin-bottom:8px; }}
+                    h1 {{ margin:0; font-size:18px; }} .sub,.foot {{ color:#64748B; }}
+                    .filters {{ border:1px solid #CBD5E1; background:#F8FAFC; border-radius:6px; padding:6px 8px; margin-bottom:8px; }}
+                    .kpis {{ display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-bottom:9px; }} .kpi {{ border:1px solid #CBD5E1; border-radius:6px; padding:7px; text-align:center; }}
+                    .kpi b {{ display:block; font-size:15px; margin-top:2px; }} table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+                    th,td {{ border:1px solid #CBD5E1; padding:3px 4px; vertical-align:top; overflow-wrap:anywhere; }} th {{ background:#065F46; color:white; }}
+                    tr:nth-child(even) {{ background:#F0FDF4; }} thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }}
+                    th:nth-child(2),td:nth-child(2) {{ width:10%; }} th:nth-child(5),td:nth-child(5) {{ width:13%; }} th:nth-child(14),td:nth-child(14) {{ width:11%; }}
+                    .foot {{ text-align:right; margin-top:7px; }}
+                    </style></head><body>
+                    <div class="head"><div><h1>ตารางสรุปประวัติงานที่ผลิตเสร็จสิ้น</h1><div class="sub">Finished History - เริ่มจริง / เสร็จจริง | Timing Process Control (TPC)</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
+                    <div class="filters"><b>ตัวกรอง:</b> ${{d.quick_filter}} | เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | จำนวน ${{d.rows_count}} รายการ</div>
+                    <div class="kpis"><div class="kpi">จบตรง/เร็วกว่าแผน<b>${{d.ontime}} รายการ</b></div><div class="kpi">จบช้ากว่าแผน<b>${{d.late}} รายการ</b></div><div class="kpi">เวลาจริงสุทธิรวม<b>${{d.net_hours}} ชม.</b></div><div class="kpi">เวลาพักสะสมรวม<b>${{d.pause_hours}} ชม.</b></div></div>
+                    <table><thead><tr><th>แผนงาน</th><th>Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>เครื่องจักร</th><th>เริ่มแผน</th><th>จบแผน</th><th>เริ่มจริง</th><th>จบจริง</th><th>พัก ชม.</th><th>แผน ชม.</th><th>จริงสุทธิ</th><th>ผลเทียบแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+                    <div class="foot">PES Production Monitoring System</div></body></html>`;
+                    const printWin = window.open('', '_blank');
+                    if (!printWin) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
+                    printWin.document.open(); printWin.document.write(reportHtml); printWin.document.close(); printWin.focus();
+                    setTimeout(function() {{ printWin.print(); }}, 700);
+                }}
+                </script>
+                """, height=62)
             else:
                 st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว'")
 
