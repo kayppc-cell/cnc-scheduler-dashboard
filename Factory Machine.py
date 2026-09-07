@@ -947,24 +947,78 @@ def render_project_master_dashboard(calc_df, is_admin):
                 overlap_counts[a["แผนงาน"]] += 1; overlap_counts[b["แผนงาน"]] += 1
     summary["แผนซ้อนกัน"] = summary["แผนงาน"].map(overlap_counts)
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("แผนงานทั้งหมด", len(summary))
-    k2.metric("อยู่ในแผน", int(summary["สถานะ"].str.contains("อยู่ในแผน").sum()))
-    k3.metric("เกินกำหนด", int(summary["สถานะ"].str.contains("เกินกำหนด").sum()))
-    k4.metric("แผนที่มีเวลาซ้อน", int((summary["แผนซ้อนกัน"] > 0).sum()))
-
     gantt_df = pd.DataFrame(gantt_rows).dropna(subset=["เริ่ม", "จบ"])
-    if not gantt_df.empty:
-        fig_master = px.timeline(gantt_df, x_start="เริ่ม", x_end="จบ", y="แผนงาน", color="ประเภท", custom_data=["สถานะ"], color_discrete_map={"กรอบเวลาลูกค้า": "#2563EB", "แผนผลิต": "#10B981", "แผนผลิตเกินกำหนด": "#DC2626"})
+    project_filter = st.selectbox(
+        "🔎 แสดงแผนงาน",
+        ["ทุกแผนงาน"] + summary["แผนงาน"].astype(str).tolist(),
+        key="project_master_gantt_filter"
+    )
+    if project_filter == "ทุกแผนงาน":
+        summary_view = summary.copy()
+        gantt_view = gantt_df.copy()
+    else:
+        summary_view = summary[summary["แผนงาน"].astype(str) == project_filter].copy()
+        gantt_view = gantt_df[gantt_df["แผนงาน"].astype(str).str.startswith(f"{project_filter} |")].copy()
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("แผนงานทั้งหมด", len(summary_view), help="จำนวนแผนงานในมุมมองที่เลือก")
+    k2.metric("อยู่ในแผน", int(summary_view["สถานะ"].str.contains("อยู่ในแผน").sum()))
+    k3.metric("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("เกินกำหนด|ยังวางงานไม่ครบ", regex=True).sum()))
+    k4.metric("ช่วงเวลาซ้อนกัน", int((summary_view["แผนซ้อนกัน"] > 0).sum()))
+
+    if not gantt_view.empty:
+        st.markdown("#### ช่วงเวลาแผนหลักเทียบแผนผลิต")
+        fig_master = px.timeline(gantt_view, x_start="เริ่ม", x_end="จบ", y="แผนงาน", color="ประเภท", custom_data=["สถานะ"], color_discrete_map={"กรอบเวลาลูกค้า": "#2563EB", "แผนผลิต": "#10B981", "แผนผลิตเกินกำหนด": "#DC2626"})
         fig_master.update_yaxes(autorange="reversed")
-        fig_master.update_traces(hovertemplate="%{y}<br>เริ่ม %{base}<br>สถานะ %{customdata[0]}<extra></extra>")
-        fig_master.update_layout(height=max(420, len(gantt_df) * 34), xaxis_title="วันและเวลา", yaxis_title="", legend=dict(orientation="h"), margin=dict(l=20, r=20, t=25, b=25))
+        fig_master.update_traces(
+            hovertemplate="%{y}<br>เริ่ม: %{base|%d/%m/%Y %H:%M}<br>สถานะ: %{customdata[0]}<extra></extra>",
+            marker_line_color="rgba(15, 23, 42, 0.18)",
+            marker_line_width=1
+        )
+
+        # แสดงวันที่บนหัวกราฟเหมือนตารางเวลา และใช้วัน/เดือนแทนเดือน/วัน
+        min_gantt_date = pd.to_datetime(gantt_view["เริ่ม"]).min().normalize()
+        max_gantt_date = pd.to_datetime(gantt_view["จบ"]).max().normalize()
+        visible_days = max(1, (max_gantt_date - min_gantt_date).days)
+        tick_step = 1 if visible_days <= 14 else (2 if visible_days <= 45 else 7)
+        tick_values = pd.date_range(min_gantt_date, max_gantt_date + pd.Timedelta(days=1), freq=f"{tick_step}D")
+        thai_months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
+        tick_labels = [f"{d.day} {thai_months[d.month - 1]}" for d in tick_values]
+        fig_master.update_xaxes(
+            side="top",
+            title=None,
+            tickmode="array",
+            tickvals=tick_values,
+            ticktext=tick_labels,
+            showgrid=True,
+            gridcolor="#D7DEE8",
+            gridwidth=1,
+            showline=True,
+            linecolor="#CBD5E1",
+            ticks="outside",
+            fixedrange=False
+        )
+        fig_master.update_yaxes(
+            title=None,
+            showgrid=True,
+            gridcolor="#E5E7EB",
+            categoryorder="array",
+            categoryarray=gantt_view["แผนงาน"].tolist()
+        )
+        fig_master.update_layout(
+            height=max(420, len(gantt_view) * 42 + 150),
+            legend=dict(orientation="h", yanchor="bottom", y=1.12, xanchor="left", x=0),
+            margin=dict(l=20, r=20, t=105, b=25),
+            plot_bgcolor="#FFFFFF",
+            paper_bgcolor="#FFFFFF",
+            hovermode="closest"
+        )
         st.plotly_chart(fig_master, use_container_width=True)
 
-    late_df = summary[summary["เกินกำหนด (ชม.)"] > 0]
+    late_df = summary_view[summary_view["เกินกำหนด (ชม.)"] > 0]
     if not late_df.empty:
         st.error(f"พบ {len(late_df)} แผนงานที่แผนผลิตจบเกินกำหนดลูกค้า กรุณาตรวจ Drawing เสี่ยงเพื่อย้ายเครื่อง ปรับคิว หรือพิจารณาจ้างภายนอก")
-    display_summary = summary.copy()
+    display_summary = summary_view.copy()
     for col in ["เริ่มลูกค้า", "กำหนดส่ง", "เริ่มผลิต", "จบผลิต"]:
         display_summary[col] = display_summary[col].apply(lambda v: v.strftime("%d/%m/%Y %H:%M") if v is not None and not pd.isna(v) else "-")
     st.dataframe(display_summary, hide_index=True, width=1550, column_config={"Drawing เสี่ยง": st.column_config.TextColumn(width=260), "สถานะ": st.column_config.TextColumn(width=150)})
