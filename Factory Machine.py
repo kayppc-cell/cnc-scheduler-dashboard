@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime, timedelta, time as dtime
 import zoneinfo
 import os
@@ -792,7 +793,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
 
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_plan_masters():
-    """อ่านกรอบเวลาโครงการของลูกค้า; คืน (dataframe, table_ready)."""
+    """อ่านกรอบเวลา Production; คืน (dataframe, table_ready)."""
     columns = ["plan_code", "customer_start", "customer_due", "note"]
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -846,8 +847,8 @@ def delete_plan_master(plan_code):
         return False
 
 def render_project_master_dashboard(calc_df, is_admin):
-    st.markdown("### 🗓️ แผนงานลูกค้าและ Project Master Gantt")
-    st.caption("กรอบเวลาลูกค้าเป็น Baseline หลัก ส่วนแท่งแผนผลิตรวมคำนวณจาก Drawing และ Step ในตารางสั่งผลิต")
+    st.markdown("### 🗓️ แผนงาน Production และ Project Master Gantt")
+    st.caption("กรอบเวลา Production เป็น Baseline หลัก ส่วนแท่งแผนผลิตรวมคำนวณจาก Drawing และ Step ในตารางสั่งผลิต")
     master_df, table_ready = fetch_plan_masters()
     if not table_ready:
         st.error("ยังไม่พบตาราง cnc_plan_master กรุณารันไฟล์ create_cnc_plan_master.sql ใน Supabase SQL Editor ก่อนใช้งานครั้งแรก")
@@ -855,13 +856,13 @@ def render_project_master_dashboard(calc_df, is_admin):
     delete_feedback = st.session_state.pop("project_master_delete_feedback", None)
     if delete_feedback:
         if delete_feedback.get("deleted"):
-            st.success(f"ลบกรอบเวลาแผนลูกค้าแล้ว {len(delete_feedback['deleted'])} รายการ: {', '.join(delete_feedback['deleted'])}")
+            st.success(f"ลบกรอบเวลา Production แล้ว {len(delete_feedback['deleted'])} รายการ: {', '.join(delete_feedback['deleted'])}")
         if delete_feedback.get("failed"):
             st.error(f"ลบไม่สำเร็จ: {', '.join(delete_feedback['failed'])} กรุณาตรวจสิทธิ์ DELETE ของตาราง cnc_plan_master")
 
     plan_codes = sorted({safe_str(v) for v in calc_df.get("แผนงาน", pd.Series(dtype=str)) if safe_str(v)})
     if is_admin and plan_codes:
-        with st.expander("➕ กำหนดหรือแก้ไขเวลาแผนหลักของลูกค้า", expanded=master_df.empty):
+        with st.expander("➕ กำหนดหรือแก้ไขกรอบเวลา Production", expanded=master_df.empty):
             selected_plan = st.selectbox("แผนงาน", plan_codes, key="master_plan_code")
             current = master_df[master_df["plan_code"].map(normalize_filter_key) == normalize_filter_key(selected_plan)]
             current_row = current.iloc[0] if not current.empty else None
@@ -870,11 +871,11 @@ def render_project_master_dashboard(calc_df, is_admin):
             with st.form(f"plan_master_form_{selected_plan}"):
                 fc1, fc2 = st.columns(2)
                 with fc1:
-                    start_date = st.date_input("วันที่เริ่มตามแผนลูกค้า", default_start.date(), format="DD/MM/YYYY")
+                    start_date = st.date_input("วันที่เริ่ม Production", default_start.date(), format="DD/MM/YYYY")
                     start_time = st.time_input("เวลาเริ่ม", default_start.time())
                 with fc2:
-                    due_date = st.date_input("วันที่กำหนดส่งลูกค้า", default_due.date(), format="DD/MM/YYYY")
-                    due_time = st.time_input("เวลากำหนดส่ง", default_due.time())
+                    due_date = st.date_input("วันที่สิ้นสุด Production", default_due.date(), format="DD/MM/YYYY")
+                    due_time = st.time_input("เวลาสิ้นสุด Production", default_due.time())
                 note = st.text_input("หมายเหตุ", value=safe_str(current_row.get("note"), "") if current_row is not None else "")
                 master_save_clicked = st.form_submit_button(
                     "💾 บันทึก/แก้ไขเวลาแผนหลัก",
@@ -886,16 +887,16 @@ def render_project_master_dashboard(calc_df, is_admin):
                     start_dt = datetime.combine(start_date, start_time)
                     due_dt = datetime.combine(due_date, due_time)
                     if due_dt <= start_dt:
-                        st.error("กำหนดส่งลูกค้าต้องอยู่หลังเวลาเริ่ม")
+                        st.error("เวลาสิ้นสุด Production ต้องอยู่หลังเวลาเริ่ม Production")
                     else:
                         master_saved, master_error = upsert_plan_master(selected_plan, start_dt, due_dt, note)
                         if master_saved:
-                            st.cache_data.clear(); st.toast("บันทึกเวลาแผนลูกค้าแล้ว", icon="✅"); st.rerun()
+                            st.cache_data.clear(); st.toast("บันทึกกรอบเวลา Production แล้ว", icon="✅"); st.rerun()
                         else:
                             st.error(f"บันทึกไม่สำเร็จ: {master_error}")
 
     if master_df.empty:
-        st.info("ยังไม่มีแผนงานที่กำหนดเวลาเริ่มและกำหนดส่งของลูกค้า")
+        st.info("ยังไม่มีแผนงานที่กำหนดกรอบเวลา Production")
         return
 
     jobs = calc_df.copy()
@@ -949,14 +950,14 @@ def render_project_master_dashboard(calc_df, is_admin):
         if production_start is None or production_finish is None:
             status = "⚪ ยังวางงานไม่ครบ"
         elif late_hours > 0:
-            status = "🔴 เกินกำหนดลูกค้า"
+            status = "🔴 เกินกรอบ Production"
         elif early_hours > 0:
-            status = "🟡 เริ่มก่อนกรอบลูกค้า"
+            status = "🟡 เริ่มก่อนกรอบ Production"
         else:
             status = "🟢 อยู่ในแผน"
-        rows.append({"แผนงาน": code, "เริ่มลูกค้า": customer_start, "กำหนดส่ง": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": risky_drawings or "-", "เครื่องเสี่ยง": risky_machines or "-", "จำนวน Drawing": sub["ชื่อ Drawing."].nunique(), "ชั่วโมงแผน": round(sub["รวม (ชม.)"].sum(), 2)})
-        customer_text = f"ลูกค้า: {project_short_date(customer_start)}–{project_short_date(customer_due)}"
-        gantt_rows.append({"แผนงาน": f"{code} | ลูกค้า", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลาลูกค้า", "สถานะ": status, "ข้อความ": customer_text})
+        rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": risky_drawings or "-", "เครื่องเสี่ยง": risky_machines or "-", "จำนวน Drawing": sub["ชื่อ Drawing."].nunique(), "ชั่วโมงแผน": round(sub["รวม (ชม.)"].sum(), 2)})
+        customer_text = f"Production: {project_short_date(customer_start)}–{project_short_date(customer_due)}"
+        gantt_rows.append({"แผนงาน": f"{code} | Production", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลา Production", "สถานะ": status, "ข้อความ": customer_text})
         if production_start and production_finish:
             production_text = f"ผลิต: {project_short_date(production_start)}–{project_short_date(production_finish)}"
             if late_hours > 0:
@@ -969,10 +970,10 @@ def render_project_master_dashboard(calc_df, is_admin):
     for i in range(len(summary)):
         for j in range(i + 1, len(summary)):
             a, b = summary.iloc[i], summary.iloc[j]
-            if a["เริ่มลูกค้า"] < b["กำหนดส่ง"] and b["เริ่มลูกค้า"] < a["กำหนดส่ง"]:
+            if a["เริ่ม Production"] < b["สิ้นสุด Production"] and b["เริ่ม Production"] < a["สิ้นสุด Production"]:
                 overlap_counts[a["แผนงาน"]] += 1; overlap_counts[b["แผนงาน"]] += 1
-                overlap_start = max(a["เริ่มลูกค้า"], b["เริ่มลูกค้า"])
-                overlap_finish = min(a["กำหนดส่ง"], b["กำหนดส่ง"])
+                overlap_start = max(a["เริ่ม Production"], b["เริ่ม Production"])
+                overlap_finish = min(a["สิ้นสุด Production"], b["สิ้นสุด Production"])
                 overlap_hours = max(0.0, (overlap_finish - overlap_start).total_seconds() / 3600.0)
                 a_jobs = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(a["แผนงาน"])]
                 b_jobs = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(b["แผนงาน"])]
@@ -1008,25 +1009,46 @@ def render_project_master_dashboard(calc_df, is_admin):
 
     if not gantt_view.empty:
         st.markdown("#### ช่วงเวลาแผนหลักเทียบแผนผลิต")
-        fig_master = px.timeline(
-            gantt_view,
-            x_start="เริ่ม",
-            x_end="จบ",
-            y="แผนงาน",
-            color="ประเภท",
-            text="ข้อความ",
-            custom_data=["สถานะ", "เริ่ม", "จบ"],
-            color_discrete_map={"กรอบเวลาลูกค้า": "#2563EB", "แผนผลิต": "#10B981", "แผนผลิตเกินกำหนด": "#DC2626"}
-        )
+        # สร้างแท่งทีละประเภทและผูก base กับวันเริ่มของแถวนั้นโดยตรง
+        # ป้องกันวันที่เริ่มของบางแผนคลาดจากตารางเมื่อ Plotly Express รวมหลายแถวเป็น trace เดียว
+        gantt_view = gantt_view.copy()
+        gantt_view["เริ่ม"] = pd.to_datetime(gantt_view["เริ่ม"], errors="coerce")
+        gantt_view["จบ"] = pd.to_datetime(gantt_view["จบ"], errors="coerce")
+        gantt_view = gantt_view.dropna(subset=["เริ่ม", "จบ"])
+        gantt_colors = {
+            "กรอบเวลา Production": "#2563EB",
+            "แผนผลิต": "#10B981",
+            "แผนผลิตเกินกำหนด": "#DC2626"
+        }
+        fig_master = go.Figure()
+        for gantt_type in ["กรอบเวลา Production", "แผนผลิต", "แผนผลิตเกินกำหนด"]:
+            type_rows = gantt_view[gantt_view["ประเภท"] == gantt_type].copy()
+            if type_rows.empty:
+                continue
+            duration_ms = (type_rows["จบ"] - type_rows["เริ่ม"]).dt.total_seconds() * 1000.0
+            hover_values = [
+                [
+                    safe_str(row.get("สถานะ"), "-"),
+                    row["เริ่ม"].strftime("%d/%m/%Y %H:%M"),
+                    row["จบ"].strftime("%d/%m/%Y %H:%M")
+                ]
+                for _, row in type_rows.iterrows()
+            ]
+            fig_master.add_trace(go.Bar(
+                name=gantt_type,
+                x=duration_ms.tolist(),
+                base=type_rows["เริ่ม"].tolist(),
+                y=type_rows["แผนงาน"].tolist(),
+                orientation="h",
+                marker=dict(color=gantt_colors[gantt_type], line=dict(color="rgba(15, 23, 42, 0.18)", width=1)),
+                text=type_rows["ข้อความ"].tolist(),
+                textposition="inside",
+                insidetextanchor="middle",
+                textfont=dict(color="white", size=11),
+                customdata=hover_values,
+                hovertemplate="%{y}<br>เริ่ม: %{customdata[1]}<br>จบ: %{customdata[2]}<br>สถานะ: %{customdata[0]}<extra></extra>"
+            ))
         fig_master.update_yaxes(autorange="reversed")
-        fig_master.update_traces(
-            hovertemplate="%{y}<br>เริ่ม: %{customdata[1]|%d/%m/%Y %H:%M}<br>จบ: %{customdata[2]|%d/%m/%Y %H:%M}<br>สถานะ: %{customdata[0]}<extra></extra>",
-            marker_line_color="rgba(15, 23, 42, 0.18)",
-            marker_line_width=1,
-            textposition="inside",
-            insidetextanchor="middle",
-            textfont=dict(color="white", size=11)
-        )
 
         # แสดงวันที่บนหัวกราฟเหมือนตารางเวลา และใช้วัน/เดือนแทนเดือน/วัน
         min_gantt_date = pd.to_datetime(gantt_view["เริ่ม"]).min().normalize()
@@ -1036,6 +1058,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         tick_values = pd.date_range(min_gantt_date, max_gantt_date + pd.Timedelta(days=1), freq=f"{tick_step}D")
         tick_labels = [f"{d.day} {thai_months_short[d.month - 1]}" for d in tick_values]
         fig_master.update_xaxes(
+            type="date",
             side="top",
             title=None,
             tickmode="array",
@@ -1062,6 +1085,7 @@ def render_project_master_dashboard(calc_df, is_admin):
             margin=dict(l=20, r=20, t=105, b=25),
             plot_bgcolor="#FFFFFF",
             paper_bgcolor="#FFFFFF",
+            barmode="overlay",
             hovermode="closest"
         )
         st.plotly_chart(fig_master, use_container_width=True)
@@ -1094,7 +1118,7 @@ def render_project_master_dashboard(calc_df, is_admin):
     with overlap_col:
         st.markdown("#### 🔀 แผนที่เวลาซ้อนกัน")
         if not visible_overlaps:
-            st.success("ไม่พบช่วงเวลาแผนลูกค้าที่ซ้อนกันในมุมมองนี้")
+            st.success("ไม่พบช่วงเวลา Production ที่ซ้อนกันในมุมมองนี้")
         else:
             for item in sorted(visible_overlaps, key=lambda v: v["ซ้อน (ชม.)"], reverse=True)[:8]:
                 overlap_days = item["ซ้อน (ชม.)"] / 24.0
@@ -1105,13 +1129,13 @@ def render_project_master_dashboard(calc_df, is_admin):
 
     late_df = summary_view[summary_view["เกินกำหนด (ชม.)"] > 0]
     if not late_df.empty:
-        st.error(f"พบ {len(late_df)} แผนงานที่แผนผลิตจบเกินกำหนดลูกค้า กรุณาตรวจ Drawing เสี่ยงเพื่อย้ายเครื่อง ปรับคิว หรือพิจารณาจ้างภายนอก")
+        st.error(f"พบ {len(late_df)} แผนงานที่แผนผลิตจบเกินกรอบเวลา Production กรุณาตรวจ Drawing เสี่ยงเพื่อย้ายเครื่อง ปรับคิว หรือพิจารณาจ้างภายนอก")
     display_summary = summary_view.copy()
-    for col in ["เริ่มลูกค้า", "กำหนดส่ง", "เริ่มผลิต", "จบผลิต"]:
+    for col in ["เริ่ม Production", "สิ้นสุด Production", "เริ่มผลิต", "จบผลิต"]:
         display_summary[col] = display_summary[col].apply(lambda v: v.strftime("%d/%m/%Y %H:%M") if v is not None and not pd.isna(v) else "-")
     if is_admin:
-        st.markdown("#### 📋 ตารางแผนงานลูกค้า")
-        st.caption("ติ๊กช่องเลือกลบได้หลายรายการ แล้วกดปุ่มลบด้านล่าง — ระบบจะลบเฉพาะกรอบเวลาแผนลูกค้า")
+        st.markdown("#### 📋 ตารางแผนงาน Production")
+        st.caption("ติ๊กช่องเลือกลบได้หลายรายการ แล้วกดปุ่มลบด้านล่าง — ระบบจะลบเฉพาะกรอบเวลา Production")
         if "project_master_delete_seed" not in st.session_state:
             st.session_state.project_master_delete_seed = []
         if "project_master_delete_editor_version" not in st.session_state:
@@ -1737,14 +1761,18 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
             st.caption("เลือก ‘📊 ภาพรวมโรงงาน’ เพื่อใช้ตารางและปุ่มค้นหาด่วนทั้งหมดที่มีอยู่เดิม")
+            old_project_master_label = "🗓️ แผนงานลูกค้าและ Project Master Gantt"
+            project_master_label = "🗓️ แผนงาน Production และ Project Master Gantt"
+            if st.session_state.get("dashboard_subview") == old_project_master_label:
+                st.session_state.dashboard_subview = project_master_label
             dashboard_subview = st.radio(
                 "เลือกหมวดแดชบอร์ด",
-                ["📊 ภาพรวมโรงงาน", "🗓️ แผนงานลูกค้าและ Project Master Gantt"],
+                ["📊 ภาพรวมโรงงาน", project_master_label],
                 horizontal=True,
                 label_visibility="collapsed",
                 key="dashboard_subview"
             )
-            if dashboard_subview == "🗓️ แผนงานลูกค้าและ Project Master Gantt":
+            if dashboard_subview == project_master_label:
                 st.info("เครื่องมือเดิมทั้งหมด—including ค้นหาด่วน ตารางสั่งผลิต ใบจ่ายคิว Gantt รายเครื่อง ประวัติ และต้นทุน—ยังอยู่ครบในแท็บ ‘ภาพรวมโรงงาน • ตารางและค้นหาด่วนเดิม’")
                 render_project_master_dashboard(calc_df, is_admin)
                 st.stop()
