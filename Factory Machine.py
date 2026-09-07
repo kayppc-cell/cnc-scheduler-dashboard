@@ -846,6 +846,67 @@ def delete_plan_master(plan_code):
     except Exception:
         return False
 
+def build_project_active_chain(calc_df):
+    """สร้างเวลาลูกโซ่สำหรับ Project Master ด้วยกฎเดียวกับตารางสั่งผลิต."""
+    jobs = calc_df.copy()
+    active_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
+    if "สถานะงาน" in jobs.columns:
+        jobs = jobs[jobs["สถานะงาน"].isin(active_statuses)].copy()
+    if jobs.empty:
+        jobs["_start"] = pd.Series(dtype="datetime64[ns]")
+        jobs["_finish"] = pd.Series(dtype="datetime64[ns]")
+        return jobs
+
+    # ลำดับคิวต้องเหมือนตารางสั่งผลิต: แยกตามเครื่อง แล้วเรียงสถานะ/เวลาเดิม/ID
+    def project_queue_priority(row):
+        status_value = safe_str(row.get("สถานะงาน"))
+        priority = 0 if "กำลังผลิต" in status_value else (1 if "พักงาน" in status_value else 2)
+        ready_dt = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+        return (
+            safe_str(row.get("เลือกเครื่องจักร")),
+            priority,
+            ready_dt if ready_dt is not None and not pd.isna(ready_dt) else pd.Timestamp.max,
+            safe_int(row.get("ID"))
+        )
+
+    jobs["_project_queue_key"] = jobs.apply(project_queue_priority, axis=1)
+    jobs = jobs.sort_values("_project_queue_key", kind="stable").drop(columns="_project_queue_key").reset_index(drop=True)
+
+    machine_available = {}
+    chained_starts, chained_finishes = [], []
+    for _, row in jobs.iterrows():
+        machine = safe_str(row.get("เลือกเครื่องจักร"))
+        duration_hours = (
+            safe_float(row.get("Setup (น.)"), 10.0)
+            + safe_float(row.get("Basic (น.)"), 0.0)
+            + safe_float(row.get("โปรแกรม (น.)"), 0.0)
+        ) / 60.0
+
+        if machine not in machine_available:
+            ready_dt = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+            if ready_dt is None or pd.isna(ready_dt) or ready_dt.year < 2020:
+                machine_available[machine] = None
+                chained_starts.append(None)
+                chained_finishes.append(None)
+                continue
+            start_dt = get_next_valid_work_time(ready_dt)
+        else:
+            previous_finish = machine_available[machine]
+            if previous_finish is None:
+                chained_starts.append(None)
+                chained_finishes.append(None)
+                continue
+            start_dt = get_next_valid_work_time(previous_finish)
+
+        _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
+        machine_available[machine] = finish_dt
+        chained_starts.append(start_dt)
+        chained_finishes.append(finish_dt)
+
+    jobs["_start"] = chained_starts
+    jobs["_finish"] = chained_finishes
+    return jobs
+
 def render_project_master_dashboard(calc_df, is_admin):
     st.markdown("### 🗓️ แผนงาน Production และ Project Master Gantt")
     st.caption("กรอบเวลา Production เป็น Baseline หลัก ส่วนแท่งแผนผลิตรวมคำนวณจาก Drawing และ Step ในตารางสั่งผลิต")
@@ -925,37 +986,9 @@ def render_project_master_dashboard(calc_df, is_admin):
         st.info("ยังไม่มีแผนงานที่กำหนดกรอบเวลา Production")
         return
 
-    # Project Master ต้องสะท้อนตารางสั่งการผลิตปัจจุบันเท่านั้น
-    # ไม่นำงานที่ย้ายไป Finished History แล้วกลับมาดึงวันเริ่มเก่าปนกับแผนคงเหลือ
-    jobs = calc_df.copy()
-    active_project_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
-    if "สถานะงาน" in jobs.columns:
-        jobs = jobs[jobs["สถานะงาน"].isin(active_project_statuses)].copy()
-    jobs["_start"] = jobs["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-
-    # ตารางฐานข้อมูลเก็บเวลาเริ่ม (ready_at) แต่ไม่ได้เก็บเวลาจบตามแผนโดยตรง
-    # จึงต้องคำนวณเวลาจบให้ Project Master ก่อนสร้างแท่งแผนผลิต
-    raw_finish_series = jobs.get("วัน-เวลาจบงาน", pd.Series(index=jobs.index, dtype=object))
-    jobs["_finish"] = raw_finish_series.apply(parse_flexible_datetime)
-
-    def project_row_finish(row):
-        existing_finish = row.get("_finish")
-        if existing_finish is not None and not pd.isna(existing_finish):
-            return existing_finish
-        start_dt = row.get("_start")
-        if start_dt is None or pd.isna(start_dt):
-            return None
-        duration_hours = (
-            safe_float(row.get("Setup (น.)"), 10.0)
-            + safe_float(row.get("Basic (น.)"), 0.0)
-            + safe_float(row.get("โปรแกรม (น.)"), 0.0)
-        ) / 60.0
-        if duration_hours <= 0:
-            return start_dt
-        _, calculated_finish = add_work_time_with_shift(start_dt, duration_hours)
-        return calculated_finish
-
-    jobs["_finish"] = jobs.apply(project_row_finish, axis=1)
+    # ใช้เวลาลูกโซ่ชุดเดียวกับตารางสั่งผลิต ไม่ใช้ ready_at ดิบซึ่งอาจอยู่ก่อน
+    # วัน/เวลาทำงานจริงและทำให้แท่งกราฟกับขีดวันที่ด้านบนคลาดกันหนึ่งวัน
+    jobs = build_project_active_chain(calc_df)
 
     thai_months_short = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
 
