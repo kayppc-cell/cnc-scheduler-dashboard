@@ -867,16 +867,42 @@ def render_project_master_dashboard(calc_df, is_admin):
             current = master_df[master_df["plan_code"].map(normalize_filter_key) == normalize_filter_key(selected_plan)]
             current_row = current.iloc[0] if not current.empty else None
             default_start = current_row["customer_start"] if current_row is not None and pd.notna(current_row["customer_start"]) else get_bangkok_now().replace(tzinfo=None, second=0, microsecond=0)
-            default_due = current_row["customer_due"] if current_row is not None and pd.notna(current_row["customer_due"]) else default_start + timedelta(days=14)
+            default_due = (
+                current_row["customer_due"]
+                if current_row is not None and pd.notna(current_row["customer_due"])
+                else datetime.combine((default_start + timedelta(days=14)).date(), dtime(17, 30))
+            )
             with st.form(f"plan_master_form_{selected_plan}"):
                 fc1, fc2 = st.columns(2)
                 with fc1:
-                    start_date = st.date_input("วันที่เริ่ม Production", default_start.date(), format="DD/MM/YYYY")
-                    start_time = st.time_input("เวลาเริ่ม", default_start.time())
+                    start_date = st.date_input(
+                        "วันที่เริ่ม Production",
+                        default_start.date(),
+                        format="DD/MM/YYYY",
+                        key=f"master_start_date_{selected_plan}"
+                    )
+                    start_time = st.time_input(
+                        "เวลาเริ่ม",
+                        default_start.time(),
+                        key=f"master_start_time_{selected_plan}"
+                    )
                 with fc2:
-                    due_date = st.date_input("วันที่สิ้นสุด Production", default_due.date(), format="DD/MM/YYYY")
-                    due_time = st.time_input("เวลาสิ้นสุด Production", default_due.time())
-                note = st.text_input("หมายเหตุ", value=safe_str(current_row.get("note"), "") if current_row is not None else "")
+                    due_date = st.date_input(
+                        "วันที่สิ้นสุด Production",
+                        default_due.date(),
+                        format="DD/MM/YYYY",
+                        key=f"master_due_date_{selected_plan}"
+                    )
+                    due_time = st.time_input(
+                        "เวลาสิ้นสุด Production",
+                        default_due.time(),
+                        key=f"master_due_time_{selected_plan}"
+                    )
+                note = st.text_input(
+                    "หมายเหตุ",
+                    value=safe_str(current_row.get("note"), "") if current_row is not None else "",
+                    key=f"master_note_{selected_plan}"
+                )
                 master_save_clicked = st.form_submit_button(
                     "💾 บันทึก/แก้ไขเวลาแผนหลัก",
                     type="primary",
@@ -1004,7 +1030,7 @@ def render_project_master_dashboard(calc_df, is_admin):
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("แผนงานทั้งหมด", len(summary_view), help="จำนวนแผนงานในมุมมองที่เลือก")
     k2.metric("อยู่ในแผน", int(summary_view["สถานะ"].str.contains("อยู่ในแผน").sum()))
-    k3.metric("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("เกินกำหนด|ยังวางงานไม่ครบ", regex=True).sum()))
+    k3.metric("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("เกินกรอบ Production|ยังวางงานไม่ครบ", regex=True).sum()))
     k4.metric("ช่วงเวลาซ้อนกัน", int((summary_view["แผนซ้อนกัน"] > 0).sum()))
 
     if not gantt_view.empty:
@@ -1092,7 +1118,7 @@ def render_project_master_dashboard(calc_df, is_admin):
 
     # กล่องสรุปงานที่ผู้วางแผนควรตัดสินใจและช่วงเวลาที่ซ้อนกัน
     decision_df = summary_view[
-        summary_view["สถานะ"].str.contains("เกินกำหนด|ยังวางงานไม่ครบ", regex=True, na=False)
+        summary_view["สถานะ"].str.contains("เกินกรอบ Production|ยังวางงานไม่ครบ", regex=True, na=False)
     ].copy()
     visible_plan_codes = set(summary_view["แผนงาน"].astype(str))
     visible_overlaps = [
@@ -1109,7 +1135,7 @@ def render_project_master_dashboard(calc_df, is_admin):
                 late_hours_item = safe_float(item.get("เกินกำหนด (ชม.)"), 0.0)
                 if late_hours_item > 0:
                     late_days = late_hours_item / 24.0
-                    headline = f"⚠️ {safe_str(item.get('แผนงาน'))} เกินกำหนด {late_days:.1f} วัน ({late_hours_item:.1f} ชม.)"
+                    headline = f"⚠️ {safe_str(item.get('แผนงาน'))} เกินกรอบ Production {late_days:.1f} วัน ({late_hours_item:.1f} ชม.)"
                     detail = f"Drawing: {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง: {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
                     st.error(f"{headline}\n\n{detail}")
                 else:
