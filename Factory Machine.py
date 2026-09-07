@@ -1197,6 +1197,94 @@ def render_project_master_dashboard(calc_df, is_admin):
     display_summary = summary_view.copy()
     for col in ["เริ่ม Production", "สิ้นสุด Production", "เริ่มผลิต", "จบผลิต"]:
         display_summary[col] = display_summary[col].apply(lambda v: v.strftime("%d/%m/%Y %H:%M") if v is not None and not pd.isna(v) else "-")
+
+    # รายงาน Project Master สำหรับพิมพ์หรือเลือก Save as PDF จากเบราว์เซอร์
+    project_pdf_rows = "".join([
+        "<tr>"
+        f"<td>{html.escape(safe_str(item.get('แผนงาน'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(item.get('เริ่ม Production'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(item.get('สิ้นสุด Production'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(item.get('เริ่มผลิต'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(item.get('จบผลิต'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(item.get('สถานะ'), '-'))}</td>"
+        f"<td style='text-align:right'>{safe_float(item.get('เกินกำหนด (ชม.)')):,.1f}</td>"
+        f"<td class='drawing'>{html.escape(safe_str(item.get('Drawing เสี่ยง'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(item.get('เครื่องเสี่ยง'), '-'))}</td>"
+        f"<td style='text-align:center'>{safe_int(item.get('จำนวน Drawing'))}</td>"
+        f"<td style='text-align:right'>{safe_float(item.get('ชั่วโมงแผน')):,.2f}</td>"
+        "</tr>"
+        for _, item in display_summary.iterrows()
+    ])
+    project_decision_items = []
+    for _, item in decision_df.sort_values("เกินกำหนด (ชม.)", ascending=False).head(12).iterrows():
+        late_value = safe_float(item.get("เกินกำหนด (ชม.)"), 0.0)
+        if late_value > 0:
+            project_decision_items.append(
+                f"{safe_str(item.get('แผนงาน'))}: เกินกรอบ Production {late_value:,.1f} ชม. | "
+                f"Drawing {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
+            )
+        else:
+            project_decision_items.append(f"{safe_str(item.get('แผนงาน'))}: ยังวาง Drawing/Step ไม่ครบ")
+    project_overlap_items = [
+        f"{item['แผน A']} ↔ {item['แผน B']}: ซ้อน {item['ซ้อน (ชม.)']:,.1f} ชม. | เครื่องร่วม {item['เครื่องร่วม']}"
+        for item in sorted(visible_overlaps, key=lambda value: value["ซ้อน (ชม.)"], reverse=True)[:12]
+    ]
+    project_pdf_payload = json.dumps({
+        "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
+        "filter": safe_str(project_filter),
+        "total": len(summary_view),
+        "on_plan": int(summary_view["สถานะ"].str.contains("อยู่ในแผน", na=False).sum()),
+        "risk": int(summary_view["สถานะ"].str.contains("เกินกรอบ Production|ยังวางงานไม่ครบ", regex=True, na=False).sum()),
+        "overlap": int((summary_view["แผนซ้อนกัน"] > 0).sum()),
+        "rows": project_pdf_rows,
+        "decisions": "".join(f"<li>{html.escape(value)}</li>" for value in project_decision_items) or "<li>ไม่พบแผนที่ต้องเร่งตัดสินใจ</li>",
+        "overlaps": "".join(f"<li>{html.escape(value)}</li>" for value in project_overlap_items) or "<li>ไม่พบช่วงเวลา Production ที่ซ้อนกัน</li>"
+    }, ensure_ascii=False).replace("<", "\\u003c")
+
+    components.html(f"""
+    <button onclick="printProjectMaster()" title="พิมพ์รายงาน Project Master หรือบันทึกเป็น PDF" style="display:block; width:250px; max-width:100%; margin:8px auto 12px auto; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:10px 16px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(185,28,28,.24);">
+        🖨️ พิมพ์ / บันทึก PDF
+    </button>
+    <script>
+    async function printProjectMaster() {{
+        const d = {project_pdf_payload};
+        const parentDoc = window.parent.document;
+        const plotEls = parentDoc.querySelectorAll('.js-plotly-plot');
+        let chartSrc = '';
+        if (window.parent.Plotly && plotEls.length > 0) {{
+            try {{
+                chartSrc = await window.parent.Plotly.toImage(plotEls[0], {{format:'png', width:1500, height:650}});
+            }} catch (err) {{ console.error('Project Master chart capture:', err); }}
+        }}
+        const chartHtml = chartSrc ? `<img src="${{chartSrc}}" style="width:100%; max-height:145mm; object-fit:contain; border:1px solid #CBD5E1; border-radius:6px;"/>` : '<div class="empty">ไม่สามารถจับภาพกราฟได้ กรุณาลองพิมพ์อีกครั้ง</div>';
+        const reportHtml = `<!doctype html><html><head><meta charset="utf-8"><title>PES Project Master Gantt</title>
+        <style>
+        @page {{ size:A3 landscape; margin:9mm; }}
+        body {{ font-family:Tahoma,'Sarabun',Arial,sans-serif; color:#172033; margin:0; font-size:9px; line-height:1.35; }}
+        .head {{ display:flex; justify-content:space-between; border-bottom:3px solid #1E3E62; padding-bottom:7px; margin-bottom:8px; }}
+        h1 {{ font-size:18px; margin:0; }} h2 {{ font-size:12px; margin:10px 0 5px; color:#1E3E62; }}
+        .sub,.foot {{ color:#64748B; }} .kpis {{ display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin:8px 0; }}
+        .kpi {{ border:1px solid #CBD5E1; border-radius:6px; padding:7px; text-align:center; background:#F8FAFC; }} .kpi b {{ display:block; font-size:15px; }}
+        .panels {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }} .panel {{ border:1px solid #CBD5E1; border-radius:6px; padding:6px 9px; background:#FFFBEB; }}
+        ul {{ margin:4px 0; padding-left:18px; }} li {{ margin:2px 0; }} table {{ width:100%; border-collapse:collapse; table-layout:fixed; margin-top:5px; }}
+        th,td {{ border:1px solid #CBD5E1; padding:3px 4px; vertical-align:top; overflow-wrap:anywhere; }} th {{ background:#E2E8F0; }} tr:nth-child(even) {{ background:#F8FAFC; }}
+        thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }} .drawing {{ width:22%; }} .empty {{ padding:30px; text-align:center; border:1px dashed #CBD5E1; }}
+        .foot {{ margin-top:8px; text-align:right; }}
+        </style></head><body>
+        <div class="head"><div><h1>แผนงาน Production และ Project Master Gantt</h1><div class="sub">กรอบเวลา Production เทียบตารางสั่งผลิตแบบลูกโซ่</div></div><div><b>มุมมอง:</b> ${{d.filter}}<br><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
+        <div class="kpis"><div class="kpi">แผนงานทั้งหมด<b>${{d.total}}</b></div><div class="kpi">อยู่ในแผน<b>${{d.on_plan}}</b></div><div class="kpi">เสี่ยง / เกินกำหนด<b>${{d.risk}}</b></div><div class="kpi">ช่วงเวลาซ้อนกัน<b>${{d.overlap}}</b></div></div>
+        <h2>1. ช่วงเวลาแผนหลักเทียบแผนผลิต</h2>${{chartHtml}}
+        <div class="panels"><div class="panel"><h2>2. จุดที่ต้องตัดสินใจ</h2><ul>${{d.decisions}}</ul></div><div class="panel"><h2>3. แผนที่เวลาซ้อนกัน</h2><ul>${{d.overlaps}}</ul></div></div>
+        <h2>4. ตารางแผนงาน Production</h2><table><thead><tr><th>แผนงาน</th><th>เริ่ม Production</th><th>สิ้นสุด Production</th><th>เริ่มผลิต</th><th>จบผลิต</th><th>สถานะ</th><th>เกิน (ชม.)</th><th class="drawing">Drawing เสี่ยง</th><th>เครื่องเสี่ยง</th><th>Drawing</th><th>ชั่วโมงแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+        <div class="foot">PES Production Monitoring System</div></body></html>`;
+        const printWin = window.open('', '_blank');
+        if (!printWin) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
+        printWin.document.open(); printWin.document.write(reportHtml); printWin.document.close(); printWin.focus();
+        setTimeout(function() {{ printWin.print(); }}, 800);
+    }}
+    </script>
+    """, height=62)
+
     if is_admin:
         st.markdown("#### 📋 ตารางแผนงาน Production")
         st.caption("ติ๊กช่องเลือกลบได้หลายรายการ แล้วกดปุ่มลบด้านล่าง — ระบบจะลบเฉพาะกรอบเวลา Production")
@@ -1213,12 +1301,15 @@ def render_project_master_dashboard(calc_df, is_admin):
             delete_table,
             key=delete_editor_key,
             hide_index=True,
-            width=1550,
+            width=1900,
+            height=min(620, max(300, len(delete_table) * 36 + 42)),
+            row_height=34,
             disabled=[col for col in delete_table.columns if col != "เลือกลบ"],
             column_config={
                 "เลือกลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width="small"),
-                "Drawing เสี่ยง": st.column_config.TextColumn(width=260),
-                "สถานะ": st.column_config.TextColumn(width=150)
+                "Drawing เสี่ยง": st.column_config.TextColumn("Drawing เสี่ยง", width=430),
+                "เครื่องเสี่ยง": st.column_config.TextColumn("เครื่องเสี่ยง", width=240),
+                "สถานะ": st.column_config.TextColumn(width=175)
             }
         )
         selected_delete_codes = edited_delete_table.loc[
@@ -1265,8 +1356,14 @@ def render_project_master_dashboard(calc_df, is_admin):
         st.dataframe(
             display_summary,
             hide_index=True,
-            width=1550,
-            column_config={"Drawing เสี่ยง": st.column_config.TextColumn(width=260), "สถานะ": st.column_config.TextColumn(width=150)}
+            width=1900,
+            height=min(620, max(300, len(display_summary) * 36 + 42)),
+            row_height=34,
+            column_config={
+                "Drawing เสี่ยง": st.column_config.TextColumn("Drawing เสี่ยง", width=430),
+                "เครื่องเสี่ยง": st.column_config.TextColumn("เครื่องเสี่ยง", width=240),
+                "สถานะ": st.column_config.TextColumn(width=175)
+            }
         )
 
 # ---------------------------------------------------------
