@@ -864,13 +864,28 @@ def render_project_master_dashboard(calc_df, is_admin):
             with st.form(f"plan_master_form_{selected_plan}"):
                 fc1, fc2 = st.columns(2)
                 with fc1:
-                    start_date = st.date_input("วันที่เริ่มตามแผนลูกค้า", default_start.date())
+                    start_date = st.date_input("วันที่เริ่มตามแผนลูกค้า", default_start.date(), format="DD/MM/YYYY")
                     start_time = st.time_input("เวลาเริ่ม", default_start.time())
                 with fc2:
-                    due_date = st.date_input("วันที่กำหนดส่งลูกค้า", default_due.date())
+                    due_date = st.date_input("วันที่กำหนดส่งลูกค้า", default_due.date(), format="DD/MM/YYYY")
                     due_time = st.time_input("เวลากำหนดส่ง", default_due.time())
                 note = st.text_input("หมายเหตุ", value=safe_str(current_row.get("note"), "") if current_row is not None else "")
-                if st.form_submit_button("💾 บันทึกเวลาแผนหลัก", type="primary", use_container_width=True):
+                confirm_delete_master = st.checkbox(
+                    "ยืนยันว่าต้องการลบกรอบเวลาแผนลูกค้านี้",
+                    disabled=(current_row is None),
+                    help="ลบเฉพาะเวลาแผนลูกค้า ไม่ลบ Drawing, Step หรือประวัติการผลิต"
+                )
+                master_save_col, master_delete_col = st.columns([2, 1])
+                with master_save_col:
+                    master_save_clicked = st.form_submit_button("💾 บันทึก/แก้ไขเวลาแผนหลัก", type="primary", use_container_width=True)
+                with master_delete_col:
+                    master_delete_clicked = st.form_submit_button(
+                        "🗑️ ลบแผนลูกค้า",
+                        disabled=(current_row is None or not confirm_delete_master),
+                        use_container_width=True
+                    )
+
+                if master_save_clicked:
                     start_dt = datetime.combine(start_date, start_time)
                     due_dt = datetime.combine(due_date, due_time)
                     if due_dt <= start_dt:
@@ -881,6 +896,14 @@ def render_project_master_dashboard(calc_df, is_admin):
                             st.cache_data.clear(); st.toast("บันทึกเวลาแผนลูกค้าแล้ว", icon="✅"); st.rerun()
                         else:
                             st.error(f"บันทึกไม่สำเร็จ: {master_error}")
+
+                if master_delete_clicked:
+                    if delete_plan_master(selected_plan):
+                        st.cache_data.clear()
+                        st.toast(f"ลบกรอบเวลาแผนลูกค้า {selected_plan} แล้ว โดยไม่กระทบรายการผลิต", icon="🗑️")
+                        st.rerun()
+                    else:
+                        st.error("ลบแผนลูกค้าไม่สำเร็จ กรุณาตรวจสิทธิ์ DELETE ของตาราง cnc_plan_master")
 
     if master_df.empty:
         st.info("ยังไม่มีแผนงานที่กำหนดเวลาเริ่มและกำหนดส่งของลูกค้า")
