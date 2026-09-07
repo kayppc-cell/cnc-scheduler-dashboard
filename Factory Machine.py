@@ -925,7 +925,12 @@ def render_project_master_dashboard(calc_df, is_admin):
         st.info("ยังไม่มีแผนงานที่กำหนดกรอบเวลา Production")
         return
 
+    # Project Master ต้องสะท้อนตารางสั่งการผลิตปัจจุบันเท่านั้น
+    # ไม่นำงานที่ย้ายไป Finished History แล้วกลับมาดึงวันเริ่มเก่าปนกับแผนคงเหลือ
     jobs = calc_df.copy()
+    active_project_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
+    if "สถานะงาน" in jobs.columns:
+        jobs = jobs[jobs["สถานะงาน"].isin(active_project_statuses)].copy()
     jobs["_start"] = jobs["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
 
     # ตารางฐานข้อมูลเก็บเวลาเริ่ม (ready_at) แต่ไม่ได้เก็บเวลาจบตามแผนโดยตรง
