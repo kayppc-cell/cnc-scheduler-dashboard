@@ -900,7 +900,38 @@ def render_project_master_dashboard(calc_df, is_admin):
 
     jobs = calc_df.copy()
     jobs["_start"] = jobs["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-    jobs["_finish"] = jobs.get("วัน-เวลาจบงาน", pd.Series(index=jobs.index, dtype=object)).apply(parse_flexible_datetime)
+
+    # ตารางฐานข้อมูลเก็บเวลาเริ่ม (ready_at) แต่ไม่ได้เก็บเวลาจบตามแผนโดยตรง
+    # จึงต้องคำนวณเวลาจบให้ Project Master ก่อนสร้างแท่งแผนผลิต
+    raw_finish_series = jobs.get("วัน-เวลาจบงาน", pd.Series(index=jobs.index, dtype=object))
+    jobs["_finish"] = raw_finish_series.apply(parse_flexible_datetime)
+
+    def project_row_finish(row):
+        existing_finish = row.get("_finish")
+        if existing_finish is not None and not pd.isna(existing_finish):
+            return existing_finish
+        start_dt = row.get("_start")
+        if start_dt is None or pd.isna(start_dt):
+            return None
+        duration_hours = (
+            safe_float(row.get("Setup (น.)"), 10.0)
+            + safe_float(row.get("Basic (น.)"), 0.0)
+            + safe_float(row.get("โปรแกรม (น.)"), 0.0)
+        ) / 60.0
+        if duration_hours <= 0:
+            return start_dt
+        _, calculated_finish = add_work_time_with_shift(start_dt, duration_hours)
+        return calculated_finish
+
+    jobs["_finish"] = jobs.apply(project_row_finish, axis=1)
+
+    thai_months_short = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
+
+    def project_short_date(value):
+        if value is None or pd.isna(value):
+            return "-"
+        return f"{value.day} {thai_months_short[value.month - 1]}"
+
     rows, gantt_rows = [], []
     for _, master in master_df.iterrows():
         code = safe_str(master["plan_code"])
@@ -924,9 +955,13 @@ def render_project_master_dashboard(calc_df, is_admin):
         else:
             status = "🟢 อยู่ในแผน"
         rows.append({"แผนงาน": code, "เริ่มลูกค้า": customer_start, "กำหนดส่ง": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": risky_drawings or "-", "เครื่องเสี่ยง": risky_machines or "-", "จำนวน Drawing": sub["ชื่อ Drawing."].nunique(), "ชั่วโมงแผน": round(sub["รวม (ชม.)"].sum(), 2)})
-        gantt_rows.append({"แผนงาน": f"{code} | ลูกค้า", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลาลูกค้า", "สถานะ": status})
+        customer_text = f"ลูกค้า: {project_short_date(customer_start)}–{project_short_date(customer_due)}"
+        gantt_rows.append({"แผนงาน": f"{code} | ลูกค้า", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลาลูกค้า", "สถานะ": status, "ข้อความ": customer_text})
         if production_start and production_finish:
-            gantt_rows.append({"แผนงาน": f"{code} | แผนผลิต", "เริ่ม": production_start, "จบ": production_finish, "ประเภท": "แผนผลิตเกินกำหนด" if late_hours > 0 else "แผนผลิต", "สถานะ": status})
+            production_text = f"ผลิต: {project_short_date(production_start)}–{project_short_date(production_finish)}"
+            if late_hours > 0:
+                production_text += f" • เกิน {late_hours / 24.0:.1f} วัน"
+            gantt_rows.append({"แผนงาน": f"{code} | แผนผลิต", "เริ่ม": production_start, "จบ": production_finish, "ประเภท": "แผนผลิตเกินกำหนด" if late_hours > 0 else "แผนผลิต", "สถานะ": status, "ข้อความ": production_text})
 
     summary = pd.DataFrame(rows)
     overlap_counts = {code: 0 for code in summary["แผนงาน"]}
@@ -973,12 +1008,24 @@ def render_project_master_dashboard(calc_df, is_admin):
 
     if not gantt_view.empty:
         st.markdown("#### ช่วงเวลาแผนหลักเทียบแผนผลิต")
-        fig_master = px.timeline(gantt_view, x_start="เริ่ม", x_end="จบ", y="แผนงาน", color="ประเภท", custom_data=["สถานะ"], color_discrete_map={"กรอบเวลาลูกค้า": "#2563EB", "แผนผลิต": "#10B981", "แผนผลิตเกินกำหนด": "#DC2626"})
+        fig_master = px.timeline(
+            gantt_view,
+            x_start="เริ่ม",
+            x_end="จบ",
+            y="แผนงาน",
+            color="ประเภท",
+            text="ข้อความ",
+            custom_data=["สถานะ", "เริ่ม", "จบ"],
+            color_discrete_map={"กรอบเวลาลูกค้า": "#2563EB", "แผนผลิต": "#10B981", "แผนผลิตเกินกำหนด": "#DC2626"}
+        )
         fig_master.update_yaxes(autorange="reversed")
         fig_master.update_traces(
-            hovertemplate="%{y}<br>เริ่ม: %{base|%d/%m/%Y %H:%M}<br>สถานะ: %{customdata[0]}<extra></extra>",
+            hovertemplate="%{y}<br>เริ่ม: %{customdata[1]|%d/%m/%Y %H:%M}<br>จบ: %{customdata[2]|%d/%m/%Y %H:%M}<br>สถานะ: %{customdata[0]}<extra></extra>",
             marker_line_color="rgba(15, 23, 42, 0.18)",
-            marker_line_width=1
+            marker_line_width=1,
+            textposition="inside",
+            insidetextanchor="middle",
+            textfont=dict(color="white", size=11)
         )
 
         # แสดงวันที่บนหัวกราฟเหมือนตารางเวลา และใช้วัน/เดือนแทนเดือน/วัน
@@ -987,8 +1034,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         visible_days = max(1, (max_gantt_date - min_gantt_date).days)
         tick_step = 1 if visible_days <= 14 else (2 if visible_days <= 45 else 7)
         tick_values = pd.date_range(min_gantt_date, max_gantt_date + pd.Timedelta(days=1), freq=f"{tick_step}D")
-        thai_months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
-        tick_labels = [f"{d.day} {thai_months[d.month - 1]}" for d in tick_values]
+        tick_labels = [f"{d.day} {thai_months_short[d.month - 1]}" for d in tick_values]
         fig_master.update_xaxes(
             side="top",
             title=None,
