@@ -925,6 +925,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         early_hours = max(0.0, (customer_start - production_start).total_seconds() / 3600.0) if production_start and customer_start else 0.0
         risky = sub[sub["_finish"].apply(lambda v: v is not None and customer_due is not None and v > customer_due)]
         risky_drawings = ", ".join(risky["ชื่อ Drawing."].dropna().astype(str).drop_duplicates().head(4))
+        risky_machines = ", ".join(risky.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3))
         if production_start is None or production_finish is None:
             status = "⚪ ยังวางงานไม่ครบ"
         elif late_hours > 0:
@@ -933,18 +934,33 @@ def render_project_master_dashboard(calc_df, is_admin):
             status = "🟡 เริ่มก่อนกรอบลูกค้า"
         else:
             status = "🟢 อยู่ในแผน"
-        rows.append({"แผนงาน": code, "เริ่มลูกค้า": customer_start, "กำหนดส่ง": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": risky_drawings or "-", "จำนวน Drawing": sub["ชื่อ Drawing."].nunique(), "ชั่วโมงแผน": round(sub["รวม (ชม.)"].sum(), 2)})
+        rows.append({"แผนงาน": code, "เริ่มลูกค้า": customer_start, "กำหนดส่ง": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": risky_drawings or "-", "เครื่องเสี่ยง": risky_machines or "-", "จำนวน Drawing": sub["ชื่อ Drawing."].nunique(), "ชั่วโมงแผน": round(sub["รวม (ชม.)"].sum(), 2)})
         gantt_rows.append({"แผนงาน": f"{code} | ลูกค้า", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลาลูกค้า", "สถานะ": status})
         if production_start and production_finish:
             gantt_rows.append({"แผนงาน": f"{code} | แผนผลิต", "เริ่ม": production_start, "จบ": production_finish, "ประเภท": "แผนผลิตเกินกำหนด" if late_hours > 0 else "แผนผลิต", "สถานะ": status})
 
     summary = pd.DataFrame(rows)
     overlap_counts = {code: 0 for code in summary["แผนงาน"]}
+    overlap_pairs = []
     for i in range(len(summary)):
         for j in range(i + 1, len(summary)):
             a, b = summary.iloc[i], summary.iloc[j]
             if a["เริ่มลูกค้า"] < b["กำหนดส่ง"] and b["เริ่มลูกค้า"] < a["กำหนดส่ง"]:
                 overlap_counts[a["แผนงาน"]] += 1; overlap_counts[b["แผนงาน"]] += 1
+                overlap_start = max(a["เริ่มลูกค้า"], b["เริ่มลูกค้า"])
+                overlap_finish = min(a["กำหนดส่ง"], b["กำหนดส่ง"])
+                overlap_hours = max(0.0, (overlap_finish - overlap_start).total_seconds() / 3600.0)
+                a_jobs = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(a["แผนงาน"])]
+                b_jobs = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(b["แผนงาน"])]
+                a_machines = set(a_jobs.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str))
+                b_machines = set(b_jobs.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str))
+                shared_machines = sorted(a_machines.intersection(b_machines))
+                overlap_pairs.append({
+                    "แผน A": safe_str(a["แผนงาน"]),
+                    "แผน B": safe_str(b["แผนงาน"]),
+                    "ซ้อน (ชม.)": overlap_hours,
+                    "เครื่องร่วม": ", ".join(shared_machines[:3]) or "ไม่พบเครื่องร่วม"
+                })
     summary["แผนซ้อนกัน"] = summary["แผนงาน"].map(overlap_counts)
 
     gantt_df = pd.DataFrame(gantt_rows).dropna(subset=["เริ่ม", "จบ"])
@@ -1014,6 +1030,43 @@ def render_project_master_dashboard(calc_df, is_admin):
             hovermode="closest"
         )
         st.plotly_chart(fig_master, use_container_width=True)
+
+    # กล่องสรุปงานที่ผู้วางแผนควรตัดสินใจและช่วงเวลาที่ซ้อนกัน
+    decision_df = summary_view[
+        summary_view["สถานะ"].str.contains("เกินกำหนด|ยังวางงานไม่ครบ", regex=True, na=False)
+    ].copy()
+    visible_plan_codes = set(summary_view["แผนงาน"].astype(str))
+    visible_overlaps = [
+        item for item in overlap_pairs
+        if item["แผน A"] in visible_plan_codes or item["แผน B"] in visible_plan_codes
+    ]
+    decision_col, overlap_col = st.columns(2)
+    with decision_col:
+        st.markdown("#### 🚨 จุดที่ต้องตัดสินใจ")
+        if decision_df.empty:
+            st.success("ยังไม่พบแผนงานที่ต้องเร่งตัดสินใจในมุมมองนี้")
+        else:
+            for _, item in decision_df.sort_values("เกินกำหนด (ชม.)", ascending=False).head(8).iterrows():
+                late_hours_item = safe_float(item.get("เกินกำหนด (ชม.)"), 0.0)
+                if late_hours_item > 0:
+                    late_days = late_hours_item / 24.0
+                    headline = f"⚠️ {safe_str(item.get('แผนงาน'))} เกินกำหนด {late_days:.1f} วัน ({late_hours_item:.1f} ชม.)"
+                    detail = f"Drawing: {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง: {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
+                    st.error(f"{headline}\n\n{detail}")
+                else:
+                    st.warning(f"⚪ {safe_str(item.get('แผนงาน'))} ยังวาง Drawing/Step ไม่ครบ จึงยังประเมินวันจบไม่ได้")
+
+    with overlap_col:
+        st.markdown("#### 🔀 แผนที่เวลาซ้อนกัน")
+        if not visible_overlaps:
+            st.success("ไม่พบช่วงเวลาแผนลูกค้าที่ซ้อนกันในมุมมองนี้")
+        else:
+            for item in sorted(visible_overlaps, key=lambda v: v["ซ้อน (ชม.)"], reverse=True)[:8]:
+                overlap_days = item["ซ้อน (ชม.)"] / 24.0
+                st.warning(
+                    f"🧱 {item['แผน A']} ↔ {item['แผน B']}\n\n"
+                    f"ซ้อนกัน {overlap_days:.1f} วัน ({item['ซ้อน (ชม.)']:.1f} ชม.) | เครื่องร่วม: {item['เครื่องร่วม']}"
+                )
 
     late_df = summary_view[summary_view["เกินกำหนด (ชม.)"] > 0]
     if not late_df.empty:
