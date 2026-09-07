@@ -4009,6 +4009,86 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                         width=1430
                     )
 
+                    drawing_pdf_rows = "".join([
+                        "<tr>"
+                        f"<td>{html.escape(safe_str(row.get('แผนงาน'), '-'))}</td>"
+                        f"<td>{html.escape(safe_str(row.get('ชื่อ Drawing.'), '-'))}</td>"
+                        f"<td style='text-align:center'>{safe_int(row.get('จำนวน'), 1)}</td>"
+                        f"<td>{html.escape(safe_str(row.get('วัสดุ'), '-'))}</td>"
+                        f"<td>{html.escape(safe_str(row.get('เครื่องจักรที่ผลิต'), '-'))}</td>"
+                        f"<td style='text-align:center'>{safe_int(row.get('จำนวน Step'), 0)}</td>"
+                        f"<td style='text-align:right'>{safe_float(row.get('เวลาแผน (ชม.)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(row.get('เวลาจริง (ชม.)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(row.get('แผน/ชิ้น (ชม.)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(row.get('จริง/ชิ้น (ชม.)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(row.get('ความแม่นยำ (%)')):,.1f}%</td>"
+                        f"<td style='text-align:right'>{safe_float(row.get('ผลต่าง (ชม.)')):+,.2f}</td>"
+                        f"<td>{html.escape(safe_str(row.get('การประเมิน'), '-'))}</td>"
+                        "</tr>"
+                        for _, row in df_table_display.iterrows()
+                    ])
+                    drawing_pdf_payload = json.dumps({
+                        "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
+                        "period": f"{month_names[sel_dw_month-1]} {sel_dw_year}",
+                        "chart_mode": safe_str(sel_dw_limit),
+                        "plan_filter": safe_str(selected_plan_filter),
+                        "chart_search": safe_str(search_dw, "-") or "-",
+                        "table_search": safe_str(search_dw_table, "-") or "-",
+                        "fast": count_fast,
+                        "target": count_target,
+                        "late": count_late,
+                        "missing": count_missing,
+                        "late_hours": f"{total_late_hrs:,.2f}",
+                        "accuracy": f"{avg_accuracy if pd.notna(avg_accuracy) else 0:.1f}",
+                        "rows_count": len(df_table_display),
+                        "rows": drawing_pdf_rows
+                    }, ensure_ascii=False).replace("<", "\\u003c")
+
+                    components.html(f"""
+                    <button onclick="printDrawingPerformance()" title="พิมพ์รายงาน Drawing Performance หรือบันทึกเป็น PDF" style="display:block; width:260px; max-width:100%; margin:9px auto 2px auto; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:10px 16px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(185,28,28,.24);">
+                        🖨️ พิมพ์ / บันทึก PDF
+                    </button>
+                    <script>
+                    async function printDrawingPerformance() {{
+                        const d = {drawing_pdf_payload};
+                        const parentDoc = window.parent.document;
+                        const plotEls = parentDoc.querySelectorAll('.js-plotly-plot');
+                        let chartSrc = '';
+                        if (window.parent.Plotly && plotEls.length > 0) {{
+                            try {{
+                                chartSrc = await window.parent.Plotly.toImage(plotEls[0], {{format:'png', width:1500, height:850}});
+                            }} catch (err) {{ console.error('Drawing Performance chart capture:', err); }}
+                        }}
+                        const chartHtml = chartSrc ? `<img src="${{chartSrc}}" style="width:100%; max-height:150mm; object-fit:contain; border:1px solid #CBD5E1; border-radius:6px;"/>` : '<div class="empty">ไม่สามารถจับภาพกราฟได้ กรุณาลองพิมพ์อีกครั้ง</div>';
+                        const reportHtml = `<!doctype html><html><head><meta charset="utf-8"><title>PES Drawing Performance Analysis</title>
+                        <style>
+                        @page {{ size:A3 landscape; margin:9mm; }}
+                        body {{ font-family:Tahoma,'Sarabun',Arial,sans-serif; color:#172033; margin:0; font-size:8.5px; line-height:1.3; }}
+                        .head {{ display:flex; justify-content:space-between; align-items:flex-end; border-bottom:3px solid #1E3E62; padding-bottom:7px; margin-bottom:8px; }}
+                        h1 {{ margin:0; font-size:18px; }} h2 {{ font-size:11px; color:#1E3E62; margin:9px 0 4px; }} .sub,.foot {{ color:#64748B; }}
+                        .filters {{ border:1px solid #CBD5E1; background:#F8FAFC; border-radius:6px; padding:6px 8px; margin-bottom:8px; }}
+                        .kpis {{ display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-bottom:8px; }} .kpi {{ border:1px solid #CBD5E1; border-radius:6px; padding:7px; text-align:center; }}
+                        .kpi b {{ display:block; font-size:15px; margin-top:2px; }} table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+                        th,td {{ border:1px solid #CBD5E1; padding:3px 4px; vertical-align:top; overflow-wrap:anywhere; }} th {{ background:#1E3E62; color:white; }}
+                        tr:nth-child(even) {{ background:#F8FAFC; }} thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }}
+                        th:nth-child(2),td:nth-child(2) {{ width:13%; }} th:nth-child(5),td:nth-child(5) {{ width:12%; }} th:nth-child(13),td:nth-child(13) {{ width:12%; }}
+                        .empty {{ padding:25px; text-align:center; border:1px dashed #CBD5E1; }} .foot {{ text-align:right; margin-top:7px; }}
+                        </style></head><body>
+                        <div class="head"><div><h1>วิเคราะห์และเปรียบเทียบเวลาทำงานจริงราย Drawing</h1><div class="sub">Drawing Performance Analysis - Timing Process Control (TPC)</div></div><div><b>ประจำเดือน:</b> ${{d.period}}<br><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
+                        <div class="filters"><b>ตัวกรอง:</b> ${{d.chart_mode}} | แผนงาน ${{d.plan_filter}} | ค้นหากราฟ ${{d.chart_search}} | ค้นหาตาราง ${{d.table_search}} | แสดง ${{d.rows_count}} Drawing</div>
+                        <div class="kpis"><div class="kpi">เร็วกว่าแผน<b>${{d.fast}} Drawing</b></div><div class="kpi">ตรงตามแผน ±5%<b>${{d.target}} Drawing</b></div><div class="kpi">ช้ากว่าแผน<b>${{d.late}} Drawing</b><span>ช้าสะสม ${{d.late_hours}} ชม.</span></div><div class="kpi">ความแม่นยำเฉลี่ย<b>${{d.accuracy}}%</b><span>ข้อมูลไม่ครบ ${{d.missing}}</span></div></div>
+                        <h2>1. กราฟเปรียบเทียบเวลาแผนกับเวลาจริงสุทธิ</h2>${{chartHtml}}
+                        <h2>2. ตารางสรุปเวลาเปรียบเทียบราย Drawing</h2>
+                        <table><thead><tr><th>แผนงาน</th><th>Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>เครื่องจักร</th><th>Step</th><th>แผน ชม.</th><th>จริง ชม.</th><th>แผน/ชิ้น</th><th>จริง/ชิ้น</th><th>แม่นยำ</th><th>ผลต่าง</th><th>ผลประเมิน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+                        <div class="foot">PES Production Monitoring System</div></body></html>`;
+                        const printWin = window.open('', '_blank');
+                        if (!printWin) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
+                        printWin.document.open(); printWin.document.write(reportHtml); printWin.document.close(); printWin.focus();
+                        setTimeout(function() {{ printWin.print(); }}, 800);
+                    }}
+                    </script>
+                    """, height=60)
+
                     st.divider()
 
                     st.markdown("#### 🔬 เจาะลึกความต่างระดับขั้นตอนย่อย (Step Breakdown Inspector)")
@@ -4724,6 +4804,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
             if r_start_parsed is not None and pd.notna(r_start_parsed):
                 start_disp_txt = r_start_parsed.strftime("%H:%M น.")
+            actual_start_report = r_start_parsed.strftime("%d/%m/%Y %H:%M") if r_start_parsed is not None and pd.notna(r_start_parsed) else "-"
             
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot" style="margin-right:6px;"></span> <b style="color:#A7F3D0;">กำลังรันงาน</b>'
@@ -4753,7 +4834,11 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": p_code,
                 "drawing": d_code,
                 "step": step_name,
-                "time_info": time_info_combined
+                "time_info": time_info_combined,
+                "actual_start": actual_start_report,
+                "planned_start": ready_display_txt,
+                "planned_finish": finish_display_txt,
+                "overdue": is_overdue
             })
         elif not hold_job.empty:
             h_info = hold_job.iloc[0]
@@ -4768,6 +4853,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             h_st_parsed = parse_flexible_datetime(h_start)
             if h_st_parsed is not None and pd.notna(h_st_parsed):
                 h_start_txt = f" (เริ่มไว้: {h_st_parsed.strftime('%H:%M น.')})"
+            hold_actual_start_report = h_st_parsed.strftime("%d/%m/%Y %H:%M") if h_st_parsed is not None and pd.notna(h_st_parsed) else "-"
 
             time_info_combined = f'''
             <div style="font-size:13px; font-weight:700; color:#FEF3C7; line-height:1.5;">
@@ -4794,7 +4880,11 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": p_code,
                 "drawing": d_code,
                 "step": step_name,
-                "time_info": time_info_combined
+                "time_info": time_info_combined,
+                "actual_start": hold_actual_start_report,
+                "planned_start": ready_display_txt,
+                "planned_finish": finish_display_txt,
+                "overdue": is_overdue
             })
         else:
             idle_machines_count += 1
@@ -4824,6 +4914,8 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
             idle_card_cls = "tv-card tv-card-idle"
             idle_badge_html = '<b style="color:#94A3B8;">⚪ เครื่องว่าง (IDLE)</b>'
+            idle_planned_start = ready_display_txt if not waiting_jobs.empty else "-"
+            idle_planned_finish = finish_display_txt if not waiting_jobs.empty else "-"
             if not waiting_jobs.empty and is_overdue:
                 overdue_machines_count += 1
                 idle_card_cls = "tv-card tv-card-overdue"
@@ -4837,7 +4929,11 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 "plan": "พร้อมรับงาน",
                 "drawing": next_txt,
                 "step": "-",
-                "time_info": f"<div style='font-size:13px; font-weight:600; color:#CBD5E1;'>📋 คิวรอ: {len(waiting_jobs)} งาน</div>{next_dates_html}"
+                "time_info": f"<div style='font-size:13px; font-weight:600; color:#CBD5E1;'>📋 คิวรอ: {len(waiting_jobs)} งาน</div>{next_dates_html}",
+                "actual_start": "-",
+                "planned_start": idle_planned_start,
+                "planned_finish": idle_planned_finish,
+                "overdue": is_overdue
             })
 
     st.markdown(f"""
@@ -4885,6 +4981,62 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
     full_grid_html = '<div class="tv-grid-container">' + "".join(card_items) + '</div>'
     st.markdown(full_grid_html, unsafe_allow_html=True)
+
+    tv_pdf_rows = "".join([
+        "<tr>"
+        f"<td>{html.escape(safe_str(card.get('machine'), '-'))}</td>"
+        f"<td class='{safe_str(card.get('status')).lower()}'>{html.escape('หลุดแผน' if card.get('overdue') else safe_str(card.get('status'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(card.get('plan'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(card.get('drawing'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(card.get('step'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(card.get('actual_start'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(card.get('planned_start'), '-'))}</td>"
+        f"<td>{html.escape(safe_str(card.get('planned_finish'), '-'))}</td>"
+        "</tr>"
+        for card in machine_status_cards
+    ])
+    tv_pdf_payload = json.dumps({
+        "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
+        "running": running_machines_count,
+        "hold": hold_machines_count,
+        "idle": idle_machines_count,
+        "overdue": overdue_machines_count,
+        "stations": len(machine_status_cards),
+        "rows": tv_pdf_rows
+    }, ensure_ascii=False).replace("<", "\\u003c")
+
+    components.html(f"""
+    <button onclick="printTvReport()" title="พิมพ์สถานะหน้าทีวีหรือบันทึกเป็น PDF" style="display:block; width:245px; max-width:100%; margin:10px auto 2px auto; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:10px 16px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(185,28,28,.24);">
+        🖨️ พิมพ์ / บันทึก PDF
+    </button>
+    <script>
+    function printTvReport() {{
+        const d = {tv_pdf_payload};
+        const reportHtml = `<!doctype html><html><head><meta charset="utf-8"><title>PES Shop Floor Live Report</title>
+        <style>
+        @page {{ size:A3 landscape; margin:10mm; }}
+        body {{ font-family:Tahoma,'Sarabun',Arial,sans-serif; color:#172033; margin:0; font-size:10px; line-height:1.35; }}
+        .head {{ display:flex; justify-content:space-between; align-items:flex-end; border-bottom:3px solid #1E3E62; padding-bottom:8px; margin-bottom:9px; }}
+        h1 {{ margin:0; font-size:20px; color:#0F172A; }} .sub,.foot {{ color:#64748B; }}
+        .kpis {{ display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin:9px 0 12px; }}
+        .kpi {{ border:1px solid #CBD5E1; border-radius:7px; padding:8px; text-align:center; background:#F8FAFC; }}
+        .kpi b {{ display:block; font-size:17px; margin-top:2px; }}
+        table {{ width:100%; border-collapse:collapse; table-layout:fixed; }} th,td {{ border:1px solid #CBD5E1; padding:5px 6px; vertical-align:top; overflow-wrap:anywhere; }}
+        th {{ background:#1E3E62; color:white; }} tr:nth-child(even) {{ background:#F8FAFC; }} thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }}
+        td:nth-child(1) {{ width:10%; font-weight:700; }} td:nth-child(4) {{ width:19%; }} .running {{ color:#047857; font-weight:700; }} .hold {{ color:#B45309; font-weight:700; }} .idle {{ color:#64748B; font-weight:700; }}
+        .foot {{ text-align:right; margin-top:8px; }}
+        </style></head><body>
+        <div class="head"><div><h1>Timing Process Control (TPC)</h1><div class="sub">รายงานสถานะจอทีวีกลางโรงงาน - Shop Floor Live Monitor</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
+        <div class="kpis"><div class="kpi">สถานีทั้งหมด<b>${{d.stations}}</b></div><div class="kpi">กำลังรัน<b>${{d.running}}</b></div><div class="kpi">พักงาน<b>${{d.hold}}</b></div><div class="kpi">เครื่องว่าง<b>${{d.idle}}</b></div><div class="kpi">หลุดแผน<b>${{d.overdue}}</b></div></div>
+        <table><thead><tr><th>เครื่องจักร</th><th>สถานะ</th><th>แผนงาน</th><th>Drawing / คิวถัดไป</th><th>ขั้นตอน</th><th>เริ่มจริง</th><th>เริ่มตามแผน</th><th>จบตามแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+        <div class="foot">PES Production Monitoring System</div></body></html>`;
+        const printWin = window.open('', '_blank');
+        if (!printWin) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
+        printWin.document.open(); printWin.document.write(reportHtml); printWin.document.close(); printWin.focus();
+        setTimeout(function() {{ printWin.print(); }}, 700);
+    }}
+    </script>
+    """, height=60)
 
 # =========================================================
 # JavaScript ท้ายไฟล์: นาฬิกา + Live Stopwatch
