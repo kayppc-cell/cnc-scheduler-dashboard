@@ -990,6 +990,22 @@ def render_project_master_dashboard(calc_df, is_admin):
     # วัน/เวลาทำงานจริงและทำให้แท่งกราฟกับขีดวันที่ด้านบนคลาดกันหนึ่งวัน
     jobs = build_project_active_chain(calc_df)
 
+    # ป้องกันหน้า Project Master ล่มเมื่อ Supabase ส่งชุดข้อมูลว่างหรือชื่อคอลัมน์
+    # Drawing ต่างรูปแบบในบางรอบโหลด
+    project_column_aliases = {
+        "แผนงาน": ["plan_code"],
+        "ชื่อ Drawing.": ["ชื่อ Drawing", "Drawing", "drawing_name"],
+        "เลือกเครื่องจักร": ["เครื่องจักร", "machine_name"],
+        "รวม (ชม.)": ["รวม ชม.", "total_hours"]
+    }
+    for required_col, aliases in project_column_aliases.items():
+        if required_col not in jobs.columns:
+            source_col = next((alias for alias in aliases if alias in jobs.columns), None)
+            jobs[required_col] = jobs[source_col] if source_col is not None else None
+    for required_col in ["_start", "_finish"]:
+        if required_col not in jobs.columns:
+            jobs[required_col] = None
+
     thai_months_short = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
 
     def project_short_date(value):
@@ -1009,7 +1025,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         late_hours = max(0.0, (production_finish - customer_due).total_seconds() / 3600.0) if production_finish and customer_due else 0.0
         early_hours = max(0.0, (customer_start - production_start).total_seconds() / 3600.0) if production_start and customer_start else 0.0
         risky = sub[sub["_finish"].apply(lambda v: v is not None and customer_due is not None and v > customer_due)]
-        risky_drawings = ", ".join(risky["ชื่อ Drawing."].dropna().astype(str).drop_duplicates().head(4))
+        risky_drawings = ", ".join(risky.get("ชื่อ Drawing.", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(4))
         risky_machines = ", ".join(risky.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3))
         if production_start is None or production_finish is None:
             status = "⚪ ยังวางงานไม่ครบ"
@@ -1019,7 +1035,11 @@ def render_project_master_dashboard(calc_df, is_admin):
             status = "🟡 เริ่มก่อนกรอบ Production"
         else:
             status = "🟢 อยู่ในแผน"
-        rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": risky_drawings or "-", "เครื่องเสี่ยง": risky_machines or "-", "จำนวน Drawing": sub["ชื่อ Drawing."].nunique(), "ชั่วโมงแผน": round(sub["รวม (ชม.)"].sum(), 2)})
+        drawing_count = sub.get("ชื่อ Drawing.", pd.Series(index=sub.index, dtype=object)).dropna().nunique()
+        planned_hours = pd.to_numeric(
+            sub.get("รวม (ชม.)", pd.Series(index=sub.index, dtype=float)), errors="coerce"
+        ).fillna(0.0).sum()
+        rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": risky_drawings or "-", "เครื่องเสี่ยง": risky_machines or "-", "จำนวน Drawing": drawing_count, "ชั่วโมงแผน": round(planned_hours, 2)})
         customer_text = f"Production: {project_short_date(customer_start)}–{project_short_date(customer_due)}"
         gantt_rows.append({"แผนงาน": f"{code} | Production", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลา Production", "สถานะ": status, "ข้อความ": customer_text})
         if production_start and production_finish:
