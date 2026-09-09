@@ -3130,7 +3130,23 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         start_view = datetime.combine(gantt_min_date, dtime(0, 0))
                         end_view = datetime.combine(gantt_max_date, dtime(23, 59))
 
-                    fig.update_xaxes(range=[start_view, end_view], showgrid=True, gridcolor="#E2E8F0")
+                    # แบ่งเส้นตารางแนวตั้งทุก 1 วัน เพื่ออ่านตำแหน่งงานเทียบวันที่ได้ชัดเจน
+                    fig.update_xaxes(
+                        range=[start_view, end_view],
+                        type="date",
+                        tickmode="linear",
+                        tick0=start_view,
+                        dtick=24 * 60 * 60 * 1000,
+                        tickformat="%d/%m<br>%Y",
+                        showgrid=True,
+                        gridcolor="#CBD5E1",
+                        gridwidth=1,
+                        showline=True,
+                        linecolor="#94A3B8",
+                        ticks="outside",
+                        ticklen=5,
+                        tickfont=dict(size=10)
+                    )
 
                     fig.update_layout(
                         height=max(450, len(display_machines) * 35),
