@@ -1954,7 +1954,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 key="dashboard_subview"
             )
             if dashboard_subview == project_master_label:
-                st.info("เครื่องมือเดิมทั้งหมด—including ค้นหาด่วน ตารางสั่งผลิต ใบจ่ายคิว Gantt รายเครื่อง ประวัติ และต้นทุน—ยังอยู่ครบในแท็บ ‘ภาพรวมโรงงาน • ตารางและค้นหาด่วนเดิม’")
                 render_project_master_dashboard(calc_df, is_admin)
                 st.stop()
 
