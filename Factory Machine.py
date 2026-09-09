@@ -144,8 +144,11 @@ def parse_flexible_datetime(dt_val):
                 return dt_parsed
 
     if "/" in s:
-        date_part = s.split(" ")[0]
-        time_part = s.split(" ")[1] if len(s.split(" ")) > 1 else "08:30:00"
+        date_time_parts = s.split()
+        date_part = date_time_parts[0]
+        time_part = date_time_parts[1] if len(date_time_parts) > 1 else "08:30:00"
+        # ผู้ใช้มักกรอกเวลาแบบ 13.30 ใน data_editor ให้ตีความเหมือน 13:30
+        time_part = time_part.replace(".", ":").replace("น.", "").strip()
         # ตารางแสดงเวลาเป็น HH:MM แต่รูปแบบเดิมบังคับ HH:MM:SS จึงได้ NaT ตอนบันทึก
         if len(time_part.split(":")) == 2:
             time_part = f"{time_part}:00"
