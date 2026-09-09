@@ -1851,13 +1851,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
     if st.session_state.user_role is None:
         st.subheader("🔒 ยืนยันตัวตนสำหรับเข้าใช้งานแดชบอร์ดภาพรวมโรงงาน")
         st.info("กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน:\n* **ผู้บริหาร/วางแผน (แก้ไขได้):** รหัสผ่านระดับ Admin\n* **เข้าชมทั่วไป (ดูอย่างเดียว):** รหัสผ่านทั่วไป")
-        col_pwd, col_btn = st.columns([3, 1])
-        with col_pwd:
-            input_pwd = st.text_input("รหัสผ่าน (Password):", type="password")
-        with col_btn:
-            st.write("")
-            st.write("")
-            if st.button("🔓 เข้าสู่ระบบ", type="primary", use_container_width=True):
+        with st.form("dashboard_login_form", clear_on_submit=False):
+            col_pwd, col_btn = st.columns([3, 1])
+            with col_pwd:
+                input_pwd = st.text_input("รหัสผ่าน (Password):", type="password", key="pwd_dashboard")
+            with col_btn:
+                st.write("")
+                st.write("")
+                login_submitted = st.form_submit_button("🔓 เข้าสู่ระบบ", type="primary", use_container_width=True)
+            if login_submitted:
                 if input_pwd == ADMIN_PASSWORD:
                     st.session_state.user_role = "admin"
                     st.rerun()
@@ -4281,13 +4283,15 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
     if st.session_state.user_role is None:
         st.subheader("🔒 ยืนยันตัวตนสำหรับเข้าใช้งานรายงานสรุปประจำเดือน")
         st.info("กรุณากรอกรหัสผ่านเพื่อเข้าใช้งาน:\n* **ผู้บริหาร/วางแผน:** รหัสผ่านระดับ Admin หรือ รหัสผ่านทั่วไป")
-        col_pwd, col_btn = st.columns([3, 1])
-        with col_pwd:
-            input_pwd = st.text_input("รหัสผ่าน (Password):", type="password", key="pwd_monthly_report")
-        with col_btn:
-            st.write("")
-            st.write("")
-            if st.button("🔓 เข้าสู่ระบบ", type="primary", use_container_width=True, key="btn_login_monthly"):
+        with st.form("monthly_report_login_form", clear_on_submit=False):
+            col_pwd, col_btn = st.columns([3, 1])
+            with col_pwd:
+                input_pwd = st.text_input("รหัสผ่าน (Password):", type="password", key="pwd_monthly_report")
+            with col_btn:
+                st.write("")
+                st.write("")
+                login_submitted = st.form_submit_button("🔓 เข้าสู่ระบบ", type="primary", use_container_width=True)
+            if login_submitted:
                 if input_pwd == ADMIN_PASSWORD:
                     st.session_state.user_role = "admin"
                     st.rerun()
