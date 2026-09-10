@@ -1083,60 +1083,64 @@ def render_machine_activity_dashboard(calc_df):
     """มุมมองผู้บริหาร: สถานะสดและประวัติกิจกรรมจากหน้าเครื่อง"""
     with st.expander("🛰️ ติดตามกิจกรรมหน้าเครื่อง (Machine Activity)", expanded=True):
         events = fetch_job_events(500)
-        live = calc_df[
-            calc_df["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True, na=False)
-        ].copy()
-        if live.empty:
-            st.info("ขณะนี้ไม่มีเครื่องที่กำลังผลิตหรือพักงาน")
+        live = calc_df[calc_df["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True, na=False)].copy()
+        running_live = live[live["สถานะงาน"].astype(str).str.contains("กำลังผลิต", na=False)]
+        hold_live = live[live["สถานะงาน"].astype(str).str.contains("พักงาน", na=False)]
+        busy_machines = set(live.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str))
+        today = get_bangkok_now().replace(tzinfo=None).date()
+        today_events = events[events["event_at"].apply(lambda dt: dt is not None and pd.notna(dt) and dt.date() == today)] if not events.empty else pd.DataFrame()
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("🟦 เครื่องกำลังผลิต", running_live["เลือกเครื่องจักร"].nunique())
+        k2.metric("🟨 เครื่องกำลังพัก", hold_live["เลือกเครื่องจักร"].nunique())
+        k3.metric("⚪ เครื่องว่าง", max(0, len(MACHINE_LIST) - len(busy_machines)))
+        k4.metric("พักวันนี้", int(today_events["event_type"].eq("Pause Step").sum()) if not today_events.empty else 0)
+        k5.metric("ย้ายเครื่องวันนี้", int(today_events["event_type"].eq("Move Machine").sum()) if not today_events.empty else 0)
+
+        st.markdown("#### 🚨 เครื่องที่ต้องติดตามตอนนี้")
+        if hold_live.empty:
+            st.success("ไม่มีเครื่องที่กำลังพักหรือหยุดรอแก้ไข")
         else:
-            live_rows = []
             now_dt = get_bangkok_now().replace(tzinfo=None)
-            for _, row in live.iterrows():
-                progress = normalize_step_progress(
-                    row.get("ติดตาม Step"), row.get("ขั้นตอน (Step)"), row.get("สถานะงาน"),
-                    row.get("เริ่มจริง"), row.get("เสร็จจริง")
-                )
-                idx = progress["current_index"]
-                item = progress["steps"][idx]
-                if "พักงาน" in str(row.get("สถานะงาน")):
-                    hold_dt = parse_flexible_datetime(row.get("เริ่มพักจริง"))
-                    state = "🟨 พักงาน"
-                    elapsed = max(0.0, (now_dt - hold_dt).total_seconds()) if hold_dt is not None and pd.notna(hold_dt) else 0.0
-                    time_label = f"พักมา {format_duration_short(elapsed)}"
-                    pause_reason_text = "-"
-                    if not events.empty and "job_id" in events.columns:
-                        job_events = events[
-                            (pd.to_numeric(events["job_id"], errors="coerce") == safe_int(row.get("ID")))
-                            & events["event_type"].astype(str).eq("Pause Step")
-                        ]
-                        if not job_events.empty:
-                            latest_pause = job_events.iloc[0]
-                            pause_reason_text = safe_str(latest_pause.get("reason"), "-")
-                            if safe_str(latest_pause.get("note"), ""):
-                                pause_reason_text += f" — {safe_str(latest_pause.get('note'), '')}"
-                else:
-                    state = "🟦 กำลังผลิต"
-                    time_label = f"Step ใช้ไป {format_duration_short(step_elapsed_seconds(item))}"
-                    pause_reason_text = "-"
-                live_rows.append({
-                    "เครื่องจักร": row.get("เลือกเครื่องจักร", "-"), "สถานะ": state,
-                    "แผนงาน": row.get("แผนงาน", "-"), "Drawing": row.get("ชื่อ Drawing.", "-"),
-                    "Step ปัจจุบัน": f"{idx + 1}/{len(progress['steps'])} · {item.get('name', '-')}",
-                    "เวลา": time_label, "เหตุผลพัก": pause_reason_text
-                })
-            st.dataframe(pd.DataFrame(live_rows), hide_index=True, use_container_width=True)
+            alert_cols = st.columns(min(3, len(hold_live)))
+            for alert_idx, (_, row) in enumerate(hold_live.iterrows()):
+                hold_dt = parse_flexible_datetime(row.get("เริ่มพักจริง"))
+                elapsed = max(0.0, (now_dt - hold_dt).total_seconds()) if hold_dt is not None and pd.notna(hold_dt) else 0.0
+                reason_text, note_text = "ไม่ระบุ", ""
+                if not events.empty and "job_id" in events.columns:
+                    job_events = events[(pd.to_numeric(events["job_id"], errors="coerce") == safe_int(row.get("ID"))) & events["event_type"].astype(str).eq("Pause Step")]
+                    if not job_events.empty:
+                        latest_pause = job_events.iloc[0]
+                        reason_text = safe_str(latest_pause.get("reason"), "ไม่ระบุ")
+                        note_text = safe_str(latest_pause.get("note"), "")
+                with alert_cols[alert_idx % len(alert_cols)]:
+                    st.markdown(f"""
+                    <div style="border:2px solid #F59E0B;border-left:7px solid #D97706;border-radius:12px;padding:12px;background:#FFFBEB;margin-bottom:8px;">
+                      <div style="font-size:16px;font-weight:900;color:#92400E;">🟨 {html.escape(safe_str(row.get('เลือกเครื่องจักร'), '-'))}</div>
+                      <div><b>พักมา:</b> {format_duration_short(elapsed)}</div>
+                      <div><b>สาเหตุ:</b> {html.escape(reason_text)}</div>
+                      <div><b>แผน/Drawing:</b> {html.escape(safe_str(row.get('แผนงาน'), '-'))} · {html.escape(safe_str(row.get('ชื่อ Drawing.'), '-'))}</div>
+                      <div style="color:#64748B;">{html.escape(note_text)}</div>
+                    </div>""", unsafe_allow_html=True)
 
         if events.empty:
             st.caption("ยังไม่มีประวัติกิจกรรม หรือยังไม่ได้รัน SQL สร้างตาราง cnc_job_events")
             return
 
-        today = get_bangkok_now().replace(tzinfo=None).date()
-        today_events = events[events["event_at"].apply(lambda dt: dt is not None and pd.notna(dt) and dt.date() == today)]
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("กิจกรรมวันนี้", len(today_events))
-        k2.metric("พัก Step", int(today_events["event_type"].eq("Pause Step").sum()))
-        k3.metric("ย้ายเครื่อง", int(today_events["event_type"].eq("Move Machine").sum()))
-        k4.metric("Finish Drawing", int(today_events["event_type"].eq("Finish Drawing").sum()))
+        st.markdown("#### 🔁 เส้นทางการย้ายเครื่องล่าสุด")
+        moves = events[events["event_type"].astype(str).eq("Move Machine")].head(8)
+        if moves.empty:
+            st.caption("ยังไม่มีการย้ายเครื่อง")
+        else:
+            move_text = []
+            for _, move in moves.iterrows():
+                move_dt = move.get("event_at")
+                dt_text = move_dt.strftime("%d/%m %H:%M") if move_dt is not None and pd.notna(move_dt) else "-"
+                move_text.append(
+                    f"🔁 **{move.get('plan_code', '-')} / {move.get('drawing_name', '-')}** · "
+                    f"{move.get('from_machine', '-')} → {move.get('to_machine', '-')} · {dt_text}"
+                )
+            st.markdown("  \n".join(move_text))
 
         machine_options = ["ทุกเครื่อง"] + sorted(events.get("machine_name", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
         event_options = ["ทุกเหตุการณ์"] + sorted(events.get("event_type", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
