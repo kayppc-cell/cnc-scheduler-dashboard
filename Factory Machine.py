@@ -2201,9 +2201,16 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             else:
                                 st.error(f"ลบ Step ไม่สำเร็จ: {error}")
 
-            if is_step_running or is_step_hold:
-                with st.expander("🔁 ย้าย Step ปัจจุบันและ Step ที่เหลือไปเครื่องอื่น", expanded=False):
-                    st.caption("Step ที่เสร็จแล้วและเวลาที่บันทึกไว้จะไม่เปลี่ยน งานจะไปรอ Start ต่อที่เครื่องใหม่")
+            if is_step_running or is_step_hold or is_step_waiting:
+                transfer_title = (
+                    "🔁 ย้ายคิวรอเริ่มงานไปเครื่องอื่น"
+                    if is_step_waiting else "🔁 ย้าย Step ปัจจุบันและ Step ที่เหลือไปเครื่องอื่น"
+                )
+                with st.expander(transfer_title, expanded=False):
+                    if is_step_waiting and not current_step_item.get("started_at"):
+                        st.caption("คิวนี้ยังไม่เคย Start ระบบจะเปลี่ยนเฉพาะเครื่องปลายทาง โดยไม่สร้างเวลาพักหรือเปลี่ยนเวลา Step")
+                    else:
+                        st.caption("Step ที่เสร็จแล้วและเวลาที่บันทึกไว้จะไม่เปลี่ยน งานจะไปรอ Start ต่อที่เครื่องใหม่")
                     transfer_options = [machine for machine in MACHINE_LIST if machine != selected_m]
                     with st.form(key=f"transfer_step_form_{target_id}"):
                         transfer_machine = st.selectbox(
@@ -2222,10 +2229,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             st.warning("กรุณาติ๊กยืนยันการย้ายเครื่องก่อน")
                         else:
                             transfer_now = get_bangkok_now().replace(tzinfo=None)
-                            pause_from = parse_flexible_datetime(s_hold_started) if is_step_hold else transfer_now
-                            if pause_from is None or pd.isna(pause_from):
-                                pause_from = transfer_now
-                            current_step_item["pending_pause_started_at"] = pause_from.strftime("%Y-%m-%d %H:%M:%S")
+                            # สร้างช่วงพักเฉพาะงานที่เคยเริ่มจับเวลาแล้วเท่านั้น
+                            if current_step_item.get("started_at"):
+                                pause_from = parse_flexible_datetime(s_hold_started) if is_step_hold else transfer_now
+                                if pause_from is None or pd.isna(pause_from):
+                                    pause_from = transfer_now
+                                current_step_item["pending_pause_started_at"] = pause_from.strftime("%Y-%m-%d %H:%M:%S")
                             transfer_payload = {
                                 "machine_name": transfer_machine,
                                 "status": "🟧 รอคิวผลิต",
@@ -2237,7 +2246,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 log_job_event(
                                     target_id, plan_code, drawing_code, transfer_machine, "Move Machine",
                                     current_step_index + 1, current_step_name,
-                                    reason="ย้ายเครื่อง", note=f"ย้าย Step ปัจจุบันและ Step ที่เหลือจาก {selected_m} ไป {transfer_machine}",
+                                    reason="ย้ายเครื่อง",
+                                    note=(
+                                        f"ย้ายคิวรอเริ่มงานจาก {selected_m} ไป {transfer_machine}"
+                                        if is_step_waiting and not current_step_item.get("started_at")
+                                        else f"ย้าย Step ปัจจุบันและ Step ที่เหลือจาก {selected_m} ไป {transfer_machine}"
+                                    ),
                                     from_machine=selected_m, to_machine=transfer_machine
                                 )
                                 st.toast(f"ย้ายไป {transfer_machine} แล้ว กรุณา Start ต่อที่เครื่องใหม่", icon="🔁")
