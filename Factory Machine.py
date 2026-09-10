@@ -1789,36 +1789,36 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            with st.expander(f"➕ เพิ่ม Step ถัดไปสำหรับ {plan_code} ({drawing_code})", expanded=False):
-                new_step_input = st.text_input("ชื่อ Step ถัดไป:", value=f"OP{(queue_idx+2)*10}", placeholder="เช่น OP20, กลึง, เจียร, เชื่อม", key=f"new_step_name_input_{target_id}")
+            with st.expander(f"➕ เพิ่ม Step ในคิวเดิมสำหรับ {plan_code} ({drawing_code})", expanded=False):
+                st.caption("Step ที่เพิ่มจะอยู่ใน Drawing และคิวเดิม โดยไม่เพิ่มเวลา Setup / Basic / Program และไม่เลื่อนคิวถัดไป")
+                new_step_input = st.text_input(
+                    "ชื่อ Step เพิ่มเติม:",
+                    value="",
+                    placeholder="เช่น OP20, กลึง, เจียร, เชื่อม",
+                    key=f"new_step_name_input_{target_id}"
+                )
 
-                if st.button(f"➕ บันทึกเพิ่มขั้นตอนต่อท้าย", key=f"btn_add_step_{target_id}", type="secondary", use_container_width=True):
-                    base_setup = safe_float(step_row.get("Setup (น.)"), 10.0)
-                    base_basic = safe_float(step_row.get("Basic (น.)"), 0.0)
-                    base_prog = safe_float(step_row.get("โปรแกรม (น.)"), 120.0)
-                    # Step ถัดไปต้องเริ่มต่อจากเวลาจบตามแผนของ Step นี้ ไม่ใช่เวลาปัจจุบัน
-                    next_ready_str = finish_w_dt.strftime("%Y-%m-%d %H:%M:%S") if finish_w_dt is not None else None
-                    
-                    new_payload = {
-                        "plan_code": str(plan_code),
-                        "drawing_name": str(drawing_code),
-                        "qty": int(qty_val),
-                        "material": str(mat_val),
-                        "job_type": str(step_row.get("ประเภทงาน", "🟢 งานปกติ")),
-                        "step_name": new_step_input.strip() if new_step_input.strip() != "" else f"OP{(queue_idx+2)*10}",
-                        "machine_name": selected_m,
-                        "ready_at": next_ready_str,
-                        "setup_mins": base_setup,
-                        "basic_hrs": base_basic,
-                        "prog_hrs": base_prog,
-                        "status": "🟧 รอคิวผลิต"
-                    }
-                    if insert_supabase_job(new_payload):
-                        st.cache_data.clear()
-                        st.toast(f"เพิ่มขั้นตอน {new_step_input} เรียบร้อยแล้ว!", icon="🚀")
-                        st.rerun()
+                if st.button("➕ เพิ่ม Step เข้าคิวเดิม", key=f"btn_add_step_{target_id}", type="secondary", use_container_width=True):
+                    new_step_name = new_step_input.strip()
+                    if not new_step_name:
+                        st.warning("กรุณาระบุชื่อ Step ที่ต้องการเพิ่ม")
                     else:
-                        st.error("เพิ่ม Step ไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
+                        # หนึ่ง Drawing คือหนึ่งคิวและหนึ่งกรอบเวลา แม้มีหลาย Step
+                        # จึงบันทึก Step เพิ่มในแถวเดิม ห้าม insert งานใหม่หรือคำนวณเวลาเพิ่มซ้ำ
+                        existing_steps = [
+                            part.strip() for part in str(s_name).split(" → ") if part.strip()
+                        ]
+                        normalized_steps = {normalize_filter_key(part) for part in existing_steps}
+                        if normalize_filter_key(new_step_name) in normalized_steps:
+                            st.warning(f"มี Step ‘{new_step_name}’ อยู่ในคิวนี้แล้ว")
+                        else:
+                            combined_step_name = " → ".join(existing_steps + [new_step_name])
+                            if update_supabase_job(target_id, {"step_name": combined_step_name}):
+                                st.cache_data.clear()
+                                st.toast(f"เพิ่ม Step {new_step_name} ในคิวเดิมเรียบร้อยแล้ว", icon="✅")
+                                st.rerun()
+                            else:
+                                st.error("เพิ่ม Step ไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
             st.write("")
 
     components.html("""
@@ -2420,7 +2420,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         column_config={
                             "ID": None,
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75),
-                            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=145),
+                            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=250),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, min_value=1, max_value=10000, step=1, format="%d"),
                             "วัสดุ": st.column_config.TextColumn("วัสดุ", width=60),
                             "ประเภทงาน": st.column_config.SelectboxColumn("ประเภทงาน", width=105, options=JOB_TYPES),
