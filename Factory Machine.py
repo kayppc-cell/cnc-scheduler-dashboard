@@ -2218,10 +2218,15 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             key=f"transfer_machine_{target_id}"
                         )
                         confirm_transfer = st.checkbox(
-                            f"ยืนยันย้ายไป {transfer_machine}", key=f"confirm_transfer_{target_id}"
+                            "ยืนยันย้ายไปเครื่องที่เลือกด้านบน", key=f"confirm_transfer_{target_id}"
+                        )
+                        transfer_button_label = (
+                            "🔁 ย้ายคิวรอเริ่มงาน"
+                            if is_step_waiting and not current_step_item.get("started_at")
+                            else "🔁 ย้าย Step ปัจจุบันและ Step ที่เหลือ"
                         )
                         transfer_submitted = st.form_submit_button(
-                            "🔁 ย้าย Step ที่เหลือ", type="secondary",
+                            transfer_button_label, type="secondary",
                             use_container_width=True
                         )
                     if transfer_submitted:
