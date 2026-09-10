@@ -708,7 +708,8 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
             "name": name,
             "started_at": old.get("started_at"),
             "finished_at": old.get("finished_at"),
-            "paused_seconds": max(0.0, safe_float(old.get("paused_seconds"), 0.0))
+            "paused_seconds": max(0.0, safe_float(old.get("paused_seconds"), 0.0)),
+            "pending_pause_started_at": old.get("pending_pause_started_at")
         })
     current_index = max(0, min(safe_int(progress.get("current_index"), 0), len(steps) - 1))
     if "กำลังผลิต" in str(status) and not steps[current_index].get("started_at"):
@@ -1603,13 +1604,22 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             r.get("ติดตาม Step"), r.get("ขั้นตอน (Step)"), r.get("สถานะงาน"),
                             r.get("เริ่มจริง"), r.get("เสร็จจริง")
                         )
-                        progress["current_index"] = 0
-                        progress["steps"][0]["started_at"] = now_str
-                        progress["steps"][0]["finished_at"] = None
-                        update_results.append(update_supabase_job(int(r["ID"]), {
-                            "status": "🟦 กำลังผลิต", "actual_start": now_str, "actual_finish": None,
-                            "hold_started_at": None, "paused_seconds": 0, "step_progress": progress
-                        }))
+                        idx = progress["current_index"]
+                        current = progress["steps"][idx]
+                        batch_now = parse_flexible_datetime(now_str)
+                        pending_dt = parse_flexible_datetime(current.get("pending_pause_started_at"))
+                        if current.get("started_at") and pending_dt is not None and pd.notna(pending_dt):
+                            current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + max(0.0, (batch_now - pending_dt).total_seconds())
+                        elif not current.get("started_at"):
+                            current["started_at"] = now_str
+                        current.pop("pending_pause_started_at", None)
+                        start_payload = {
+                            "status": "🟦 กำลังผลิต", "actual_finish": None,
+                            "hold_started_at": None, "step_progress": progress
+                        }
+                        if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
+                            start_payload["actual_start"] = now_str
+                        update_results.append(update_supabase_job(int(r["ID"]), start_payload))
                     if update_results and all(update_results):
                         st.toast("เริ่มจับเวลาจริงทุกคิวพร้อมกันเรียบร้อย!", icon="🚀")
                         st.rerun()
@@ -1828,54 +1838,32 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                         st.caption(f"**ขั้นตอน:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับคิวก่อนหน้าตามแผน</span>", unsafe_allow_html=True)
 
                 if not is_step_finished:
-                    step_val = st.text_input(f"ชื่อขั้นตอนงาน (Step):", value=s_name, key=f"op_step_{target_id}")
-
                     if is_step_hold:
-                        c_btn_save, c_btn_resume = st.columns([1.5, 4])
-                        with c_btn_save:
-                            if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{target_id}", use_container_width=True):
-                                if update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name)}):
-                                    st.toast("บันทึกชื่อขั้นตอนเรียบร้อย!", icon="💾")
-                                    st.rerun()
-                                else:
-                                    st.error("บันทึกชื่อขั้นตอนไม่สำเร็จ")
-                        with c_btn_resume:
-                            if st.button("▶️ ได้วัสดุใหม่แล้ว (Resume เริ่มรันต่อ)", key=f"btn_resume_{target_id}", type="primary", use_container_width=True):
-                                resume_payload = {"step_name": safe_str(step_val, s_name), "status": "🟦 กำลังผลิต"}
-                                hold_started_dt = parse_flexible_datetime(s_hold_started)
-                                if hold_started_dt is not None:
-                                    pause_delta = max(0.0, (get_bangkok_now().replace(tzinfo=None) - hold_started_dt).total_seconds())
-                                    resume_payload["paused_seconds"] = s_paused_seconds + pause_delta
-                                    tracked_steps[current_step_index]["paused_seconds"] = safe_float(
-                                        tracked_steps[current_step_index].get("paused_seconds"), 0.0
-                                    ) + pause_delta
-                                    resume_payload["step_progress"] = step_progress
-                                resume_payload["hold_started_at"] = None
-                                # รักษาเวลาเริ่มจริงครั้งแรกไว้ ไม่เขียนทับทุกครั้งที่ Resume
-                                if parse_flexible_datetime(s_start) is None:
-                                    resume_payload["actual_start"] = get_bangkok_str()
-                                if update_supabase_job(target_id, resume_payload):
-                                    st.toast("เริ่มรันงานต่อเรียบร้อย!", icon="🚀")
-                                    st.rerun()
-                                else:
-                                    st.error("Resume ไม่สำเร็จ")
+                        if st.button("▶️ Resume Step เดิม (แก้ไขพร้อมแล้ว)", key=f"btn_resume_{target_id}", type="primary", use_container_width=True):
+                            resume_now = get_bangkok_now().replace(tzinfo=None)
+                            resume_payload = {"status": "🟦 กำลังผลิต", "hold_started_at": None}
+                            hold_started_dt = parse_flexible_datetime(s_hold_started)
+                            if hold_started_dt is not None and pd.notna(hold_started_dt):
+                                pause_delta = max(0.0, (resume_now - hold_started_dt).total_seconds())
+                                resume_payload["paused_seconds"] = s_paused_seconds + pause_delta
+                                current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + pause_delta
+                            resume_payload["step_progress"] = step_progress
+                            if parse_flexible_datetime(s_start) is None:
+                                resume_payload["actual_start"] = resume_now.strftime("%Y-%m-%d %H:%M:%S")
+                            if update_supabase_job(target_id, resume_payload):
+                                st.toast("เริ่มรัน Step เดิมต่อเรียบร้อย", icon="▶️")
+                                st.rerun()
+                            else:
+                                st.error("Resume ไม่สำเร็จ")
                     elif is_step_running:
-                        c_btn_save, c_btn_hold, c_btn_finish = st.columns([1.5, 2.5, 2])
-                        with c_btn_save:
-                            if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{target_id}", use_container_width=True):
-                                if update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name)}):
-                                    st.toast("บันทึกชื่อขั้นตอนเรียบร้อย!", icon="💾")
-                                    st.rerun()
-                                else:
-                                    st.error("บันทึกชื่อขั้นตอนไม่สำเร็จ")
+                        c_btn_hold, c_btn_finish = st.columns([2.5, 2])
                         with c_btn_hold:
-                            if st.button("🛑 พักงาน (รอวัสดุใหม่)", key=f"btn_hold_{target_id}", use_container_width=True):
+                            if st.button("🛑 พัก Step (รอแก้ไข / รอวัสดุ)", key=f"btn_hold_{target_id}", use_container_width=True):
                                 if update_supabase_job(target_id, {
-                                    "step_name": safe_str(step_val, s_name),
-                                    "status": "🟨 พักงาน (รอวัสดุ)",
-                                    "hold_started_at": get_bangkok_str()
+                                    "status": "🟨 พักงาน (รอวัสดุ)", "hold_started_at": get_bangkok_str(),
+                                    "step_progress": step_progress
                                 }):
-                                    st.toast("พักงานเรียบร้อย!", icon="🛑")
+                                    st.toast("พัก Step และหยุดนับเวลาเดินสุทธิแล้ว", icon="🛑")
                                     st.rerun()
                                 else:
                                     st.error("เปลี่ยนสถานะพักงานไม่สำเร็จ")
@@ -1888,63 +1876,42 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             if st.button(finish_button_label, key=f"btn_finish_step_{target_id}", type="primary", use_container_width=True):
                                 step_finish_dt = get_bangkok_now().replace(tzinfo=None)
                                 step_finish_str = step_finish_dt.strftime("%Y-%m-%d %H:%M:%S")
-                                tracked_steps[current_step_index]["finished_at"] = step_finish_str
+                                current_step_item["finished_at"] = step_finish_str
                                 if has_next_step:
                                     step_progress["current_index"] = current_step_index + 1
                                     tracked_steps[current_step_index + 1]["started_at"] = step_finish_str
-                                    finish_payload = {
-                                        "status": "🟦 กำลังผลิต", "actual_finish": None,
-                                        "hold_started_at": None, "step_progress": step_progress
-                                    }
+                                    finish_payload = {"status": "🟦 กำลังผลิต", "actual_finish": None, "hold_started_at": None, "step_progress": step_progress}
                                 else:
-                                    finish_payload = {
-                                        "status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": step_finish_str,
-                                        "hold_started_at": None, "step_progress": step_progress
-                                    }
+                                    finish_payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": step_finish_str, "hold_started_at": None, "step_progress": step_progress}
                                 if update_supabase_job(target_id, finish_payload):
                                     if has_next_step:
                                         st.toast(f"เริ่ม Step ถัดไป: {tracked_steps[current_step_index + 1]['name']}", icon="➡️")
                                     else:
-                                        st.session_state.operator_finish_feedback = build_operator_finish_feedback(
-                                            pd.DataFrame([step_row]), step_finish_dt
-                                        )
+                                        st.session_state.operator_finish_feedback = build_operator_finish_feedback(pd.DataFrame([step_row]), step_finish_dt)
                                     st.rerun()
                                 else:
                                     st.error("บันทึกจบ Step ไม่สำเร็จ")
                     else:
-                        c_btn_save, c_btn_start, c_btn_finish = st.columns([1.5, 2, 2])
-                        with c_btn_save:
-                            if st.button("💾 บันทึกชื่อ", key=f"btn_save_edit_{target_id}", use_container_width=True):
-                                if update_supabase_job(target_id, {"step_name": safe_str(step_val, s_name)}):
-                                    st.toast("บันทึกชื่อขั้นตอนเรียบร้อย!", icon="💾")
+                        if can_start:
+                            if st.button(f"🚀 Start Step {current_step_index + 1}: {current_step_name}", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
+                                start_now = get_bangkok_now().replace(tzinfo=None)
+                                start_now_str = start_now.strftime("%Y-%m-%d %H:%M:%S")
+                                pending_pause_dt = parse_flexible_datetime(current_step_item.get("pending_pause_started_at"))
+                                if current_step_item.get("started_at") and pending_pause_dt is not None and pd.notna(pending_pause_dt):
+                                    current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + max(0.0, (start_now - pending_pause_dt).total_seconds())
+                                elif not current_step_item.get("started_at"):
+                                    current_step_item["started_at"] = start_now_str
+                                current_step_item.pop("pending_pause_started_at", None)
+                                start_payload = {"status": "🟦 กำลังผลิต", "actual_finish": None, "hold_started_at": None, "step_progress": step_progress}
+                                if parse_flexible_datetime(s_start) is None:
+                                    start_payload["actual_start"] = start_now_str
+                                if update_supabase_job(target_id, start_payload):
+                                    st.toast(f"เริ่ม Step {current_step_index + 1}: {current_step_name}", icon="🚀")
                                     st.rerun()
                                 else:
-                                    st.error("บันทึกชื่อขั้นตอนไม่สำเร็จ")
-                        with c_btn_start:
-                            if can_start:
-                                if st.button("🚀 Start (เริ่มจับเวลาจริง)", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
-                                    start_now_str = get_bangkok_str()
-                                    step_progress["current_index"] = 0
-                                    tracked_steps[0]["started_at"] = start_now_str
-                                    tracked_steps[0]["finished_at"] = None
-                                    start_payload = {
-                                        "step_name": safe_str(step_val, s_name),
-                                        "status": "🟦 กำลังผลิต",
-                                        "actual_start": start_now_str,
-                                        "actual_finish": None,
-                                        "hold_started_at": None,
-                                        "paused_seconds": 0,
-                                        "step_progress": step_progress
-                                    }
-                                    if update_supabase_job(target_id, start_payload):
-                                        st.toast("เริ่มผลิตแล้ว!", icon="🚀")
-                                        st.rerun()
-                                    else:
-                                        st.error("เริ่มงานไม่สำเร็จ")
-                            else:
-                                st.button("🚀 Start", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
-                        with c_btn_finish:
-                            st.button("🏁 Finish", key=f"btn_finish_disabled_{target_id}", disabled=True, use_container_width=True)
+                                    st.error("เริ่มงานไม่สำเร็จ")
+                        else:
+                            st.button("🚀 Start — รอคิวก่อนหน้า", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1967,6 +1934,95 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     state_text = "รอทำ"
                 step_status_lines.append(f"{icon} **Step {idx + 1}:** {item.get('name', '-')} · {state_text}")
             st.markdown("  \n".join(step_status_lines))
+
+            if not is_step_finished:
+                with st.expander("🛠️ จัดการ Step (แก้ชื่อ / ลบ)", expanded=False):
+                    st.caption("Step ที่เสร็จแล้วจะถูกล็อก และ Step ที่เริ่มจับเวลาแล้วจะไม่สามารถลบได้")
+                    for idx, item in enumerate(tracked_steps):
+                        step_locked = bool(item.get("finished_at"))
+                        delete_allowed = (
+                            len(tracked_steps) > 1
+                            and not item.get("started_at")
+                            and not item.get("finished_at")
+                        )
+                        with st.form(key=f"manage_step_form_{target_id}_{idx}"):
+                            edited_name = st.text_input(
+                                f"Step {idx + 1}", value=item.get("name", ""),
+                                disabled=step_locked, key=f"edit_step_name_{target_id}_{idx}"
+                            )
+                            edit_col, delete_col = st.columns(2)
+                            with edit_col:
+                                save_step_name = st.form_submit_button(
+                                    "💾 บันทึกชื่อ Step", disabled=step_locked, use_container_width=True
+                                )
+                            with delete_col:
+                                delete_step = st.form_submit_button(
+                                    "🗑️ ลบ Step", disabled=not delete_allowed, use_container_width=True
+                                )
+                        if save_step_name:
+                            clean_name = edited_name.strip()
+                            if not clean_name:
+                                st.warning("ชื่อ Step ต้องไม่เป็นค่าว่าง")
+                            else:
+                                tracked_steps[idx]["name"] = clean_name
+                                combined_names = " → ".join(step.get("name", "-") for step in tracked_steps)
+                                saved, error = update_job_step_preserving_state(target_id, combined_names, step_progress)
+                                if saved:
+                                    st.toast(f"แก้ชื่อ Step {idx + 1} เรียบร้อย", icon="💾")
+                                    st.rerun()
+                                else:
+                                    st.error(f"แก้ชื่อไม่สำเร็จ: {error}")
+                        if delete_step:
+                            deleted_name = tracked_steps[idx].get("name", f"Step {idx + 1}")
+                            tracked_steps.pop(idx)
+                            if idx < step_progress["current_index"]:
+                                step_progress["current_index"] -= 1
+                            step_progress["current_index"] = max(0, min(step_progress["current_index"], len(tracked_steps) - 1))
+                            combined_names = " → ".join(step.get("name", "-") for step in tracked_steps)
+                            saved, error = update_job_step_preserving_state(target_id, combined_names, step_progress)
+                            if saved:
+                                st.toast(f"ลบ Step ‘{deleted_name}’ เรียบร้อย", icon="🗑️")
+                                st.rerun()
+                            else:
+                                st.error(f"ลบ Step ไม่สำเร็จ: {error}")
+
+            if is_step_running or is_step_hold:
+                with st.expander("🔁 ย้าย Step ปัจจุบันและ Step ที่เหลือไปเครื่องอื่น", expanded=False):
+                    st.caption("Step ที่เสร็จแล้วและเวลาที่บันทึกไว้จะไม่เปลี่ยน งานจะไปรอ Start ต่อที่เครื่องใหม่")
+                    transfer_options = [machine for machine in MACHINE_LIST if machine != selected_m]
+                    with st.form(key=f"transfer_step_form_{target_id}"):
+                        transfer_machine = st.selectbox(
+                            "เลือกเครื่องปลายทาง", transfer_options,
+                            key=f"transfer_machine_{target_id}"
+                        )
+                        confirm_transfer = st.checkbox(
+                            f"ยืนยันย้ายไป {transfer_machine}", key=f"confirm_transfer_{target_id}"
+                        )
+                        transfer_submitted = st.form_submit_button(
+                            "🔁 ย้าย Step ที่เหลือ", type="secondary",
+                            use_container_width=True
+                        )
+                    if transfer_submitted:
+                        if not confirm_transfer:
+                            st.warning("กรุณาติ๊กยืนยันการย้ายเครื่องก่อน")
+                        else:
+                            transfer_now = get_bangkok_now().replace(tzinfo=None)
+                            pause_from = parse_flexible_datetime(s_hold_started) if is_step_hold else transfer_now
+                            if pause_from is None or pd.isna(pause_from):
+                                pause_from = transfer_now
+                            current_step_item["pending_pause_started_at"] = pause_from.strftime("%Y-%m-%d %H:%M:%S")
+                            transfer_payload = {
+                                "machine_name": transfer_machine,
+                                "status": "🟧 รอคิวผลิต",
+                                "actual_finish": None,
+                                "hold_started_at": None,
+                                "step_progress": step_progress
+                            }
+                            if update_supabase_job(target_id, transfer_payload):
+                                st.toast(f"ย้ายไป {transfer_machine} แล้ว กรุณา Start ต่อที่เครื่องใหม่", icon="🔁")
+                                st.rerun()
+                            else:
+                                st.error("ย้ายเครื่องไม่สำเร็จ")
 
             completed_step_seconds = sum(step_elapsed_seconds(item) for item in tracked_steps if item.get("finished_at"))
             if is_step_finished:
