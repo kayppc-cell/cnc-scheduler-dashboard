@@ -685,6 +685,34 @@ def update_supabase_job(job_id: int, payload: dict, clear_cache: bool = True) ->
     except Exception:
         return False
 
+def get_other_running_job(machine_name: str, exclude_job_id=None):
+    """ตรวจฐานข้อมูลสดว่าเครื่องนี้มีคิวอื่นกำลังจับเวลาอยู่หรือไม่"""
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs"
+        params = {
+            "select": "id,plan_code,drawing_name,status,machine_name",
+            "machine_name": f"eq.{machine_name}"
+        }
+        res = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        if res.status_code != 200:
+            return {"_check_error": True}
+        for row in res.json():
+            if exclude_job_id is not None and safe_int(row.get("id")) == safe_int(exclude_job_id):
+                continue
+            if "กำลังผลิต" in str(row.get("status", "")):
+                return row
+        return None
+    except Exception:
+        return {"_check_error": True}
+
+def running_job_label(row):
+    if not row:
+        return ""
+    if row.get("_check_error"):
+        return "ไม่สามารถตรวจสอบสถานะเครื่องจากฐานข้อมูลได้"
+    return f"แผน {safe_str(row.get('plan_code'), '-')} / Drawing {safe_str(row.get('drawing_name'), '-')}"
+
 def normalize_step_progress(raw_progress, step_name, status="", actual_start=None, actual_finish=None):
     """คืนโครงสร้างติดตาม Step ที่พร้อมใช้ และแปลงข้อมูลเก่าให้อัตโนมัติ"""
     progress = {}
@@ -1739,6 +1767,15 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             is_step_finished = "เสร็จสิ้น" in s_status
             is_step_waiting = not is_step_running and not is_step_finished and not is_step_hold
             is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
+            other_running_rows = m_all_jobs[
+                (m_all_jobs["ID"].apply(safe_int) != target_id)
+                & m_all_jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต", na=False)
+            ]
+            blocking_running_row = other_running_rows.iloc[0] if not other_running_rows.empty else None
+            blocking_running_text = (
+                f"แผน {blocking_running_row.get('แผนงาน', '-')} / Drawing {blocking_running_row.get('ชื่อ Drawing.', '-')}"
+                if blocking_running_row is not None else ""
+            )
 
             s_m = safe_float(step_row.get("Setup (น.)"), 10.0)
             b_m = safe_float(step_row.get("Basic (น.)"), 0.0)
@@ -1774,7 +1811,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
             overdue_minutes = int((operator_now - finish_w_dt).total_seconds() // 60) if is_running_overdue else 0
 
             if "Batch" in run_mode:
-                can_start = is_step_waiting
+                can_start = is_step_waiting and not machine_any_running
             else:
                 can_start = False
                 if is_step_waiting and not machine_any_running and not next_available_start_found:
@@ -1839,7 +1876,14 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
 
                 if not is_step_finished:
                     if is_step_hold:
-                        if st.button("▶️ Resume Step เดิม (แก้ไขพร้อมแล้ว)", key=f"btn_resume_{target_id}", type="primary", use_container_width=True):
+                        resume_blocked = blocking_running_row is not None
+                        if resume_blocked:
+                            st.warning(f"🔒 ยัง Resume ไม่ได้: {selected_m} กำลังรัน {blocking_running_text} กรุณาพักหรือจบงานนั้นก่อน")
+                        if st.button("▶️ Resume Step เดิม (แก้ไขพร้อมแล้ว)", key=f"btn_resume_{target_id}", type="primary", disabled=resume_blocked, use_container_width=True):
+                            live_blocker = get_other_running_job(selected_m, target_id)
+                            if live_blocker:
+                                st.error(f"Resume ไม่ได้ เพราะเครื่องกำลังรัน {running_job_label(live_blocker)}")
+                                st.stop()
                             resume_now = get_bangkok_now().replace(tzinfo=None)
                             resume_payload = {"status": "🟦 กำลังผลิต", "hold_started_at": None}
                             hold_started_dt = parse_flexible_datetime(s_hold_started)
@@ -1894,6 +1938,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     else:
                         if can_start:
                             if st.button(f"🚀 Start Step {current_step_index + 1}: {current_step_name}", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
+                                live_blocker = get_other_running_job(selected_m, target_id)
+                                if live_blocker:
+                                    st.error(f"Start ไม่ได้ เพราะเครื่องกำลังรัน {running_job_label(live_blocker)}")
+                                    st.stop()
                                 start_now = get_bangkok_now().replace(tzinfo=None)
                                 start_now_str = start_now.strftime("%Y-%m-%d %H:%M:%S")
                                 pending_pause_dt = parse_flexible_datetime(current_step_item.get("pending_pause_started_at"))
@@ -1912,6 +1960,8 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                     st.error("เริ่มงานไม่สำเร็จ")
                         else:
                             st.button("🚀 Start — รอคิวก่อนหน้า", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
+                            if is_step_waiting and blocking_running_text:
+                                st.caption(f"🔒 เครื่องกำลังรัน {blocking_running_text}")
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
