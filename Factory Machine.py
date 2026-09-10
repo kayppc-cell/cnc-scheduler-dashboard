@@ -713,6 +713,50 @@ def running_job_label(row):
         return "ไม่สามารถตรวจสอบสถานะเครื่องจากฐานข้อมูลได้"
     return f"แผน {safe_str(row.get('plan_code'), '-')} / Drawing {safe_str(row.get('drawing_name'), '-')}"
 
+PAUSE_REASONS = [
+    "วัสดุมีปัญหา", "กัดงานเสีย", "เครื่องจักรขัดข้อง", "รอ Drawing/ข้อมูล",
+    "รอ Tool", "งานด่วนแทรก", "กำลังตรวจสอบงานบนเครื่อง", "อื่น ๆ"
+]
+
+def log_job_event(job_id, plan_code, drawing_name, machine_name, event_type,
+                  step_index=None, step_name=None, reason=None, note=None,
+                  from_machine=None, to_machine=None) -> bool:
+    """บันทึกประวัติกิจกรรมหน้าเครื่อง; ความล้มเหลวของ log ต้องไม่ย้อนสถานะการผลิต"""
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_job_events"
+        payload = {
+            "job_id": safe_int(job_id), "plan_code": safe_str(plan_code, "-"),
+            "drawing_name": safe_str(drawing_name, "-"), "machine_name": safe_str(machine_name, "-"),
+            "event_type": safe_str(event_type, "-"), "step_index": safe_int(step_index) if step_index is not None else None,
+            "step_name": safe_str(step_name, "") or None, "reason": safe_str(reason, "") or None,
+            "note": safe_str(note, "") or None, "from_machine": safe_str(from_machine, "") or None,
+            "to_machine": safe_str(to_machine, "") or None, "event_at": get_bangkok_str()
+        }
+        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
+        if res.status_code in [200, 201]:
+            fetch_job_events.clear()
+            return True
+        return False
+    except Exception:
+        return False
+
+@st.cache_data(ttl=10, show_spinner=False)
+def fetch_job_events(limit=300):
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_job_events"
+        params = {"select": "*", "order": "event_at.desc", "limit": str(int(limit))}
+        res = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        if res.status_code != 200:
+            return pd.DataFrame()
+        df = pd.DataFrame(res.json())
+        if not df.empty and "event_at" in df.columns:
+            df["event_at"] = df["event_at"].apply(parse_flexible_datetime)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
 def normalize_step_progress(raw_progress, step_name, status="", actual_start=None, actual_finish=None):
     """คืนโครงสร้างติดตาม Step ที่พร้อมใช้ และแปลงข้อมูลเก่าให้อัตโนมัติ"""
     progress = {}
@@ -1034,6 +1078,97 @@ def build_project_active_chain(calc_df):
     jobs["_start"] = chained_starts
     jobs["_finish"] = chained_finishes
     return jobs
+
+def render_machine_activity_dashboard(calc_df):
+    """มุมมองผู้บริหาร: สถานะสดและประวัติกิจกรรมจากหน้าเครื่อง"""
+    with st.expander("🛰️ ติดตามกิจกรรมหน้าเครื่อง (Machine Activity)", expanded=True):
+        events = fetch_job_events(500)
+        live = calc_df[
+            calc_df["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True, na=False)
+        ].copy()
+        if live.empty:
+            st.info("ขณะนี้ไม่มีเครื่องที่กำลังผลิตหรือพักงาน")
+        else:
+            live_rows = []
+            now_dt = get_bangkok_now().replace(tzinfo=None)
+            for _, row in live.iterrows():
+                progress = normalize_step_progress(
+                    row.get("ติดตาม Step"), row.get("ขั้นตอน (Step)"), row.get("สถานะงาน"),
+                    row.get("เริ่มจริง"), row.get("เสร็จจริง")
+                )
+                idx = progress["current_index"]
+                item = progress["steps"][idx]
+                if "พักงาน" in str(row.get("สถานะงาน")):
+                    hold_dt = parse_flexible_datetime(row.get("เริ่มพักจริง"))
+                    state = "🟨 พักงาน"
+                    elapsed = max(0.0, (now_dt - hold_dt).total_seconds()) if hold_dt is not None and pd.notna(hold_dt) else 0.0
+                    time_label = f"พักมา {format_duration_short(elapsed)}"
+                    pause_reason_text = "-"
+                    if not events.empty and "job_id" in events.columns:
+                        job_events = events[
+                            (pd.to_numeric(events["job_id"], errors="coerce") == safe_int(row.get("ID")))
+                            & events["event_type"].astype(str).eq("Pause Step")
+                        ]
+                        if not job_events.empty:
+                            latest_pause = job_events.iloc[0]
+                            pause_reason_text = safe_str(latest_pause.get("reason"), "-")
+                            if safe_str(latest_pause.get("note"), ""):
+                                pause_reason_text += f" — {safe_str(latest_pause.get('note'), '')}"
+                else:
+                    state = "🟦 กำลังผลิต"
+                    time_label = f"Step ใช้ไป {format_duration_short(step_elapsed_seconds(item))}"
+                    pause_reason_text = "-"
+                live_rows.append({
+                    "เครื่องจักร": row.get("เลือกเครื่องจักร", "-"), "สถานะ": state,
+                    "แผนงาน": row.get("แผนงาน", "-"), "Drawing": row.get("ชื่อ Drawing.", "-"),
+                    "Step ปัจจุบัน": f"{idx + 1}/{len(progress['steps'])} · {item.get('name', '-')}",
+                    "เวลา": time_label, "เหตุผลพัก": pause_reason_text
+                })
+            st.dataframe(pd.DataFrame(live_rows), hide_index=True, use_container_width=True)
+
+        if events.empty:
+            st.caption("ยังไม่มีประวัติกิจกรรม หรือยังไม่ได้รัน SQL สร้างตาราง cnc_job_events")
+            return
+
+        today = get_bangkok_now().replace(tzinfo=None).date()
+        today_events = events[events["event_at"].apply(lambda dt: dt is not None and pd.notna(dt) and dt.date() == today)]
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("กิจกรรมวันนี้", len(today_events))
+        k2.metric("พัก Step", int(today_events["event_type"].eq("Pause Step").sum()))
+        k3.metric("ย้ายเครื่อง", int(today_events["event_type"].eq("Move Machine").sum()))
+        k4.metric("Finish Drawing", int(today_events["event_type"].eq("Finish Drawing").sum()))
+
+        machine_options = ["ทุกเครื่อง"] + sorted(events.get("machine_name", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+        event_options = ["ทุกเหตุการณ์"] + sorted(events.get("event_type", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+        f1, f2 = st.columns(2)
+        selected_machine = f1.selectbox("กรองเครื่องจักร", machine_options, key="activity_machine_filter")
+        selected_event = f2.selectbox("กรองเหตุการณ์", event_options, key="activity_event_filter")
+        shown = events.copy()
+        if selected_machine != "ทุกเครื่อง":
+            shown = shown[shown["machine_name"].astype(str) == selected_machine]
+        if selected_event != "ทุกเหตุการณ์":
+            shown = shown[shown["event_type"].astype(str) == selected_event]
+        shown = shown.head(150).copy()
+        shown["เวลา"] = shown["event_at"].apply(
+            lambda dt: dt.strftime("%d/%m/%Y %H:%M:%S") if dt is not None and pd.notna(dt) else "-"
+        )
+        rename_map = {
+            "machine_name": "เครื่องจักร", "plan_code": "แผนงาน", "drawing_name": "Drawing",
+            "event_type": "เหตุการณ์", "step_index": "Step", "step_name": "ชื่อ Step",
+            "reason": "เหตุผล", "note": "หมายเหตุ", "from_machine": "จากเครื่อง", "to_machine": "ไปเครื่อง"
+        }
+        report_cols = [
+            "เวลา", "machine_name", "plan_code", "drawing_name", "event_type", "step_index",
+            "step_name", "reason", "note", "from_machine", "to_machine"
+        ]
+        st.dataframe(shown[[col for col in report_cols if col in shown.columns]].rename(columns=rename_map), hide_index=True, use_container_width=True)
+
+        pauses = shown[shown.get("event_type", pd.Series(index=shown.index, dtype=str)).eq("Pause Step")]
+        if not pauses.empty and "reason" in pauses.columns:
+            reason_counts = pauses["reason"].fillna("ไม่ระบุ").value_counts().rename_axis("เหตุผล").reset_index(name="จำนวนครั้ง")
+            fig_reason = px.bar(reason_counts, x="จำนวนครั้ง", y="เหตุผล", orientation="h", title="สาเหตุการพัก Step")
+            fig_reason.update_layout(height=max(260, 42 * len(reason_counts)), margin=dict(l=10, r=10, t=45, b=10))
+            st.plotly_chart(fig_reason, use_container_width=True)
 
 def render_project_master_dashboard(calc_df, is_admin):
     st.markdown("### 🗓️ แผนงาน Production และ Project Master Gantt")
@@ -1895,6 +2030,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             if parse_flexible_datetime(s_start) is None:
                                 resume_payload["actual_start"] = resume_now.strftime("%Y-%m-%d %H:%M:%S")
                             if update_supabase_job(target_id, resume_payload):
+                                log_job_event(
+                                    target_id, plan_code, drawing_code, selected_m, "Resume Step",
+                                    current_step_index + 1, current_step_name
+                                )
                                 st.toast("เริ่มรัน Step เดิมต่อเรียบร้อย", icon="▶️")
                                 st.rerun()
                             else:
@@ -1902,15 +2041,31 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                     elif is_step_running:
                         c_btn_hold, c_btn_finish = st.columns([2.5, 2])
                         with c_btn_hold:
-                            if st.button("🛑 พัก Step (รอแก้ไข / รอวัสดุ)", key=f"btn_hold_{target_id}", use_container_width=True):
-                                if update_supabase_job(target_id, {
-                                    "status": "🟨 พักงาน (รอวัสดุ)", "hold_started_at": get_bangkok_str(),
-                                    "step_progress": step_progress
-                                }):
-                                    st.toast("พัก Step และหยุดนับเวลาเดินสุทธิแล้ว", icon="🛑")
-                                    st.rerun()
-                                else:
-                                    st.error("เปลี่ยนสถานะพักงานไม่สำเร็จ")
+                            with st.expander("🛑 พัก Step", expanded=False):
+                                with st.form(key=f"pause_step_form_{target_id}"):
+                                    pause_reason = st.selectbox("เหตุผลการพัก", PAUSE_REASONS, key=f"pause_reason_{target_id}")
+                                    pause_note = st.text_area(
+                                        "หมายเหตุเพิ่มเติม", placeholder="กรอกรายละเอียด โดยเฉพาะเมื่อเลือก ‘อื่น ๆ’",
+                                        key=f"pause_note_{target_id}"
+                                    )
+                                    pause_submitted = st.form_submit_button("🛑 ยืนยันพัก Step", use_container_width=True)
+                                if pause_submitted:
+                                    if pause_reason == "อื่น ๆ" and not pause_note.strip():
+                                        st.warning("กรุณากรอกหมายเหตุเมื่อเลือก ‘อื่น ๆ’")
+                                    else:
+                                        pause_now_str = get_bangkok_str()
+                                        if update_supabase_job(target_id, {
+                                            "status": "🟨 พักงาน (รอวัสดุ)", "hold_started_at": pause_now_str,
+                                            "step_progress": step_progress
+                                        }):
+                                            log_job_event(
+                                                target_id, plan_code, drawing_code, selected_m, "Pause Step",
+                                                current_step_index + 1, current_step_name, pause_reason, pause_note
+                                            )
+                                            st.toast("พัก Step และหยุดนับเวลาเดินสุทธิแล้ว", icon="🛑")
+                                            st.rerun()
+                                        else:
+                                            st.error("เปลี่ยนสถานะพักงานไม่สำเร็จ")
                         with c_btn_finish:
                             has_next_step = current_step_index < len(tracked_steps) - 1
                             finish_button_label = (
@@ -1929,8 +2084,11 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                     finish_payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": step_finish_str, "hold_started_at": None, "step_progress": step_progress}
                                 if update_supabase_job(target_id, finish_payload):
                                     if has_next_step:
+                                        log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Step", current_step_index + 1, current_step_name)
+                                        log_job_event(target_id, plan_code, drawing_code, selected_m, "Start Step", current_step_index + 2, tracked_steps[current_step_index + 1]['name'])
                                         st.toast(f"เริ่ม Step ถัดไป: {tracked_steps[current_step_index + 1]['name']}", icon="➡️")
                                     else:
+                                        log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Drawing", current_step_index + 1, current_step_name)
                                         st.session_state.operator_finish_feedback = build_operator_finish_feedback(pd.DataFrame([step_row]), step_finish_dt)
                                     st.rerun()
                                 else:
@@ -1954,6 +2112,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 if parse_flexible_datetime(s_start) is None:
                                     start_payload["actual_start"] = start_now_str
                                 if update_supabase_job(target_id, start_payload):
+                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Start Step", current_step_index + 1, current_step_name)
                                     st.toast(f"เริ่ม Step {current_step_index + 1}: {current_step_name}", icon="🚀")
                                     st.rerun()
                                 else:
@@ -2018,6 +2177,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 combined_names = " → ".join(step.get("name", "-") for step in tracked_steps)
                                 saved, error = update_job_step_preserving_state(target_id, combined_names, step_progress)
                                 if saved:
+                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Edit Step", idx + 1, clean_name)
                                     st.toast(f"แก้ชื่อ Step {idx + 1} เรียบร้อย", icon="💾")
                                     st.rerun()
                                 else:
@@ -2031,6 +2191,7 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             combined_names = " → ".join(step.get("name", "-") for step in tracked_steps)
                             saved, error = update_job_step_preserving_state(target_id, combined_names, step_progress)
                             if saved:
+                                log_job_event(target_id, plan_code, drawing_code, selected_m, "Delete Step", idx + 1, deleted_name)
                                 st.toast(f"ลบ Step ‘{deleted_name}’ เรียบร้อย", icon="🗑️")
                                 st.rerun()
                             else:
@@ -2069,6 +2230,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 "step_progress": step_progress
                             }
                             if update_supabase_job(target_id, transfer_payload):
+                                log_job_event(
+                                    target_id, plan_code, drawing_code, transfer_machine, "Move Machine",
+                                    current_step_index + 1, current_step_name,
+                                    reason="ย้ายเครื่อง", note=f"ย้าย Step ปัจจุบันและ Step ที่เหลือจาก {selected_m} ไป {transfer_machine}",
+                                    from_machine=selected_m, to_machine=transfer_machine
+                                )
                                 st.toast(f"ย้ายไป {transfer_machine} แล้ว กรุณา Start ต่อที่เครื่องใหม่", icon="🔁")
                                 st.rerun()
                             else:
@@ -2124,6 +2291,10 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 target_id, combined_step_name, updated_step_progress
                             )
                             if step_saved:
+                                log_job_event(
+                                    target_id, plan_code, drawing_code, selected_m, "Add Step",
+                                    len(updated_step_progress["steps"]), new_step_name
+                                )
                                 st.toast(f"เพิ่ม Step {new_step_name} ในคิวเดิมเรียบร้อยแล้ว", icon="✅")
                                 st.rerun()
                             else:
@@ -2272,6 +2443,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.stop()
 
             st.markdown("### 🎯 แผงสรุปภาพรวมและจุดวิกฤตการผลิต (Executive Overview)")
+            render_machine_activity_dashboard(calc_df)
             
             ov_col1, ov_col2 = st.columns([1.2, 1.8])
 
