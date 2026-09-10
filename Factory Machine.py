@@ -685,6 +685,48 @@ def update_supabase_job(job_id: int, payload: dict, clear_cache: bool = True) ->
     except Exception:
         return False
 
+def update_job_step_preserving_state(job_id: int, combined_step_name: str) -> tuple[bool, str]:
+    """เพิ่มชื่อ Step โดยล็อกสถานะและเวลาจริงของคิวเดิมไม่ให้เปลี่ยนตามการ rerun"""
+    protected_fields = ["status", "actual_start", "actual_finish", "hold_started_at", "paused_seconds"]
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs?id=eq.{int(job_id)}"
+        read_res = requests.get(f"{endpoint}&select=*", headers=get_supabase_headers(), timeout=8)
+        if read_res.status_code != 200 or not read_res.json():
+            return False, "ไม่พบคิวงานในฐานข้อมูล"
+
+        before = read_res.json()[0]
+        # ส่งค่าการทำงานเดิมกลับไปพร้อมชื่อ Step เพื่อป้องกันสถานะ/เวลาจริงถูกเปลี่ยน
+        payload = {"step_name": combined_step_name}
+        for field in protected_fields:
+            if field in before:
+                payload[field] = before.get(field)
+
+        patch_res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
+        if patch_res.status_code not in [200, 204]:
+            return False, "ฐานข้อมูลไม่รับการเพิ่ม Step"
+
+        verify_res = requests.get(f"{endpoint}&select=*", headers=get_supabase_headers(), timeout=8)
+        if verify_res.status_code != 200 or not verify_res.json():
+            return False, "ตรวจสอบคิวหลังบันทึกไม่ได้"
+        after = verify_res.json()[0]
+
+        changed_fields = [
+            field for field in protected_fields
+            if field in before and before.get(field) != after.get(field)
+        ]
+        if changed_fields:
+            # คืนค่าคิวเดิมทันที แต่คงชื่อ Step ใหม่ไว้
+            restore_payload = {"step_name": combined_step_name}
+            restore_payload.update({field: before.get(field) for field in protected_fields if field in before})
+            requests.patch(endpoint, headers=get_supabase_headers(), json=restore_payload, timeout=8)
+            return False, "ระบบตรวจพบว่าสถานะคิวเปลี่ยนและได้คืนค่าเดิมแล้ว กรุณาลองอีกครั้ง"
+
+        st.cache_data.clear()
+        return True, ""
+    except Exception:
+        return False, "เกิดข้อผิดพลาดระหว่างบันทึก Step"
+
 def verify_supabase_ready_at(job_id: int, expected_dt: datetime) -> bool:
     """อ่านค่ากลับหลังบันทึก ป้องกันการรีเฟรชหน้าถ้าฐานข้อมูลไม่ได้เก็บเวลาจริง"""
     try:
@@ -1813,12 +1855,12 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                             st.warning(f"มี Step ‘{new_step_name}’ อยู่ในคิวนี้แล้ว")
                         else:
                             combined_step_name = " → ".join(existing_steps + [new_step_name])
-                            if update_supabase_job(target_id, {"step_name": combined_step_name}):
-                                st.cache_data.clear()
+                            step_saved, step_error = update_job_step_preserving_state(target_id, combined_step_name)
+                            if step_saved:
                                 st.toast(f"เพิ่ม Step {new_step_name} ในคิวเดิมเรียบร้อยแล้ว", icon="✅")
                                 st.rerun()
                             else:
-                                st.error("เพิ่ม Step ไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
+                                st.error(f"เพิ่ม Step ไม่สำเร็จ: {step_error}")
             st.write("")
 
     components.html("""
