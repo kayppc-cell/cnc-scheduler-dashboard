@@ -601,7 +601,8 @@ default_states = {
     "scroll_to_bottom": False,
     "gantt_date_range": None,
     "drawing_tracker_filter": "ALL",
-    "wo_color_filter": "ALL"
+    "wo_color_filter": "ALL",
+    "purchase_authenticated": False
 }
 for k, v in default_states.items():
     if k not in st.session_state:
@@ -1265,6 +1266,248 @@ def render_project_master_dashboard(calc_df, is_admin):
         "เลือกเครื่องจักร": ["เครื่องจักร", "machine_name"],
         "รวม (ชม.)": ["รวม ชม.", "total_hours"]
     }
+
+# =========================================================
+# 4.1 โมดูลจัดซื้อและต้นทุนแผนงาน (แยกจากคิว Production)
+# =========================================================
+PURCHASE_TABLE = "cnc_purchase_costs"
+
+def purchase_request(method, params=None, payload=None):
+    """เรียกตารางต้นทุนโดยไม่ผูกกับตรรกะคิว/Step ของ cnc_jobs"""
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/{PURCHASE_TABLE}"
+        response = requests.request(
+            method,
+            endpoint,
+            headers=get_supabase_headers(),
+            params=params,
+            json=payload,
+            timeout=8
+        )
+        if response.status_code not in [200, 201, 204]:
+            try:
+                detail = safe_str(response.json().get("message"), response.text)
+            except Exception:
+                detail = safe_str(response.text, f"HTTP {response.status_code}")
+            return False, detail, None
+        data = response.json() if response.content else []
+        return True, "", data
+    except Exception as exc:
+        return False, safe_str(exc, "ไม่สามารถเชื่อมต่อฐานข้อมูลได้"), None
+
+@st.cache_data(ttl=10, show_spinner=False)
+def fetch_purchase_costs():
+    ok, error, data = purchase_request(
+        "GET", params={"select": "*", "order": "created_at.desc,id.desc"}
+    )
+    if not ok:
+        return pd.DataFrame(), error
+    result = pd.DataFrame(data or [])
+    numeric_cols = ["qty", "unit_price", "actual_qty", "actual_unit_price"]
+    for col in numeric_cols:
+        if col not in result.columns:
+            result[col] = 0.0
+        result[col] = pd.to_numeric(result[col], errors="coerce").fillna(0.0)
+    if not result.empty:
+        result["ยอดผูกพัน"] = (result["qty"] * result["unit_price"]).round(2)
+        result["ต้นทุนจริง"] = (result["actual_qty"] * result["actual_unit_price"]).round(2)
+    return result, ""
+
+def save_purchase_cost(payload):
+    ok, error, _ = purchase_request("POST", payload=payload)
+    if ok:
+        fetch_purchase_costs.clear()
+    return ok, error
+
+def cancel_purchase_cost(item_id, reason):
+    params = {"id": f"eq.{safe_int(item_id)}"}
+    payload = {
+        "status": "ยกเลิก",
+        "cancel_reason": safe_str(reason),
+        "updated_at": get_bangkok_str()
+    }
+    ok, error, _ = purchase_request("PATCH", params=params, payload=payload)
+    if ok:
+        fetch_purchase_costs.clear()
+    return ok, error
+
+def render_purchase_cost_module():
+    st.markdown("## 🛒 จัดซื้อและต้นทุนแผนงาน")
+    st.caption("Purchasing & Project Cost Control — แยกข้อมูลต้นทุนออกจากคิว Production และ Step")
+
+    if not st.session_state.get("purchase_authenticated", False):
+        st.info("โมดูลนี้สงวนสิทธิ์สำหรับผู้จัดการแผนกจัดซื้อและผู้ได้รับอนุญาต")
+        try:
+            configured_password = safe_str(st.secrets.get("PURCHASE_MANAGER_PASSWORD", ""))
+        except Exception:
+            configured_password = ""
+        if not configured_password:
+            st.warning("ยังไม่ได้ตั้งค่า PURCHASE_MANAGER_PASSWORD ใน Streamlit Secrets")
+            st.code('PURCHASE_MANAGER_PASSWORD = "กำหนดรหัสเฉพาะของผู้จัดการจัดซื้อ"', language="toml")
+            return
+        with st.form("purchase_login_form", clear_on_submit=True):
+            purchase_password = st.text_input("รหัสเข้าสู่โมดูลจัดซื้อ", type="password")
+            purchase_login = st.form_submit_button("🔐 เข้าสู่โมดูลจัดซื้อ", type="primary", use_container_width=True)
+        if purchase_login:
+            import hmac
+            if hmac.compare_digest(purchase_password, configured_password):
+                st.session_state.purchase_authenticated = True
+                st.rerun()
+            else:
+                st.error("รหัสเข้าสู่โมดูลจัดซื้อไม่ถูกต้อง")
+        return
+
+    top_left, top_right = st.columns([5, 1])
+    with top_left:
+        st.success("เข้าสู่โมดูลจัดซื้อแล้ว — ราคาจะแสดงเฉพาะภายในโมดูลนี้")
+    with top_right:
+        if st.button("🚪 ออกจากโมดูล", use_container_width=True, key="purchase_logout"):
+            st.session_state.purchase_authenticated = False
+            st.rerun()
+
+    costs, fetch_error = fetch_purchase_costs()
+    if fetch_error:
+        st.error("ยังเปิดข้อมูลต้นทุนไม่ได้ กรุณารันไฟล์ Supabase_purchase_cost_module_migration.sql ก่อนใช้งานครั้งแรก")
+        with st.expander("รายละเอียดจากฐานข้อมูล"):
+            st.code(fetch_error)
+        return
+
+    active_costs = costs[~costs.get("status", pd.Series(index=costs.index, dtype=str)).astype(str).eq("ยกเลิก")].copy() if not costs.empty else costs.copy()
+    overview_tab, entry_tab, list_tab = st.tabs([
+        "📊 ภาพรวมต้นทุนแต่ละแผน", "➕ บันทึกรายการจัดซื้อ/งานจ้าง", "📋 รายการและการยกเลิก"
+    ])
+
+    with overview_tab:
+        if active_costs.empty:
+            st.info("ยังไม่มีข้อมูลต้นทุน")
+        else:
+            plan_summary = active_costs.groupby("plan_code", dropna=False).agg(
+                จำนวนรายการ=("id", "count"),
+                ยอดผูกพัน=("ยอดผูกพัน", "sum"),
+                ต้นทุนจริง=("ต้นทุนจริง", "sum")
+            ).reset_index().rename(columns={"plan_code": "แผนงาน"})
+            plan_summary["คงเหลือผูกพัน"] = (plan_summary["ยอดผูกพัน"] - plan_summary["ต้นทุนจริง"]).clip(lower=0)
+            total_committed = plan_summary["ยอดผูกพัน"].sum()
+            total_actual = plan_summary["ต้นทุนจริง"].sum()
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("แผนงานที่มีต้นทุน", f"{plan_summary['แผนงาน'].nunique():,} แผน")
+            c2.metric("ยอดผูกพัน (PO)", f"{total_committed:,.2f} บาท")
+            c3.metric("ต้นทุนรับ/ใช้จริง", f"{total_actual:,.2f} บาท")
+            c4.metric("คงเหลือผูกพัน", f"{max(0, total_committed-total_actual):,.2f} บาท")
+            st.dataframe(
+                plan_summary.sort_values("ต้นทุนจริง", ascending=False), hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "ยอดผูกพัน": st.column_config.NumberColumn(format="%.2f บาท"),
+                    "ต้นทุนจริง": st.column_config.NumberColumn(format="%.2f บาท"),
+                    "คงเหลือผูกพัน": st.column_config.NumberColumn(format="%.2f บาท")
+                }
+            )
+            selected_cost_plan = st.selectbox(
+                "ดูรายละเอียดแผนงาน", sorted(active_costs["plan_code"].dropna().astype(str).unique()),
+                key="purchase_overview_plan"
+            )
+            plan_detail = active_costs[active_costs["plan_code"].astype(str) == selected_cost_plan].copy()
+            category_summary = plan_detail.groupby("item_type").agg(
+                จำนวนรายการ=("id", "count"), ยอดผูกพัน=("ยอดผูกพัน", "sum"), ต้นทุนจริง=("ต้นทุนจริง", "sum")
+            ).reset_index().rename(columns={"item_type": "ประเภทต้นทุน"})
+            st.markdown(f"#### รายละเอียดต้นทุนแผน {selected_cost_plan}")
+            st.dataframe(category_summary, hide_index=True, use_container_width=True)
+
+    with entry_tab:
+        jobs = fetch_jobs_from_supabase()
+        plan_codes = sorted(jobs.get("แผนงาน", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+        if not plan_codes:
+            plan_codes = ["กรอกรหัสแผนงานเอง"]
+        with st.form("purchase_cost_entry_form", clear_on_submit=True):
+            a1, a2, a3 = st.columns([1.2, 1, 1.4])
+            document_no = a1.text_input("เลขที่ PR/PO/เอกสาร *")
+            item_type = a2.selectbox("ประเภทต้นทุน *", ["วัตถุดิบ", "Part มาตรฐาน", "งานจ้าง Maker", "Tool/วัสดุสิ้นเปลือง", "ค่าใช้จ่ายอื่น"])
+            supplier = a3.text_input("ผู้ขาย/ผู้รับจ้าง")
+            b1, b2 = st.columns([1, 2])
+            selected_plan = b1.selectbox("แผนงาน *", plan_codes)
+            drawing_name = b2.text_input("Drawing", placeholder="เว้นว่างได้ หากใช้ร่วมทั้งแผน")
+            item_name = st.text_input("รายการวัสดุ / Part / รายละเอียดงานจ้าง *")
+            q1, q2, q3, q4 = st.columns(4)
+            qty = q1.number_input("จำนวนสั่งซื้อ", min_value=0.0, step=1.0)
+            unit = q2.text_input("หน่วย", value="ชิ้น")
+            unit_price = q3.number_input("ราคาต่อหน่วย", min_value=0.0, step=1.0, format="%.2f")
+            po_status = q4.selectbox("สถานะ", ["ขอซื้อ", "เปิด PO", "รับบางส่วน", "รับครบ", "รอใบแจ้งหนี้"])
+            r1, r2 = st.columns(2)
+            actual_qty = r1.number_input("จำนวนรับ/ใช้จริง", min_value=0.0, step=1.0)
+            actual_unit_price = r2.number_input("ราคาจริงต่อหน่วย", min_value=0.0, step=1.0, format="%.2f")
+            note = st.text_area("หมายเหตุ")
+            st.caption(f"ยอดผูกพัน: {qty * unit_price:,.2f} บาท | ต้นทุนจริง: {actual_qty * actual_unit_price:,.2f} บาท")
+            submitted = st.form_submit_button("💾 บันทึกรายการต้นทุน", type="primary", use_container_width=True)
+        if submitted:
+            if not safe_str(document_no) or not safe_str(item_name) or not safe_str(selected_plan):
+                st.error("กรุณากรอกเลขที่เอกสาร แผนงาน และชื่อรายการให้ครบ")
+            else:
+                payload = {
+                    "document_no": safe_str(document_no), "item_type": safe_str(item_type),
+                    "item_name": safe_str(item_name), "supplier": safe_str(supplier) or None,
+                    "plan_code": safe_str(selected_plan), "drawing_name": safe_str(drawing_name) or None,
+                    "qty": qty, "unit": safe_str(unit), "unit_price": unit_price,
+                    "actual_qty": actual_qty, "actual_unit_price": actual_unit_price,
+                    "status": safe_str(po_status), "note": safe_str(note) or None,
+                    "created_by": "purchase_manager", "updated_at": get_bangkok_str()
+                }
+                ok, error = save_purchase_cost(payload)
+                if ok:
+                    st.success("บันทึกรายการต้นทุนแล้ว")
+                    st.rerun()
+                else:
+                    st.error(f"บันทึกไม่สำเร็จ: {error}")
+
+    with list_tab:
+        if costs.empty:
+            st.info("ยังไม่มีรายการ")
+        else:
+            show_costs = costs.copy()
+            display_cols = [
+                "id", "document_no", "plan_code", "drawing_name", "item_type", "item_name",
+                "supplier", "qty", "unit", "unit_price", "ยอดผูกพัน", "actual_qty",
+                "actual_unit_price", "ต้นทุนจริง", "status", "note", "updated_at"
+            ]
+            rename_cols = {
+                "id": "ID", "document_no": "เลขที่เอกสาร", "plan_code": "แผนงาน",
+                "drawing_name": "Drawing", "item_type": "ประเภท", "item_name": "รายการ",
+                "supplier": "ผู้ขาย/ผู้รับจ้าง", "qty": "จำนวนสั่ง", "unit": "หน่วย",
+                "unit_price": "ราคาสั่ง/หน่วย", "actual_qty": "จำนวนจริง",
+                "actual_unit_price": "ราคาจริง/หน่วย", "status": "สถานะ",
+                "note": "หมายเหตุ", "updated_at": "แก้ไขล่าสุด"
+            }
+            st.dataframe(
+                show_costs[[c for c in display_cols if c in show_costs.columns]].rename(columns=rename_cols),
+                hide_index=True, width=1900, height=min(650, max(300, len(show_costs) * 35 + 42)),
+                column_config={
+                    "Drawing": st.column_config.TextColumn(width=250),
+                    "รายการ": st.column_config.TextColumn(width=320),
+                    "ผู้ขาย/ผู้รับจ้าง": st.column_config.TextColumn(width=230)
+                }
+            )
+            cancellable = show_costs[~show_costs["status"].astype(str).eq("ยกเลิก")]
+            if not cancellable.empty:
+                with st.expander("🚫 ยกเลิกรายการ (เก็บประวัติ ไม่ลบถาวร)"):
+                    cancel_id = st.selectbox(
+                        "เลือกรายการ",
+                        cancellable["id"].tolist(),
+                        format_func=lambda value: f"ID {value} | {safe_str(cancellable.loc[cancellable['id'] == value, 'document_no'].iloc[0])} | {safe_str(cancellable.loc[cancellable['id'] == value, 'item_name'].iloc[0])}",
+                        key="purchase_cancel_id"
+                    )
+                    cancel_reason = st.text_input("เหตุผลที่ยกเลิก *", key="purchase_cancel_reason")
+                    confirm_cancel = st.checkbox("ยืนยันการยกเลิกรายการนี้", key="purchase_cancel_confirm")
+                    if st.button("🚫 ยกเลิกรายการ", disabled=not confirm_cancel, use_container_width=True):
+                        if not safe_str(cancel_reason):
+                            st.error("กรุณาระบุเหตุผลที่ยกเลิก")
+                        else:
+                            ok, error = cancel_purchase_cost(cancel_id, cancel_reason)
+                            if ok:
+                                st.success("ยกเลิกรายการและเก็บประวัติแล้ว")
+                                st.rerun()
+                            else:
+                                st.error(f"ยกเลิกไม่สำเร็จ: {error}")
     for required_col, aliases in project_column_aliases.items():
         if required_col not in jobs.columns:
             source_col = next((alias for alias in aliases if alias in jobs.columns), None)
@@ -1661,7 +1904,8 @@ nav_options = [
     "📊 แดชบอร์ดภาพรวมโรงงาน", 
     "📈 วิเคราะห์ประสิทธิภาพราย Drawing", 
     "📑 รายงานสรุปประจำเดือน", 
-    "📺 จอทีวีกลางโรงงาน (TV Live)"
+    "📺 จอทีวีกลางโรงงาน (TV Live)",
+    "🛒 จัดซื้อและต้นทุนแผนงาน"
 ]
 
 cur_idx = nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0
@@ -5362,6 +5606,9 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 # ---------------------------------------------------------
 # VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
 # ---------------------------------------------------------
+elif st.session_state.current_view == "🛒 จัดซื้อและต้นทุนแผนงาน":
+    render_purchase_cost_module()
+
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
     df_live = fetch_jobs_from_supabase()
