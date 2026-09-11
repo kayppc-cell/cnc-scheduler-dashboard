@@ -8,6 +8,7 @@ import os
 import base64
 import json
 import html
+import io
 from PIL import Image
 import requests
 import streamlit.components.v1 as components
@@ -1899,6 +1900,180 @@ def render_purchase_cost_module():
                                 st.rerun()
                             else:
                                 st.error(f"ยกเลิกไม่สำเร็จ: {error}")
+
+def render_total_project_cost_report(df_db, selected_month, selected_year, rate_map):
+    """รวมต้นทุนเครื่องจริงกับจัดซื้อ โดยไม่แก้ไขข้อมูลต้นทางของทั้งสองโมดูล"""
+    st.markdown("### 💼 ต้นทุนรวมทั้งแผน")
+    st.caption("รวมค่าเครื่องจักรจริง + วัตถุดิบ + Part + งานจ้าง Maker + Tool และค่าใช้จ่ายอื่น")
+
+    view_mode = st.radio(
+        "รูปแบบรายงานต้นทุน",
+        ["ค่าใช้จ่ายที่เกิดในเดือนนี้", "ต้นทุนสะสมทั้งแผน"],
+        horizontal=True,
+        key="monthly_total_cost_mode"
+    )
+
+    purchase_df, purchase_error = fetch_purchase_costs()
+    if purchase_error:
+        st.warning("ยังดึงต้นทุนจัดซื้อไม่ได้ กรุณาตรวจว่ารัน SQL โมดูลจัดซื้อแล้ว")
+        purchase_df = pd.DataFrame()
+    if not purchase_df.empty:
+        purchase_df = purchase_df[~purchase_df["status"].astype(str).eq("ยกเลิก")].copy()
+        purchase_df["_cost_date"] = pd.to_datetime(
+            purchase_df.get("updated_at", purchase_df.get("created_at")).apply(parse_flexible_datetime),
+            errors="coerce"
+        )
+
+    finished_costs = pd.DataFrame()
+    if not df_db.empty:
+        finished_costs = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
+        if not finished_costs.empty:
+            finished_costs = build_performance_metrics(finished_costs)
+            finished_costs["_cost_date"] = pd.to_datetime(finished_costs["_actual_finish_dt"], errors="coerce")
+            finished_costs["แผนงาน"] = finished_costs["แผนงาน"].map(lambda value: safe_str(value, "ไม่ระบุแผนงาน"))
+            finished_costs["_machine_rate"] = finished_costs["เลือกเครื่องจักร"].map(rate_map).fillna(500.0)
+            finished_costs["_machine_actual_cost"] = (
+                pd.to_numeric(finished_costs["เวลาจริง (ชม.)"], errors="coerce").fillna(0.0)
+                * pd.to_numeric(finished_costs["_machine_rate"], errors="coerce").fillna(500.0)
+            ).round(2)
+
+    all_plan_codes = set()
+    if not purchase_df.empty:
+        all_plan_codes.update(purchase_df["plan_code"].dropna().astype(str))
+    if not finished_costs.empty:
+        all_plan_codes.update(finished_costs["แผนงาน"].dropna().astype(str))
+    if not all_plan_codes:
+        st.info("ยังไม่มีข้อมูลต้นทุนจัดซื้อหรืองานผลิตเสร็จสำหรับจัดทำรายงาน")
+        return
+
+    selected_cost_plan = st.selectbox(
+        "เลือกแผนงาน",
+        ["ทุกแผนงาน"] + sorted(all_plan_codes),
+        key="monthly_total_cost_plan"
+    )
+
+    shown_purchase = purchase_df.copy()
+    shown_machine = finished_costs.copy()
+    if view_mode == "ค่าใช้จ่ายที่เกิดในเดือนนี้":
+        if not shown_purchase.empty:
+            shown_purchase = shown_purchase[
+                (shown_purchase["_cost_date"].dt.month == selected_month)
+                & (shown_purchase["_cost_date"].dt.year == selected_year)
+            ]
+        if not shown_machine.empty:
+            shown_machine = shown_machine[
+                (shown_machine["_cost_date"].dt.month == selected_month)
+                & (shown_machine["_cost_date"].dt.year == selected_year)
+            ]
+    if selected_cost_plan != "ทุกแผนงาน":
+        if not shown_purchase.empty:
+            shown_purchase = shown_purchase[shown_purchase["plan_code"].astype(str) == selected_cost_plan]
+        if not shown_machine.empty:
+            shown_machine = shown_machine[shown_machine["แผนงาน"].astype(str) == selected_cost_plan]
+
+    machine_by_plan = (
+        shown_machine.groupby("แผนงาน")["_machine_actual_cost"].sum().to_dict()
+        if not shown_machine.empty else {}
+    )
+    purchase_committed = {}
+    purchase_actual = {}
+    purchase_categories = {}
+    if not shown_purchase.empty:
+        purchase_committed = shown_purchase.groupby("plan_code")["ยอดผูกพัน"].sum().to_dict()
+        purchase_actual = shown_purchase.groupby("plan_code")["ต้นทุนจริง"].sum().to_dict()
+        purchase_categories = shown_purchase.pivot_table(
+            index="plan_code", columns="item_type", values="ต้นทุนจริง", aggfunc="sum", fill_value=0
+        ).to_dict(orient="index")
+
+    report_plans = sorted(set(machine_by_plan) | set(purchase_committed) | set(purchase_actual))
+    report_rows = []
+    for plan_code in report_plans:
+        cats = purchase_categories.get(plan_code, {})
+        machine_cost = safe_float(machine_by_plan.get(plan_code), 0.0)
+        committed_cost = safe_float(purchase_committed.get(plan_code), 0.0)
+        purchase_actual_cost = safe_float(purchase_actual.get(plan_code), 0.0)
+        report_rows.append({
+            "แผนงาน": plan_code,
+            "ค่าเครื่องจริง": machine_cost,
+            "วัตถุดิบ": safe_float(cats.get("วัตถุดิบ"), 0.0),
+            "Part มาตรฐาน": safe_float(cats.get("Part มาตรฐาน"), 0.0),
+            "งานจ้าง Maker": safe_float(cats.get("งานจ้าง Maker"), 0.0),
+            "Tool/สิ้นเปลือง": safe_float(cats.get("Tool/วัสดุสิ้นเปลือง"), 0.0),
+            "ค่าใช้จ่ายอื่น": safe_float(cats.get("ค่าใช้จ่ายอื่น"), 0.0),
+            "ยอดผูกพันจัดซื้อ": committed_cost,
+            "ต้นทุนจัดซื้อจริง": purchase_actual_cost,
+            "ต้นทุนรวมจริง": machine_cost + purchase_actual_cost
+        })
+    report_df = pd.DataFrame(report_rows)
+    if report_df.empty:
+        st.info("ไม่พบค่าใช้จ่ายตามเดือนหรือแผนงานที่เลือก")
+        return
+
+    total_machine = report_df["ค่าเครื่องจริง"].sum()
+    total_committed = report_df["ยอดผูกพันจัดซื้อ"].sum()
+    total_purchase_actual = report_df["ต้นทุนจัดซื้อจริง"].sum()
+    total_all = report_df["ต้นทุนรวมจริง"].sum()
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("ค่าเครื่องจักรจริง", f"{total_machine:,.2f} บาท")
+    k2.metric("ยอดผูกพันจัดซื้อ", f"{total_committed:,.2f} บาท")
+    k3.metric("ต้นทุนจัดซื้อจริง", f"{total_purchase_actual:,.2f} บาท")
+    k4.metric("ต้นทุนรวมจริง", f"{total_all:,.2f} บาท")
+    st.dataframe(
+        report_df.sort_values("ต้นทุนรวมจริง", ascending=False),
+        hide_index=True, width=1900,
+        column_config={
+            col: st.column_config.NumberColumn(format="%.2f บาท")
+            for col in report_df.columns if col != "แผนงาน"
+        }
+    )
+    st.caption("ต้นทุนรวมจริง = ค่าเครื่องจักรจากเวลาผลิตจริง + รายการจัดซื้อที่บันทึกจำนวนและราคาจริงแล้ว")
+
+    excel_buffer = io.BytesIO()
+    excel_ready = True
+    try:
+        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+            report_df.to_excel(writer, index=False, sheet_name="ต้นทุนรวมทั้งแผน")
+            if not shown_purchase.empty:
+                purchase_export_cols = [
+                    "document_no", "plan_code", "drawing_name", "item_type", "item_name", "supplier",
+                    "qty", "unit", "unit_price", "ยอดผูกพัน", "actual_qty", "actual_unit_price", "ต้นทุนจริง", "status"
+                ]
+                shown_purchase[[c for c in purchase_export_cols if c in shown_purchase.columns]].to_excel(
+                    writer, index=False, sheet_name="รายละเอียดจัดซื้อ"
+                )
+    except Exception:
+        excel_ready = False
+    report_period = f"{selected_month:02d}-{selected_year}" if view_mode == "ค่าใช้จ่ายที่เกิดในเดือนนี้" else "สะสมทั้งแผน"
+    export_col, print_col = st.columns(2)
+    with export_col:
+        st.download_button(
+            "📥 ดาวน์โหลด Excel ต้นทุนรวม",
+            data=excel_buffer.getvalue() if excel_ready else report_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"TPC_Total_Project_Cost_{report_period}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            disabled=not excel_ready,
+            use_container_width=True
+        )
+        if not excel_ready:
+            st.caption("กรุณาเพิ่ม openpyxl ใน requirements.txt เพื่อเปิดการดาวน์โหลด Excel")
+
+    pdf_rows = "".join(
+        "<tr>" + "".join(
+            f"<td>{html.escape(safe_str(value))}</td>" if col == "แผนงาน" else f"<td class='num'>{safe_float(value):,.2f}</td>"
+            for col, value in row.items()
+        ) + "</tr>" for row in report_rows
+    )
+    pdf_payload = json.dumps({
+        "period": report_period, "mode": view_mode, "plan": selected_cost_plan,
+        "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
+        "machine": f"{total_machine:,.2f}", "committed": f"{total_committed:,.2f}",
+        "purchase": f"{total_purchase_actual:,.2f}", "total": f"{total_all:,.2f}", "rows": pdf_rows
+    }, ensure_ascii=False).replace("<", "\\u003c")
+    with print_col:
+        components.html(f"""
+        <button onclick="printTotalCost()" style="width:100%;background:#DC2626;color:white;border:0;padding:10px;border-radius:8px;font-weight:700;cursor:pointer;">🖨️ พิมพ์ / บันทึก PDF</button>
+        <script>function printTotalCost(){{const d={pdf_payload};const w=window.open('','_blank');if(!w){{alert('กรุณาอนุญาต Pop-up');return;}}w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>TPC Total Project Cost</title><style>@page{{size:A3 landscape;margin:10mm}}body{{font-family:Tahoma,Arial;font-size:10px;color:#172033}}h1{{font-size:20px}}.head{{display:flex;justify-content:space-between;border-bottom:3px solid #1E3E62}}.kpi{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}}.kpi div{{border:1px solid #CBD5E1;padding:9px;text-align:center}}.kpi b{{display:block;font-size:16px}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #CBD5E1;padding:5px}}th{{background:#1E3E62;color:white}}.num{{text-align:right}}</style></head><body><div class="head"><div><h1>ต้นทุนรวมทั้งแผน</h1><p>${{d.mode}} | แผน: ${{d.plan}}</p></div><p>วันที่ออกรายงาน: ${{d.print_date}}</p></div><div class="kpi"><div>ค่าเครื่องจริง<b>${{d.machine}}</b></div><div>ยอดผูกพันจัดซื้อ<b>${{d.committed}}</b></div><div>ต้นทุนจัดซื้อจริง<b>${{d.purchase}}</b></div><div>ต้นทุนรวมจริง<b>${{d.total}}</b></div></div><table><thead><tr><th>แผนงาน</th><th>ค่าเครื่องจริง</th><th>วัตถุดิบ</th><th>Part</th><th>งานจ้าง Maker</th><th>Tool/สิ้นเปลือง</th><th>อื่น ๆ</th><th>ยอดผูกพัน</th><th>จัดซื้อจริง</th><th>รวมจริง</th></tr></thead><tbody>${{d.rows}}</tbody></table></body></html>`);w.document.close();w.focus();setTimeout(()=>w.print(),600);}}</script>
+        """, height=48)
 
 nav_options = [
     "👷 โหมดช่างหน้าเครื่อง", 
@@ -5072,6 +5247,12 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             selected_month_idx = st.selectbox("📅 เลือกเดือน:", range(1, 13), index=current_now.month - 1, format_func=lambda x: month_names[x-1])
         with r_col2:
             selected_year = st.selectbox("📆 เลือกปี (ค.ศ.):", [current_now.year - 1, current_now.year, current_now.year + 1], index=1)
+
+        if st.session_state.user_role == "admin":
+            with st.expander("💼 ต้นทุนรวมทั้งแผน", expanded=True):
+                render_total_project_cost_report(df_db, selected_month_idx, selected_year, rate_map)
+        else:
+            st.info("🔒 รายงานต้นทุนรวมทั้งแผนแสดงเฉพาะผู้ใช้งานระดับ Admin")
 
         if not df_db.empty:
             finished_all = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
