@@ -5432,6 +5432,43 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                             "สิ้นสุด Production": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
                         }
                     )
+                    plan_result_pdf_rows = "".join([
+                        "<tr>"
+                        f"<td>{html.escape(safe_str(item.get('แผนงาน'), '-'))}</td>"
+                        f"<td>{item.get('จบจริงทั้งแผน').strftime('%d/%m/%Y %H:%M') if item.get('จบจริงทั้งแผน') is not None and pd.notna(item.get('จบจริงทั้งแผน')) else '-'}</td>"
+                        f"<td>{item.get('สิ้นสุด Production').strftime('%d/%m/%Y %H:%M') if item.get('สิ้นสุด Production') is not None and pd.notna(item.get('สิ้นสุด Production')) else '-'}</td>"
+                        f"<td>{html.escape(safe_str(item.get('ผล'), '-'))}</td>"
+                        "</tr>"
+                        for item in plan_kpi_rows
+                    ])
+                    plan_result_pdf_payload = json.dumps({
+                        "period": f"{month_names[selected_month_idx-1]} {selected_year}",
+                        "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
+                        "rate": f"{plan_on_time_rate:.1f}%" if pd.notna(plan_on_time_rate) else "ไม่มีข้อมูล",
+                        "on_time": plan_on_time_count,
+                        "late": plan_late_count,
+                        "missing": missing_plan_baseline_count,
+                        "rows": plan_result_pdf_rows
+                    }, ensure_ascii=False).replace("<", "\\u003c")
+                    components.html(f"""
+                    <button onclick="printPlanProductionResult()" style="display:block;width:260px;max-width:100%;margin:8px auto 2px;background:#DC2626;color:white;border:0;padding:10px 15px;border-radius:8px;font-weight:700;cursor:pointer;">🖨️ พิมพ์ / บันทึก PDF</button>
+                    <script>
+                    function printPlanProductionResult() {{
+                        const d = {plan_result_pdf_payload};
+                        const w = window.open('', '_blank');
+                        if (!w) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน'); return; }}
+                        w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>TPC Production Plan Result</title><style>
+                        @page{{size:A4 landscape;margin:10mm}}body{{font-family:Tahoma,Arial,sans-serif;color:#172033;font-size:11px}}
+                        .head{{display:flex;justify-content:space-between;border-bottom:3px solid #1E3E62;padding-bottom:8px}}h1{{font-size:19px;margin:0}}
+                        .kpi{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}}.kpi div{{border:1px solid #CBD5E1;padding:9px;text-align:center;background:#F8FAFC}}.kpi b{{display:block;font-size:16px;margin-top:3px}}
+                        table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #CBD5E1;padding:6px}}th{{background:#1E3E62;color:white}}tr:nth-child(even){{background:#F8FAFC}}
+                        </style></head><body><div class="head"><div><h1>แผนงานที่ผลิตเสร็จเทียบกับเวลา แผนงาน Production</h1><div>ประจำเดือน ${{d.period}}</div></div><div>วันที่ออกรายงาน: ${{d.print_date}}</div></div>
+                        <div class="kpi"><div>อัตราจบภายในเวลา Production<b>${{d.rate}}</b></div><div>จบภายในเวลา Production<b>${{d.on_time}} แผน</b></div><div>จบเกินเวลา Production<b>${{d.late}} แผน</b></div><div>ไม่ได้วางแผนงานในระบบ Production<b>${{d.missing}} แผน</b></div></div>
+                        <table><thead><tr><th>แผนงาน</th><th>จบจริงทั้งแผน</th><th>สิ้นสุด Production</th><th>ผล</th></tr></thead><tbody>${{d.rows}}</tbody></table></body></html>`);
+                        w.document.close(); w.focus(); setTimeout(function(){{w.print();}}, 600);
+                    }}
+                    </script>
+                    """, height=55)
 
             valid_month_rows = monthly_jobs.dropna(subset=["ผลต่าง (ชม.)"])
             if not valid_month_rows.empty:
