@@ -5247,7 +5247,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
         rate_map = DEFAULT_RATES
 
         current_now = get_bangkok_now()
-        r_col1, r_col2, r_col_exp = st.columns([2, 2, 4])
+        r_col1, r_col2 = st.columns(2)
         
         with r_col1:
             month_names = ["มกราคม (1)", "กุมภาพันธ์ (2)", "มีนาคม (3)", "เมษายน (4)", "พฤษภาคม (5)", "มิถุนายน (6)", "กรกฎาคม (7)", "สิงหาคม (8)", "กันยายน (9)", "ตุลาคม (10)", "พฤศจิกายน (11)", "ธันวาคม (12)"]
@@ -5256,7 +5256,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             selected_year = st.selectbox("📆 เลือกปี (ค.ศ.):", [current_now.year - 1, current_now.year, current_now.year + 1], index=1)
 
         if st.session_state.user_role == "admin":
-            with st.expander("💼 ต้นทุนรวมทั้งแผน", expanded=True):
+            with st.expander("💼 รายงานต้นทุนรวมทั้งแผน", expanded=False):
                 render_total_project_cost_report(df_db, selected_month_idx, selected_year, rate_map)
         else:
             st.info("🔒 รายงานต้นทุนรวมทั้งแผนแสดงเฉพาะผู้ใช้งานระดับ Admin")
@@ -5381,6 +5381,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             var_title_txt = f"⚡ ผลต่างสุทธิเร็วกว่าแผน {abs(total_variance_hrs):.1f} ชม." if total_variance_hrs <= 0 else f"⚠️ ผลต่างสุทธิช้ากว่าแผน +{total_variance_hrs:.1f} ชม."
 
+            st.markdown("### 📊 ภาพรวมผลการผลิตและประสิทธิภาพประจำเดือน")
             st.markdown(f"""
             <div class="kpi-container">
                 <div class="kpi-card kpi-green">
@@ -5601,8 +5602,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             }
             json_report_payload = json.dumps(report_data_dict, ensure_ascii=False).replace("<", "\\u003c")
 
-            with r_col_exp:
-                st.write("")
+            with st.expander("🖨️ เครื่องมือพิมพ์และดาวน์โหลดรายงานภาพรวมประจำเดือน", expanded=False):
                 b_col_pdf, b_col_csv = st.columns(2)
                 with b_col_pdf:
                     components.html(f"""
