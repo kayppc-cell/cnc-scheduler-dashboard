@@ -2018,12 +2018,19 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
     k2.metric("ยอดผูกพันจัดซื้อ", f"{total_committed:,.2f} บาท")
     k3.metric("ต้นทุนจัดซื้อจริง", f"{total_purchase_actual:,.2f} บาท")
     k4.metric("ต้นทุนรวมจริง", f"{total_all:,.2f} บาท")
+    # Streamlit NumberColumn ไม่รองรับ comma คั่นหลักพันอย่างสม่ำเสมอทุกเวอร์ชัน
+    # จึงทำสำเนาสำหรับแสดงผลเป็นข้อความ ส่วน report_df เดิมยังเป็นตัวเลขสำหรับคำนวณ/Excel
+    report_display_df = report_df.sort_values("ต้นทุนรวมจริง", ascending=False).copy()
+    money_columns = [col for col in report_display_df.columns if col != "แผนงาน"]
+    for col in money_columns:
+        report_display_df[col] = report_display_df[col].map(lambda value: f"{safe_float(value):,.2f} บาท")
     st.dataframe(
-        report_df.sort_values("ต้นทุนรวมจริง", ascending=False),
-        hide_index=True, width=1900,
+        report_display_df,
+        hide_index=True,
+        width=1900,
         column_config={
-            col: st.column_config.NumberColumn(format="%.2f บาท")
-            for col in report_df.columns if col != "แผนงาน"
+            col: st.column_config.TextColumn(width=135)
+            for col in money_columns
         }
     )
     st.caption("ต้นทุนรวมจริง = ค่าเครื่องจักรจากเวลาผลิตจริง + รายการจัดซื้อที่บันทึกจำนวนและราคาจริงแล้ว")
@@ -5300,6 +5307,57 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             on_time_rate = float(valid_schedule.mean() * 100.0) if not valid_schedule.empty else float("nan")
             data_complete_rate = valid_actual_count / total_jobs_count * 100.0 if total_jobs_count else 0.0
 
+            # ตัวชี้วัดระดับแผน: ใช้ Finish จริงสุดท้ายของทั้งแผนเทียบกรอบ Production
+            # คิดเฉพาะแผนที่ทุกคิวเสร็จแล้ว และวันจบจริงของแผนอยู่ในเดือนรายงาน
+            master_for_kpi, master_ready_for_kpi = fetch_plan_masters()
+            master_due_map = {}
+            if master_ready_for_kpi and not master_for_kpi.empty:
+                master_due_map = {
+                    normalize_filter_key(row.get("plan_code")): row.get("customer_due")
+                    for _, row in master_for_kpi.iterrows()
+                }
+            plan_kpi_rows = []
+            unfinished_plan_count = 0
+            missing_plan_baseline_count = 0
+            if not df_db.empty:
+                finished_status_values = {"🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"}
+                for plan_code, plan_group in df_db.groupby("แผนงาน", dropna=False):
+                    plan_label = safe_str(plan_code, "ไม่ระบุแผนงาน")
+                    all_finished = plan_group["สถานะงาน"].isin(finished_status_values).all()
+                    if not all_finished:
+                        unfinished_plan_count += 1
+                        continue
+                    finish_values = [
+                        parse_flexible_datetime(value) for value in plan_group.get("เสร็จจริง", pd.Series(dtype=object))
+                    ]
+                    finish_values = [value for value in finish_values if value is not None and not pd.isna(value)]
+                    if not finish_values:
+                        continue
+                    final_actual = max(finish_values)
+                    if final_actual.month != selected_month_idx or final_actual.year != selected_year:
+                        continue
+                    production_due = master_due_map.get(normalize_filter_key(plan_label))
+                    if production_due is None or pd.isna(production_due):
+                        missing_plan_baseline_count += 1
+                        plan_kpi_rows.append({
+                            "แผนงาน": plan_label, "จบจริงทั้งแผน": final_actual,
+                            "สิ้นสุด Production": None, "ผล": "⚠️ ไม่มีกรอบ Production"
+                        })
+                        continue
+                    is_plan_on_time = final_actual <= production_due
+                    plan_kpi_rows.append({
+                        "แผนงาน": plan_label, "จบจริงทั้งแผน": final_actual,
+                        "สิ้นสุด Production": production_due,
+                        "ผล": "🟢 จบภายในกรอบ Production" if is_plan_on_time else "🔴 จบเกินกรอบ Production",
+                        "_on_time": is_plan_on_time
+                    })
+            plan_kpi_df = pd.DataFrame(plan_kpi_rows)
+            evaluable_plan_kpi = plan_kpi_df.dropna(subset=["_on_time"]) if "_on_time" in plan_kpi_df.columns else pd.DataFrame()
+            plan_on_time_count = int(evaluable_plan_kpi["_on_time"].sum()) if not evaluable_plan_kpi.empty else 0
+            plan_evaluable_count = len(evaluable_plan_kpi)
+            plan_late_count = plan_evaluable_count - plan_on_time_count
+            plan_on_time_rate = (plan_on_time_count / plan_evaluable_count * 100.0) if plan_evaluable_count else float("nan")
+
             if undated_finished_count or missing_actual_count:
                 st.warning(
                     f"⚠️ คุณภาพข้อมูล: งานเสร็จที่ไม่มี Finish จึงไม่ถูกจัดเข้าเดือน {undated_finished_count} รายการ | "
@@ -5347,6 +5405,33 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 </div>
             </div>
             """, unsafe_allow_html=True)
+
+            st.markdown("#### 🗓️ ผลสำเร็จระดับแผนงานเทียบกรอบ Production")
+            plan_metric_1, plan_metric_2, plan_metric_3, plan_metric_4 = st.columns(4)
+            plan_metric_1.metric(
+                "แผนงานจบภายในกรอบ Production",
+                f"{plan_on_time_rate:.1f}%" if pd.notna(plan_on_time_rate) else "ไม่มีข้อมูล",
+                help="วันจบจริงสุดท้ายของทุกคิวในแผน ต้องไม่เกินวันสิ้นสุด Production"
+            )
+            plan_metric_2.metric("จบภายในกรอบ", f"{plan_on_time_count:,} แผน")
+            plan_metric_3.metric("จบเกินกรอบ", f"{plan_late_count:,} แผน")
+            plan_metric_4.metric("ไม่มีกรอบ Production", f"{missing_plan_baseline_count:,} แผน")
+            st.caption(
+                "คำนวณเฉพาะแผนที่ทุกคิวผลิตเสร็จแล้ว และ Finish จริงสุดท้ายอยู่ในเดือนที่เลือก "
+                "แผนที่ยังมีคิวกำลังผลิต/รอคิวจะยังไม่ถูกตัดสินผล"
+            )
+            if not plan_kpi_df.empty:
+                with st.expander("🔎 ดูผลรายแผนงาน"):
+                    plan_kpi_display = plan_kpi_df.drop(columns=["_on_time"], errors="ignore").copy()
+                    st.dataframe(
+                        plan_kpi_display,
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "จบจริงทั้งแผน": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+                            "สิ้นสุด Production": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
+                        }
+                    )
 
             valid_month_rows = monthly_jobs.dropna(subset=["ผลต่าง (ชม.)"])
             if not valid_month_rows.empty:
