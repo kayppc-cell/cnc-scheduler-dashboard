@@ -5341,14 +5341,14 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                         missing_plan_baseline_count += 1
                         plan_kpi_rows.append({
                             "แผนงาน": plan_label, "จบจริงทั้งแผน": final_actual,
-                            "สิ้นสุด Production": None, "ผล": "⚠️ ไม่มีกรอบ Production"
+                            "สิ้นสุด Production": None, "ผล": "⚠️ ไม่ได้วางแผนงานในระบบ Production"
                         })
                         continue
                     is_plan_on_time = final_actual <= production_due
                     plan_kpi_rows.append({
                         "แผนงาน": plan_label, "จบจริงทั้งแผน": final_actual,
                         "สิ้นสุด Production": production_due,
-                        "ผล": "🟢 จบภายในกรอบ Production" if is_plan_on_time else "🔴 จบเกินกรอบ Production",
+                        "ผล": "🟢 จบภายในเวลา Production" if is_plan_on_time else "🔴 จบเกินเวลา Production",
                         "_on_time": is_plan_on_time
                     })
             plan_kpi_df = pd.DataFrame(plan_kpi_rows)
@@ -5406,16 +5406,16 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("#### 🗓️ ผลสำเร็จระดับแผนงานเทียบกรอบ Production")
+            st.markdown("#### 🗓️ แผนงานที่ผลิตเสร็จเทียบกับเวลา แผนงาน Production")
             plan_metric_1, plan_metric_2, plan_metric_3, plan_metric_4 = st.columns(4)
             plan_metric_1.metric(
                 "แผนงานจบภายในกรอบ Production",
                 f"{plan_on_time_rate:.1f}%" if pd.notna(plan_on_time_rate) else "ไม่มีข้อมูล",
                 help="วันจบจริงสุดท้ายของทุกคิวในแผน ต้องไม่เกินวันสิ้นสุด Production"
             )
-            plan_metric_2.metric("จบภายในกรอบ", f"{plan_on_time_count:,} แผน")
-            plan_metric_3.metric("จบเกินกรอบ", f"{plan_late_count:,} แผน")
-            plan_metric_4.metric("ไม่มีกรอบ Production", f"{missing_plan_baseline_count:,} แผน")
+            plan_metric_2.metric("จบภายในเวลา Production", f"{plan_on_time_count:,} แผน")
+            plan_metric_3.metric("จบเกินเวลา Production", f"{plan_late_count:,} แผน")
+            plan_metric_4.metric("ไม่ได้วางแผนงานในระบบ Production", f"{missing_plan_baseline_count:,} แผน")
             st.caption(
                 "คำนวณเฉพาะแผนที่ทุกคิวผลิตเสร็จแล้ว และ Finish จริงสุดท้ายอยู่ในเดือนที่เลือก "
                 "แผนที่ยังมีคิวกำลังผลิต/รอคิวจะยังไม่ถูกตัดสินผล"
