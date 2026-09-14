@@ -582,6 +582,19 @@ st.markdown("""
     div[data-testid="stDataFrame"] [role="gridcell"] {
         font-size: 12px !important;
     }
+
+    /* เปิดรายการ Selectbox ใน Data Editor ให้สูงพอเห็นรายชื่อเครื่องทั้งหมด
+       ถ้าความสูงหน้าจอไม่พอ เมนูจะมีแถบเลื่อนอยู่ภายในแทนการถูกตัดสั้น */
+    div[data-baseweb="popover"] {
+        z-index: 1000000 !important;
+        max-height: 82vh !important;
+    }
+    div[data-baseweb="popover"] ul[role="listbox"],
+    ul[role="listbox"] {
+        max-height: 76vh !important;
+        overflow-y: auto !important;
+        overscroll-behavior: contain;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1284,6 +1297,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         return f"{value.day} {thai_months_short[value.month - 1]}"
 
     rows, gantt_rows = [], []
+    project_now = get_bangkok_now().replace(tzinfo=None)
     for _, master in master_df.iterrows():
         code = safe_str(master["plan_code"])
         customer_start, customer_due = master["customer_start"], master["customer_due"]
@@ -1297,10 +1311,24 @@ def render_project_master_dashboard(calc_df, is_admin):
         risky = sub[sub["_finish"].apply(lambda v: v is not None and customer_due is not None and v > customer_due)]
         risky_drawings = ", ".join(risky.get("ชื่อ Drawing.", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(4))
         risky_machines = ", ".join(risky.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3))
+        # สถานะคิวหน้างานต้องส่งผลถึงระดับแผน แม้วันจบรวมที่วางไว้ยังไม่เกิน Production
+        # เพื่อไม่ให้แผนเป็นสีเขียวทั้งที่มีงานกำลังผลิต/รอคิวซึ่งเลยเวลาจบของตัวเองแล้ว
+        delayed = sub[sub["_finish"].apply(
+            lambda v: v is not None and not pd.isna(v) and v < project_now
+        )].copy()
+        delayed_count = len(delayed)
+        max_delay_hours = max(
+            [max(0.0, (project_now - value).total_seconds() / 3600.0) for value in delayed["_finish"]],
+            default=0.0
+        )
+        delayed_drawings = ", ".join(delayed.get("ชื่อ Drawing.", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(4))
+        delayed_machines = ", ".join(delayed.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3))
         if production_start is None or production_finish is None:
             status = "⚪ ยังวางงานไม่ครบ"
         elif late_hours > 0:
             status = "🔴 เกินแผน Production"
+        elif delayed_count > 0:
+            status = "🟠 มีคิวดีเลย์ / เสี่ยงกระทบ Production"
         elif early_hours > 0:
             status = "🟡 เริ่มก่อนกรอบ Production"
         else:
@@ -1309,14 +1337,19 @@ def render_project_master_dashboard(calc_df, is_admin):
         planned_hours = pd.to_numeric(
             sub.get("รวม (ชม.)", pd.Series(index=sub.index, dtype=float)), errors="coerce"
         ).fillna(0.0).sum()
-        rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": risky_drawings or "-", "เครื่องเสี่ยง": risky_machines or "-", "จำนวน Drawing": drawing_count, "ชั่วโมงแผน": round(planned_hours, 2)})
+        shown_risky_drawings = risky_drawings or delayed_drawings
+        shown_risky_machines = risky_machines or delayed_machines
+        rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "คิวดีเลย์": delayed_count, "ดีเลย์สูงสุด (ชม.)": round(max_delay_hours, 1), "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": shown_risky_drawings or "-", "เครื่องเสี่ยง": shown_risky_machines or "-", "จำนวน Drawing": drawing_count, "ชั่วโมงแผน": round(planned_hours, 2)})
         customer_text = f"Production: {project_short_date(customer_start)}–{project_short_date(customer_due)}"
         gantt_rows.append({"แผนงาน": f"{code} | Production", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลา Production", "สถานะ": status, "ข้อความ": customer_text})
         if production_start and production_finish:
             production_text = f"ผลิต: {project_short_date(production_start)}–{project_short_date(production_finish)}"
             if late_hours > 0:
                 production_text += f" • เกิน {late_hours / 24.0:.1f} วัน"
-            gantt_rows.append({"แผนงาน": f"{code} | แผนผลิต", "เริ่ม": production_start, "จบ": production_finish, "ประเภท": "แผนผลิตเกินกำหนด" if late_hours > 0 else "แผนผลิต", "สถานะ": status, "ข้อความ": production_text})
+            elif delayed_count > 0:
+                production_text += f" • ดีเลย์ {delayed_count} คิว"
+            production_type = "แผนผลิตเกินกำหนด" if late_hours > 0 else ("แผนผลิตมีคิวดีเลย์" if delayed_count > 0 else "แผนผลิต")
+            gantt_rows.append({"แผนงาน": f"{code} | แผนผลิต", "เริ่ม": production_start, "จบ": production_finish, "ประเภท": production_type, "สถานะ": status, "ข้อความ": production_text})
 
     summary = pd.DataFrame(rows)
     overlap_counts = {code: 0 for code in summary["แผนงาน"]}
@@ -1358,7 +1391,7 @@ def render_project_master_dashboard(calc_df, is_admin):
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("แผนงานทั้งหมด", len(summary_view), help="จำนวนแผนงานในมุมมองที่เลือก")
     k2.metric("อยู่ในแผน", int(summary_view["สถานะ"].str.contains("อยู่ในแผน").sum()))
-    k3.metric("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("เกินแผน Production|ยังวางงานไม่ครบ", regex=True).sum()))
+    k3.metric("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True).sum()))
     k4.metric("ช่วงเวลาซ้อนกัน", int((summary_view["แผนซ้อนกัน"] > 0).sum()))
 
     if not gantt_view.empty:
@@ -1372,10 +1405,11 @@ def render_project_master_dashboard(calc_df, is_admin):
         gantt_colors = {
             "กรอบเวลา Production": "#2563EB",
             "แผนผลิต": "#10B981",
+            "แผนผลิตมีคิวดีเลย์": "#F59E0B",
             "แผนผลิตเกินกำหนด": "#DC2626"
         }
         fig_master = go.Figure()
-        for gantt_type in ["กรอบเวลา Production", "แผนผลิต", "แผนผลิตเกินกำหนด"]:
+        for gantt_type in ["กรอบเวลา Production", "แผนผลิต", "แผนผลิตมีคิวดีเลย์", "แผนผลิตเกินกำหนด"]:
             type_rows = gantt_view[gantt_view["ประเภท"] == gantt_type].copy()
             if type_rows.empty:
                 continue
@@ -1446,7 +1480,7 @@ def render_project_master_dashboard(calc_df, is_admin):
 
     # กล่องสรุปงานที่ผู้วางแผนควรตัดสินใจและช่วงเวลาที่ซ้อนกัน
     decision_df = summary_view[
-        summary_view["สถานะ"].str.contains("เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False)
+        summary_view["สถานะ"].str.contains("มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False)
     ].copy()
     visible_plan_codes = set(summary_view["แผนงาน"].astype(str))
     visible_overlaps = [
@@ -1466,6 +1500,12 @@ def render_project_master_dashboard(calc_df, is_admin):
                     headline = f"⚠️ {safe_str(item.get('แผนงาน'))} เกินแผน Production {late_days:.1f} วัน ({late_hours_item:.1f} ชม.)"
                     detail = f"Drawing: {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง: {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
                     st.error(f"{headline}\n\n{detail}")
+                elif safe_int(item.get("คิวดีเลย์"), 0) > 0:
+                    st.warning(
+                        f"🟠 {safe_str(item.get('แผนงาน'))} มีคิวดีเลย์ {safe_int(item.get('คิวดีเลย์'))} คิว "
+                        f"(สูงสุด {safe_float(item.get('ดีเลย์สูงสุด (ชม.)')):,.1f} ชม.)\n\n"
+                        f"Drawing: {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง: {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
+                    )
                 else:
                     st.warning(f"⚪ {safe_str(item.get('แผนงาน'))} ยังวาง Drawing/Step ไม่ครบ จึงยังประเมินวันจบไม่ได้")
 
@@ -1484,6 +1524,9 @@ def render_project_master_dashboard(calc_df, is_admin):
     late_df = summary_view[summary_view["เกินกำหนด (ชม.)"] > 0]
     if not late_df.empty:
         st.error(f"พบ {len(late_df)} แผนงานที่แผนผลิตจบเกินกรอบเวลา Production กรุณาตรวจ Drawing เสี่ยงเพื่อย้ายเครื่อง ปรับคิว หรือพิจารณาจ้างภายนอก")
+    delay_risk_df = summary_view[(summary_view["คิวดีเลย์"] > 0) & (summary_view["เกินกำหนด (ชม.)"] <= 0)]
+    if not delay_risk_df.empty:
+        st.warning(f"พบ {len(delay_risk_df)} แผนงานที่มีคิวดีเลย์ แม้วันจบรวมยังไม่เกิน Production กรุณาตรวจคิวก่อนเวลาสำรองถูกใช้หมด")
     display_summary = summary_view.copy()
     for col in ["เริ่ม Production", "สิ้นสุด Production", "เริ่มผลิต", "จบผลิต"]:
         display_summary[col] = display_summary[col].apply(lambda v: v.strftime("%d/%m/%Y %H:%M") if v is not None and not pd.isna(v) else "-")
@@ -1497,6 +1540,8 @@ def render_project_master_dashboard(calc_df, is_admin):
         f"<td>{html.escape(safe_str(item.get('เริ่มผลิต'), '-'))}</td>"
         f"<td>{html.escape(safe_str(item.get('จบผลิต'), '-'))}</td>"
         f"<td>{html.escape(safe_str(item.get('สถานะ'), '-'))}</td>"
+        f"<td style='text-align:center'>{safe_int(item.get('คิวดีเลย์'))}</td>"
+        f"<td style='text-align:right'>{safe_float(item.get('ดีเลย์สูงสุด (ชม.)')):,.1f}</td>"
         f"<td style='text-align:right'>{safe_float(item.get('เกินกำหนด (ชม.)')):,.1f}</td>"
         f"<td class='drawing'>{html.escape(safe_str(item.get('Drawing เสี่ยง'), '-'))}</td>"
         f"<td>{html.escape(safe_str(item.get('เครื่องเสี่ยง'), '-'))}</td>"
@@ -1513,6 +1558,12 @@ def render_project_master_dashboard(calc_df, is_admin):
                 f"{safe_str(item.get('แผนงาน'))}: เกินแผน Production {late_value:,.1f} ชม. | "
                 f"Drawing {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
             )
+        elif safe_int(item.get("คิวดีเลย์"), 0) > 0:
+            project_decision_items.append(
+                f"{safe_str(item.get('แผนงาน'))}: มีคิวดีเลย์ {safe_int(item.get('คิวดีเลย์'))} คิว "
+                f"สูงสุด {safe_float(item.get('ดีเลย์สูงสุด (ชม.)')):,.1f} ชม. | "
+                f"Drawing {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
+            )
         else:
             project_decision_items.append(f"{safe_str(item.get('แผนงาน'))}: ยังวาง Drawing/Step ไม่ครบ")
     project_overlap_items = [
@@ -1524,7 +1575,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         "filter": safe_str(project_filter),
         "total": len(summary_view),
         "on_plan": int(summary_view["สถานะ"].str.contains("อยู่ในแผน", na=False).sum()),
-        "risk": int(summary_view["สถานะ"].str.contains("เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False).sum()),
+        "risk": int(summary_view["สถานะ"].str.contains("มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False).sum()),
         "overlap": int((summary_view["แผนซ้อนกัน"] > 0).sum()),
         "rows": project_pdf_rows,
         "decisions": "".join(f"<li>{html.escape(value)}</li>" for value in project_decision_items) or "<li>ไม่พบแผนที่ต้องเร่งตัดสินใจ</li>",
@@ -1565,7 +1616,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         <div class="kpis"><div class="kpi">แผนงานทั้งหมด<b>${{d.total}}</b></div><div class="kpi">อยู่ในแผน<b>${{d.on_plan}}</b></div><div class="kpi">เสี่ยง / เกินกำหนด<b>${{d.risk}}</b></div><div class="kpi">ช่วงเวลาซ้อนกัน<b>${{d.overlap}}</b></div></div>
         <h2>1. ช่วงเวลาแผนหลักเทียบแผนผลิต</h2>${{chartHtml}}
         <div class="panels"><div class="panel"><h2>2. จุดที่ต้องตัดสินใจ</h2><ul>${{d.decisions}}</ul></div><div class="panel"><h2>3. แผนที่เวลาซ้อนกัน</h2><ul>${{d.overlaps}}</ul></div></div>
-        <h2>4. ตารางแผนงาน Production</h2><table><thead><tr><th>แผนงาน</th><th>เริ่ม Production</th><th>สิ้นสุด Production</th><th>เริ่มผลิต</th><th>จบผลิต</th><th>สถานะ</th><th>เกิน (ชม.)</th><th class="drawing">Drawing เสี่ยง</th><th>เครื่องเสี่ยง</th><th>Drawing</th><th>ชั่วโมงแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+        <h2>4. ตารางแผนงาน Production</h2><table><thead><tr><th>แผนงาน</th><th>เริ่ม Production</th><th>สิ้นสุด Production</th><th>เริ่มผลิต</th><th>จบผลิต</th><th>สถานะ</th><th>คิวดีเลย์</th><th>ดีเลย์สูงสุด (ชม.)</th><th>เกิน Production (ชม.)</th><th class="drawing">Drawing เสี่ยง</th><th>เครื่องเสี่ยง</th><th>Drawing</th><th>ชั่วโมงแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
         <div class="foot">PES Production Monitoring System</div></body></html>`;
         const printWin = window.open('', '_blank');
         if (!printWin) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
@@ -1599,7 +1650,9 @@ def render_project_master_dashboard(calc_df, is_admin):
                 "เลือกลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width="small"),
                 "Drawing เสี่ยง": st.column_config.TextColumn("Drawing เสี่ยง", width=430),
                 "เครื่องเสี่ยง": st.column_config.TextColumn("เครื่องเสี่ยง", width=240),
-                "สถานะ": st.column_config.TextColumn(width=175)
+                "สถานะ": st.column_config.TextColumn(width=270),
+                "คิวดีเลย์": st.column_config.NumberColumn(width="small"),
+                "ดีเลย์สูงสุด (ชม.)": st.column_config.NumberColumn(format="%.1f", width="small")
             }
         )
         selected_delete_codes = edited_delete_table.loc[
@@ -1652,7 +1705,9 @@ def render_project_master_dashboard(calc_df, is_admin):
             column_config={
                 "Drawing เสี่ยง": st.column_config.TextColumn("Drawing เสี่ยง", width=430),
                 "เครื่องเสี่ยง": st.column_config.TextColumn("เครื่องเสี่ยง", width=240),
-                "สถานะ": st.column_config.TextColumn(width=175)
+                "สถานะ": st.column_config.TextColumn(width=270),
+                "คิวดีเลย์": st.column_config.NumberColumn(width="small"),
+                "ดีเลย์สูงสุด (ชม.)": st.column_config.NumberColumn(format="%.1f", width="small")
             }
         )
 
