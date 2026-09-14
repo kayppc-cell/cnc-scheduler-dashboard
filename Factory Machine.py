@@ -392,8 +392,35 @@ st.set_page_config(
 
 components.html("""
 <script>
-    window.parent.document.body.style.overscrollBehaviorY = 'none';
-    window.parent.document.documentElement.style.overscrollBehaviorY = 'none';
+    const parentWindow = window.parent;
+    const parentDocument = parentWindow.document;
+    parentDocument.body.style.overscrollBehaviorY = 'none';
+    parentDocument.documentElement.style.overscrollBehaviorY = 'none';
+
+    // ปิดเมนู Selectbox ของ Data Editor เมื่อเลื่อนหน้าหรือเลื่อนตาราง
+    // แต่ยังอนุญาตให้เลื่อนภายในรายชื่อเครื่องจักรได้ตามปกติ
+    if (!parentWindow.__tpcCloseGridDropdownOnScroll) {
+        const closeGridDropdown = function(event) {
+            const target = event && event.target;
+            if (target && target.closest && target.closest('[data-baseweb="popover"], [role="listbox"], [data-testid="stSelectboxVirtualDropdown"]')) {
+                return;
+            }
+            const openList = parentDocument.querySelector('[data-baseweb="popover"] [role="listbox"], [data-testid="stSelectboxVirtualDropdown"], [role="listbox"]');
+            if (!openList) return;
+            const escapeEvent = new KeyboardEvent('keydown', {
+                key: 'Escape', code: 'Escape', keyCode: 27, which: 27,
+                bubbles: true, cancelable: true
+            });
+            const activeElement = parentDocument.activeElement;
+            if (activeElement) activeElement.dispatchEvent(escapeEvent);
+            parentDocument.dispatchEvent(escapeEvent);
+            parentWindow.dispatchEvent(escapeEvent);
+            if (activeElement && typeof activeElement.blur === 'function') activeElement.blur();
+        };
+        parentWindow.addEventListener('scroll', closeGridDropdown, true);
+        parentWindow.addEventListener('wheel', closeGridDropdown, {capture: true, passive: true});
+        parentWindow.__tpcCloseGridDropdownOnScroll = true;
+    }
 </script>
 """, height=0)
 
@@ -588,6 +615,9 @@ st.markdown("""
     div[data-baseweb="popover"] {
         z-index: 1000000 !important;
         max-height: 92vh !important;
+        min-width: 420px !important;
+        width: max-content !important;
+        max-width: 92vw !important;
     }
     div[data-baseweb="popover"] > div,
     div[data-baseweb="menu"],
@@ -604,12 +634,20 @@ st.markdown("""
     }
     ul[role="listbox"] li[role="option"],
     div[role="listbox"] [role="option"] {
-        min-height: 24px !important;
-        height: 24px !important;
-        padding-top: 2px !important;
-        padding-bottom: 2px !important;
-        line-height: 20px !important;
+        min-height: 29px !important;
+        height: auto !important;
+        padding-top: 4px !important;
+        padding-bottom: 4px !important;
+        line-height: 21px !important;
         font-size: 12px !important;
+        white-space: nowrap !important;
+    }
+    ul[role="listbox"] li[role="option"] *,
+    div[role="listbox"] [role="option"] * {
+        white-space: nowrap !important;
+        line-height: 21px !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
     }
 </style>
 """, unsafe_allow_html=True)
