@@ -1308,14 +1308,18 @@ def render_project_master_dashboard(calc_df, is_admin):
         production_finish = max(valid_finishes) if valid_finishes else None
         late_hours = max(0.0, (production_finish - customer_due).total_seconds() / 3600.0) if production_finish and customer_due else 0.0
         early_hours = max(0.0, (customer_start - production_start).total_seconds() / 3600.0) if production_start and customer_start else 0.0
-        risky = sub[sub["_finish"].apply(lambda v: v is not None and customer_due is not None and v > customer_due)]
+        risky_mask = sub["_finish"].apply(
+            lambda v: v is not None and not pd.isna(v) and customer_due is not None and v > customer_due
+        ).astype(bool)
+        risky = sub.loc[risky_mask].copy()
         risky_drawings = ", ".join(risky.get("ชื่อ Drawing.", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(4))
         risky_machines = ", ".join(risky.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3))
         # สถานะคิวหน้างานต้องส่งผลถึงระดับแผน แม้วันจบรวมที่วางไว้ยังไม่เกิน Production
         # เพื่อไม่ให้แผนเป็นสีเขียวทั้งที่มีงานกำลังผลิต/รอคิวซึ่งเลยเวลาจบของตัวเองแล้ว
-        delayed = sub[sub["_finish"].apply(
+        delayed_mask = sub["_finish"].apply(
             lambda v: v is not None and not pd.isna(v) and v < project_now
-        )].copy()
+        ).astype(bool)
+        delayed = sub.loc[delayed_mask].copy()
         delayed_count = len(delayed)
         max_delay_hours = max(
             [max(0.0, (project_now - value).total_seconds() / 3600.0) for value in delayed["_finish"]],
