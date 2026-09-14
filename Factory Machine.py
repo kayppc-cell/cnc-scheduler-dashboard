@@ -587,13 +587,29 @@ st.markdown("""
        ถ้าความสูงหน้าจอไม่พอ เมนูจะมีแถบเลื่อนอยู่ภายในแทนการถูกตัดสั้น */
     div[data-baseweb="popover"] {
         z-index: 1000000 !important;
-        max-height: 82vh !important;
+        max-height: 92vh !important;
+    }
+    div[data-baseweb="popover"] > div,
+    div[data-baseweb="menu"],
+    div[data-testid="stSelectboxVirtualDropdown"] {
+        max-height: 88vh !important;
+        overflow-y: auto !important;
     }
     div[data-baseweb="popover"] ul[role="listbox"],
-    ul[role="listbox"] {
-        max-height: 76vh !important;
+    ul[role="listbox"],
+    div[role="listbox"] {
+        max-height: 84vh !important;
         overflow-y: auto !important;
         overscroll-behavior: contain;
+    }
+    ul[role="listbox"] li[role="option"],
+    div[role="listbox"] [role="option"] {
+        min-height: 24px !important;
+        height: 24px !important;
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+        line-height: 20px !important;
+        font-size: 12px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1266,6 +1282,25 @@ def render_project_master_dashboard(calc_df, is_admin):
 
     if master_df.empty:
         st.info("ยังไม่มีแผนงานที่กำหนดกรอบเวลา Production")
+        return
+
+    # ซ่อน Project Master เมื่อทุกงานของแผนนั้นเสร็จสิ้นแล้ว
+    # เก็บข้อมูลจริงและประวัติไว้ตามเดิม เพียงไม่แสดงในกราฟแผนงานที่กำลังใช้งาน
+    completed_plan_keys = set()
+    if "แผนงาน" in calc_df.columns and "สถานะงาน" in calc_df.columns:
+        for plan_value, plan_jobs in calc_df.groupby(calc_df["แผนงาน"].map(normalize_filter_key), dropna=False):
+            if not plan_value or plan_jobs.empty:
+                continue
+            finished_flags = plan_jobs["สถานะงาน"].astype(str).str.contains("เสร็จสิ้น", na=False)
+            if bool(finished_flags.all()):
+                completed_plan_keys.add(plan_value)
+
+    if completed_plan_keys:
+        master_df = master_df[
+            ~master_df["plan_code"].map(normalize_filter_key).isin(completed_plan_keys)
+        ].copy()
+    if master_df.empty:
+        st.success("แผนงานที่กำหนดไว้ผลิตเสร็จครบทั้งหมดแล้ว จึงไม่มีแผนคงเหลือใน Project Master")
         return
 
     # ใช้เวลาลูกโซ่ชุดเดียวกับตารางสั่งผลิต ไม่ใช้ ready_at ดิบซึ่งอาจอยู่ก่อน
