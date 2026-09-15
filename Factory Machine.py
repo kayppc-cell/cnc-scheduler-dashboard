@@ -580,8 +580,20 @@ st.markdown("""
     }
     div.stButton > button:disabled { background-color: #F1F5F9 !important; color: #94A3B8 !important; border-color: #CBD5E1 !important; cursor: not-allowed !important; }
 
-    .tv-grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-top: 10px; }
-    .tv-card { border-radius: 14px; padding: 16px 18px; color: #FFFFFF !important; box-shadow: 0 6px 18px rgba(0,0,0,0.16); display: flex; flex-direction: column; justify-content: space-between; min-height: 180px; border: 1px solid rgba(255,255,255,0.12); }
+    .tv-grid-container { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-top: 6px; }
+    .tv-card { border-radius: 11px; padding: 9px 11px; color: #FFFFFF !important; box-shadow: 0 4px 12px rgba(0,0,0,0.16); display: flex; flex-direction: column; justify-content: space-between; min-height: 138px; border: 1px solid rgba(255,255,255,0.12); overflow:hidden; }
+    .tv-machine-name { font-size:14px !important; font-weight:800; letter-spacing:0.1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tv-status-badge { font-size:10px !important; white-space:nowrap; }
+    .tv-plan-code { font-size:12.5px !important; font-weight:800; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tv-drawing-code { font-size:11px !important; color:rgba(255,255,255,0.92); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
+    .tv-step-name { font-size:10.5px !important; color:rgba(255,255,255,0.82); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
+    .tv-time-section { margin-top:4px !important; padding-top:4px !important; }
+    .tv-time-section div { font-size:10.5px !important; line-height:1.25 !important; }
+    .tv-time-section .pes-live-timer { font-size:12px !important; }
+    @media (min-width: 2500px) {
+        .tv-grid-container { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+    }
+    .tv-live-header { padding:8px 14px !important; margin-bottom:6px !important; }
     .tv-card-running { background: linear-gradient(135deg, #065F46 0%, #059669 100%) !important; border-left: 7px solid #34D399 !important; }
     .tv-card-warning { background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important; border-left: 7px solid #FDE047 !important; }
     .tv-card-late { background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important; border-left: 7px solid #EF4444 !important; }
@@ -6273,7 +6285,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             })
 
     st.markdown(f"""
-    <div style="background:#0F172A; border:2px solid #1E3A8A; border-radius:16px; padding:12px 20px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
+    <div class="tv-live-header" style="background:#0F172A; border:2px solid #1E3A8A; border-radius:14px; padding:12px 20px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
         <div>
             <div style="font-size:21px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
                 <span>📺 PES SHOP FLOOR LIVE MONITOR (22 สถานี)</span>
@@ -6300,15 +6312,15 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         card_item = (
             f'<div class="{c["card_class"]}">'
             f'<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">'
-            f'<div style="font-size:17px; font-weight:800; letter-spacing:0.2px;">{c["machine"]}</div>'
-            f'<div style="font-size:12px;">{c["badge_html"]}</div>'
+            f'<div class="tv-machine-name">{c["machine"]}</div>'
+            f'<div class="tv-status-badge">{c["badge_html"]}</div>'
             f'</div>'
             f'<div style="margin: 3px 0;">'
-            f'<div style="font-size:15px; font-weight:700; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">📌 {c["plan"]}</div>'
-            f'<div style="font-size:13.5px; color:rgba(255,255,255,0.9); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px;">📄 {c["drawing"]}</div>'
-            f'<div style="font-size:12.5px; color:rgba(255,255,255,0.78); margin-top:2px;">⚙️ ขั้นตอน: {c["step"]}</div>'
+            f'<div class="tv-plan-code">📌 {c["plan"]}</div>'
+            f'<div class="tv-drawing-code">📄 {c["drawing"]}</div>'
+            f'<div class="tv-step-name">⚙️ ขั้นตอน: {c["step"]}</div>'
             f'</div>'
-            f'<div style="margin-top:8px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.18);">'
+            f'<div class="tv-time-section" style="border-top:1px solid rgba(255,255,255,0.18);">'
             f'{c["time_info"]}'
             f'</div>'
             f'</div>'
