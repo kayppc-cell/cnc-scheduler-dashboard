@@ -397,10 +397,25 @@ components.html("""
     parentDocument.body.style.overscrollBehaviorY = 'none';
     parentDocument.documentElement.style.overscrollBehaviorY = 'none';
 
-    // ปิดเมนู Selectbox ของ Data Editor เมื่อเลื่อนหน้าหรือเลื่อนตาราง
-    // แต่ยังอนุญาตให้เลื่อนภายในรายชื่อเครื่องจักรได้ตามปกติ
-    if (!parentWindow.__tpcCloseGridDropdownOnScroll) {
+    // จำกัดเมนูแบบยาวไว้เฉพาะ Data Editor ตารางสั่งผลิตหลัก
+    if (!parentWindow.__tpcProductionEditorMenuScope) {
+        const getProductionGrid = function() {
+            const marker = parentDocument.getElementById('tpc-production-editor-marker');
+            if (!marker) return null;
+            const grids = Array.from(parentDocument.querySelectorAll('div[data-testid="stDataFrame"]'));
+            return grids.find(function(grid) {
+                return Boolean(marker.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING);
+            }) || null;
+        };
+        parentDocument.addEventListener('pointerdown', function(event) {
+            const grid = getProductionGrid();
+            const insideGrid = grid && grid.contains(event.target);
+            const insideMenu = event.target && event.target.closest && event.target.closest('[data-baseweb="popover"], [role="listbox"], [data-testid="stSelectboxVirtualDropdown"]');
+            if (insideGrid) parentDocument.body.classList.add('tpc-production-editor-menu');
+            else if (!insideMenu) parentDocument.body.classList.remove('tpc-production-editor-menu');
+        }, true);
         const closeGridDropdown = function(event) {
+            if (!parentDocument.body.classList.contains('tpc-production-editor-menu')) return;
             const target = event && event.target;
             if (target && target.closest && target.closest('[data-baseweb="popover"], [role="listbox"], [data-testid="stSelectboxVirtualDropdown"]')) {
                 return;
@@ -416,10 +431,11 @@ components.html("""
             parentDocument.dispatchEvent(escapeEvent);
             parentWindow.dispatchEvent(escapeEvent);
             if (activeElement && typeof activeElement.blur === 'function') activeElement.blur();
+            parentDocument.body.classList.remove('tpc-production-editor-menu');
         };
         parentWindow.addEventListener('scroll', closeGridDropdown, true);
         parentWindow.addEventListener('wheel', closeGridDropdown, {capture: true, passive: true});
-        parentWindow.__tpcCloseGridDropdownOnScroll = true;
+        parentWindow.__tpcProductionEditorMenuScope = true;
     }
 </script>
 """, height=0)
@@ -610,30 +626,29 @@ st.markdown("""
         font-size: 12px !important;
     }
 
-    /* เปิดรายการ Selectbox ใน Data Editor ให้สูงพอเห็นรายชื่อเครื่องทั้งหมด
-       ถ้าความสูงหน้าจอไม่พอ เมนูจะมีแถบเลื่อนอยู่ภายในแทนการถูกตัดสั้น */
-    div[data-baseweb="popover"] {
+    /* เมนูแบบยาวใช้เฉพาะ Data Editor ตารางสั่งผลิตหลัก */
+    body.tpc-production-editor-menu div[data-baseweb="popover"] {
         z-index: 1000000 !important;
         max-height: 92vh !important;
         min-width: 420px !important;
         width: max-content !important;
         max-width: 92vw !important;
     }
-    div[data-baseweb="popover"] > div,
-    div[data-baseweb="menu"],
-    div[data-testid="stSelectboxVirtualDropdown"] {
+    body.tpc-production-editor-menu div[data-baseweb="popover"] > div,
+    body.tpc-production-editor-menu div[data-baseweb="menu"],
+    body.tpc-production-editor-menu div[data-testid="stSelectboxVirtualDropdown"] {
         max-height: 88vh !important;
         overflow-y: auto !important;
     }
-    div[data-baseweb="popover"] ul[role="listbox"],
-    ul[role="listbox"],
-    div[role="listbox"] {
+    body.tpc-production-editor-menu div[data-baseweb="popover"] ul[role="listbox"],
+    body.tpc-production-editor-menu ul[role="listbox"],
+    body.tpc-production-editor-menu div[role="listbox"] {
         max-height: 84vh !important;
         overflow-y: auto !important;
         overscroll-behavior: contain;
     }
-    ul[role="listbox"] li[role="option"],
-    div[role="listbox"] [role="option"] {
+    body.tpc-production-editor-menu ul[role="listbox"] li[role="option"],
+    body.tpc-production-editor-menu div[role="listbox"] [role="option"] {
         min-height: 29px !important;
         height: auto !important;
         padding-top: 4px !important;
@@ -642,8 +657,8 @@ st.markdown("""
         font-size: 12px !important;
         white-space: nowrap !important;
     }
-    ul[role="listbox"] li[role="option"] *,
-    div[role="listbox"] [role="option"] * {
+    body.tpc-production-editor-menu ul[role="listbox"] li[role="option"] *,
+    body.tpc-production-editor-menu div[role="listbox"] [role="option"] * {
         white-space: nowrap !important;
         line-height: 21px !important;
         overflow: visible !important;
@@ -1137,7 +1152,11 @@ def build_project_active_chain(calc_df):
                 chained_starts.append(None)
                 chained_finishes.append(None)
                 continue
-            start_dt = get_next_valid_work_time(previous_finish)
+            row_ready = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+            # คิวถัดไปเริ่มต่อจากคิวก่อนหน้า แต่ห้ามเริ่มก่อนวันที่ผู้วางแผนกำหนด
+            # จึงรองรับช่วงว่างของเครื่องและงานที่วางล่วงหน้าได้
+            start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
+            start_dt = get_next_valid_work_time(start_base)
 
         _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
         machine_available[machine] = finish_dt
@@ -3339,7 +3358,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         chained_start_dates.append("")
                         chained_finish_dates.append("")
                         continue
-                    start_work_dt = get_next_valid_work_time(previous_finish)
+                    row_ready = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
+                    # ใช้เวลาจบคิวก่อนหน้าเป็นหลัก แต่รักษาวันเริ่มล่วงหน้าที่ผู้วางแผนกำหนด
+                    start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
+                    start_work_dt = get_next_valid_work_time(start_base)
 
                 _, finish_work_dt = add_work_time_with_shift(start_work_dt, tot_h)
                 m_available_tracker[m_target] = finish_work_dt
@@ -3469,6 +3491,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.session_state.editor_cnc_jobs_grid_main_row_ids = display_editor_df["ID"].tolist()
 
                 if is_admin:
+                    st.markdown('<div id="tpc-production-editor-marker"></div>', unsafe_allow_html=True)
                     # เก็บ Data Editor ไว้ใน form เพื่อไม่ให้ Streamlit rerun ทั้งหน้าทุกครั้งที่ออกจากเซลล์
                     with st.form("active_jobs_editor_form", clear_on_submit=False):
                         edited_jobs = st.data_editor(
@@ -3710,12 +3733,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     continue
                                 start_dt = get_next_valid_work_time(start_dt)
                             else:
-                                start_dt = machine_available[machine_name]
-                                if start_dt is None:
+                                previous_finish = machine_available[machine_name]
+                                if previous_finish is None:
                                     calculated_starts.append("")
                                     calculated_finishes.append("")
                                     continue
-                                start_dt = get_next_valid_work_time(start_dt)
+                                row_ready = parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
+                                # ไม่ดึงงานล่วงหน้าให้มาต่อทันที หากกำหนดเริ่มไว้หลังคิวก่อนหน้า
+                                start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
+                                start_dt = get_next_valid_work_time(start_base)
                             _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
                             machine_available[machine_name] = finish_dt
                             calculated_starts.append(start_dt.strftime("%d/%m/%Y %H:%M"))
