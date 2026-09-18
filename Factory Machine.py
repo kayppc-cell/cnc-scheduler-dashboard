@@ -580,6 +580,7 @@ st.markdown("""
     }
     div.stButton > button:disabled { background-color: #F1F5F9 !important; color: #94A3B8 !important; border-color: #CBD5E1 !important; cursor: not-allowed !important; }
 
+    /* TV Live ใช้ HTML ชุดเดียว แต่จัดหน้าตามขนาดอุปกรณ์อัตโนมัติ */
     .tv-grid-container { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-top: 6px; }
     .tv-card { border-radius: 11px; padding: 9px 11px; color: #FFFFFF !important; box-shadow: 0 4px 12px rgba(0,0,0,0.16); display: flex; flex-direction: column; justify-content: space-between; min-height: 138px; border: 1px solid rgba(255,255,255,0.12); overflow:hidden; }
     .tv-machine-name { font-size:14px !important; font-weight:800; letter-spacing:0.1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -594,6 +595,30 @@ st.markdown("""
         .tv-grid-container { grid-template-columns: repeat(8, minmax(0, 1fr)); }
     }
     .tv-live-header { padding:8px 14px !important; margin-bottom:6px !important; }
+    @media (max-width: 1100px) {
+        .tv-grid-container { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .tv-card { min-height: 190px; padding: 12px 14px; }
+        .tv-machine-name { font-size:17px !important; }
+        .tv-plan-code { font-size:15px !important; }
+        .tv-drawing-code, .tv-step-name { font-size:13px !important; white-space:normal; overflow:visible; overflow-wrap:anywhere; }
+        .tv-status-badge { font-size:12px !important; }
+        .tv-time-section div { font-size:12.5px !important; }
+        .tv-time-section .pes-live-timer { font-size:14px !important; }
+    }
+    @media (max-width: 700px) {
+        .tv-grid-container { grid-template-columns: 1fr; gap: 12px; }
+        .tv-card { min-height: auto; padding: 14px 16px; overflow:visible; }
+        .tv-live-header { display:block !important; padding:14px 16px !important; }
+        .tv-live-header > div:last-child { text-align:left !important; margin-top:12px; }
+        .tv-live-title { display:block !important; font-size:20px !important; line-height:1.35 !important; }
+        .tv-live-title .tv-auto-badge { display:inline-block; margin-top:8px; }
+        .tv-machine-name { font-size:18px !important; white-space:normal; overflow:visible; }
+        .tv-status-badge { white-space:normal; text-align:right; }
+        .tv-plan-code { font-size:16px !important; white-space:normal; overflow:visible; }
+        .tv-drawing-code, .tv-step-name { font-size:14px !important; line-height:1.45; }
+        .tv-time-section div { font-size:13.5px !important; }
+        .tv-time-section .pes-live-timer { font-size:16px !important; }
+    }
     .tv-card-running { background: linear-gradient(135deg, #065F46 0%, #059669 100%) !important; border-left: 7px solid #34D399 !important; }
     .tv-card-warning { background: linear-gradient(135deg, #9A3412 0%, #C2410C 100%) !important; border-left: 7px solid #FDE047 !important; }
     .tv-card-late { background: linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%) !important; border-left: 7px solid #EF4444 !important; }
@@ -3061,57 +3086,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         df_db = fetch_jobs_from_supabase()
 
         if is_admin:
-            with st.expander("➕ สั่งผลิตงานใหม่เข้าระบบ (Add New Job)", expanded=False):
-                with st.form("form_add_new_job_main", clear_on_submit=True):
-                    f_c1, f_c2, f_c_qty, f_c3 = st.columns([1.5, 2.5, 1, 1.2])
-                    with f_c1:
-                        new_f_plan = st.text_input("รหัสแผนงาน (Plan No.):", placeholder="เช่น 26-105")
-                    with f_c2:
-                        new_f_draw = st.text_input("ชื่อ Drawing:", placeholder="เช่น P26-PES-105-001-Unit10")
-                    with f_c_qty:
-                        new_f_qty = st.number_input("จำนวน:", min_value=1, max_value=10000, value=1, step=1)
-                    with f_c3:
-                        new_f_mat = st.text_input("วัสดุ:", value="SS400")
-
-                    f_c4, f_c5, f_c6 = st.columns([1.5, 2, 2])
-                    with f_c4:
-                        new_f_type = st.selectbox("ประเภทงาน:", JOB_TYPES)
-                    with f_c5:
-                        st.text_input("ขั้นตอน (Step):", value="รอหน้าเครื่องระบุ", disabled=True, help="ช่องนี้ถูกล็อกไว้ ให้ช่างหน้าเครื่องเป็นผู้ระบุชื่อขั้นตอนจริง")
-                    with f_c6:
-                        new_f_machine = st.selectbox("เลือกเครื่องจักร / แผนก:", MACHINE_LIST)
-
-                    f_c7, f_c8, f_c9 = st.columns([1.5, 1.5, 1.5])
-                    with f_c7:
-                        new_f_setup = st.number_input("เวลาตั้งเครื่อง Setup (นาที):", min_value=0, max_value=720, value=10, step=5)
-                    with f_c8:
-                        new_f_basic = st.number_input("Basic Machine (นาที):", min_value=0, max_value=6000, value=0, step=5)
-                    with f_c9:
-                        new_f_prog = st.number_input("รันโปรแกรม/เวลาทำงานตามแผน (นาที):", min_value=0, max_value=12000, value=120, step=10)
-
-                    if st.form_submit_button("🚀 บันทึกสั่งผลิตใหม่เข้าสู่ระบบ", type="primary", use_container_width=True):
-                        if new_f_plan.strip() != "":
-                            payload = {
-                                "plan_code": new_f_plan.strip(),
-                                "drawing_name": new_f_draw.strip(),
-                                "qty": int(new_f_qty),
-                                "material": new_f_mat.strip(),
-                                "job_type": new_f_type,
-                                "step_name": "รอหน้าเครื่องระบุ",
-                                "machine_name": new_f_machine,
-                                "ready_at": get_bangkok_str(),
-                                "setup_mins": float(new_f_setup),
-                                "basic_hrs": float(new_f_basic),
-                                "prog_hrs": float(new_f_prog),
-                                "status": "🟧 รอคิวผลิต"
-                            }
-                            if insert_supabase_job(payload):
-                                st.cache_data.clear()
-                                st.success(f"เพิ่มแผนงาน {new_f_plan} เข้าสู่ระบบสำเร็จ!")
-                                st.rerun()
-                        else:
-                            st.error("กรุณาระบุรหัสแผนงาน")
-
             templates = fetch_drawing_templates()
             with st.expander("📚 Drawing Template — ลดการพิมพ์ข้อมูลซ้ำ", expanded=False):
                 if templates is None:
@@ -6514,9 +6488,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     st.markdown(f"""
     <div class="tv-live-header" style="background:#0F172A; border:2px solid #1E3A8A; border-radius:14px; padding:12px 20px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
         <div>
-            <div style="font-size:21px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
+            <div class="tv-live-title" style="font-size:21px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
                 <span>📺 PES SHOP FLOOR LIVE MONITOR (22 สถานี)</span>
-                <span style="font-size:11.5px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:2px 8px; border-radius:16px;">Auto 30s</span>
+                <span class="tv-auto-badge" style="font-size:11.5px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:2px 8px; border-radius:16px;">Auto 30s</span>
             </div>
             <div style="color:#94A3B8; font-size:12.5px; margin-top:2px;">
                 สถานะการผลิต 22 สถานีงานแบบ Real-time | ประจำวันที่ <b>{cur_date_str}</b>
