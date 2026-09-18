@@ -781,6 +781,86 @@ def update_supabase_job(job_id: int, payload: dict, clear_cache: bool = True) ->
     except Exception:
         return False
 
+@st.cache_data(ttl=15, show_spinner=False)
+def fetch_drawing_templates():
+    """อ่าน Drawing Template; ค่า None หมายถึงยังไม่ได้สร้างตารางใน Supabase"""
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_drawing_templates"
+        res = requests.get(
+            endpoint,
+            headers=get_supabase_headers(),
+            params={"select": "*", "order": "drawing_name.asc"},
+            timeout=8
+        )
+        if res.status_code != 200:
+            return None
+        return res.json() if isinstance(res.json(), list) else []
+    except Exception:
+        return None
+
+def save_drawing_template(payload: dict) -> tuple[bool, str]:
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_drawing_templates"
+        headers = get_supabase_headers().copy()
+        headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+        res = requests.post(endpoint, headers=headers, params={"on_conflict": "drawing_name"}, json=payload, timeout=8)
+        if res.status_code in [200, 201]:
+            fetch_drawing_templates.clear()
+            return True, ""
+        return False, safe_str(res.text, "บันทึก Template ไม่สำเร็จ")
+    except Exception as exc:
+        return False, str(exc)
+
+def delete_drawing_template(template_id: int) -> tuple[bool, str]:
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_drawing_templates?id=eq.{int(template_id)}"
+        res = requests.delete(endpoint, headers=get_supabase_headers(), timeout=8)
+        if res.status_code in [200, 204]:
+            fetch_drawing_templates.clear()
+            return True, ""
+        return False, safe_str(res.text, "ลบ Template ไม่สำเร็จ")
+    except Exception as exc:
+        return False, str(exc)
+
+def template_step_names(template_row: dict) -> list[str]:
+    raw_steps = template_row.get("steps", []) if isinstance(template_row, dict) else []
+    if isinstance(raw_steps, str):
+        try:
+            raw_steps = json.loads(raw_steps)
+        except Exception:
+            raw_steps = []
+    names = []
+    for item in raw_steps if isinstance(raw_steps, list) else []:
+        name = safe_str(item.get("name") if isinstance(item, dict) else item, "")
+        if name:
+            names.append(name)
+    return names or ["รอหน้าเครื่องระบุ"]
+
+def urgent_insert_ready_at(machine_name: str, insert_mode: str, target_id, jobs_df: pd.DataFrame):
+    """หาเวลาจัดลำดับคิวโดยไม่หยุดหรือแก้สถานะงานที่กำลังผลิต"""
+    now_dt = get_bangkok_now().replace(tzinfo=None)
+    machine_jobs = jobs_df[
+        (jobs_df["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(machine_name)) &
+        (jobs_df["สถานะงาน"].astype(str).str.contains("กำลังผลิต|รอคิว|พักงาน", regex=True))
+    ].copy()
+    machine_jobs["_ready"] = machine_jobs["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
+    waiting = machine_jobs[machine_jobs["สถานะงาน"].astype(str).str.contains("รอคิว")].sort_values(["_ready", "ID"])
+    if insert_mode.startswith("ก่อนคิว") and target_id is not None:
+        target = waiting[waiting["ID"].astype(int) == int(target_id)]
+        if not target.empty and pd.notna(target.iloc[0]["_ready"]):
+            return get_next_valid_work_time(target.iloc[0]["_ready"] - timedelta(seconds=1))
+    running = machine_jobs[machine_jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True)]
+    if not running.empty:
+        row = running.sort_values(["_ready", "ID"]).iloc[0]
+        start_dt = row["_ready"] if pd.notna(row["_ready"]) else now_dt
+        hours = (safe_float(row.get("Setup (น.)"), 10) + safe_float(row.get("Basic (น.)"), 0) + safe_float(row.get("โปรแกรม (น.)"), 0)) / 60.0
+        _, planned_finish = add_work_time_with_shift(get_next_valid_work_time(start_dt), hours)
+        return max(get_next_valid_work_time(now_dt), planned_finish)
+    return get_next_valid_work_time(now_dt)
+
 def get_other_running_job(machine_name: str, exclude_job_id=None):
     """ตรวจฐานข้อมูลสดว่าเครื่องนี้มีคิวอื่นกำลังจับเวลาอยู่หรือไม่"""
     try:
@@ -3031,6 +3111,153 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 st.rerun()
                         else:
                             st.error("กรุณาระบุรหัสแผนงาน")
+
+            templates = fetch_drawing_templates()
+            with st.expander("📚 Drawing Template — ลดการพิมพ์ข้อมูลซ้ำ", expanded=False):
+                if templates is None:
+                    st.warning("ยังไม่พบตาราง cnc_drawing_templates ใน Supabase กรุณารันไฟล์ SQL ที่แนบให้ก่อน")
+                else:
+                    template_map = {safe_str(item.get("drawing_name")): item for item in templates}
+                    template_options = ["➕ สร้าง Template ใหม่"] + list(template_map.keys())
+                    selected_template_name = st.selectbox(
+                        "เลือก Drawing Template เพื่อดู/แก้ไข",
+                        template_options,
+                        key="drawing_template_select"
+                    )
+                    selected_template = template_map.get(selected_template_name, {})
+                    selected_steps = template_step_names(selected_template) if selected_template else ["รอหน้าเครื่องระบุ"]
+                    with st.form("drawing_template_form", clear_on_submit=False):
+                        t1, t2, t3 = st.columns([2.2, 1.2, 1])
+                        with t1:
+                            tpl_drawing = st.text_input("Drawing", value=safe_str(selected_template.get("drawing_name")))
+                        with t2:
+                            tpl_material = st.text_input("วัสดุมาตรฐาน", value=safe_str(selected_template.get("material"), "SS400"))
+                        with t3:
+                            tpl_qty = st.number_input("จำนวนมาตรฐาน", 1, 10000, safe_int(selected_template.get("default_qty"), 1))
+                        t4, t5, t6, t7 = st.columns([1.5, 1, 1, 1])
+                        with t4:
+                            default_machine = safe_str(selected_template.get("machine_name"), MACHINE_LIST[0])
+                            tpl_machine = st.selectbox("เครื่องจักรแนะนำ", MACHINE_LIST, index=MACHINE_LIST.index(default_machine) if default_machine in MACHINE_LIST else 0)
+                        with t5:
+                            tpl_setup = st.number_input("Setup (นาที)", 0, 720, safe_int(selected_template.get("setup_mins"), 10), step=5)
+                        with t6:
+                            tpl_basic = st.number_input("Basic (นาที)", 0, 6000, safe_int(selected_template.get("basic_mins"), 0), step=5)
+                        with t7:
+                            tpl_prog = st.number_input("โปรแกรม (นาที)", 0, 12000, safe_int(selected_template.get("program_mins"), 120), step=10)
+                        tpl_steps_text = st.text_area(
+                            "รายการ Step — หนึ่งบรรทัดต่อหนึ่ง Step เรียงตามลำดับทำงาน",
+                            value="\n".join(selected_steps),
+                            height=130,
+                            placeholder="Step 1: ตั้งงาน\nStep 2: กัดหยาบ\nStep 3: กัดละเอียด"
+                        )
+                        save_tpl = st.form_submit_button("💾 บันทึก Drawing Template", type="primary", use_container_width=True)
+                    if save_tpl:
+                        step_names = [line.strip() for line in tpl_steps_text.splitlines() if line.strip()]
+                        if not tpl_drawing.strip():
+                            st.error("กรุณาระบุ Drawing")
+                        elif not step_names:
+                            st.error("กรุณาระบุอย่างน้อย 1 Step")
+                        else:
+                            ok, error = save_drawing_template({
+                                "drawing_name": tpl_drawing.strip(), "material": tpl_material.strip(),
+                                "default_qty": int(tpl_qty), "machine_name": tpl_machine,
+                                "setup_mins": float(tpl_setup), "basic_mins": float(tpl_basic),
+                                "program_mins": float(tpl_prog),
+                                "steps": [{"name": name, "order": idx + 1} for idx, name in enumerate(step_names)],
+                                "updated_at": get_bangkok_str()
+                            })
+                            if ok:
+                                st.success(f"บันทึก Template {tpl_drawing.strip()} แล้ว")
+                                st.rerun()
+                            else:
+                                st.error(f"บันทึก Template ไม่สำเร็จ: {error}")
+                    if selected_template and st.button("🗑️ ลบ Template ที่เลือก", key="delete_selected_drawing_template"):
+                        ok, error = delete_drawing_template(safe_int(selected_template.get("id"), 0))
+                        if ok:
+                            st.success("ลบ Template แล้ว โดยไม่ลบงานผลิตที่เคยสร้าง")
+                            st.rerun()
+                        else:
+                            st.error(error)
+
+            with st.expander("⚡ งานด่วนแทรกจาก Drawing Template", expanded=False):
+                if templates is None:
+                    st.warning("กรุณาสร้างตาราง Template ใน Supabase ก่อน")
+                elif not templates:
+                    st.info("ยังไม่มี Drawing Template กรุณาสร้าง Template อย่างน้อย 1 รายการก่อน")
+                else:
+                    urgent_template_map = {safe_str(item.get("drawing_name")): item for item in templates}
+                    u1, u2, u3 = st.columns([1.2, 2, 1])
+                    with u1:
+                        urgent_plan = st.text_input("รหัสแผนงาน", key="urgent_plan_code")
+                    with u2:
+                        urgent_drawing = st.selectbox("Drawing Template", list(urgent_template_map.keys()), key="urgent_template_name")
+                    urgent_tpl = urgent_template_map[urgent_drawing]
+                    with u3:
+                        urgent_qty = st.number_input("จำนวน", 1, 10000, safe_int(urgent_tpl.get("default_qty"), 1), key="urgent_qty")
+                    u4, u5 = st.columns([1.5, 2.5])
+                    with u4:
+                        urgent_machine_default = safe_str(urgent_tpl.get("machine_name"), MACHINE_LIST[0])
+                        urgent_machine = st.selectbox(
+                            "เครื่องจักร",
+                            MACHINE_LIST,
+                            index=MACHINE_LIST.index(urgent_machine_default) if urgent_machine_default in MACHINE_LIST else 0,
+                            key="urgent_machine"
+                        )
+                    machine_waiting = df_db[
+                        (df_db["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(urgent_machine)) &
+                        (df_db["สถานะงาน"].astype(str).str.contains("รอคิว"))
+                    ].copy() if not df_db.empty else pd.DataFrame()
+                    target_map = {}
+                    if not machine_waiting.empty:
+                        machine_waiting["_ready"] = machine_waiting["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
+                        machine_waiting = machine_waiting.sort_values(["_ready", "ID"])
+                        target_map = {
+                            f"ก่อนคิว {safe_str(row.get('แผนงาน'))} | {safe_str(row.get('ชื่อ Drawing.'))}": safe_int(row.get("ID"))
+                            for _, row in machine_waiting.iterrows()
+                        }
+                    insert_choices = ["หลังงานที่กำลังรัน / เป็นคิวถัดไป"] + list(target_map.keys())
+                    with u5:
+                        urgent_position = st.selectbox("ตำแหน่งแทรก", insert_choices, key="urgent_insert_position")
+                    urgent_reason = st.text_input("เหตุผล/หมายเหตุงานด่วน", placeholder="เช่น ลูกค้าเร่งส่ง, งานแก้ไขเร่งด่วน", key="urgent_reason")
+
+                    target_id = target_map.get(urgent_position)
+                    urgent_start = urgent_insert_ready_at(urgent_machine, urgent_position, target_id, df_db)
+                    urgent_minutes = (
+                        safe_float(urgent_tpl.get("setup_mins"), 10) +
+                        safe_float(urgent_tpl.get("basic_mins"), 0) +
+                        safe_float(urgent_tpl.get("program_mins"), 120)
+                    )
+                    _, urgent_finish = add_work_time_with_shift(urgent_start, urgent_minutes / 60.0)
+                    affected_count = 0
+                    if not machine_waiting.empty:
+                        affected_count = int((machine_waiting["_ready"] >= urgent_start).sum())
+                    p1, p2, p3 = st.columns(3)
+                    p1.metric("เริ่มงานด่วนโดยประมาณ", urgent_start.strftime("%d/%m/%Y %H:%M"))
+                    p2.metric("จบงานด่วนโดยประมาณ", urgent_finish.strftime("%d/%m/%Y %H:%M"))
+                    p3.metric("คิวถัดไปที่อาจเลื่อน", f"{affected_count} คิว")
+                    st.caption("ระบบจะไม่หยุดงานที่กำลังผลิต งานด่วนจะเข้าในคิวเดียวพร้อม Step ทั้งหมด และลูกโซ่ของเครื่องนี้จะคำนวณใหม่บนหน้าตาราง")
+                    confirm_urgent = st.checkbox("ยืนยันว่าได้ตรวจสอบผลกระทบของคิวแล้ว", key="confirm_urgent_insert")
+                    if st.button("⚡ บันทึกงานด่วนแทรก", type="primary", use_container_width=True, disabled=not confirm_urgent):
+                        urgent_steps = template_step_names(urgent_tpl)
+                        combined_steps = " → ".join(urgent_steps)
+                        payload = {
+                            "plan_code": urgent_plan.strip(), "drawing_name": urgent_drawing,
+                            "qty": int(urgent_qty), "material": safe_str(urgent_tpl.get("material"), "SS400"),
+                            "job_type": "🔴 งานด่วนแทรก", "step_name": combined_steps,
+                            "machine_name": urgent_machine, "ready_at": urgent_start.strftime("%Y-%m-%d %H:%M:%S"),
+                            "setup_mins": safe_float(urgent_tpl.get("setup_mins"), 10),
+                            "basic_hrs": safe_float(urgent_tpl.get("basic_mins"), 0),
+                            "prog_hrs": safe_float(urgent_tpl.get("program_mins"), 120),
+                            "status": "🟧 รอคิวผลิต",
+                            "step_progress": normalize_step_progress(None, combined_steps, "🟧 รอคิวผลิต")
+                        }
+                        if not urgent_plan.strip():
+                            st.error("กรุณาระบุรหัสแผนงาน")
+                        elif insert_supabase_job(payload):
+                            st.success(f"เพิ่มงานด่วน {urgent_drawing} แล้ว — ไม่กระทบสถานะงานที่กำลังรัน")
+                            st.rerun()
+                        else:
+                            st.error("บันทึกงานด่วนไม่สำเร็จ กรุณาตรวจสอบคอลัมน์ step_progress ใน Supabase")
 
         if not df_db.empty:
             calc_df = df_db.copy()
