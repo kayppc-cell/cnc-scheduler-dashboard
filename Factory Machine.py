@@ -1096,6 +1096,114 @@ def verify_supabase_ready_times(expected_by_id: dict) -> bool:
     except Exception:
         return False
 
+def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: int) -> tuple[bool, str, list]:
+    """สลับตำแหน่งคิวรอสองงานบนเครื่องเดียวกัน แล้วคำนวณลูกโซ่คิวรอใหม่ทั้งหมด"""
+    source_job_id, target_job_id = safe_int(source_job_id), safe_int(target_job_id)
+    if source_job_id <= 0 or target_job_id <= 0 or source_job_id == target_job_id:
+        return False, "กรุณาเลือกคิวปลายทางคนละรายการ", []
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs"
+        params = {
+            "select": "id,plan_code,drawing_name,machine_name,status,ready_at,setup_mins,basic_hrs,prog_hrs",
+            "machine_name": f"eq.{machine_name}",
+            "order": "ready_at.asc,id.asc"
+        }
+        res = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        if res.status_code != 200:
+            return False, "อ่านคิวล่าสุดจากฐานข้อมูลไม่สำเร็จ", []
+
+        live_rows = res.json() if isinstance(res.json(), list) else []
+        waiting_rows = [row for row in live_rows if "รอคิว" in safe_str(row.get("status"))]
+        waiting_ids = [safe_int(row.get("id")) for row in waiting_rows]
+        if source_job_id not in waiting_ids or target_job_id not in waiting_ids:
+            return False, "คิวรายการใดรายการหนึ่งเปลี่ยนสถานะแล้ว กรุณารีเฟรชและลองใหม่", []
+        if len(waiting_rows) < 2:
+            return False, "เครื่องนี้มีคิวรอไม่ถึง 2 รายการ", []
+
+        # สลับเฉพาะตำแหน่ง แต่ใช้เวลาของงานแต่ละรายการคำนวณลูกโซ่ใหม่
+        source_idx, target_idx = waiting_ids.index(source_job_id), waiting_ids.index(target_job_id)
+        waiting_rows[source_idx], waiting_rows[target_idx] = waiting_rows[target_idx], waiting_rows[source_idx]
+
+        original_ready = {
+            safe_int(row.get("id")): parse_flexible_datetime(row.get("ready_at"))
+            for row in live_rows if safe_int(row.get("id")) > 0
+        }
+        valid_waiting_times = [
+            parse_flexible_datetime(row.get("ready_at")) for row in waiting_rows
+            if parse_flexible_datetime(row.get("ready_at")) is not None
+        ]
+        chain_start = min(valid_waiting_times) if valid_waiting_times else get_bangkok_now().replace(tzinfo=None)
+        chain_start = get_next_valid_work_time(chain_start)
+
+        # ถ้ามีงานกำลังผลิต/พักอยู่ ให้คิวรอเริ่มหลังเวลาจบตามแผนของงานนั้น
+        active_rows = [
+            row for row in live_rows
+            if "กำลังผลิต" in safe_str(row.get("status")) or "พักงาน" in safe_str(row.get("status"))
+        ]
+        for row in active_rows:
+            active_start = parse_flexible_datetime(row.get("ready_at"))
+            if active_start is None or pd.isna(active_start):
+                continue
+            duration_hours = (
+                safe_float(row.get("setup_mins"), 10.0)
+                + safe_float(row.get("basic_hrs"), 0.0)
+                + safe_float(row.get("prog_hrs"), 0.0)
+            ) / 60.0
+            _, active_finish = add_work_time_with_shift(get_next_valid_work_time(active_start), duration_hours)
+            if active_finish is not None and pd.notna(active_finish):
+                chain_start = max(chain_start, active_finish)
+
+        expected_by_id, changed_rows = {}, []
+        cursor = chain_start
+        for row in waiting_rows:
+            job_id = safe_int(row.get("id"))
+            cursor = get_next_valid_work_time(cursor)
+            expected_by_id[job_id] = cursor
+            changed_rows.append({
+                "id": job_id,
+                "plan_code": safe_str(row.get("plan_code"), "-"),
+                "drawing_name": safe_str(row.get("drawing_name"), "-"),
+                "ready_at": cursor
+            })
+            duration_hours = (
+                safe_float(row.get("setup_mins"), 10.0)
+                + safe_float(row.get("basic_hrs"), 0.0)
+                + safe_float(row.get("prog_hrs"), 0.0)
+            ) / 60.0
+            _, cursor = add_work_time_with_shift(cursor, duration_hours)
+
+        updated_ids = []
+        for job_id, ready_dt in expected_by_id.items():
+            if not update_supabase_job(
+                job_id, {"ready_at": ready_dt.strftime("%Y-%m-%d %H:%M:%S")}, clear_cache=False
+            ):
+                # คืนค่าเวลาของแถวที่บันทึกไปแล้ว ลดความเสี่ยงคิวค้างครึ่งชุด
+                for rollback_id in updated_ids:
+                    old_dt = original_ready.get(rollback_id)
+                    if old_dt is not None and not pd.isna(old_dt):
+                        update_supabase_job(
+                            rollback_id, {"ready_at": old_dt.strftime("%Y-%m-%d %H:%M:%S")}, clear_cache=False
+                        )
+                st.cache_data.clear()
+                return False, "บันทึกลูกโซ่คิวไม่ครบ ระบบคืนค่าเดิมให้รายการที่แก้แล้ว", []
+            updated_ids.append(job_id)
+
+        if not verify_supabase_ready_times(expected_by_id):
+            for rollback_id in updated_ids:
+                old_dt = original_ready.get(rollback_id)
+                if old_dt is not None and not pd.isna(old_dt):
+                    update_supabase_job(
+                        rollback_id, {"ready_at": old_dt.strftime("%Y-%m-%d %H:%M:%S")}, clear_cache=False
+                    )
+            st.cache_data.clear()
+            return False, "ตรวจสอบเวลาหลังสลับคิวไม่ผ่าน ระบบคืนค่าเดิมแล้ว", []
+
+        st.cache_data.clear()
+        return True, "", changed_rows
+    except Exception:
+        return False, "เกิดข้อผิดพลาดระหว่างสลับลำดับคิว", []
+
 def delete_supabase_job(job_id: int) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -2895,6 +3003,94 @@ if st.session_state.current_view == "👷 โหมดช่างหน้า�
                                 st.rerun()
                             else:
                                 st.error(f"ลบ Step ไม่สำเร็จ: {error}")
+
+            if is_step_waiting:
+                other_waiting_options = []
+                for other_queue_idx, other_row in m_active.iterrows():
+                    other_status = safe_str(other_row.get("สถานะงาน"))
+                    other_id = safe_int(other_row.get("ID"))
+                    if other_id == target_id or "รอคิว" not in other_status:
+                        continue
+                    other_waiting_options.append({
+                        "id": other_id,
+                        "queue_no": other_queue_idx + 1,
+                        "plan_code": safe_str(other_row.get("แผนงาน"), "-"),
+                        "drawing_name": safe_str(other_row.get("ชื่อ Drawing."), "-")
+                    })
+
+                with st.expander("🔀 สลับลำดับคิว", expanded=False):
+                    if not other_waiting_options:
+                        st.caption("เครื่องนี้ยังไม่มีคิวรอรายการอื่นให้สลับ")
+                    else:
+                        st.caption(
+                            "สลับได้เฉพาะคิวรอของเครื่องเดียวกัน งานที่กำลังรัน/พักจะไม่ถูกย้าย "
+                            "และระบบจะคำนวณเวลาเริ่มของคิวรอทั้งหมดใหม่ตามลูกโซ่"
+                        )
+                        option_by_id = {item["id"]: item for item in other_waiting_options}
+                        with st.form(key=f"swap_queue_form_{target_id}"):
+                            swap_target_id = st.selectbox(
+                                "เลือกคิวที่ต้องการสลับตำแหน่ง",
+                                options=list(option_by_id),
+                                format_func=lambda job_id: (
+                                    f"คิวที่ {option_by_id[job_id]['queue_no']} | "
+                                    f"{option_by_id[job_id]['plan_code']} | "
+                                    f"{option_by_id[job_id]['drawing_name']}"
+                                ),
+                                key=f"swap_queue_target_{target_id}"
+                            )
+                            selected_swap = option_by_id[swap_target_id]
+                            st.info(
+                                f"ตัวอย่างหลังยืนยัน: คิวที่ {queue_idx + 1} ({plan_code} / {drawing_code}) "
+                                f"↔ คิวที่ {selected_swap['queue_no']} "
+                                f"({selected_swap['plan_code']} / {selected_swap['drawing_name']})"
+                            )
+                            swap_reason = st.selectbox(
+                                "เหตุผลการสลับคิว",
+                                ["ปรับลำดับการผลิต", "งานด่วนแทรก", "ความพร้อมวัสดุ/Tool", "อื่น ๆ"],
+                                key=f"swap_queue_reason_{target_id}"
+                            )
+                            swap_note = st.text_input(
+                                "หมายเหตุ (ถ้ามี)", key=f"swap_queue_note_{target_id}"
+                            )
+                            confirm_swap = st.checkbox(
+                                "ยืนยันการสลับลำดับคิวและคำนวณเวลาลูกโซ่ใหม่",
+                                key=f"confirm_swap_queue_{target_id}"
+                            )
+                            swap_submitted = st.form_submit_button(
+                                "🔀 สลับลำดับคิว", type="secondary", use_container_width=True
+                            )
+
+                        if swap_submitted:
+                            if not confirm_swap:
+                                st.warning("กรุณาติ๊กยืนยันก่อนสลับลำดับคิว")
+                            else:
+                                swapped, swap_error, changed_rows = reorder_waiting_queue(
+                                    selected_m, target_id, swap_target_id
+                                )
+                                if swapped:
+                                    event_note = (
+                                        f"สลับคิว {plan_code}/{drawing_code} กับ "
+                                        f"{selected_swap['plan_code']}/{selected_swap['drawing_name']}"
+                                    )
+                                    if swap_note.strip():
+                                        event_note += f" | {swap_note.strip()}"
+                                    log_job_event(
+                                        target_id, plan_code, drawing_code, selected_m, "Swap Queue",
+                                        current_step_index + 1, current_step_name,
+                                        reason=swap_reason, note=event_note
+                                    )
+                                    log_job_event(
+                                        swap_target_id, selected_swap["plan_code"],
+                                        selected_swap["drawing_name"], selected_m, "Swap Queue",
+                                        reason=swap_reason, note=event_note
+                                    )
+                                    st.toast(
+                                        f"สลับคิวเรียบร้อย และคำนวณเวลาใหม่ {len(changed_rows)} คิว",
+                                        icon="🔀"
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.error(f"สลับคิวไม่สำเร็จ: {swap_error}")
 
             if is_step_running or is_step_hold or is_step_waiting:
                 transfer_title = (
