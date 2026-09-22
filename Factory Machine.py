@@ -6787,7 +6787,19 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     for idx_m, m in enumerate(MACHINE_LIST):
         m_jobs = df_live[df_live["เลือกเครื่องจักร"] == m] if not df_live.empty else pd.DataFrame()
         
-        running_job = m_jobs[m_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
+        running_job = m_jobs[m_jobs["สถานะงาน"].str.contains("กำลังผลิต")].copy()
+        # หากมีข้อมูลผิดปกติหลายงานกำลังผลิตในเครื่องเดียว ให้เลือกงานที่มีเวลาเริ่มจริงล่าสุดก่อน
+        duplicate_running_count = len(running_job)
+        if not running_job.empty:
+            running_job["_tv_actual_start"] = running_job["เริ่มจริง"].apply(parse_flexible_datetime)
+            tv_sort_now = now_bangkok.replace(tzinfo=None)
+            running_job["_tv_has_actual_start"] = running_job["_tv_actual_start"].apply(
+                lambda value: bool(value is not None and pd.notna(value) and value <= tv_sort_now)
+            )
+            running_job = running_job.sort_values(
+                by=["_tv_has_actual_start", "_tv_actual_start", "ID"],
+                ascending=[False, False, False], na_position="last", kind="stable"
+            )
         hold_job = m_jobs[m_jobs["สถานะงาน"].str.contains("พักงาน")]
         waiting_jobs = m_jobs[m_jobs["สถานะงาน"].str.contains("รอคิว")]
 
@@ -6814,16 +6826,27 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             r_ready_dt, r_finish_dt, ready_display_txt, finish_display_txt, is_overdue = get_tv_plan_window(r_info)
 
             start_disp_txt = "-"
-            start_epoch = to_bangkok_epoch_ms(s_start)
+            start_epoch = 0
             r_start_parsed = parse_flexible_datetime(s_start)
+            tv_now_naive = now_bangkok.replace(tzinfo=None)
+            has_valid_actual_start = bool(
+                r_start_parsed is not None and pd.notna(r_start_parsed)
+                and r_start_parsed <= tv_now_naive
+            )
 
-            if r_start_parsed is None and r_ready_dt is not None and pd.notna(r_ready_dt):
-                r_start_parsed = r_ready_dt
-                start_epoch = to_bangkok_epoch_ms(r_ready_dt)
-
-            if r_start_parsed is not None and pd.notna(r_start_parsed):
+            if has_valid_actual_start:
+                start_epoch = to_bangkok_epoch_ms(r_start_parsed)
                 start_disp_txt = r_start_parsed.strftime("%H:%M น.")
-            actual_start_report = r_start_parsed.strftime("%d/%m/%Y %H:%M") if r_start_parsed is not None and pd.notna(r_start_parsed) else "-"
+                timer_display_html = f'<span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span>'
+                actual_start_report = r_start_parsed.strftime("%d/%m/%Y %H:%M")
+            else:
+                # ห้ามใช้เวลาแผนแทนเวลาเริ่มจริง เพราะจะทำให้ตัวจับเวลาเริ่มเองเมื่อถึงเวลาแผน
+                timer_display_html = '<span style="font-size:11.5px; font-weight:900; color:#FDE047;">⚠️ รันงานก่อนเวลาเริ่มจริง......</span>'
+                actual_start_report = "-"
+
+            duplicate_running_html = ""
+            if duplicate_running_count > 1:
+                duplicate_running_html = f'<div style="margin-top:4px; padding:3px 6px; background:rgba(127,29,29,.72); border:1px dashed #FCA5A5; border-radius:6px; font-size:10.5px; color:#FEE2E2;">⚠️ พบสถานะกำลังผลิตซ้ำ {duplicate_running_count} งาน — แสดงงานที่มีเวลาเริ่มจริงล่าสุด</div>'
             
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot" style="margin-right:6px;"></span> <b style="color:#A7F3D0;">กำลังรันงาน</b>'
@@ -6836,13 +6859,13 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             <div style="font-size:13px; font-weight:700; color:#FFFFFF; line-height:1.5;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
-                    <span>⏱️ <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span></span>
+                    <span>⏱️ {timer_display_html}</span>
                 </div>
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
                     <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
                 </div>
-            </div>{hold_alert_html}
+            </div>{duplicate_running_html}{hold_alert_html}
             '''
 
             machine_status_cards.append({
