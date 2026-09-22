@@ -777,6 +777,13 @@ DEFAULT_RATES = {
 ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
 JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทรก"]
 JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "🟩 เสร็จสิ้นแล้ว"]
+MATERIAL_OPTIONS = [
+    "SS400", "SKD11", "S45C", "S50C", "SUS431", "SUS304", "SUJ2",
+    "SCM4 - SCM440", "เหล็กกล่อง STD", "ทองเหลือง", "ทองแดง",
+    "AL5083", "AL6061", "ไม้อัดแผ่น", "Epoxy", "Bakelite สีส้ม",
+    "Nc nylon", "ซุปเปอร์ลีน", "POM", "ยางโพลียูรีเทน",
+    "อื่น ๆ (พิมพ์เอง)"
+]
 
 # =========================================================
 # 4. ฟังก์ชันเชื่อมต่อ Supabase
@@ -3375,13 +3382,25 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
                     selected_template = template_map.get(selected_template_name, {})
                     selected_steps = template_step_names(selected_template) if selected_template else ["รอหน้าเครื่องระบุ"]
+                    current_material = safe_str(selected_template.get("material"), "SS400")
+                    material_presets = [item for item in MATERIAL_OPTIONS if item != "อื่น ๆ (พิมพ์เอง)"]
+                    selected_material_option = current_material if current_material in material_presets else "อื่น ๆ (พิมพ์เอง)"
+                    selected_custom_material = "" if current_material in material_presets else current_material
                     with st.form("drawing_template_form", clear_on_submit=False):
-                        t1, t2, t3 = st.columns([2.2, 1.2, 1])
+                        t1, t2, t3, t_qty = st.columns([2.0, 1.3, 1.3, 0.8])
                         with t1:
                             tpl_drawing = st.text_input("Drawing", value=safe_str(selected_template.get("drawing_name")))
                         with t2:
-                            tpl_material = st.text_input("วัสดุมาตรฐาน", value=safe_str(selected_template.get("material"), "SS400"))
+                            tpl_material_selected = st.selectbox(
+                                "เลือกวัสดุมาตรฐาน", MATERIAL_OPTIONS,
+                                index=MATERIAL_OPTIONS.index(selected_material_option)
+                            )
                         with t3:
+                            tpl_material_custom = st.text_input(
+                                "วัสดุอื่น (พิมพ์เอง)", value=selected_custom_material,
+                                placeholder="กรอกเมื่อไม่มีในรายการ"
+                            )
+                        with t_qty:
                             tpl_qty = st.number_input("จำนวนมาตรฐาน", 1, 10000, safe_int(selected_template.get("default_qty"), 1))
                         t4, t5, t6, t7 = st.columns([1.5, 1, 1, 1])
                         with t4:
@@ -3402,8 +3421,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         save_tpl = st.form_submit_button("💾 บันทึก Drawing Template", type="primary", use_container_width=True)
                     if save_tpl:
                         step_names = [line.strip() for line in tpl_steps_text.splitlines() if line.strip()]
+                        tpl_material = safe_str(tpl_material_custom, "") or (
+                            "" if tpl_material_selected == "อื่น ๆ (พิมพ์เอง)" else tpl_material_selected
+                        )
                         if not tpl_drawing.strip():
                             st.error("กรุณาระบุ Drawing")
+                        elif not tpl_material:
+                            st.error("กรุณาระบุวัสดุอื่น หรือเลือกวัสดุจากรายการ")
                         elif not step_names:
                             st.error("กรุณาระบุอย่างน้อย 1 Step")
                         else:
@@ -3438,7 +3462,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                         bulk_blank_df = pd.DataFrame([
                             {
-                                "Drawing": "", "วัสดุ": "SS400", "จำนวน": 1,
+                                "Drawing": "", "วัสดุ (เลือก)": "SS400", "วัสดุอื่น": "", "จำนวน": 1,
                                 "เครื่องจักร": MACHINE_LIST[0],
                                 "Setup (น.)": int(DEFAULT_SETUP_MINUTES),
                                 "Basic (น.)": int(DEFAULT_BASIC_MINUTES),
@@ -3456,7 +3480,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 use_container_width=True,
                                 column_config={
                                     "Drawing": st.column_config.TextColumn("Drawing", width=210, required=True),
-                                    "วัสดุ": st.column_config.TextColumn("วัสดุ", width=90),
+                                    "วัสดุ (เลือก)": st.column_config.SelectboxColumn(
+                                        "วัสดุ (เลือก)", options=MATERIAL_OPTIONS,
+                                        width=145, required=True
+                                    ),
+                                    "วัสดุอื่น": st.column_config.TextColumn(
+                                        "วัสดุอื่น (พิมพ์เอง)", width=150,
+                                        help="หากกรอกช่องนี้ ระบบจะใช้ค่านี้แทนวัสดุที่เลือก"
+                                    ),
                                     "จำนวน": st.column_config.NumberColumn("จำนวน", min_value=1, max_value=10000, step=1, format="%d", width=75),
                                     "เครื่องจักร": st.column_config.SelectboxColumn("เครื่องจักร", options=MACHINE_LIST, width=160, required=True),
                                     "Setup (น.)": st.column_config.NumberColumn("Setup", min_value=0, max_value=720, step=5, format="%d", width=75),
@@ -3489,6 +3520,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if machine_name not in MACHINE_LIST:
                                     validation_errors.append(f"แถว {row_no}: กรุณาเลือกเครื่องจักร")
                                     continue
+                                selected_material = safe_str(bulk_row.get("วัสดุ (เลือก)"), "SS400")
+                                custom_material = safe_str(bulk_row.get("วัสดุอื่น"), "")
+                                final_material = custom_material or (
+                                    "" if selected_material == "อื่น ๆ (พิมพ์เอง)" else selected_material
+                                )
+                                if not final_material:
+                                    validation_errors.append(f"แถว {row_no}: กรุณาพิมพ์ชื่อวัสดุอื่น")
+                                    continue
                                 raw_steps = safe_str(bulk_row.get("รายการ Step"), "")
                                 step_names = [
                                     part.strip() for part in re.split(r"\s*→\s*|[;|\r\n]+", raw_steps)
@@ -3500,7 +3539,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                                 prepared_templates.append({
                                     "drawing_name": drawing_name,
-                                    "material": safe_str(bulk_row.get("วัสดุ"), "SS400"),
+                                    "material": final_material,
                                     "default_qty": max(1, safe_int(bulk_row.get("จำนวน"), 1)),
                                     "machine_name": machine_name,
                                     "setup_mins": max(0.0, safe_float(bulk_row.get("Setup (น.)"), DEFAULT_SETUP_MINUTES)),
