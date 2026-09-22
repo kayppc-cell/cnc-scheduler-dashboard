@@ -864,6 +864,28 @@ def save_drawing_template(payload: dict) -> tuple[bool, str]:
     except Exception as exc:
         return False, str(exc)
 
+def save_drawing_templates_bulk(payloads: list[dict]) -> tuple[bool, str, int]:
+    """บันทึก Drawing Template หลายรายการในคำขอเดียว (Bulk Upsert)."""
+    if not payloads:
+        return False, "ไม่มีรายการสำหรับบันทึก", 0
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_drawing_templates"
+        headers = get_supabase_headers().copy()
+        headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+        res = requests.post(
+            endpoint, headers=headers,
+            params={"on_conflict": "drawing_name"},
+            json=payloads, timeout=15
+        )
+        if res.status_code in [200, 201]:
+            fetch_drawing_templates.clear()
+            returned = res.json() if isinstance(res.json(), list) else []
+            return True, "", len(returned) if returned else len(payloads)
+        return False, safe_str(res.text, "บันทึก Template แบบหลายรายการไม่สำเร็จ"), 0
+    except Exception as exc:
+        return False, str(exc), 0
+
 def delete_drawing_template(template_id: int) -> tuple[bool, str]:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -3405,6 +3427,101 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.rerun()
                         else:
                             st.error(error)
+
+                    with st.expander("📋 สร้าง Template หลาย Drawing — บันทึกครั้งเดียว", expanded=False):
+                        st.caption(
+                            "พิมพ์หรือวางข้อมูลหลายแถวได้ ช่อง Step ใช้เครื่องหมาย → คั่นลำดับ เช่น "
+                            "ตั้งงาน → กัดหยาบ → กัดละเอียด หาก Drawing มีอยู่แล้วระบบจะอัปเดต Template เดิม"
+                        )
+                        if st.session_state.pop("reset_bulk_template_editor", False):
+                            st.session_state.pop("bulk_drawing_template_editor", None)
+
+                        bulk_blank_df = pd.DataFrame([
+                            {
+                                "Drawing": "", "วัสดุ": "SS400", "จำนวน": 1,
+                                "เครื่องจักร": MACHINE_LIST[0],
+                                "Setup (น.)": int(DEFAULT_SETUP_MINUTES),
+                                "Basic (น.)": int(DEFAULT_BASIC_MINUTES),
+                                "โปรแกรม (น.)": int(DEFAULT_PROGRAM_MINUTES),
+                                "รายการ Step": "รอหน้าเครื่องระบุ"
+                            }
+                            for _ in range(10)
+                        ])
+                        with st.form("bulk_drawing_template_form", clear_on_submit=False):
+                            bulk_templates = st.data_editor(
+                                bulk_blank_df,
+                                key="bulk_drawing_template_editor",
+                                num_rows="dynamic",
+                                hide_index=True,
+                                use_container_width=True,
+                                column_config={
+                                    "Drawing": st.column_config.TextColumn("Drawing", width=210, required=True),
+                                    "วัสดุ": st.column_config.TextColumn("วัสดุ", width=90),
+                                    "จำนวน": st.column_config.NumberColumn("จำนวน", min_value=1, max_value=10000, step=1, format="%d", width=75),
+                                    "เครื่องจักร": st.column_config.SelectboxColumn("เครื่องจักร", options=MACHINE_LIST, width=160, required=True),
+                                    "Setup (น.)": st.column_config.NumberColumn("Setup", min_value=0, max_value=720, step=5, format="%d", width=75),
+                                    "Basic (น.)": st.column_config.NumberColumn("Basic", min_value=0, max_value=6000, step=5, format="%d", width=75),
+                                    "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", min_value=0, max_value=12000, step=10, format="%d", width=85),
+                                    "รายการ Step": st.column_config.TextColumn("Step 1 → Step 2 → Step 3", width=360, required=True),
+                                }
+                            )
+                            save_bulk_templates = st.form_submit_button(
+                                "💾 ตรวจสอบและบันทึก Template ทุก Drawing",
+                                type="primary", use_container_width=True
+                            )
+
+                        if save_bulk_templates:
+                            prepared_templates = []
+                            validation_errors = []
+                            seen_drawings = set()
+                            for row_no, (_, bulk_row) in enumerate(bulk_templates.iterrows(), start=1):
+                                drawing_name = safe_str(bulk_row.get("Drawing"), "")
+                                # แถวว่างทั้งหมดมีไว้รองรับการพิมพ์ ไม่ถือเป็นข้อผิดพลาด
+                                if not drawing_name:
+                                    continue
+                                drawing_key = normalize_filter_key(drawing_name)
+                                if drawing_key in seen_drawings:
+                                    validation_errors.append(f"แถว {row_no}: Drawing {drawing_name} ซ้ำในตาราง")
+                                    continue
+                                seen_drawings.add(drawing_key)
+
+                                machine_name = safe_str(bulk_row.get("เครื่องจักร"), "")
+                                if machine_name not in MACHINE_LIST:
+                                    validation_errors.append(f"แถว {row_no}: กรุณาเลือกเครื่องจักร")
+                                    continue
+                                raw_steps = safe_str(bulk_row.get("รายการ Step"), "")
+                                step_names = [
+                                    part.strip() for part in re.split(r"\s*→\s*|[;|\r\n]+", raw_steps)
+                                    if part.strip()
+                                ]
+                                if not step_names:
+                                    validation_errors.append(f"แถว {row_no}: กรุณาระบุอย่างน้อย 1 Step")
+                                    continue
+
+                                prepared_templates.append({
+                                    "drawing_name": drawing_name,
+                                    "material": safe_str(bulk_row.get("วัสดุ"), "SS400"),
+                                    "default_qty": max(1, safe_int(bulk_row.get("จำนวน"), 1)),
+                                    "machine_name": machine_name,
+                                    "setup_mins": max(0.0, safe_float(bulk_row.get("Setup (น.)"), DEFAULT_SETUP_MINUTES)),
+                                    "basic_mins": max(0.0, safe_float(bulk_row.get("Basic (น.)"), DEFAULT_BASIC_MINUTES)),
+                                    "program_mins": max(0.0, safe_float(bulk_row.get("โปรแกรม (น.)"), DEFAULT_PROGRAM_MINUTES)),
+                                    "steps": [{"name": name, "order": idx + 1} for idx, name in enumerate(step_names)],
+                                    "updated_at": get_bangkok_str()
+                                })
+
+                            if validation_errors:
+                                st.error("ยังไม่บันทึก: " + " | ".join(validation_errors[:8]))
+                            elif not prepared_templates:
+                                st.warning("กรุณากรอก Drawing อย่างน้อย 1 รายการ")
+                            else:
+                                ok, error, saved_count = save_drawing_templates_bulk(prepared_templates)
+                                if ok:
+                                    st.session_state.reset_bulk_template_editor = True
+                                    st.success(f"บันทึก Drawing Template สำเร็จ {saved_count} รายการ")
+                                    st.rerun()
+                                else:
+                                    st.error(f"บันทึก Template แบบหลายรายการไม่สำเร็จ: {error}")
 
             with st.expander("⚡ งานด่วนแทรกจาก Drawing Template", expanded=False):
                 if templates is None:
