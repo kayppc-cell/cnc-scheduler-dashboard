@@ -5150,6 +5150,54 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.session_state.finished_history_quick_filter = filter_key
                             quick_filter = filter_key
 
+                # เลือกวันย้อนหลังได้อิสระ โดยยึดวันที่จบจริงของงาน
+                all_finish_datetimes = fin_display_df["เสร็จจริง"].apply(parse_flexible_datetime)
+                valid_finish_days = sorted({
+                    value.date() for value in all_finish_datetimes
+                    if value is not None and pd.notna(value)
+                })
+                if "finished_history_custom_date_enabled" not in st.session_state:
+                    st.session_state.finished_history_custom_date_enabled = False
+                custom_date_enabled = st.toggle(
+                    "📆 เลือกวันที่ดูประวัติเอง",
+                    key="finished_history_custom_date_enabled",
+                    help="กรองตามวันที่จบจริง และใช้กับตารางรวมถึงรายงาน PDF"
+                )
+                selected_history_day = None
+                selected_history_range = None
+                if custom_date_enabled:
+                    date_mode = st.radio(
+                        "รูปแบบการเลือกวันที่",
+                        ["วันเดียว", "ช่วงวันที่"],
+                        horizontal=True,
+                        key="finished_history_date_mode"
+                    )
+                    default_day = valid_finish_days[-1] if valid_finish_days else get_bangkok_now().date()
+                    min_history_day = valid_finish_days[0] if valid_finish_days else default_day
+                    max_history_day = valid_finish_days[-1] if valid_finish_days else default_day
+                    if date_mode == "วันเดียว":
+                        selected_history_day = st.date_input(
+                            "📅 เลือกวันที่จบงาน",
+                            value=default_day,
+                            min_value=min_history_day,
+                            max_value=max_history_day,
+                            format="DD/MM/YYYY",
+                            key="finished_history_single_date"
+                        )
+                    else:
+                        range_value = st.date_input(
+                            "🗓️ เลือกช่วงวันที่จบงาน",
+                            value=(min_history_day, max_history_day),
+                            min_value=min_history_day,
+                            max_value=max_history_day,
+                            format="DD/MM/YYYY",
+                            key="finished_history_date_range"
+                        )
+                        if isinstance(range_value, (tuple, list)) and len(range_value) == 2:
+                            selected_history_range = (min(range_value), max(range_value))
+                        else:
+                            st.info("กรุณาเลือกวันเริ่มต้นและวันสิ้นสุดให้ครบ")
+
                 machine_options = ["🌐 ทุกเครื่อง"] + sorted(fin_display_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
                 plan_options = ["🌐 ทุกแผนงาน"] + sorted(fin_display_df["แผนงาน"].dropna().astype(str).unique().tolist())
                 drawing_options = ["🌐 ทุก Drawing"] + sorted(fin_display_df["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
@@ -5170,12 +5218,26 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 finish_dates = fin_display_df["เสร็จจริง"].apply(parse_flexible_datetime)
                 today_finished = get_bangkok_now().date()
 
-                if quick_filter == "TODAY":
-                    fin_display_df = fin_display_df[finish_dates.apply(lambda x: x is not None and x.date() == today_finished)]
+                # เมื่อเปิดปฏิทิน ให้ปฏิทินมีสิทธิ์เหนือปุ่ม วันนี้/7 วัน
+                if custom_date_enabled and selected_history_day is not None:
+                    fin_display_df = fin_display_df[
+                        finish_dates.apply(lambda x: x is not None and pd.notna(x) and x.date() == selected_history_day)
+                    ]
+                elif custom_date_enabled and selected_history_range is not None:
+                    range_start, range_end = selected_history_range
+                    fin_display_df = fin_display_df[
+                        finish_dates.apply(
+                            lambda x: x is not None and pd.notna(x) and range_start <= x.date() <= range_end
+                        )
+                    ]
+                elif quick_filter == "TODAY":
+                    fin_display_df = fin_display_df[finish_dates.apply(lambda x: x is not None and pd.notna(x) and x.date() == today_finished)]
                 elif quick_filter == "7D":
                     start_7d = today_finished - timedelta(days=6)
-                    fin_display_df = fin_display_df[finish_dates.apply(lambda x: x is not None and start_7d <= x.date() <= today_finished)]
-                elif quick_filter == "LATE":
+                    fin_display_df = fin_display_df[finish_dates.apply(lambda x: x is not None and pd.notna(x) and start_7d <= x.date() <= today_finished)]
+
+                # ตัวกรองผลลัพธ์ทำงานร่วมกับวันที่ที่เลือก
+                if quick_filter == "LATE":
                     fin_display_df = fin_display_df[pd.to_numeric(fin_display_df["จบคลาดเคลื่อน (น.)"], errors="coerce") > 0]
                 elif quick_filter == "ONTIME":
                     finish_diff_series = pd.to_numeric(fin_display_df["จบคลาดเคลื่อน (น.)"], errors="coerce")
