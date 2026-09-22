@@ -140,8 +140,9 @@ def parse_flexible_datetime(dt_val):
         return None
     if isinstance(dt_val, (datetime, pd.Timestamp)):
         if getattr(dt_val, 'tzinfo', None) is not None:
-            # แปลง timezone ให้เป็นเวลาไทยก่อนถอด timezone ป้องกันคลาด 7 ชั่วโมง
-            dt_val = pd.Timestamp(dt_val).tz_convert("Asia/Bangkok").tz_localize(None)
+            # ระบบเดิมจัดเก็บตัวเลขนาฬิกาเป็นเวลาไทยอยู่แล้ว แม้ค่าที่อ่านกลับมาจะมี timezone
+            # จึงถอด timezone โดยคง HH:MM เดิมไว้ ห้ามบวกเวลาไทยซ้ำอีก 7 ชั่วโมง
+            dt_val = pd.Timestamp(dt_val).tz_localize(None)
         if dt_val.year > 2400:
             dt_val = dt_val.replace(year=dt_val.year - 543)
         return dt_val
@@ -150,13 +151,9 @@ def parse_flexible_datetime(dt_val):
     if s in ["", "None", "nan", "NaN", "null", "-", "NaT"]:
         return None
     
-    # ISO ที่มี Z/offset ต้องแปลงเป็นเวลาไทยก่อน ห้ามตัด timezone ทิ้ง
-    iso_candidate = str(dt_val).strip()
-    if "T" in iso_candidate and (iso_candidate.endswith("Z") or "+" in iso_candidate[10:]):
-        iso_dt = pd.to_datetime(iso_candidate, errors="coerce", utc=True)
-        if pd.notna(iso_dt):
-            return iso_dt.tz_convert("Asia/Bangkok").tz_localize(None)
-    s = s.replace('T', ' ').strip()
+    # คงตัวเลขนาฬิกาตามที่ระบบเดิมบันทึกไว้ แล้วถอด Z/offset ออก
+    # ตัวอย่าง 08:59+00:00 ต้องอ่านเป็น 08:59 ไม่ใช่แปลงซ้ำเป็น 15:59
+    s = s.replace('T', ' ').split('+')[0].split('Z')[0].strip()
     current_year = get_bangkok_now().year
 
     if "-" in s:
