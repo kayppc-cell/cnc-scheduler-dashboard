@@ -9,9 +9,24 @@ import base64
 import json
 import html
 import io
+import uuid
+import re
 from PIL import Image
 import requests
 import streamlit.components.v1 as components
+
+# ค่าเวลาเริ่มต้นต้องใช้ค่าเดียวกันทุกหน้า/รายงาน
+DEFAULT_SETUP_MINUTES = 10.0
+DEFAULT_BASIC_MINUTES = 0.0
+DEFAULT_PROGRAM_MINUTES = 120.0
+
+def get_planned_minutes(row):
+    """คืนเวลาแผนรวมเป็นนาทีด้วยค่าเริ่มต้นมาตรฐานชุดเดียวทั้งระบบ"""
+    return max(0.0, (
+        safe_float(row.get("Setup (น.)"), DEFAULT_SETUP_MINUTES)
+        + safe_float(row.get("Basic (น.)"), DEFAULT_BASIC_MINUTES)
+        + safe_float(row.get("โปรแกรม (น.)"), DEFAULT_PROGRAM_MINUTES)
+    ))
 
 # =========================================================
 # 0. Timezone Helper (GMT+7) & Factory Shift Rules & Data Sanitizers
@@ -56,7 +71,11 @@ def normalize_filter_key(val):
 def build_performance_metrics(source_df):
     """สร้างเวลามาตรฐานชุดเดียวสำหรับหน้า Drawing และรายงานเดือน โดยไม่ปลอมเวลาจริงที่ขาดหาย"""
     result = source_df.copy()
-    for col_name, default_value in [("Setup (น.)", 10.0), ("Basic (น.)", 0.0), ("โปรแกรม (น.)", 0.0)]:
+    for col_name, default_value in [
+        ("Setup (น.)", DEFAULT_SETUP_MINUTES),
+        ("Basic (น.)", DEFAULT_BASIC_MINUTES),
+        ("โปรแกรม (น.)", DEFAULT_PROGRAM_MINUTES)
+    ]:
         if col_name not in result.columns:
             result[col_name] = default_value
         result[col_name] = pd.to_numeric(result[col_name], errors="coerce").fillna(default_value).clip(lower=0)
@@ -121,7 +140,8 @@ def parse_flexible_datetime(dt_val):
         return None
     if isinstance(dt_val, (datetime, pd.Timestamp)):
         if getattr(dt_val, 'tzinfo', None) is not None:
-            dt_val = dt_val.tz_localize(None)
+            # แปลง timezone ให้เป็นเวลาไทยก่อนถอด timezone ป้องกันคลาด 7 ชั่วโมง
+            dt_val = pd.Timestamp(dt_val).tz_convert("Asia/Bangkok").tz_localize(None)
         if dt_val.year > 2400:
             dt_val = dt_val.replace(year=dt_val.year - 543)
         return dt_val
@@ -130,7 +150,13 @@ def parse_flexible_datetime(dt_val):
     if s in ["", "None", "nan", "NaN", "null", "-", "NaT"]:
         return None
     
-    s = s.replace('T', ' ').split('+')[0].split('Z')[0].strip()
+    # ISO ที่มี Z/offset ต้องแปลงเป็นเวลาไทยก่อน ห้ามตัด timezone ทิ้ง
+    iso_candidate = str(dt_val).strip()
+    if "T" in iso_candidate and (iso_candidate.endswith("Z") or "+" in iso_candidate[10:]):
+        iso_dt = pd.to_datetime(iso_candidate, errors="coerce", utc=True)
+        if pd.notna(iso_dt):
+            return iso_dt.tz_convert("Asia/Bangkok").tz_localize(None)
+    s = s.replace('T', ' ').strip()
     current_year = get_bangkok_now().year
 
     if "-" in s:
@@ -303,17 +329,17 @@ def get_planned_busy_hours_in_range(start_dt: datetime, duration_hours: float, r
 
 def get_job_planned_finish(job_row):
     """คืนเวลาจบตามแผนจากค่าที่บันทึกไว้ หรือคำนวณจากเวลาเริ่มและเวลามาตรฐานเมื่อไม่มีค่าเก็บไว้"""
-    stored_finish = parse_flexible_datetime(job_row.get("วัน-เวลาจบงาน"))
+    stored_finish = parse_flexible_datetime(
+        job_row.get("เวลาจบ Baseline") or job_row.get("วัน-เวลาจบงาน")
+    )
     if stored_finish is not None and not pd.isna(stored_finish):
         return stored_finish
-    planned_start = parse_flexible_datetime(job_row.get("วัน-เวลาขึ้นงาน"))
+    planned_start = parse_flexible_datetime(
+        job_row.get("กำหนดพร้อมขึ้นงาน (Baseline)") or job_row.get("วัน-เวลาขึ้นงาน")
+    )
     if planned_start is None or pd.isna(planned_start) or planned_start.year < 2020:
         return None
-    duration_hours = max(0.0, (
-        safe_float(job_row.get("Setup (น.)"), 10.0)
-        + safe_float(job_row.get("Basic (น.)"), 0.0)
-        + safe_float(job_row.get("โปรแกรม (น.)"), 0.0)
-    ) / 60.0)
+    duration_hours = get_planned_minutes(job_row) / 60.0
     _, planned_finish = add_work_time_with_shift(get_next_valid_work_time(planned_start), duration_hours)
     return planned_finish
 
@@ -881,7 +907,7 @@ def urgent_insert_ready_at(machine_name: str, insert_mode: str, target_id, jobs_
     if not running.empty:
         row = running.sort_values(["_ready", "ID"]).iloc[0]
         start_dt = row["_ready"] if pd.notna(row["_ready"]) else now_dt
-        hours = (safe_float(row.get("Setup (น.)"), 10) + safe_float(row.get("Basic (น.)"), 0) + safe_float(row.get("โปรแกรม (น.)"), 0)) / 60.0
+        hours = get_planned_minutes(row) / 60.0
         _, planned_finish = add_work_time_with_shift(get_next_valid_work_time(start_dt), hours)
         return max(get_next_valid_work_time(now_dt), planned_finish)
     return get_next_valid_work_time(now_dt)
@@ -970,14 +996,27 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
         except Exception:
             progress = {}
 
-    names = [part.strip() for part in str(step_name or "").split(" → ") if part.strip()]
+    # รองรับตัวคั่นจากข้อมูลเก่า แต่เก็บชื่อ Step ที่มีเครื่องหมาย + ไว้ตามเดิม
+    names = [part.strip() for part in re.split(r"\s*→\s*|[\r\n]+", str(step_name or "")) if part.strip()]
     if not names:
         names = ["รอหน้าเครื่องระบุ"]
     old_steps = progress.get("steps") if isinstance(progress.get("steps"), list) else []
     steps = []
+    used_old_indexes = set()
     for idx, name in enumerate(names):
-        old = old_steps[idx] if idx < len(old_steps) and isinstance(old_steps[idx], dict) else {}
+        # จับคู่ด้วยชื่อก่อน เพื่อไม่ให้ประวัติเวลาย้ายผิด Step เมื่อแทรก Step กลางรายการ
+        matched_index = next((
+            old_idx for old_idx, old_item in enumerate(old_steps)
+            if old_idx not in used_old_indexes and isinstance(old_item, dict)
+            and normalize_filter_key(old_item.get("name")) == normalize_filter_key(name)
+        ), None)
+        if matched_index is None and idx < len(old_steps) and idx not in used_old_indexes and isinstance(old_steps[idx], dict):
+            matched_index = idx
+        old = old_steps[matched_index] if matched_index is not None else {}
+        if matched_index is not None:
+            used_old_indexes.add(matched_index)
         steps.append({
+            "step_id": safe_str(old.get("step_id"), str(uuid.uuid4())),
             "name": name,
             "started_at": old.get("started_at"),
             "finished_at": old.get("finished_at"),
@@ -1002,7 +1041,11 @@ def step_elapsed_seconds(step_item, now_dt=None):
         return 0.0
     finish_dt = parse_flexible_datetime(step_item.get("finished_at"))
     end_dt = finish_dt if finish_dt is not None and pd.notna(finish_dt) else (now_dt or get_bangkok_now().replace(tzinfo=None))
-    return max(0.0, (end_dt - start_dt).total_seconds() - safe_float(step_item.get("paused_seconds"), 0.0))
+    paused_seconds = safe_float(step_item.get("paused_seconds"), 0.0)
+    pending_pause = parse_flexible_datetime(step_item.get("pending_pause_started_at"))
+    if finish_dt is None and pending_pause is not None and pd.notna(pending_pause):
+        paused_seconds += max(0.0, (end_dt - pending_pause).total_seconds())
+    return max(0.0, (end_dt - start_dt).total_seconds() - paused_seconds)
 
 def format_duration_short(seconds):
     total_minutes = max(0, int(round(safe_float(seconds, 0.0) / 60.0)))
@@ -1146,18 +1189,23 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
             if active_start is None or pd.isna(active_start):
                 continue
             duration_hours = (
-                safe_float(row.get("setup_mins"), 10.0)
-                + safe_float(row.get("basic_hrs"), 0.0)
-                + safe_float(row.get("prog_hrs"), 0.0)
+                safe_float(row.get("setup_mins"), DEFAULT_SETUP_MINUTES)
+                + safe_float(row.get("basic_hrs"), DEFAULT_BASIC_MINUTES)
+                + safe_float(row.get("prog_hrs"), DEFAULT_PROGRAM_MINUTES)
             ) / 60.0
             _, active_finish = add_work_time_with_shift(get_next_valid_work_time(active_start), duration_hours)
             if active_finish is not None and pd.notna(active_finish):
-                chain_start = max(chain_start, active_finish)
+                # งานจริงที่ล่าช้าห้ามปล่อยให้คิวถัดไปเริ่มย้อนหลัง
+                chain_start = max(chain_start, active_finish, get_bangkok_now().replace(tzinfo=None))
 
         expected_by_id, changed_rows = {}, []
         cursor = chain_start
         for row in waiting_rows:
             job_id = safe_int(row.get("id"))
+            # รักษาวันเริ่มขั้นต่ำของงานนั้น แม้สลับลำดับคิว
+            row_not_before = parse_flexible_datetime(row.get("ready_at"))
+            if row_not_before is not None and pd.notna(row_not_before):
+                cursor = max(cursor, row_not_before)
             cursor = get_next_valid_work_time(cursor)
             expected_by_id[job_id] = cursor
             changed_rows.append({
@@ -1167,9 +1215,9 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
                 "ready_at": cursor
             })
             duration_hours = (
-                safe_float(row.get("setup_mins"), 10.0)
-                + safe_float(row.get("basic_hrs"), 0.0)
-                + safe_float(row.get("prog_hrs"), 0.0)
+                safe_float(row.get("setup_mins"), DEFAULT_SETUP_MINUTES)
+                + safe_float(row.get("basic_hrs"), DEFAULT_BASIC_MINUTES)
+                + safe_float(row.get("prog_hrs"), DEFAULT_PROGRAM_MINUTES)
             ) / 60.0
             _, cursor = add_work_time_with_shift(cursor, duration_hours)
 
@@ -1238,6 +1286,9 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                 df = pd.DataFrame(data)
                 if "ready_at" in df.columns:
                     df["ready_at"] = df["ready_at"].apply(parse_flexible_datetime)
+                for baseline_col in ["baseline_ready_at", "baseline_finish_at"]:
+                    if baseline_col in df.columns:
+                        df[baseline_col] = df[baseline_col].apply(parse_flexible_datetime)
                 if "actual_start" in df.columns:
                     df["actual_start"] = df["actual_start"].apply(parse_flexible_datetime)
                 if "actual_finish" in df.columns:
@@ -1262,6 +1313,8 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                     "qty": "จำนวน", "material": "วัสดุ", "job_type": "ประเภทงาน",
                     "step_name": "ขั้นตอน (Step)", "machine_name": "เลือกเครื่องจักร",
                     "ready_at": "วัน-เวลาขึ้นงาน", "setup_mins": "Setup (น.)",
+                    "baseline_ready_at": "กำหนดพร้อมขึ้นงาน (Baseline)",
+                    "baseline_finish_at": "เวลาจบ Baseline",
                     "basic_hrs": "Basic (น.)", "prog_hrs": "โปรแกรม (น.)",
                     "status": "สถานะงาน", "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง",
                     "hold_started_at": "เริ่มพักจริง", "paused_seconds": "เวลาพักสะสม (วินาที)",
@@ -1358,9 +1411,9 @@ def build_project_active_chain(calc_df):
     for _, row in jobs.iterrows():
         machine = safe_str(row.get("เลือกเครื่องจักร"))
         duration_hours = (
-            safe_float(row.get("Setup (น.)"), 10.0)
-            + safe_float(row.get("Basic (น.)"), 0.0)
-            + safe_float(row.get("โปรแกรม (น.)"), 0.0)
+            safe_float(row.get("Setup (น.)"), DEFAULT_SETUP_MINUTES)
+            + safe_float(row.get("Basic (น.)"), DEFAULT_BASIC_MINUTES)
+            + safe_float(row.get("โปรแกรม (น.)"), DEFAULT_PROGRAM_MINUTES)
         ) / 60.0
 
         if machine not in machine_available:
@@ -1384,6 +1437,10 @@ def build_project_active_chain(calc_df):
             start_dt = get_next_valid_work_time(start_base)
 
         _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
+        status_value = safe_str(row.get("สถานะงาน"))
+        if "กำลังผลิต" in status_value or "พักงาน" in status_value:
+            # กราฟผู้บริหารต้องสะท้อนความล่าช้าจริง ไม่จบย้อนหลังตามแผนเดิม
+            finish_dt = max(finish_dt, get_bangkok_now().replace(tzinfo=None))
         machine_available[machine] = finish_dt
         chained_starts.append(start_dt)
         chained_finishes.append(finish_dt)
@@ -3433,7 +3490,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             calc_df = df_db.copy()
             calc_df["Setup (น.)"] = pd.to_numeric(calc_df["Setup (น.)"], errors='coerce').fillna(10.0)
             calc_df["Basic (น.)"] = pd.to_numeric(calc_df["Basic (น.)"], errors='coerce').fillna(0.0)
-            calc_df["โปรแกรม (น.)"] = pd.to_numeric(calc_df["โปรแกรม (น.)"], errors='coerce').fillna(0.0)
+            calc_df["โปรแกรม (น.)"] = pd.to_numeric(calc_df["โปรแกรม (น.)"], errors='coerce').fillna(DEFAULT_PROGRAM_MINUTES)
             calc_df["รวม (ชม.)"] = ((calc_df["Setup (น.)"] + calc_df["Basic (น.)"] + calc_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
             st.caption("เลือก ‘📊 ภาพรวมโรงงาน’ เพื่อใช้ตารางและปุ่มค้นหาด่วนทั้งหมดที่มีอยู่เดิม")
@@ -3722,8 +3779,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # ไม่เช่นนั้น pandas อาจแปลง 03/09/2026 เป็น 9 มีนาคมแบบ month-first ทันทีที่แก้เซลล์
             active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(format_thai_datetime).astype("object")
 
-            # เก็บค่าเวลาตั้งต้นเดิมไว้เป็น Baseline สำหรับสอบกลับ ไม่แตะต้อง
-            active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"]
+            # Baseline ต้องอ่านจากฐานข้อมูลและห้ามสร้างทับทุกครั้งที่ rerun
+            if "กำหนดพร้อมขึ้นงาน (Baseline)" not in active_jobs_editor_df.columns:
+                active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"]
+            else:
+                missing_baseline = active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"].apply(parse_flexible_datetime).isna()
+                active_jobs_editor_df.loc[missing_baseline, "กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df.loc[missing_baseline, "วัน-เวลาขึ้นงาน"]
+            if "เวลาจบ Baseline" not in active_jobs_editor_df.columns:
+                active_jobs_editor_df["เวลาจบ Baseline"] = None
 
             # จัดลำดับความสำคัญ: กำลังผลิต (0) -> พักงาน (1) -> รอคิว (2) ตามเวลาขึ้นงานเดิม
             def get_queue_priority(r):
@@ -3936,7 +3999,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "Basic (น.)": st.column_config.NumberColumn("Basic", width=65, min_value=0, max_value=6000, step=5, format="%d"),
                             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, min_value=0, max_value=12000, step=10, format="%d"),
                             "รวม (ชม.)": st.column_config.NumberColumn("รวม ชม.", width=70, format="%.2f", disabled=True),
-                            "สถานะงาน": st.column_config.SelectboxColumn("สถานะ", width=115, options=JOB_STATUS),
+                            "สถานะงาน": st.column_config.TextColumn(
+                                "สถานะ", width=115, disabled=True,
+                                help="เปลี่ยนสถานะผ่านปุ่ม Start / Pause / Resume / Finish เท่านั้น เพื่อให้เวลาจริงครบถ้วน"
+                            ),
                             "ลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width=85),
                         },
                         hide_index=True,
@@ -4126,11 +4192,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                         for _, save_row in save_source.iterrows():
                             machine_name = safe_str(save_row.get("เลือกเครื่องจักร"), "")
-                            duration_hours = (
-                                safe_float(save_row.get("Setup (น.)"), 10.0)
-                                + safe_float(save_row.get("Basic (น.)"), 0.0)
-                                + safe_float(save_row.get("โปรแกรม (น.)"), 120.0)
-                            ) / 60.0
+                            duration_hours = get_planned_minutes(save_row) / 60.0
+                            save_status = safe_str(save_row.get("สถานะงาน"), "")
+                            is_live_job = "กำลังผลิต" in save_status or "พักงาน" in save_status
                             if machine_name not in machine_available:
                                 start_dt = parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
                                 if start_dt is None or pd.isna(start_dt) or start_dt.year < 2020:
@@ -4152,6 +4216,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
                                 start_dt = get_next_valid_work_time(start_base)
                             _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
+                            # งานที่เริ่มจริงแล้วห้ามเลื่อน Baseline; หากเลยแผนให้คิวถัดไปรออย่างน้อยถึงเวลาปัจจุบัน
+                            if is_live_job:
+                                original_start = parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
+                                if original_start is not None and pd.notna(original_start):
+                                    start_dt = original_start
+                                stored_finish = parse_flexible_datetime(save_row.get("เวลาจบ Baseline"))
+                                if stored_finish is not None and pd.notna(stored_finish):
+                                    finish_dt = stored_finish
+                                finish_dt = max(finish_dt, get_bangkok_now().replace(tzinfo=None))
                             machine_available[machine_name] = finish_dt
                             calculated_starts.append(start_dt.strftime("%d/%m/%Y %H:%M"))
                             calculated_finishes.append(finish_dt.strftime("%d/%m/%Y %H:%M"))
@@ -4218,6 +4291,18 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     "status": safe_str(row.get("สถานะงาน"), "🟧 รอคิวผลิต")
                                 }
                                 row_id = valid_job_id(row.get("ID"))
+                                baseline_start = parse_flexible_datetime(row.get("กำหนดพร้อมขึ้นงาน (Baseline)")) or dt_parsed
+                                baseline_finish = parse_flexible_datetime(row.get("เวลาจบ Baseline"))
+                                if baseline_finish is None or pd.isna(baseline_finish):
+                                    _, baseline_finish = add_work_time_with_shift(
+                                        get_next_valid_work_time(baseline_start), get_planned_minutes(row) / 60.0
+                                    )
+                                payload["baseline_ready_at"] = baseline_start.strftime("%Y-%m-%d %H:%M:%S")
+                                payload["baseline_finish_at"] = baseline_finish.strftime("%Y-%m-%d %H:%M:%S")
+                                if row_id is None:
+                                    payload["step_progress"] = normalize_step_progress(
+                                        None, payload["step_name"], payload["status"]
+                                    )
                                 if row_needs_database_save(row, row_id, dt_parsed):
                                     pending_saves.append((p_code, row_id, dt_parsed, payload))
 
@@ -4226,6 +4311,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             save_errors.append("ไม่มีข้อมูลเปลี่ยนแปลงที่ต้องบันทึก")
 
                         if save_success:
+                            successfully_updated_ids = []
                             for p_code, row_id, dt_parsed, payload in pending_saves:
                                 row_saved = (
                                     insert_supabase_job(payload, clear_cache=False)
@@ -4234,9 +4320,40 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 )
                                 if row_saved and row_id is not None:
                                     parsed_ready_by_id[row_id] = dt_parsed
+                                    successfully_updated_ids.append(row_id)
                                 elif not row_saved:
                                     save_success = False
                                     save_errors.append(f"{p_code}: ฐานข้อมูลไม่รับข้อมูล")
+
+                            # REST เขียนทีละแถว: หากแถวใดล้มเหลว ให้คืนค่าแถวเดิมที่เขียนสำเร็จไปแล้ว
+                            if not save_success and successfully_updated_ids:
+                                for rollback_id in successfully_updated_ids:
+                                    old = original_by_id.get(rollback_id)
+                                    if old is None:
+                                        continue
+                                    old_ready = parse_flexible_datetime(old.get("วัน-เวลาขึ้นงาน"))
+                                    old_base_start = parse_flexible_datetime(old.get("กำหนดพร้อมขึ้นงาน (Baseline)"))
+                                    old_base_finish = parse_flexible_datetime(old.get("เวลาจบ Baseline"))
+                                    restore_payload = {
+                                        "plan_code": safe_str(old.get("แผนงาน"), ""),
+                                        "drawing_name": safe_str(old.get("ชื่อ Drawing."), ""),
+                                        "qty": safe_int(old.get("จำนวน"), 1),
+                                        "material": safe_str(old.get("วัสดุ"), "SS400"),
+                                        "job_type": safe_str(old.get("ประเภทงาน"), "🟢 งานปกติ"),
+                                        "step_name": safe_str(old.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ"),
+                                        "machine_name": safe_str(old.get("เลือกเครื่องจักร"), "No.1 Awea"),
+                                        "setup_mins": safe_float(old.get("Setup (น.)"), DEFAULT_SETUP_MINUTES),
+                                        "basic_hrs": safe_float(old.get("Basic (น.)"), DEFAULT_BASIC_MINUTES),
+                                        "prog_hrs": safe_float(old.get("โปรแกรม (น.)"), DEFAULT_PROGRAM_MINUTES),
+                                        "status": safe_str(old.get("สถานะงาน"), "🟧 รอคิวผลิต")
+                                    }
+                                    if old_ready is not None and pd.notna(old_ready):
+                                        restore_payload["ready_at"] = old_ready.strftime("%Y-%m-%d %H:%M:%S")
+                                    if old_base_start is not None and pd.notna(old_base_start):
+                                        restore_payload["baseline_ready_at"] = old_base_start.strftime("%Y-%m-%d %H:%M:%S")
+                                    if old_base_finish is not None and pd.notna(old_base_finish):
+                                        restore_payload["baseline_finish_at"] = old_base_finish.strftime("%Y-%m-%d %H:%M:%S")
+                                    update_supabase_job(rollback_id, restore_payload, clear_cache=False)
 
                         if save_success:
                             if not verify_supabase_ready_times(parsed_ready_by_id):
@@ -4788,20 +4905,16 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     fn_p = parse_flexible_datetime(r.get("เสร็จจริง"))
                     plan_st = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
                     pause_seconds = max(0.0, safe_float(r.get("เวลาพักสะสม (วินาที)"), 0.0))
-                    plan_minutes = (
-                        safe_float(r.get("Setup (น.)"), 10.0)
-                        + safe_float(r.get("Basic (น.)"), 0.0)
-                        + safe_float(r.get("โปรแกรม (น.)"), 120.0)
-                    )
-                    plan_fn = None
-                    if plan_st is not None:
-                        _, plan_fn = add_work_time_with_shift(plan_st, plan_minutes / 60.0)
+                    plan_minutes = get_planned_minutes(r)
+                    # ใช้ Baseline/เวลาจบที่บันทึกไว้เป็นแหล่งเดียวกับหน้าอื่น
+                    plan_fn = get_job_planned_finish(r)
 
                     if st_p and fn_p:
                         net_seconds = max(0.0, (fn_p - st_p).total_seconds() - pause_seconds)
                         act_hrs_list.append(round(net_seconds / 3600.0, 2))
                     else:
-                        act_hrs_list.append(round(plan_minutes / 60.0, 2))
+                        # ห้ามนำเวลาแผนมาปลอมเป็นเวลาจริง
+                        act_hrs_list.append(float("nan"))
 
                     pause_hrs_list.append(round(pause_seconds / 3600.0, 2))
                     plan_finish_list.append(plan_fn)
@@ -5125,7 +5238,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             with cost_col2:
                 if not finished_jobs_df.empty:
                     cost_df = finished_jobs_df.copy()
-                    for time_col, default_val in [("Setup (น.)", 10.0), ("Basic (น.)", 0.0), ("โปรแกรม (น.)", 0.0)]:
+                    for time_col, default_val in [
+                        ("Setup (น.)", DEFAULT_SETUP_MINUTES),
+                        ("Basic (น.)", DEFAULT_BASIC_MINUTES),
+                        ("โปรแกรม (น.)", DEFAULT_PROGRAM_MINUTES)
+                    ]:
                         cost_df[time_col] = pd.to_numeric(cost_df[time_col], errors="coerce").fillna(default_val)
                     cost_df["เวลาแผน (ชม.)"] = ((cost_df["Setup (น.)"] + cost_df["Basic (น.)"] + cost_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
