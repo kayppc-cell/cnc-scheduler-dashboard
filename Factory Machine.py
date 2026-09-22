@@ -605,7 +605,7 @@ st.markdown("""
 
     /* TV Live ใช้ HTML ชุดเดียว แต่จัดหน้าตามขนาดอุปกรณ์อัตโนมัติ */
     .tv-grid-container { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-top: 6px; }
-    .tv-card { border-radius: 11px; padding: 9px 11px; color: #FFFFFF !important; box-shadow: 0 4px 12px rgba(0,0,0,0.16); display: flex; flex-direction: column; justify-content: space-between; min-height: 138px; border: 1px solid rgba(255,255,255,0.12); overflow:hidden; }
+    .tv-card { position:relative; border-radius: 11px; padding: 9px 11px; color: #FFFFFF !important; box-shadow: 0 4px 12px rgba(0,0,0,0.16); display: flex; flex-direction: column; justify-content: space-between; min-height: 138px; border: 1px solid rgba(255,255,255,0.12); overflow:hidden; }
     .tv-machine-name { font-size:14px !important; font-weight:800; letter-spacing:0.1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .tv-status-badge { font-size:10px !important; white-space:nowrap; }
     .tv-plan-code { font-size:12.5px !important; font-weight:800; color:#FFFFFF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -658,6 +658,43 @@ st.markdown("""
     .tv-overdue-badge { color:#FFFFFF; background:#DC2626; border:1px solid #FDE047; padding:2px 6px; border-radius:6px; font-weight:900; }
     .tv-card-hold { background: linear-gradient(135deg, #92400E 0%, #D97706 100%) !important; border-left: 7px solid #FBBF24 !important; }
     .tv-card-idle { background: linear-gradient(135deg, #1E293B 0%, #334155 100%) !important; border-left: 7px solid #64748B !important; opacity: 0.92; }
+    .tv-card-done { background:linear-gradient(135deg,#166534 0%,#16A34A 100%) !important; border-left:7px solid #86EFAC !important; }
+    .tv-card-breakdown { background:linear-gradient(135deg,#78350F 0%,#B45309 100%) !important; border:2px solid #FDE68A !important; border-left:7px solid #F59E0B !important; }
+
+    /* มาสคอตสถานะหน้าเครื่อง: ใช้ CSS/Emoji น้ำหนักเบา ไม่โหลดภาพภายนอก */
+    .tv-job-summary { padding-right:34px; }
+    .tv-mascot {
+        position:absolute; right:6px; top:36px; width:29px; height:29px;
+        display:flex; align-items:center; justify-content:center;
+        border-radius:50%; background:rgba(15,23,42,.35);
+        border:1px solid rgba(255,255,255,.32); box-shadow:0 2px 7px rgba(0,0,0,.24);
+        pointer-events:none; z-index:2; line-height:1;
+    }
+    .tv-mascot-main { display:block; font-size:20px; transform-origin:50% 85%; }
+    .tv-mascot-mini { position:absolute; right:-4px; bottom:-4px; font-size:11px; }
+    @keyframes tvMascotWork { 0%,100% { transform:translateY(0) rotate(-3deg); } 50% { transform:translateY(-3px) rotate(3deg); } }
+    @keyframes tvMascotGear { to { transform:rotate(360deg); } }
+    @keyframes tvMascotWait { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-1px) scale(.96); } }
+    @keyframes tvMascotAlert { 0%,100% { transform:translateX(0) rotate(0); } 25% { transform:translateX(-2px) rotate(-5deg); } 75% { transform:translateX(2px) rotate(5deg); } }
+    @keyframes tvMascotSleep { 0%,100% { opacity:.75; transform:scale(.96); } 50% { opacity:1; transform:scale(1.04); } }
+    @keyframes tvMascotCelebrate { 0%,100% { transform:translateY(0) rotate(-4deg); } 45% { transform:translateY(-4px) rotate(5deg) scale(1.08); } }
+    @keyframes tvMascotRepair { 0%,100% { transform:rotate(-5deg); } 50% { transform:rotate(8deg) translateY(-2px); } }
+    .tv-mascot-running .tv-mascot-main { animation:tvMascotWork .85s ease-in-out infinite; }
+    .tv-mascot-running .tv-mascot-mini { animation:tvMascotGear 1.4s linear infinite; }
+    .tv-mascot-hold .tv-mascot-main { animation:tvMascotWait 1.8s ease-in-out infinite; }
+    .tv-mascot-late { background:rgba(127,29,29,.72); border-color:#FDE047; }
+    .tv-mascot-late .tv-mascot-main { animation:tvMascotAlert .55s ease-in-out infinite; }
+    .tv-mascot-late .tv-mascot-mini { animation:tvMascotAlert .7s ease-in-out infinite; }
+    .tv-mascot-idle .tv-mascot-main, .tv-mascot-idle .tv-mascot-mini { animation:tvMascotSleep 2.2s ease-in-out infinite; }
+    .tv-mascot-done { background:rgba(20,83,45,.72); border-color:#86EFAC; }
+    .tv-mascot-done .tv-mascot-main { animation:tvMascotCelebrate .95s ease-in-out infinite; }
+    .tv-mascot-done .tv-mascot-mini { animation:tvMascotWait .8s ease-in-out infinite; }
+    .tv-mascot-breakdown { background:rgba(120,53,15,.78); border-color:#FDE68A; }
+    .tv-mascot-breakdown .tv-mascot-main, .tv-mascot-breakdown .tv-mascot-mini { animation:tvMascotRepair .75s ease-in-out infinite; }
+    @media (max-width:700px) { .tv-mascot { display:none !important; } .tv-job-summary { padding-right:0; } }
+    @media (prefers-reduced-motion:reduce) {
+        .tv-mascot-main, .tv-mascot-mini { animation:none !important; }
+    }
 
     .tv-pulse-dot {
         width: 13px !important;
@@ -6754,6 +6791,7 @@ elif st.session_state.current_view == "🛒 จัดซื้อและต้
 elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
     st.cache_data.clear()
     df_live = fetch_jobs_from_supabase()
+    tv_events = fetch_job_events(500)
 
     now_bangkok = get_bangkok_now()
     cur_date_str = now_bangkok.strftime("%d/%m/%Y")
@@ -6763,6 +6801,20 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     hold_machines_count = 0
     idle_machines_count = 0
     overdue_machines_count = 0
+    breakdown_machines_count = 0
+    done_machines_count = 0
+
+    def get_tv_latest_pause_reason(job_id):
+        """คืนเหตุผล Pause ล่าสุดของงาน เพื่อแยกเครื่องขัดข้องออกจากการพักทั่วไป"""
+        if tv_events.empty or "job_id" not in tv_events.columns:
+            return ""
+        matched = tv_events[
+            (pd.to_numeric(tv_events["job_id"], errors="coerce") == safe_int(job_id)) &
+            (tv_events["event_type"].astype(str) == "Pause Step")
+        ]
+        if matched.empty:
+            return ""
+        return safe_str(matched.iloc[0].get("reason"), "")
 
     def get_tv_plan_window(job_row):
         """คืนเวลาเริ่ม/จบตามแผนของงานบนการ์ด และสถานะหลุดแผน"""
@@ -6933,6 +6985,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             })
         elif not hold_job.empty:
             h_info = hold_job.iloc[0]
+            hold_reason = get_tv_latest_pause_reason(h_info.get("ID"))
+            is_breakdown = hold_reason == "เครื่องจักรขัดข้อง"
+            if is_breakdown:
+                breakdown_machines_count += 1
             p_code = str(h_info.get("แผนงาน", "-"))
             d_code = str(h_info.get("ชื่อ Drawing.", "-"))
             step_name = str(h_info.get("ขั้นตอน (Step)", "-"))
@@ -6948,7 +7004,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
             time_info_combined = f'''
             <div style="font-size:13px; font-weight:700; color:#FEF3C7; line-height:1.5;">
-                <div>⚠️ <b>เครื่องหยุด:</b> รอเบิกวัสดุใหม่{h_start_txt}</div>
+                <div>⚠️ <b>{'เครื่องจักรขัดข้อง' if is_breakdown else 'พักงาน'}:</b> {hold_reason or 'รอเบิกวัสดุใหม่'}{h_start_txt}</div>
                 {hold_start_variance_html}
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
@@ -6957,16 +7013,20 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             </div>
             '''
 
-            hold_card_cls = "tv-card tv-card-hold"
-            hold_badge_html = '<b style="color:#FDE68A;">🛑 พักงาน (รอวัสดุ)</b>'
+            hold_card_cls = "tv-card tv-card-breakdown" if is_breakdown else "tv-card tv-card-hold"
+            hold_badge_html = (
+                '<b style="color:#FEF3C7;">⚠️ เครื่องจักรขัดข้อง</b>'
+                if is_breakdown else '<b style="color:#FDE68A;">🛑 พักงาน</b>'
+            )
             if is_overdue:
                 overdue_machines_count += 1
-                hold_card_cls = "tv-card tv-card-overdue"
-                hold_badge_html = '<span class="tv-overdue-badge">🚨 หลุดแผน</span>'
+                if not is_breakdown:
+                    hold_card_cls = "tv-card tv-card-overdue"
+                    hold_badge_html = '<span class="tv-overdue-badge">🚨 หลุดแผน</span>'
 
             machine_status_cards.append({
                 "machine": m,
-                "status": "HOLD",
+                "status": "BREAKDOWN" if is_breakdown else "HOLD",
                 "card_class": hold_card_cls,
                 "badge_html": hold_badge_html,
                 "plan": p_code,
@@ -7004,18 +7064,43 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 </div>
                 '''
 
+            finished_jobs = m_jobs[m_jobs["สถานะงาน"].astype(str).str.contains("เสร็จสิ้น", na=False)].copy()
+            recent_finished = None
+            if not finished_jobs.empty:
+                finished_jobs["_tv_finish_dt"] = finished_jobs["เสร็จจริง"].apply(parse_flexible_datetime)
+                finished_jobs = finished_jobs.dropna(subset=["_tv_finish_dt"]).sort_values("_tv_finish_dt", ascending=False)
+                if not finished_jobs.empty:
+                    finish_candidate = finished_jobs.iloc[0]
+                    finish_dt = finish_candidate["_tv_finish_dt"]
+                    seconds_since_finish = (now_bangkok.replace(tzinfo=None) - finish_dt).total_seconds()
+                    if 0 <= seconds_since_finish <= 600:
+                        recent_finished = finish_candidate
+
             idle_card_cls = "tv-card tv-card-idle"
             idle_badge_html = '<b style="color:#94A3B8;">⚪ เครื่องว่าง (IDLE)</b>'
+            idle_status = "IDLE"
             idle_planned_start = ready_display_txt if not waiting_jobs.empty else "-"
             idle_planned_finish = finish_display_txt if not waiting_jobs.empty else "-"
-            if not waiting_jobs.empty and is_overdue:
+            if recent_finished is not None and not is_overdue:
+                done_machines_count += 1
+                finish_dt = recent_finished["_tv_finish_dt"]
+                idle_card_cls = "tv-card tv-card-done"
+                idle_badge_html = '<b style="color:#DCFCE7;">✅ งานเสร็จแล้ว</b>'
+                idle_status = "DONE"
+                next_txt = f"{safe_str(recent_finished.get('แผนงาน'), '-')} ({safe_str(recent_finished.get('ชื่อ Drawing.'), '-')})"
+                next_dates_html = (
+                    f'<div style="margin-top:4px;font-size:12px;color:#DCFCE7;background:rgba(0,0,0,.22);padding:5px 8px;border-radius:6px;">'
+                    f'🏁 เสร็จจริง: {finish_dt.strftime("%d/%m/%Y %H:%M")}<br>'
+                    f'📋 คิวรอถัดไป: {len(waiting_jobs)} งาน</div>'
+                )
+            elif not waiting_jobs.empty and is_overdue:
                 overdue_machines_count += 1
                 idle_card_cls = "tv-card tv-card-overdue"
                 idle_badge_html = '<span class="tv-overdue-badge">🚨 หลุดแผน</span>'
 
             machine_status_cards.append({
                 "machine": m,
-                "status": "IDLE",
+                "status": idle_status,
                 "card_class": idle_card_cls,
                 "badge_html": idle_badge_html,
                 "plan": "พร้อมรับงาน",
@@ -7043,8 +7128,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             <div id="live-tv-clock" style="font-size:26px; font-weight:900; color:#F8FAFC; font-family:monospace; letter-spacing:1px;">--:--:-- น.</div>
             <div style="font-size:12.5px; font-weight:bold;">
                 <span style="color:#34D399;">🟢 กำลังรัน {running_machines_count}</span> | 
-                <span style="color:#FBBF24;">🟡 พักงาน {hold_machines_count}</span> | 
-                <span style="color:#94A3B8;">⚪ ว่าง {idle_machines_count}</span> |
+                <span style="color:#FBBF24;">🟡 พักงาน {max(0, hold_machines_count - breakdown_machines_count)}</span> | 
+                <span style="color:#FDE68A;">⚠️ ขัดข้อง {breakdown_machines_count}</span> |
+                <span style="color:#86EFAC;">✅ เสร็จล่าสุด {done_machines_count}</span> |
+                <span style="color:#94A3B8;">⚪ ว่าง {max(0, idle_machines_count - done_machines_count)}</span> |
                 <span style="color:#FCA5A5;">🚨 หลุดแผน {overdue_machines_count} เครื่อง</span>
             </div>
         </div>
@@ -7053,13 +7140,26 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
     card_items = []
     for c in machine_status_cards:
+        if c.get("status") == "BREAKDOWN":
+            mascot_html = '<div class="tv-mascot tv-mascot-breakdown" title="ช่างกำลังตรวจเครื่องจักรขัดข้อง" aria-hidden="true"><span class="tv-mascot-main">🧑‍🔧</span><span class="tv-mascot-mini">🛠️</span></div>'
+        elif c.get("overdue"):
+            mascot_html = '<div class="tv-mascot tv-mascot-late" title="หลุดแผน" aria-hidden="true"><span class="tv-mascot-main">🧑‍🏭</span><span class="tv-mascot-mini">🚨</span></div>'
+        elif c.get("status") == "RUNNING":
+            mascot_html = '<div class="tv-mascot tv-mascot-running" title="กำลังทำงาน" aria-hidden="true"><span class="tv-mascot-main">🧑‍🏭</span><span class="tv-mascot-mini">⚙️</span></div>'
+        elif c.get("status") == "HOLD":
+            mascot_html = '<div class="tv-mascot tv-mascot-hold" title="พักงาน/กำลังรอ" aria-hidden="true"><span class="tv-mascot-main">🧑‍🔧</span><span class="tv-mascot-mini">⏳</span></div>'
+        elif c.get("status") == "DONE":
+            mascot_html = '<div class="tv-mascot tv-mascot-done" title="งานเสร็จแล้ว" aria-hidden="true"><span class="tv-mascot-main">🧑‍🏭</span><span class="tv-mascot-mini">👍</span></div>'
+        else:
+            mascot_html = '<div class="tv-mascot tv-mascot-idle" title="เครื่องว่าง" aria-hidden="true"><span class="tv-mascot-main">🧑‍🏭</span><span class="tv-mascot-mini">💤</span></div>'
         card_item = (
             f'<div class="{c["card_class"]}">'
+            f'{mascot_html}'
             f'<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">'
             f'<div class="tv-machine-name">{c["machine"]}</div>'
             f'<div class="tv-status-badge">{c["badge_html"]}</div>'
             f'</div>'
-            f'<div style="margin: 3px 0;">'
+            f'<div class="tv-job-summary" style="margin: 3px 0;">'
             f'<div class="tv-plan-code">📌 {c["plan"]}</div>'
             f'<div class="tv-drawing-code">📄 {c["drawing"]}</div>'
             f'<div class="tv-step-name">⚙️ ขั้นตอน: {c["step"]}</div>'
