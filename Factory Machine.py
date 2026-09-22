@@ -4159,10 +4159,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 "สถานะ", width=115, disabled=True,
                                 help="เปลี่ยนสถานะผ่านปุ่ม Start / Pause / Resume / Finish เท่านั้น เพื่อให้เวลาจริงครบถ้วน"
                             ),
-                            "ลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width=85),
+                            "ลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width=90),
                         },
                         hide_index=True,
-                        width=1540,
+                        # เพิ่มเฉพาะระยะที่จำเป็นให้เห็นช่องเลือกลบด้านขวาครบ ไม่ขยายเต็มหน้าจอ
+                        width=1640,
                         row_height=30
                     )
                         st.caption("✍️ แก้ไขหรือเพิ่มหลายช่องให้ครบก่อน แล้วกดบันทึกครั้งเดียว ระบบจึงจะคำนวณรวมชั่วโมงและเวลาลูกโซ่ใหม่")
