@@ -6784,6 +6784,59 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         is_overdue = now_bangkok.replace(tzinfo=None) > plan_finish
         return plan_start, plan_finish, start_txt, finish_txt, is_overdue
 
+    def get_tv_actual_start(job_row):
+        """คืนเวลาเริ่มจริงสำหรับหน้าทีวี โดยไม่ใช้เวลาแผนเป็นตัวจับเวลา"""
+        drawing_start = parse_flexible_datetime(job_row.get("เริ่มจริง"))
+        if drawing_start is not None and pd.notna(drawing_start):
+            return drawing_start
+
+        # ข้อมูล Multi-Step บางรายการมีเวลาเริ่มจริงอยู่ใน Step ปัจจุบัน
+        # แม้ actual_start ระดับ Drawing จะยังว่าง จึงใช้เป็น fallback ที่ถูกต้องได้
+        progress = normalize_step_progress(
+            job_row.get("ติดตาม Step"), job_row.get("ขั้นตอน (Step)"),
+            job_row.get("สถานะงาน"), job_row.get("เริ่มจริง"), job_row.get("เสร็จจริง")
+        )
+        steps = progress.get("steps", []) if isinstance(progress, dict) else []
+        if not steps:
+            return None
+        current_index = int(safe_float(progress.get("current_index"), 0))
+        current_index = max(0, min(current_index, len(steps) - 1))
+        step_start = parse_flexible_datetime(steps[current_index].get("started_at"))
+        return step_start if step_start is not None and pd.notna(step_start) else None
+
+    def build_tv_start_variance(actual_start, planned_start):
+        """สร้างป้ายเปรียบเทียบเวลาเริ่มจริงกับแผน โดยไม่กระทบตัวจับเวลา"""
+        if actual_start is None or pd.isna(actual_start) or planned_start is None or pd.isna(planned_start):
+            return ""
+
+        diff_seconds = (actual_start - planned_start).total_seconds()
+        if abs(diff_seconds) < 60:
+            label = "✅ เริ่มตรงตามแผน"
+            color = "#BFDBFE"
+        else:
+            total_minutes = max(1, int(round(abs(diff_seconds) / 60.0)))
+            days, remain_minutes = divmod(total_minutes, 24 * 60)
+            hours, minutes = divmod(remain_minutes, 60)
+            duration_parts = []
+            if days:
+                duration_parts.append(f"{days} วัน")
+            if hours:
+                duration_parts.append(f"{hours} ชม.")
+            if minutes:
+                duration_parts.append(f"{minutes} นาที")
+            duration_text = " ".join(duration_parts) or "1 นาที"
+            if diff_seconds < 0:
+                label = f"⏩ เริ่มก่อนแผน {duration_text}"
+                color = "#A7F3D0"
+            else:
+                label = f"⏰ เริ่มช้ากว่าแผน {duration_text}"
+                color = "#FDE68A"
+
+        return (
+            f'<div style="margin-top:3px; font-size:11.5px; font-weight:900; '
+            f'color:{color};">{label}</div>'
+        )
+
     for idx_m, m in enumerate(MACHINE_LIST):
         m_jobs = df_live[df_live["เลือกเครื่องจักร"] == m] if not df_live.empty else pd.DataFrame()
         
@@ -6791,10 +6844,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         # หากมีข้อมูลผิดปกติหลายงานกำลังผลิตในเครื่องเดียว ให้เลือกงานที่มีเวลาเริ่มจริงล่าสุดก่อน
         duplicate_running_count = len(running_job)
         if not running_job.empty:
-            running_job["_tv_actual_start"] = running_job["เริ่มจริง"].apply(parse_flexible_datetime)
-            tv_sort_now = now_bangkok.replace(tzinfo=None)
+            running_job["_tv_actual_start"] = running_job.apply(get_tv_actual_start, axis=1)
             running_job["_tv_has_actual_start"] = running_job["_tv_actual_start"].apply(
-                lambda value: bool(value is not None and pd.notna(value) and value <= tv_sort_now)
+                lambda value: bool(value is not None and pd.notna(value))
             )
             running_job = running_job.sort_values(
                 by=["_tv_has_actual_start", "_tv_actual_start", "ID"],
@@ -6817,7 +6869,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         if not running_job.empty:
             running_machines_count += 1
             r_info = running_job.iloc[0]
-            s_start = r_info.get("เริ่มจริง")
             r_paused_seconds = int(safe_float(r_info.get("เวลาพักสะสม (วินาที)"), 0.0))
             p_code = str(r_info.get("แผนงาน", "-"))
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
@@ -6827,11 +6878,9 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
             start_disp_txt = "-"
             start_epoch = 0
-            r_start_parsed = parse_flexible_datetime(s_start)
-            tv_now_naive = now_bangkok.replace(tzinfo=None)
+            r_start_parsed = get_tv_actual_start(r_info)
             has_valid_actual_start = bool(
                 r_start_parsed is not None and pd.notna(r_start_parsed)
-                and r_start_parsed <= tv_now_naive
             )
 
             if has_valid_actual_start:
@@ -6841,8 +6890,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                 actual_start_report = r_start_parsed.strftime("%d/%m/%Y %H:%M")
             else:
                 # ห้ามใช้เวลาแผนแทนเวลาเริ่มจริง เพราะจะทำให้ตัวจับเวลาเริ่มเองเมื่อถึงเวลาแผน
-                timer_display_html = '<span style="font-size:11.5px; font-weight:900; color:#FDE047;">⚠️ รันงานก่อนเวลาเริ่มจริง......</span>'
+                timer_display_html = '<span style="font-size:11.5px; font-weight:900; color:#FDE047;">⚠️ ไม่พบเวลาเริ่มจริง กรุณาตรวจสอบข้อมูล</span>'
                 actual_start_report = "-"
+
+            start_variance_html = build_tv_start_variance(r_start_parsed, r_ready_dt)
 
             duplicate_running_html = ""
             if duplicate_running_count > 1:
@@ -6861,6 +6912,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
                     <span>⏱️ {timer_display_html}</span>
                 </div>
+                {start_variance_html}
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
                     <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
@@ -6884,7 +6936,6 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             })
         elif not hold_job.empty:
             h_info = hold_job.iloc[0]
-            h_start = h_info.get("เริ่มจริง")
             p_code = str(h_info.get("แผนงาน", "-"))
             d_code = str(h_info.get("ชื่อ Drawing.", "-"))
             step_name = str(h_info.get("ขั้นตอน (Step)", "-"))
@@ -6892,14 +6943,16 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             h_ready_dt, h_finish_dt, ready_display_txt, finish_display_txt, is_overdue = get_tv_plan_window(h_info)
 
             h_start_txt = ""
-            h_st_parsed = parse_flexible_datetime(h_start)
+            h_st_parsed = get_tv_actual_start(h_info)
             if h_st_parsed is not None and pd.notna(h_st_parsed):
                 h_start_txt = f" (เริ่มไว้: {h_st_parsed.strftime('%H:%M น.')})"
             hold_actual_start_report = h_st_parsed.strftime("%d/%m/%Y %H:%M") if h_st_parsed is not None and pd.notna(h_st_parsed) else "-"
+            hold_start_variance_html = build_tv_start_variance(h_st_parsed, h_ready_dt)
 
             time_info_combined = f'''
             <div style="font-size:13px; font-weight:700; color:#FEF3C7; line-height:1.5;">
                 <div>⚠️ <b>เครื่องหยุด:</b> รอเบิกวัสดุใหม่{h_start_txt}</div>
+                {hold_start_variance_html}
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
                     <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
