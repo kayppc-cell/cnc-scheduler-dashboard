@@ -2227,10 +2227,38 @@ def render_work_order_readonly(source_df):
 
     now_check = get_bangkok_now().replace(tzinfo=None)
     finish_map = dict(zip(work_df["ID"].astype(str), work_df["_dt_finish"]))
-    status_options = ["🌐 ทั้งหมด", "🟦 กำลังผลิต", "🟧 รอคิว", "🟨 พักงาน", "🟡 ใกล้เสร็จภายใน 1 ชม.", "🔴 เกินแผน"]
-    f1, f2, f3, f4, f5 = st.columns([1.15, 1.15, 1, 1.35, 1])
-    with f1:
-        status_filter = st.selectbox("🚦 สถานะ", status_options, key="monitor_wo_status")
+    active_deadline_mask = work_df["สถานะ"].apply(is_deadline_active_status)
+    finish_diff_seconds = work_df["_dt_finish"].apply(
+        lambda value: (value - now_check).total_seconds() if value is not None and pd.notna(value) else float("nan")
+    )
+    running_count = int(work_df["สถานะ"].str.contains("กำลังผลิต", na=False).sum())
+    waiting_count = int(work_df["สถานะ"].str.contains("รอคิว", na=False).sum())
+    hold_count = int(work_df["สถานะ"].str.contains("พักงาน|รอวัสดุ", regex=True, na=False).sum())
+    warn_count = int((active_deadline_mask & finish_diff_seconds.between(0, 3600, inclusive="both")).sum())
+    late_count = int((active_deadline_mask & (finish_diff_seconds < 0)).sum())
+
+    st.markdown("**🔎 ค้นหาด่วนด้วยปุ่ม:**")
+    selected_quick_filter = st.session_state.get("monitor_wo_quick_filter", "ALL")
+    quick_filters = [
+        ("ALL", "🌐 ทั้งหมด"),
+        ("RUNNING", f"🟦 กำลังผลิต {running_count}"),
+        ("WAITING", f"🟥 รอคิว {waiting_count}"),
+        ("HOLD", f"🟧 พักงาน {hold_count}"),
+        ("WARN", f"🟡 ใกล้เสร็จ {warn_count}"),
+        ("LATE", f"🔴 เกินแผน {late_count}")
+    ]
+    for button_col, (filter_key, filter_label) in zip(st.columns(6), quick_filters):
+        with button_col:
+            if st.button(
+                filter_label,
+                key=f"monitor_wo_quick_{filter_key}",
+                type="primary" if selected_quick_filter == filter_key else "secondary",
+                use_container_width=True
+            ):
+                st.session_state.monitor_wo_quick_filter = filter_key
+                selected_quick_filter = filter_key
+
+    f2, f3, f4, f5 = st.columns([1.15, 1, 1.35, 1])
     with f2:
         machine_filter = st.selectbox("🏭 เครื่องจักร", ["🌐 ทุกเครื่อง"] + sorted(work_df["เครื่องจักร / แผนก"].dropna().unique().tolist()), key="monitor_wo_machine")
     with f3:
@@ -2241,17 +2269,17 @@ def render_work_order_readonly(source_df):
         material_filter = st.selectbox("🔩 วัสดุ", ["🌐 ทุกวัสดุ"] + sorted(work_df["วัสดุ"].dropna().astype(str).unique().tolist()), key="monitor_wo_material")
 
     view_df = work_df.copy()
-    if "กำลังผลิต" in status_filter:
+    if selected_quick_filter == "RUNNING":
         view_df = view_df[view_df["สถานะ"].str.contains("กำลังผลิต", na=False)]
-    elif "รอคิว" in status_filter:
+    elif selected_quick_filter == "WAITING":
         view_df = view_df[view_df["สถานะ"].str.contains("รอคิว", na=False)]
-    elif "พักงาน" in status_filter:
+    elif selected_quick_filter == "HOLD":
         view_df = view_df[view_df["สถานะ"].str.contains("พักงาน|รอวัสดุ", regex=True, na=False)]
-    elif "ใกล้เสร็จ" in status_filter:
+    elif selected_quick_filter == "WARN":
         view_df = view_df[view_df["_dt_finish"].apply(
             lambda value: value is not None and pd.notna(value) and 0 <= (value - now_check).total_seconds() <= 3600
         )]
-    elif "เกินแผน" in status_filter:
+    elif selected_quick_filter == "LATE":
         view_df = view_df[view_df["_dt_finish"].apply(
             lambda value: value is not None and pd.notna(value) and value < now_check
         )]
@@ -2269,7 +2297,7 @@ def render_work_order_readonly(source_df):
     display_columns = [
         "ID", "เครื่องจักร / แผนก", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.",
         "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", "เริ่มขึ้นงานตามแผน",
-        "จบงานตามแผน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)"
+        "จบงานตามแผน", "รวม (ชม.)", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)"
     ]
     styled_view = view_df[display_columns].style.apply(
         highlight_running_deadlines, planned_finish_map=finish_map, axis=1
@@ -2277,23 +2305,23 @@ def render_work_order_readonly(source_df):
     st.dataframe(
         styled_view,
         hide_index=True,
-        width=1500,
-        height=min(680, max(260, len(view_df) * 31 + 42)),
-        row_height=30,
+        width=1900,
+        height=min(780, max(320, len(view_df) * 34 + 46)),
+        row_height=33,
         column_config={
             "ID": None,
-            "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=115),
-            "ลำดับคิว": st.column_config.TextColumn("คิว", width=60),
-            "สถานะ": st.column_config.TextColumn("สถานะ", width=105),
-            "ประเภทงาน": st.column_config.TextColumn("ประเภท", width=90),
-            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75),
-            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=150),
-            "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, format="%d"),
-            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
-            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=150),
-            "กำหนดพร้อมขึ้นงาน": st.column_config.TextColumn("Baseline", width=135),
-            "เริ่มขึ้นงานตามแผน": st.column_config.TextColumn("เริ่มแผน", width=135),
-            "จบงานตามแผน": st.column_config.TextColumn("จบแผน", width=135),
+            "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=140),
+            "ลำดับคิว": st.column_config.TextColumn("คิว", width=70),
+            "สถานะ": st.column_config.TextColumn("สถานะ", width=125),
+            "ประเภทงาน": st.column_config.TextColumn("ประเภท", width=105),
+            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=90),
+            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=185),
+            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=90),
+            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=185),
+            "กำหนดพร้อมขึ้นงาน": st.column_config.TextColumn("Baseline", width=140),
+            "เริ่มขึ้นงานตามแผน": st.column_config.TextColumn("เริ่มแผน", width=140),
+            "จบงานตามแผน": st.column_config.TextColumn("จบแผน", width=140),
             "Setup (น.)": st.column_config.NumberColumn("Setup", width=65, format="%d"),
             "Basic (น.)": st.column_config.NumberColumn("Basic", width=65, format="%d"),
             "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, format="%d"),
