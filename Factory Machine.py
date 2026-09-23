@@ -2372,7 +2372,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 f"<td><details><summary>ดูรายละเอียด</summary><div class='project-tablet-details'>{detail_html}</div></details></td>"
                 "</tr>"
             )
-            mobile_cards.append(textwrap.dedent(f"""
+            mobile_card_html = textwrap.dedent(f"""
             <article class="project-mobile-card">
                 <div class="project-mobile-title"><b>{plan_code}</b><span>{status_text}</span></div>
                 <div class="project-mobile-grid">
@@ -2384,7 +2384,9 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 <div class="project-mobile-progress"><span style="width:{remaining_pct:.1f}%"></span></div>
                 <details><summary>ดูรายละเอียดแผนงาน</summary><div class="project-mobile-details">{detail_html}</div></details>
             </article>
-            """).strip())
+            """)
+            # ห้ามเหลือช่องว่างนำหน้าหรือขึ้นบรรทัดใหม่ เพราะ Markdown อาจตีความเป็น code block
+            mobile_cards.append("".join(line.strip() for line in mobile_card_html.splitlines()))
 
         responsive_project_html = textwrap.dedent("""
         <style>
