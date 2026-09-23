@@ -775,7 +775,7 @@ VIEWER_PASSWORD = "pes1234"
 
 default_states = {
     "user_role": None,
-    "current_view": "👷 โหมดช่างหน้าเครื่อง",
+    "current_view": "👷 โหมดหน้าเครื่อง",
     "active_select_all": False,
     "finish_select_all": False,
     "scroll_to_bottom": False,
@@ -787,6 +787,10 @@ default_states = {
 for k, v in default_states.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# รองรับ session ที่เปิดค้างจากเวอร์ชันก่อนเปลี่ยนชื่อเมนู
+if st.session_state.get("current_view") == "👷 โหมดช่างหน้าเครื่อง":
+    st.session_state.current_view = "👷 โหมดหน้าเครื่อง"
 
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
@@ -1609,7 +1613,7 @@ def render_machine_activity_dashboard(calc_df):
 
 def render_project_master_dashboard(calc_df, is_admin, read_only=False):
     if read_only:
-        st.markdown("### 🗓️ แผนงาน Production (ดูอย่างเดียว)")
+        st.markdown("### 🗓️ แผนงาน Production")
         st.caption("แสดงกรอบเวลา Production และแผนผลิตล่าสุดสำหรับตรวจสอบเท่านั้น — ไม่สามารถเพิ่ม แก้ไข ลบ หรือพิมพ์จากหน้านี้")
     else:
         st.markdown("### 🗓️ แผนงาน Production และ Project Master Gantt")
@@ -2585,7 +2589,7 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
         """, height=48)
 
 nav_options = [
-    "👷 โหมดช่างหน้าเครื่อง", 
+    "👷 โหมดหน้าเครื่อง", 
     "📊 แดชบอร์ดภาพรวมโรงงาน", 
     "📈 วิเคราะห์ประสิทธิภาพราย Drawing", 
     "📑 รายงานสรุปประจำเดือน", 
@@ -2601,9 +2605,9 @@ if selected_tab != st.session_state.current_view:
     st.rerun()
 
 # ---------------------------------------------------------
-# VIEW 1: โหมดช่างหน้าเครื่อง
+# VIEW 1: โหมดหน้าเครื่อง
 # ---------------------------------------------------------
-if st.session_state.current_view == "👷 โหมดช่างหน้าเครื่อง":
+if st.session_state.current_view == "👷 โหมดหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
 
     operator_finish_feedback = st.session_state.pop("operator_finish_feedback", None)
@@ -5084,7 +5088,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =====================================================
             # 5. ตารางสรุปประวัติงานที่เสร็จสิ้น (Finished Production History)
             # =====================================================
-            st.subheader("✅ ตารางสรุปประวัติงานที่ผลิตเสร็จสิ้น (Finished History - เริ่มจริง / เสร็จจริง)")
+            st.subheader("✅ ตารางสรุปประวัติงานผลิตที่เสร็จแล้ว (Finished History - เริ่มจริง / เสร็จจริง)")
 
             if not finished_jobs_df.empty:
                 fin_display_df = finished_jobs_df.copy()
@@ -5423,7 +5427,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     th:nth-child(2),td:nth-child(2) {{ width:10%; }} th:nth-child(5),td:nth-child(5) {{ width:13%; }} th:nth-child(14),td:nth-child(14) {{ width:11%; }}
                     .foot {{ text-align:right; margin-top:7px; }}
                     </style></head><body>
-                    <div class="head"><div><h1>ตารางสรุปประวัติงานที่ผลิตเสร็จสิ้น</h1><div class="sub">Finished History - เริ่มจริง / เสร็จจริง | Timing Process Control (TPC)</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
+                    <div class="head"><div><h1>ตารางสรุปประวัติงานผลิตที่เสร็จแล้ว</h1><div class="sub">Finished History - เริ่มจริง / เสร็จจริง | Timing Process Control (TPC)</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
                     <div class="filters"><b>ตัวกรอง:</b> ${{d.quick_filter}} | เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | จำนวน ${{d.rows_count}} รายการ</div>
                     <div class="kpis"><div class="kpi">จบตรง/เร็วกว่าแผน<b>${{d.ontime}} รายการ</b></div><div class="kpi">จบช้ากว่าแผน<b>${{d.late}} รายการ</b></div><div class="kpi">เวลาจริงสุทธิรวม<b>${{d.net_hours}} ชม.</b></div><div class="kpi">เวลาพักสะสมรวม<b>${{d.pause_hours}} ชม.</b></div></div>
                     <table><thead><tr><th>แผนงาน</th><th>Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>เครื่องจักร</th><th>เริ่มแผน</th><th>จบแผน</th><th>เริ่มจริง</th><th>จบจริง</th><th>พัก ชม.</th><th>แผน ชม.</th><th>จริงสุทธิ</th><th>ผลเทียบแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
@@ -5441,9 +5445,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.divider()
 
             # =====================================================
-            # 6. ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)
+            # 6. ตารางคำนวณเวลาและต้นทุนเครื่องจักร (Machining Cost Calculation)
             # =====================================================
-            st.subheader("💰 ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร (Machining Cost Calculation)")
+            st.subheader("💰 ตารางคำนวณเวลาและต้นทุนเครื่องจักร (Machining Cost Calculation)")
 
             current_rates_df = pd.DataFrame([
                 {"เครื่องจักร": m, "เรตราคา (บาท/ชม.)": DEFAULT_RATES.get(m, 500)}
@@ -5746,7 +5750,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }}
                         .foot {{ margin-top:8px; color:#64748B; text-align:right; }}
                         </style></head><body>
-                        <div class="head"><div><h1>ตารางคำนวณมูลค่าและต้นทุนค่าเครื่องจักร</h1><div class="sub">Machining Cost Calculation - งานเสร็จสิ้น / ต้นทุนจริงสุทธิ</div></div><div>วันที่ออกรายงาน: ${{d.print_date}}</div></div>
+                        <div class="head"><div><h1>ตารางคำนวณเวลาและต้นทุนเครื่องจักร</h1><div class="sub">Machining Cost Calculation - งานเสร็จสิ้น / ต้นทุนจริงสุทธิ</div></div><div>วันที่ออกรายงาน: ${{d.print_date}}</div></div>
                         <div class="filters"><b>เงื่อนไข:</b> เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | ค้นหา ${{d.search}} | จำนวน ${{d.rows_count}} รายการ</div>
                         <div class="kpis">
                           <div class="kpi">ต้นทุนจริงสุทธิ<b>${{d.actual_cost}} บาท</b></div>
@@ -5783,7 +5787,7 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
             render_project_master_dashboard(df_db, is_admin=False, read_only=True)
 
     st.divider()
-    st.markdown("### 📊 ผลวิเคราะห์ประสิทธิภาพราย Drawing")
+    st.markdown("### 📊 ผลวิเคราะห์ประสิทธิภาพตาม Drawing")
 
     current_now = get_bangkok_now()
     month_names = ["มกราคม (1)", "กุมภาพันธ์ (2)", "มีนาคม (3)", "เมษายน (4)", "พฤษภาคม (5)", "มิถุนายน (6)", "กรกฎาคม (7)", "สิงหาคม (8)", "กันยายน (9)", "ตุลาคม (10)", "พฤศจิกายน (11)", "ธันวาคม (12)"]
