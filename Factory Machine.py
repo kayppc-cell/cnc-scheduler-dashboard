@@ -2200,23 +2200,59 @@ def render_work_order_readonly(source_df):
         st.success("ขณะนี้ไม่มีงานกำลังผลิต พักงาน หรือรอคิว")
         return
 
-    work_df["_dt_start"] = work_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-    work_df["_dt_finish"] = work_df["วัน-เวลาจบงาน"].apply(parse_flexible_datetime)
+    # คำนวณเวลาลูกโซ่ใหม่ด้วยสูตรเดียวกับหน้าแดชบอร์ด
+    # ห้ามใช้วัน-เวลาจบงานดิบ เพราะบางรายการในฐานข้อมูลไม่มีค่าจบที่คำนวณแล้ว
+    if "กำหนดพร้อมขึ้นงาน (Baseline)" not in work_df.columns:
+        work_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = work_df["วัน-เวลาขึ้นงาน"]
+    work_df["_baseline_dt"] = work_df["กำหนดพร้อมขึ้นงาน (Baseline)"].apply(parse_flexible_datetime)
+    missing_baseline = work_df["_baseline_dt"].isna()
+    work_df.loc[missing_baseline, "_baseline_dt"] = work_df.loc[missing_baseline, "วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
+    work_df["_ready_original"] = work_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
     work_df["_priority"] = work_df["สถานะงาน"].astype(str).apply(
         lambda value: 0 if "กำลังผลิต" in value else (1 if ("พักงาน" in value or "รอวัสดุ" in value) else 2)
     )
     work_df = work_df.sort_values(
-        ["เลือกเครื่องจักร", "_priority", "_dt_start", "ID"], na_position="last"
+        ["เลือกเครื่องจักร", "_priority", "_ready_original", "ID"], na_position="last"
     ).reset_index(drop=True)
+
+    machine_available = {}
+    chain_starts, chain_finishes = [], []
+    for _, queue_row in work_df.iterrows():
+        machine_name = safe_str(queue_row.get("เลือกเครื่องจักร"), "-")
+        duration_hours = (
+            safe_float(queue_row.get("Setup (น.)"), 10.0)
+            + safe_float(queue_row.get("Basic (น.)"), 0.0)
+            + safe_float(queue_row.get("โปรแกรม (น.)"), DEFAULT_PROGRAM_MINUTES)
+        ) / 60.0
+        row_ready = queue_row.get("_ready_original")
+        if machine_name not in machine_available:
+            if row_ready is None or pd.isna(row_ready) or row_ready.year < 2020:
+                machine_available[machine_name] = None
+                chain_starts.append(None)
+                chain_finishes.append(None)
+                continue
+            chain_start = get_next_valid_work_time(row_ready)
+        else:
+            previous_finish = machine_available[machine_name]
+            if previous_finish is None:
+                chain_starts.append(None)
+                chain_finishes.append(None)
+                continue
+            start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
+            chain_start = get_next_valid_work_time(start_base)
+        _, chain_finish = add_work_time_with_shift(chain_start, duration_hours)
+        machine_available[machine_name] = chain_finish
+        chain_starts.append(chain_start)
+        chain_finishes.append(chain_finish)
+
+    work_df["_dt_start"] = chain_starts
+    work_df["_dt_finish"] = chain_finishes
+    work_df["วัน-เวลาขึ้นงาน"] = chain_starts
+    work_df["วัน-เวลาจบงาน"] = chain_finishes
     work_df["ลำดับคิว"] = "คิวที่ " + (work_df.groupby("เลือกเครื่องจักร").cumcount() + 1).astype(str)
     work_df["เครื่องจักร / แผนก"] = work_df["เลือกเครื่องจักร"].map(lambda value: safe_str(value, "-"))
     work_df["สถานะ"] = work_df["สถานะงาน"].map(lambda value: safe_str(value, "-"))
-    baseline_source = (
-        work_df["กำหนดพร้อมขึ้นงาน (Baseline)"]
-        if "กำหนดพร้อมขึ้นงาน (Baseline)" in work_df.columns
-        else work_df["วัน-เวลาขึ้นงาน"]
-    )
-    work_df["กำหนดพร้อมขึ้นงาน"] = baseline_source.apply(format_thai_datetime)
+    work_df["กำหนดพร้อมขึ้นงาน"] = work_df["_baseline_dt"].apply(format_thai_datetime)
     work_df["เริ่มขึ้นงานตามแผน"] = work_df["_dt_start"].apply(format_thai_datetime)
     work_df["จบงานตามแผน"] = work_df["_dt_finish"].apply(format_thai_datetime)
     for numeric_col in ["Setup (น.)", "Basic (น.)", "โปรแกรม (น.)"]:
