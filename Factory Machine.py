@@ -811,8 +811,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ลิงก์สำหรับจอทีวีโดยเฉพาะ: เติม ?view=tv ต่อท้าย URL ของแอป
+# โหมดนี้แสดง TV Live ทันทีและซ่อนหัวเว็บ/เมนูเลือกโหมด โดยไม่แก้ข้อมูลการผลิต
+try:
+    tv_link_view = safe_str(st.query_params.get("view", ""), "").strip().lower()
+except Exception:
+    tv_link_view = ""
+tv_only_mode = tv_link_view in {"tv", "tv-live", "tvlive"}
+
 header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>Timing Process Control (TPC)</h1><p>จ.-ศ. (08:30-20:00 น.) | ส. (08:30-17:00 น.) | เบรกเช้า 10:00-10:10 น. | พักเที่ยง 12:00-13:00 น. | เบรกบ่าย 15:00-15:10 น. | หยุดวันอาทิตย์</p></div></div>'''
-st.markdown(header_content, unsafe_allow_html=True)
+if not tv_only_mode:
+    st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
 # 3. กำหนดสิทธิ์และความปลอดภัย & ตัวแปรเริ่มต้นระบบ
@@ -3118,12 +3127,16 @@ nav_options = [
     "🛒 จัดซื้อและต้นทุนแผนงาน"
 ]
 
-cur_idx = nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0
-selected_tab = st.radio("เลือกมุมมอง:", nav_options, index=cur_idx, horizontal=True, label_visibility="collapsed")
+if tv_only_mode:
+    # URL เฉพาะทีวีต้องอยู่หน้า TV Live เสมอ แม้ session เดิมเคยเปิดหน้าอื่น
+    st.session_state.current_view = "📺 จอทีวีกลางโรงงาน (TV Live)"
+else:
+    cur_idx = nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0
+    selected_tab = st.radio("เลือกมุมมอง:", nav_options, index=cur_idx, horizontal=True, label_visibility="collapsed")
 
-if selected_tab != st.session_state.current_view:
-    st.session_state.current_view = selected_tab
-    st.rerun()
+    if selected_tab != st.session_state.current_view:
+        st.session_state.current_view = selected_tab
+        st.rerun()
 
 # ---------------------------------------------------------
 # VIEW 1: โหมดหน้าเครื่อง
