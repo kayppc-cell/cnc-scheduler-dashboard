@@ -2166,10 +2166,10 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 "สถานะ": st.column_config.TextColumn(width=270),
                 "คิวดีเลย์": st.column_config.NumberColumn(width="small"),
                 "ดีเลย์สูงสุด (ชม.)": st.column_config.NumberColumn(format="%.1f", width="small"),
-                "Drawing ทั้งหมด": st.column_config.NumberColumn(width="small"),
-                "Drawing เสร็จแล้ว": st.column_config.NumberColumn(width="small"),
-                "Drawing คงเหลือ": st.column_config.NumberColumn(width="small"),
-                "งานคงเหลือ (%)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100, width="medium"),
+                "Drawing ทั้งหมด": st.column_config.NumberColumn("Dwg ทั้งหมด", width="small"),
+                "Drawing เสร็จแล้ว": st.column_config.NumberColumn("Dwg เสร็จแล้ว", width="small"),
+                "Drawing คงเหลือ": st.column_config.NumberColumn("Dwg คงเหลือ", width="small"),
+                "งานคงเหลือ (%)": st.column_config.ProgressColumn("เหลือ %", format="%.1f%%", min_value=0, max_value=100, width="medium"),
                 "งานเสร็จ (%)": st.column_config.NumberColumn(format="%.1f%%", width="small")
             }
         )
@@ -2214,25 +2214,99 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 elif failed_codes:
                     st.error(f"ลบไม่สำเร็จ: {', '.join(failed_codes)} กรุณาตรวจสิทธิ์ DELETE ของตาราง cnc_plan_master")
     else:
-        st.dataframe(
-            display_summary,
-            hide_index=True,
-            use_container_width=True,
-            height=min(620, max(300, len(display_summary) * 36 + 42)),
-            row_height=34,
-            column_config={
-                "Drawing เสี่ยง": st.column_config.TextColumn("Drawing เสี่ยง", width=430),
-                "เครื่องเสี่ยง": st.column_config.TextColumn("เครื่องเสี่ยง", width=240),
-                "สถานะ": st.column_config.TextColumn(width=270),
-                "คิวดีเลย์": st.column_config.NumberColumn(width="small"),
-                "ดีเลย์สูงสุด (ชม.)": st.column_config.NumberColumn(format="%.1f", width="small"),
-                "Drawing ทั้งหมด": st.column_config.NumberColumn(width="small"),
-                "Drawing เสร็จแล้ว": st.column_config.NumberColumn(width="small"),
-                "Drawing คงเหลือ": st.column_config.NumberColumn(width="small"),
-                "งานคงเหลือ (%)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100, width="medium"),
-                "งานเสร็จ (%)": st.column_config.NumberColumn(format="%.1f%%", width="small")
-            }
+        # หน้าคอม/ทีวีแสดงตารางเต็ม ส่วนมือถือแสดงสรุปคอลัมน์สำคัญ
+        # และเปิดดูรายละเอียดของแต่ละแผนได้โดยไม่ต้องเลื่อนตารางแนวนอน
+        desktop_columns = [
+            "แผนงาน", "เริ่ม Production", "สิ้นสุด Production", "เริ่มผลิต", "จบผลิต",
+            "สถานะ", "คิวดีเลย์", "ดีเลย์สูงสุด (ชม.)", "เกินกำหนด (ชม.)",
+            "Drawing เสี่ยง", "เครื่องเสี่ยง", "Drawing ทั้งหมด", "Drawing เสร็จแล้ว",
+            "Drawing คงเหลือ", "งานคงเหลือ (%)", "งานเสร็จ (%)", "ชั่วโมงแผน", "แผนซ้อนกัน"
+        ]
+        desktop_columns = [column for column in desktop_columns if column in display_summary.columns]
+        mobile_header_labels = {
+            "แผนงาน": "แผน", "Drawing ทั้งหมด": "Dwg ทั้งหมด",
+            "Drawing เสร็จแล้ว": "Dwg เสร็จแล้ว", "Drawing คงเหลือ": "Dwg คงเหลือ",
+            "งานคงเหลือ (%)": "เหลือ %"
+        }
+        desktop_header_labels = {
+            "Drawing ทั้งหมด": "Dwg ทั้งหมด", "Drawing เสร็จแล้ว": "Dwg เสร็จแล้ว",
+            "Drawing คงเหลือ": "Dwg คงเหลือ", "งานคงเหลือ (%)": "เหลือ %"
+        }
+
+        desktop_headers = "".join(
+            f"<th>{html.escape(desktop_header_labels.get(column, column))}</th>"
+            for column in desktop_columns
         )
+        desktop_rows = []
+        mobile_cards = []
+        for _, item in display_summary.iterrows():
+            desktop_cells = []
+            for column in desktop_columns:
+                value = item.get(column, "-")
+                if column in ["งานคงเหลือ (%)", "งานเสร็จ (%)"]:
+                    value_text = f"{safe_float(value):.1f}%"
+                else:
+                    value_text = safe_str(value, "-") or "-"
+                desktop_cells.append(f"<td>{html.escape(value_text)}</td>")
+            desktop_rows.append("<tr>" + "".join(desktop_cells) + "</tr>")
+
+            remaining_pct = min(100.0, max(0.0, safe_float(item.get("งานคงเหลือ (%)"), 0.0)))
+            plan_code = html.escape(safe_str(item.get("แผนงาน"), "-"))
+            status_text = html.escape(safe_str(item.get("สถานะ"), "-"))
+            detail_pairs = [
+                ("เริ่ม Production", item.get("เริ่ม Production", "-")),
+                ("สิ้นสุด Production", item.get("สิ้นสุด Production", "-")),
+                ("เริ่มผลิต", item.get("เริ่มผลิต", "-")),
+                ("จบผลิต", item.get("จบผลิต", "-")),
+                ("คิวดีเลย์", item.get("คิวดีเลย์", 0)),
+                ("Drawing เสี่ยง", item.get("Drawing เสี่ยง", "-")),
+                ("เครื่องเสี่ยง", item.get("เครื่องเสี่ยง", "-"))
+            ]
+            detail_html = "".join(
+                f"<div><b>{html.escape(label)}:</b> {html.escape(safe_str(value, '-') or '-')}</div>"
+                for label, value in detail_pairs
+            )
+            mobile_cards.append(f"""
+            <article class="project-mobile-card">
+                <div class="project-mobile-title"><b>{plan_code}</b><span>{status_text}</span></div>
+                <div class="project-mobile-grid">
+                    <div><small>{mobile_header_labels['Drawing ทั้งหมด']}</small><strong>{safe_int(item.get('Drawing ทั้งหมด'))}</strong></div>
+                    <div><small>{mobile_header_labels['Drawing เสร็จแล้ว']}</small><strong>{safe_int(item.get('Drawing เสร็จแล้ว'))}</strong></div>
+                    <div><small>{mobile_header_labels['Drawing คงเหลือ']}</small><strong>{safe_int(item.get('Drawing คงเหลือ'))}</strong></div>
+                    <div><small>{mobile_header_labels['งานคงเหลือ (%)']}</small><strong>{remaining_pct:.1f}%</strong></div>
+                </div>
+                <div class="project-mobile-progress"><span style="width:{remaining_pct:.1f}%"></span></div>
+                <details><summary>ดูรายละเอียดแผนงาน</summary><div class="project-mobile-details">{detail_html}</div></details>
+            </article>
+            """)
+
+        responsive_project_html = """
+        <style>
+        .project-responsive-desktop{width:100%;overflow-x:auto;border:1px solid #D8DEE9;border-radius:10px;background:#FFF}
+        .project-responsive-desktop table{width:max-content;min-width:100%;border-collapse:collapse;font-size:13px}
+        .project-responsive-desktop th,.project-responsive-desktop td{border-bottom:1px solid #E5E7EB;border-right:1px solid #E5E7EB;padding:8px 10px;text-align:left;white-space:nowrap}
+        .project-responsive-desktop th{position:sticky;top:0;background:#F3F4F6;color:#4B5563;font-weight:600}
+        .project-responsive-desktop tr:nth-child(even){background:#FAFAFA}
+        .project-responsive-mobile{display:none}
+        @media (max-width:768px){
+            .project-responsive-desktop{display:none}
+            .project-responsive-mobile{display:block}
+            .project-mobile-card{border:1px solid #D8DEE9;border-radius:12px;background:#FFF;padding:12px;margin:0 0 12px;box-shadow:0 2px 8px rgba(15,23,42,.06)}
+            .project-mobile-title{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+            .project-mobile-title b{font-size:18px;color:#0F172A}.project-mobile-title span{font-size:13px;color:#475569}
+            .project-mobile-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+            .project-mobile-grid div{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:9px;padding:8px;text-align:center;min-width:0}
+            .project-mobile-grid small{display:block;color:#64748B;font-size:11px;white-space:normal;line-height:1.25}
+            .project-mobile-grid strong{display:block;color:#0F172A;font-size:18px;margin-top:3px}
+            .project-mobile-progress{height:9px;background:#E5E7EB;border-radius:99px;overflow:hidden;margin:10px 0}
+            .project-mobile-progress span{display:block;height:100%;background:#EF4444;border-radius:99px}
+            .project-mobile-card details{border-top:1px solid #E5E7EB;padding-top:8px}.project-mobile-card summary{cursor:pointer;color:#2563EB;font-weight:600}
+            .project-mobile-details{display:grid;gap:5px;margin-top:8px;color:#334155;font-size:13px;overflow-wrap:anywhere}
+        }
+        </style>
+        <div class="project-responsive-desktop"><table><thead><tr>""" + desktop_headers + "</tr></thead><tbody>" + "".join(desktop_rows) + """</tbody></table></div>
+        <div class="project-responsive-mobile">""" + "".join(mobile_cards) + "</div>"
+        st.markdown(responsive_project_html, unsafe_allow_html=True)
 
 def render_work_order_readonly(source_df):
     """แสดงใบจ่ายคิวงานสำหรับติดตามเท่านั้น ไม่มีคำสั่งแก้ไข/บันทึก/ลบ"""
