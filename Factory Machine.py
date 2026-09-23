@@ -98,7 +98,7 @@ def build_performance_metrics(source_df):
 
         if actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
             paused_seconds = max(0.0, safe_float(row.get("เวลาพักสะสม (วินาที)"), 0.0))
-            net_seconds = max(0.0, (actual_finish - actual_start).total_seconds() - paused_seconds)
+            net_seconds = get_net_actual_work_seconds(actual_start, actual_finish, paused_seconds)
             actual_value = round(net_seconds / 3600.0, 2)
             actual_hours.append(actual_value)
             variances.append(round(actual_value - safe_float(row.get("เวลาแผน (ชม.)"), 0.0), 2))
@@ -310,6 +310,16 @@ def get_work_capacity_between(range_start: datetime, range_end: datetime) -> flo
                 total_hours += (overlap_end - overlap_start).total_seconds() / 3600.0
         cur_date += timedelta(days=1)
     return total_hours
+
+def get_work_seconds_between(range_start, range_end) -> float:
+    """วินาทีทำงานตามปฏิทินโรงงานชุดเดียวกับระบบลูกโซ่"""
+    if range_start is None or range_end is None or pd.isna(range_start) or pd.isna(range_end):
+        return 0.0
+    return max(0.0, get_work_capacity_between(range_start, range_end) * 3600.0)
+
+def get_net_actual_work_seconds(range_start, range_end, paused_seconds=0.0) -> float:
+    """เวลาเดินจริงสุทธิ: เฉพาะในกะ ลบเวลาที่ Pause ซึ่งบันทึกเป็นเวลาในกะแล้ว"""
+    return max(0.0, get_work_seconds_between(range_start, range_end) - max(0.0, safe_float(paused_seconds, 0.0)))
 
 def get_planned_busy_hours_in_range(start_dt: datetime, duration_hours: float, range_start: datetime, range_end: datetime) -> float:
     """ชั่วโมงแผนของงานที่ทับกับช่วงวิเคราะห์ โดยใช้กะเดียวกับ Auto-Chain"""
@@ -1111,8 +1121,8 @@ def step_elapsed_seconds(step_item, now_dt=None):
     paused_seconds = safe_float(step_item.get("paused_seconds"), 0.0)
     pending_pause = parse_flexible_datetime(step_item.get("pending_pause_started_at"))
     if finish_dt is None and pending_pause is not None and pd.notna(pending_pause):
-        paused_seconds += max(0.0, (end_dt - pending_pause).total_seconds())
-    return max(0.0, (end_dt - start_dt).total_seconds() - paused_seconds)
+        paused_seconds += get_work_seconds_between(pending_pause, end_dt)
+    return get_net_actual_work_seconds(start_dt, end_dt, paused_seconds)
 
 def format_duration_short(seconds):
     total_minutes = max(0, int(round(safe_float(seconds, 0.0) / 60.0)))
@@ -2649,6 +2659,9 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
             st_txt = "-"
             start_epoch = to_bangkok_epoch_ms(st_t)
             act_dt = parse_flexible_datetime(st_t)
+            banner_render_now = get_bangkok_now().replace(tzinfo=None)
+            banner_base_work_seconds = int(get_net_actual_work_seconds(act_dt, banner_render_now, banner_paused_seconds)) if act_dt is not None else 0
+            banner_render_epoch = to_bangkok_epoch_ms(banner_render_now)
             if act_dt is not None:
                 st_txt = act_dt.strftime("%H:%M น.")
 
@@ -2656,7 +2669,7 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
             <div class="shop-live-banner shop-live-running">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span class="tv-pulse-dot"></span>
-                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
+                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
                 </div>
                 <div style="font-size:12.5px; opacity:0.9;">
                     📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
@@ -2709,7 +2722,7 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
                         batch_now = parse_flexible_datetime(now_str)
                         pending_dt = parse_flexible_datetime(current.get("pending_pause_started_at"))
                         if current.get("started_at") and pending_dt is not None and pd.notna(pending_dt):
-                            current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + max(0.0, (batch_now - pending_dt).total_seconds())
+                            current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + get_work_seconds_between(pending_dt, batch_now)
                         elif not current.get("started_at"):
                             current["started_at"] = now_str
                         current.pop("pending_pause_started_at", None)
@@ -2935,7 +2948,10 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
                     start_txt = st_parsed.strftime('%H:%M น.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
                     step_start_epoch = to_bangkok_epoch_ms(st_parsed)
                     current_step_paused = safe_float(current_step_item.get("paused_seconds"), 0.0)
-                    st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
+                    step_render_now = get_bangkok_now().replace(tzinfo=None)
+                    step_base_work_seconds = int(get_net_actual_work_seconds(st_parsed, step_render_now, current_step_paused)) if st_parsed is not None else 0
+                    step_render_epoch = to_bangkok_epoch_ms(step_render_now)
+                    st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' data-base-work-seconds='{step_base_work_seconds}' data-render-epoch='{step_render_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                     if is_running_overdue:
                         st.error(f"🚨 งานนี้กำลังผลิตและเกินเวลาจบตามแผนแล้ว {overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที")
                 elif is_step_hold:
@@ -2960,7 +2976,7 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
                             resume_payload = {"status": "🟦 กำลังผลิต", "hold_started_at": None}
                             hold_started_dt = parse_flexible_datetime(s_hold_started)
                             if hold_started_dt is not None and pd.notna(hold_started_dt):
-                                pause_delta = max(0.0, (resume_now - hold_started_dt).total_seconds())
+                                pause_delta = get_work_seconds_between(hold_started_dt, resume_now)
                                 resume_payload["paused_seconds"] = s_paused_seconds + pause_delta
                                 current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + pause_delta
                             resume_payload["step_progress"] = step_progress
@@ -3041,7 +3057,7 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
                                 start_now_str = start_now.strftime("%Y-%m-%d %H:%M:%S")
                                 pending_pause_dt = parse_flexible_datetime(current_step_item.get("pending_pause_started_at"))
                                 if current_step_item.get("started_at") and pending_pause_dt is not None and pd.notna(pending_pause_dt):
-                                    current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + max(0.0, (start_now - pending_pause_dt).total_seconds())
+                                    current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + get_work_seconds_between(pending_pause_dt, start_now)
                                 elif not current_step_item.get("started_at"):
                                     current_step_item["started_at"] = start_now_str
                                 current_step_item.pop("pending_pause_started_at", None)
@@ -3355,9 +3371,24 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
                     const startAttr = el.getAttribute('data-start-epoch');
                     const startTs = parseInt(startAttr, 10);
                     if (startTs && startTs > 0) {
-                        const pausedSecs = parseFloat(el.getAttribute('data-paused-seconds') || '0') || 0;
-                        const diffMs = Math.max(0, nowTs - startTs - (pausedSecs * 1000));
-                        const totalSecs = Math.floor(diffMs / 1000);
+                        const baseWorkAttr = el.getAttribute('data-base-work-seconds');
+                        let totalSecs;
+                        if (baseWorkAttr !== null) {
+                            const baseWorkSecs = parseFloat(baseWorkAttr || '0') || 0;
+                            const renderTs = parseInt(el.getAttribute('data-render-epoch') || String(nowTs), 10);
+                            const bkkNow = new Date(nowTs + (7 * 60 * 60 * 1000));
+                            const day = bkkNow.getUTCDay();
+                            const minuteOfDay = bkkNow.getUTCHours() * 60 + bkkNow.getUTCMinutes();
+                            const weekdayWindows = [[510,600],[610,720],[780,900],[910,1020],[1050,1200]];
+                            const saturdayWindows = [[510,600],[610,720],[780,900],[910,1020]];
+                            const windows = day === 0 ? [] : (day === 6 ? saturdayWindows : weekdayWindows);
+                            const isWorkingNow = windows.some(w => minuteOfDay >= w[0] && minuteOfDay < w[1]);
+                            const liveIncrement = isWorkingNow ? Math.max(0, Math.floor((nowTs - renderTs) / 1000)) : 0;
+                            totalSecs = Math.max(0, Math.floor(baseWorkSecs + liveIncrement));
+                        } else {
+                            const pausedSecs = parseFloat(el.getAttribute('data-paused-seconds') || '0') || 0;
+                            totalSecs = Math.floor(Math.max(0, nowTs - startTs - (pausedSecs * 1000)) / 1000);
+                        }
                         const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
                         const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
                         const secs = String(totalSecs % 60).padStart(2, '0');
@@ -5111,7 +5142,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     plan_fn = get_job_planned_finish(r)
 
                     if st_p and fn_p:
-                        net_seconds = max(0.0, (fn_p - st_p).total_seconds() - pause_seconds)
+                        net_seconds = get_net_actual_work_seconds(st_p, fn_p, pause_seconds)
                         act_hrs_list.append(round(net_seconds / 3600.0, 2))
                     else:
                         # ห้ามนำเวลาแผนมาปลอมเป็นเวลาจริง
@@ -5516,7 +5547,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         actual_finish = parse_flexible_datetime(cost_row.get("เสร็จจริง"))
                         paused_seconds = max(0.0, safe_float(cost_row.get("เวลาพักสะสม (วินาที)"), 0.0))
                         if actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
-                            net_seconds = max(0.0, (actual_finish - actual_start).total_seconds() - paused_seconds)
+                            net_seconds = get_net_actual_work_seconds(actual_start, actual_finish, paused_seconds)
                             actual_net_hours.append(round(net_seconds / 3600.0, 2))
                             time_sources.append("✅ เวลาจริง")
                         else:
@@ -6121,7 +6152,9 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
                                 act_st = parse_flexible_datetime(s_st)
                                 act_fn = parse_flexible_datetime(s_fn)
                                 if act_st is not None and act_fn is not None:
-                                    d_sec = max(0.0, (act_fn - act_st).total_seconds() - safe_float(sr.get("เวลาพักสะสม (วินาที)"), 0.0))
+                                    d_sec = get_net_actual_work_seconds(
+                                        act_st, act_fn, safe_float(sr.get("เวลาพักสะสม (วินาที)"), 0.0)
+                                    )
                                     a_h = round(d_sec / 3600.0, 2)
                                     v_h = round(a_h - sr["เวลาแผน (ชม.)"], 2)
                                     step_diffs.append(v_h)
@@ -6511,14 +6544,34 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 color_discrete_map={"เวลาแผน (ชม.)": "#94A3B8", "เวลาจริง (ชม.)": "#2563EB"},
                 text_auto='.2f'
             )
-            fig_compare.update_traces(textposition='outside', cliponaxis=False)
+            # วางค่าที่ปลายแท่งและเพิ่มขนาด/ความเข้ม เพื่อให้อ่านได้แม้แท่งสั้น
+            compare_max_value = pd.to_numeric(
+                df_m_sum[["เวลาแผน (ชม.)", "เวลาจริง (ชม.)"]].stack(), errors="coerce"
+            ).max()
+            compare_max_value = max(1.0, safe_float(compare_max_value, 1.0))
+            fig_compare.update_traces(
+                texttemplate="%{x:,.2f}",
+                textposition="outside",
+                textfont=dict(size=13, color="#111827"),
+                cliponaxis=False
+            )
             fig_compare.update_layout(
-                height=max(380, len(df_m_sum) * 26), 
+                height=max(460, len(df_m_sum) * 38),
                 plot_bgcolor="#FFFFFF", 
                 paper_bgcolor="#FFFFFF", 
-                margin=dict(l=20, r=20, t=40, b=20), 
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                margin=dict(l=25, r=105, t=65, b=35),
+                font=dict(size=12, color="#111827"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1),
+                uniformtext_minsize=12,
+                uniformtext_mode="show"
             )
+            fig_compare.update_xaxes(
+                range=[0, compare_max_value * 1.16],
+                tickfont=dict(size=12, color="#334155"),
+                gridcolor="#E2E8F0",
+                zerolinecolor="#94A3B8"
+            )
+            fig_compare.update_yaxes(tickfont=dict(size=12, color="#334155"))
 
             def report_escape(value):
                 return html.escape(safe_str(value, "-"))
@@ -7018,7 +7071,10 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
             if has_valid_actual_start:
                 start_epoch = to_bangkok_epoch_ms(r_start_parsed)
                 start_disp_txt = r_start_parsed.strftime("%H:%M น.")
-                timer_display_html = f'<span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span>'
+                tv_render_now = get_bangkok_now().replace(tzinfo=None)
+                tv_base_work_seconds = int(get_net_actual_work_seconds(r_start_parsed, tv_render_now, r_paused_seconds))
+                tv_render_epoch = to_bangkok_epoch_ms(tv_render_now)
+                timer_display_html = f'<span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" data-base-work-seconds="{tv_base_work_seconds}" data-render-epoch="{tv_render_epoch}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span>'
                 actual_start_report = r_start_parsed.strftime("%d/%m/%Y %H:%M")
             else:
                 # ห้ามใช้เวลาแผนแทนเวลาเริ่มจริง เพราะจะทำให้ตัวจับเวลาเริ่มเองเมื่อถึงเวลาแผน
@@ -7336,9 +7392,24 @@ components.html("""
                 const startAttr = el.getAttribute('data-start-epoch');
                 const startTs = parseInt(startAttr, 10);
                 if (startTs && startTs > 0) {
-                    const pausedSecs = parseFloat(el.getAttribute('data-paused-seconds') || '0') || 0;
-                    const diffMs = Math.max(0, nowTs - startTs - (pausedSecs * 1000));
-                    const totalSecs = Math.floor(diffMs / 1000);
+                    const baseWorkAttr = el.getAttribute('data-base-work-seconds');
+                    let totalSecs;
+                    if (baseWorkAttr !== null) {
+                        const baseWorkSecs = parseFloat(baseWorkAttr || '0') || 0;
+                        const renderTs = parseInt(el.getAttribute('data-render-epoch') || String(nowTs), 10);
+                        const bkkNow = new Date(nowTs + (7 * 60 * 60 * 1000));
+                        const day = bkkNow.getUTCDay();
+                        const minuteOfDay = bkkNow.getUTCHours() * 60 + bkkNow.getUTCMinutes();
+                        const weekdayWindows = [[510,600],[610,720],[780,900],[910,1020],[1050,1200]];
+                        const saturdayWindows = [[510,600],[610,720],[780,900],[910,1020]];
+                        const windows = day === 0 ? [] : (day === 6 ? saturdayWindows : weekdayWindows);
+                        const isWorkingNow = windows.some(w => minuteOfDay >= w[0] && minuteOfDay < w[1]);
+                        const liveIncrement = isWorkingNow ? Math.max(0, Math.floor((nowTs - renderTs) / 1000)) : 0;
+                        totalSecs = Math.max(0, Math.floor(baseWorkSecs + liveIncrement));
+                    } else {
+                        const pausedSecs = parseFloat(el.getAttribute('data-paused-seconds') || '0') || 0;
+                        totalSecs = Math.floor(Math.max(0, nowTs - startTs - (pausedSecs * 1000)) / 1000);
+                    }
                     const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
                     const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
                     const tSecs = String(totalSecs % 60).padStart(2, '0');
