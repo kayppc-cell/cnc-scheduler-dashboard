@@ -1607,14 +1607,18 @@ def render_machine_activity_dashboard(calc_df):
             fig_reason.update_layout(height=max(260, 42 * len(reason_counts)), margin=dict(l=10, r=10, t=45, b=10))
             st.plotly_chart(fig_reason, use_container_width=True)
 
-def render_project_master_dashboard(calc_df, is_admin):
-    st.markdown("### 🗓️ แผนงาน Production และ Project Master Gantt")
-    st.caption("กรอบเวลา Production เป็น Baseline หลัก ส่วนแท่งแผนผลิตรวมคำนวณจาก Drawing และ Step ในตารางสั่งผลิต")
+def render_project_master_dashboard(calc_df, is_admin, read_only=False):
+    if read_only:
+        st.markdown("### 🗓️ แผนงาน Production (ดูอย่างเดียว)")
+        st.caption("แสดงกรอบเวลา Production และแผนผลิตล่าสุดสำหรับตรวจสอบเท่านั้น — ไม่สามารถเพิ่ม แก้ไข ลบ หรือพิมพ์จากหน้านี้")
+    else:
+        st.markdown("### 🗓️ แผนงาน Production และ Project Master Gantt")
+        st.caption("กรอบเวลา Production เป็น Baseline หลัก ส่วนแท่งแผนผลิตรวมคำนวณจาก Drawing และ Step ในตารางสั่งผลิต")
     master_df, table_ready = fetch_plan_masters()
     if not table_ready:
         st.error("ยังไม่พบตาราง cnc_plan_master กรุณารันไฟล์ create_cnc_plan_master.sql ใน Supabase SQL Editor ก่อนใช้งานครั้งแรก")
         return
-    delete_feedback = st.session_state.pop("project_master_delete_feedback", None)
+    delete_feedback = None if read_only else st.session_state.pop("project_master_delete_feedback", None)
     if delete_feedback:
         if delete_feedback.get("deleted"):
             st.success(f"ลบกรอบเวลา Production แล้ว {len(delete_feedback['deleted'])} รายการ: {', '.join(delete_feedback['deleted'])}")
@@ -1622,7 +1626,7 @@ def render_project_master_dashboard(calc_df, is_admin):
             st.error(f"ลบไม่สำเร็จ: {', '.join(delete_feedback['failed'])} กรุณาตรวจสิทธิ์ DELETE ของตาราง cnc_plan_master")
 
     plan_codes = sorted({safe_str(v) for v in calc_df.get("แผนงาน", pd.Series(dtype=str)) if safe_str(v)})
-    if is_admin and plan_codes:
+    if is_admin and not read_only and plan_codes:
         with st.expander("➕ กำหนดหรือแก้ไขกรอบเวลา Production", expanded=master_df.empty):
             selected_plan = st.selectbox("แผนงาน", plan_codes, key="master_plan_code")
             current = master_df[master_df["plan_code"].map(normalize_filter_key) == normalize_filter_key(selected_plan)]
@@ -1973,6 +1977,7 @@ def render_project_master_dashboard(calc_df, is_admin):
         display_summary[col] = display_summary[col].apply(lambda v: v.strftime("%d/%m/%Y %H:%M") if v is not None and not pd.isna(v) else "-")
 
     # รายงาน Project Master สำหรับพิมพ์หรือเลือก Save as PDF จากเบราว์เซอร์
+    # โหมดอ่านอย่างเดียวในหน้าวิเคราะห์ Drawing จะไม่สร้างหรือแสดงคำสั่งพิมพ์
     project_pdf_rows = "".join([
         "<tr>"
         f"<td>{html.escape(safe_str(item.get('แผนงาน'), '-'))}</td>"
@@ -2023,7 +2028,8 @@ def render_project_master_dashboard(calc_df, is_admin):
         "overlaps": "".join(f"<li>{html.escape(value)}</li>" for value in project_overlap_items) or "<li>ไม่พบช่วงเวลา Production ที่ซ้อนกัน</li>"
     }, ensure_ascii=False).replace("<", "\\u003c")
 
-    components.html(f"""
+    if not read_only:
+        components.html(f"""
     <button onclick="printProjectMaster()" title="พิมพ์รายงาน Project Master หรือบันทึกเป็น PDF" style="display:block; width:250px; max-width:100%; margin:8px auto 12px auto; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:10px 16px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(185,28,28,.24);">
         🖨️ พิมพ์ / บันทึก PDF
     </button>
@@ -2065,9 +2071,9 @@ def render_project_master_dashboard(calc_df, is_admin):
         setTimeout(function() {{ printWin.print(); }}, 800);
     }}
     </script>
-    """, height=62)
+        """, height=62)
 
-    if is_admin:
+    if is_admin and not read_only:
         st.markdown("#### 📋 ตารางแผนงาน Production")
         st.caption("ติ๊กช่องเลือกลบได้หลายรายการ แล้วกดปุ่มลบด้านล่าง — ระบบจะลบเฉพาะกรอบเวลา Production")
         if "project_master_delete_seed" not in st.session_state:
@@ -5767,6 +5773,17 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
     st.subheader("📈 วิเคราะห์และเปรียบเทียบเวลาทำงานจริงราย Drawing (Drawing Performance Analysis)")
     
     df_db = fetch_jobs_from_supabase()
+
+    # เปิดให้หน่วยงานอื่นตรวจดูแผน Production จากหน้าวิเคราะห์ Drawing ได้
+    # ใช้ข้อมูลและตรรกะเดียวกับหน้า Project Master แต่ปิดคำสั่งเพิ่ม/แก้ไข/ลบ/พิมพ์ทั้งหมด
+    with st.expander("🗓️ ดูแผนงาน Production (อ่านอย่างเดียว)", expanded=True):
+        if df_db.empty:
+            st.info("ยังไม่มีข้อมูลรายการสั่งผลิตสำหรับแสดงแผนงาน Production")
+        else:
+            render_project_master_dashboard(df_db, is_admin=False, read_only=True)
+
+    st.divider()
+    st.markdown("### 📊 ผลวิเคราะห์ประสิทธิภาพราย Drawing")
 
     current_now = get_bangkok_now()
     month_names = ["มกราคม (1)", "กุมภาพันธ์ (2)", "มีนาคม (3)", "เมษายน (4)", "พฤษภาคม (5)", "มิถุนายน (6)", "กรกฎาคม (7)", "สิงหาคม (8)", "กันยายน (9)", "ตุลาคม (10)", "พฤศจิกายน (11)", "ธันวาคม (12)"]
