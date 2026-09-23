@@ -11,6 +11,7 @@ import html
 import io
 import uuid
 import re
+import textwrap
 from PIL import Image
 import requests
 import streamlit.components.v1 as components
@@ -2266,7 +2267,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 f"<div><b>{html.escape(label)}:</b> {html.escape(safe_str(value, '-') or '-')}</div>"
                 for label, value in detail_pairs
             )
-            mobile_cards.append(f"""
+            mobile_cards.append(textwrap.dedent(f"""
             <article class="project-mobile-card">
                 <div class="project-mobile-title"><b>{plan_code}</b><span>{status_text}</span></div>
                 <div class="project-mobile-grid">
@@ -2278,9 +2279,9 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 <div class="project-mobile-progress"><span style="width:{remaining_pct:.1f}%"></span></div>
                 <details><summary>ดูรายละเอียดแผนงาน</summary><div class="project-mobile-details">{detail_html}</div></details>
             </article>
-            """)
+            """).strip())
 
-        responsive_project_html = """
+        responsive_project_html = textwrap.dedent("""
         <style>
         .project-responsive-desktop{width:100%;overflow-x:auto;border:1px solid #D8DEE9;border-radius:10px;background:#FFF}
         .project-responsive-desktop table{width:max-content;min-width:100%;border-collapse:collapse;font-size:13px}
@@ -2304,8 +2305,9 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             .project-mobile-details{display:grid;gap:5px;margin-top:8px;color:#334155;font-size:13px;overflow-wrap:anywhere}
         }
         </style>
-        <div class="project-responsive-desktop"><table><thead><tr>""" + desktop_headers + "</tr></thead><tbody>" + "".join(desktop_rows) + """</tbody></table></div>
-        <div class="project-responsive-mobile">""" + "".join(mobile_cards) + "</div>"
+        <div class="project-responsive-desktop"><table><thead><tr>
+        """).strip() + desktop_headers + "</tr></thead><tbody>" + "".join(desktop_rows) + "</tbody></table></div>" + \
+            '<div class="project-responsive-mobile">' + "".join(mobile_cards) + "</div>"
         st.markdown(responsive_project_html, unsafe_allow_html=True)
 
 def render_work_order_readonly(source_df):
