@@ -474,6 +474,42 @@ components.html("""
 </script>
 """, height=0)
 
+def get_device_mode():
+    """แยกโทรศัพท์ แท็บเล็ต และคอม/ทีวีจาก User-Agent"""
+    try:
+        headers = st.context.headers
+        user_agent = safe_str(headers.get("User-Agent") or headers.get("user-agent"), "").lower()
+        is_ipad = "ipad" in user_agent or ("macintosh" in user_agent and "mobile" in user_agent)
+        is_android_tablet = "android" in user_agent and "mobile" not in user_agent
+        if is_ipad or "tablet" in user_agent or is_android_tablet:
+            return "tablet"
+        if re.search(r"android|iphone|ipod|mobile|windows phone", user_agent):
+            return "mobile"
+        return "desktop"
+    except Exception:
+        return "desktop"
+
+
+def is_mobile_view():
+    return get_device_mode() == "mobile"
+
+
+# ปรับเฉพาะตัวอักษรและพื้นที่บนโทรศัพท์ ส่วนจอคอม/ทีวีไม่เปลี่ยน
+st.markdown("""
+<style>
+@media (max-width: 768px) {
+    .block-container {padding-left:.45rem !important;padding-right:.45rem !important;padding-top:.45rem !important;}
+    h1 {font-size:1.65rem !important;line-height:1.18 !important;}
+    h2 {font-size:1.4rem !important;line-height:1.2 !important;}
+    h3 {font-size:1.22rem !important;line-height:1.25 !important;}
+    h4 {font-size:1.08rem !important;line-height:1.3 !important;}
+    div[data-testid="stCaptionContainer"] {font-size:.82rem !important;}
+    .modebar-container {display:none !important;}
+    div[data-testid="stDataFrame"] {max-width:100% !important;overflow-x:auto !important;}
+}
+</style>
+""", unsafe_allow_html=True)
+
 @st.cache_data(show_spinner=False)
 def get_cached_logo():
     for fname in ["Logo_Pes.png", "logo.png", "logo.jpg", r"D:\Python\Logo_Pes.png"]:
@@ -1665,6 +1701,9 @@ def calculate_plan_drawing_progress(plan_jobs):
 
 
 def render_project_master_dashboard(calc_df, is_admin, read_only=False):
+    device_mode = get_device_mode()
+    mobile_view = device_mode == "mobile"
+    tablet_view = device_mode == "tablet"
     if read_only:
         st.markdown("### 🗓️ แผนงาน Production")
         st.caption("แสดงกรอบเวลา Production และแผนผลิตล่าสุดสำหรับตรวจสอบเท่านั้น — ไม่สามารถเพิ่ม แก้ไข ลบ หรือพิมพ์จากหน้านี้")
@@ -1885,10 +1924,12 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
     summary["แผนซ้อนกัน"] = summary["แผนงาน"].map(overlap_counts)
 
     gantt_df = pd.DataFrame(gantt_rows).dropna(subset=["เริ่ม", "จบ"])
+    project_options = ["ทุกแผนงาน"] + summary["แผนงาน"].astype(str).tolist()
     project_filter = st.selectbox(
         "🔎 แสดงแผนงาน",
-        ["ทุกแผนงาน"] + summary["แผนงาน"].astype(str).tolist(),
-        key="project_master_gantt_filter"
+        project_options,
+        index=(1 if mobile_view and len(project_options) > 1 else 0),
+        key=(f"project_master_gantt_filter_{device_mode}" if device_mode != "desktop" else "project_master_gantt_filter")
     )
     if project_filter == "ทุกแผนงาน":
         summary_view = summary.copy()
@@ -1897,11 +1938,34 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         summary_view = summary[summary["แผนงาน"].astype(str) == project_filter].copy()
         gantt_view = gantt_df[gantt_df["แผนงาน"].astype(str).str.startswith(f"{project_filter} |")].copy()
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("แผนงานทั้งหมด", len(summary_view), help="จำนวนแผนงานในมุมมองที่เลือก")
-    k2.metric("อยู่ในแผน", int(summary_view["สถานะ"].str.contains("อยู่ในแผน").sum()))
-    k3.metric("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True).sum()))
-    k4.metric("ช่วงเวลาซ้อนกัน", int((summary_view["แผนซ้อนกัน"] > 0).sum()))
+    metric_values = [
+        ("แผนงานทั้งหมด", len(summary_view), "จำนวนแผนงานในมุมมองที่เลือก"),
+        ("อยู่ในแผน", int(summary_view["สถานะ"].str.contains("อยู่ในแผน").sum()), None),
+        ("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True).sum()), None),
+        ("ช่วงเวลาซ้อนกัน", int((summary_view["แผนซ้อนกัน"] > 0).sum()), None)
+    ]
+    if mobile_view:
+        for metric_row in [metric_values[:2], metric_values[2:]]:
+            metric_cols = st.columns(2)
+            for metric_col, (label, value, help_text) in zip(metric_cols, metric_row):
+                metric_col.metric(label, value, help=help_text)
+    elif tablet_view:
+        tablet_metric_cards = "".join(
+            f'<div class="tablet-kpi"><span>{html.escape(label)}</span><b>{safe_int(value)}</b></div>'
+            for label, value, _ in metric_values
+        )
+        st.markdown(
+            '<style>.tablet-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:8px 0 16px}'
+            '.tablet-kpi{border:1px solid #E2E8F0;border-radius:10px;padding:12px;background:#FFF}'
+            '.tablet-kpi span{display:block;color:#475569;font-size:14px}.tablet-kpi b{display:block;font-size:28px;color:#0F172A;margin-top:5px}'
+            '@media(max-width:820px){.tablet-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}</style>'
+            f'<div class="tablet-kpi-grid">{tablet_metric_cards}</div>',
+            unsafe_allow_html=True
+        )
+    else:
+        metric_cols = st.columns(4)
+        for metric_col, (label, value, help_text) in zip(metric_cols, metric_values):
+            metric_col.metric(label, value, help=help_text)
 
     if not gantt_view.empty:
         st.markdown("#### ช่วงเวลาแผนหลักเทียบแผนผลิต")
@@ -1941,7 +2005,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 text=type_rows["ข้อความ"].tolist(),
                 textposition="inside",
                 insidetextanchor="middle",
-                textfont=dict(color="white", size=11),
+                textfont=dict(color="white", size=(9 if mobile_view else (10 if tablet_view else 11))),
                 customdata=hover_values,
                 hovertemplate="%{y}<br>เริ่ม: %{customdata[1]}<br>จบ: %{customdata[2]}<br>สถานะ: %{customdata[0]}<extra></extra>"
             ))
@@ -1977,15 +2041,33 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             categoryarray=gantt_view["แผนงาน"].tolist()
         )
         fig_master.update_layout(
-            height=max(420, len(gantt_view) * 42 + 150),
-            legend=dict(orientation="h", yanchor="bottom", y=1.12, xanchor="left", x=0),
-            margin=dict(l=20, r=20, t=105, b=25),
+            height=(
+                max(330, len(gantt_view) * 54 + 130) if mobile_view else
+                (max(390, len(gantt_view) * 46 + 145) if tablet_view else max(420, len(gantt_view) * 42 + 150))
+            ),
+            legend=(
+                dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0, font=dict(size=9))
+                if mobile_view else (
+                dict(orientation="h", yanchor="top", y=-0.14, xanchor="left", x=0, font=dict(size=10))
+                if tablet_view else
+                dict(orientation="h", yanchor="bottom", y=1.12, xanchor="left", x=0)
+                )
+            ),
+            margin=(
+                dict(l=5, r=5, t=45, b=90) if mobile_view else
+                (dict(l=10, r=10, t=60, b=75) if tablet_view else dict(l=20, r=20, t=105, b=25))
+            ),
             plot_bgcolor="#FFFFFF",
             paper_bgcolor="#FFFFFF",
             barmode="overlay",
-            hovermode="closest"
+            hovermode="closest",
+            font=dict(size=(10 if mobile_view else (11 if tablet_view else 12)))
         )
-        st.plotly_chart(fig_master, use_container_width=True)
+        st.plotly_chart(
+            fig_master,
+            use_container_width=True,
+            config={"displayModeBar": device_mode == "desktop", "responsive": True, "scrollZoom": False}
+        )
 
     # กล่องสรุปงานที่ผู้วางแผนควรตัดสินใจและช่วงเวลาที่ซ้อนกัน
     decision_df = summary_view[
@@ -1996,7 +2078,10 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         item for item in overlap_pairs
         if item["แผน A"] in visible_plan_codes or item["แผน B"] in visible_plan_codes
     ]
-    decision_col, overlap_col = st.columns(2)
+    if mobile_view or tablet_view:
+        decision_col, overlap_col = st.container(), st.container()
+    else:
+        decision_col, overlap_col = st.columns(2)
     with decision_col:
         st.markdown("#### 🚨 จุดที่ต้องตัดสินใจ")
         if decision_df.empty:
@@ -2008,13 +2093,22 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                     late_days = late_hours_item / 24.0
                     headline = f"⚠️ {safe_str(item.get('แผนงาน'))} เกินแผน Production {late_days:.1f} วัน ({late_hours_item:.1f} ชม.)"
                     detail = f"Drawing: {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง: {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
-                    st.error(f"{headline}\n\n{detail}")
+                    if mobile_view or tablet_view:
+                        with st.expander(headline):
+                            st.error(detail)
+                    else:
+                        st.error(f"{headline}\n\n{detail}")
                 elif safe_int(item.get("คิวดีเลย์"), 0) > 0:
-                    st.warning(
+                    delay_headline = (
                         f"🟠 {safe_str(item.get('แผนงาน'))} มีคิวดีเลย์ {safe_int(item.get('คิวดีเลย์'))} คิว "
-                        f"(สูงสุด {safe_float(item.get('ดีเลย์สูงสุด (ชม.)')):,.1f} ชม.)\n\n"
-                        f"Drawing: {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง: {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
+                        f"(สูงสุด {safe_float(item.get('ดีเลย์สูงสุด (ชม.)')):,.1f} ชม.)"
                     )
+                    delay_detail = f"Drawing: {safe_str(item.get('Drawing เสี่ยง'), '-')} | เครื่อง: {safe_str(item.get('เครื่องเสี่ยง'), '-')}"
+                    if mobile_view or tablet_view:
+                        with st.expander(delay_headline):
+                            st.warning(delay_detail)
+                    else:
+                        st.warning(f"{delay_headline}\n\n{delay_detail}")
                 else:
                     st.warning(f"⚪ {safe_str(item.get('แผนงาน'))} ยังวาง Drawing/Step ไม่ครบ จึงยังประเมินวันจบไม่ได้")
 
@@ -2240,6 +2334,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         )
         desktop_rows = []
         mobile_cards = []
+        tablet_rows = []
         for _, item in display_summary.iterrows():
             desktop_cells = []
             for column in desktop_columns:
@@ -2267,6 +2362,16 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 f"<div><b>{html.escape(label)}:</b> {html.escape(safe_str(value, '-') or '-')}</div>"
                 for label, value in detail_pairs
             )
+            tablet_rows.append(
+                "<tr>"
+                f"<td><b>{plan_code}</b></td><td>{status_text}</td>"
+                f"<td>{safe_int(item.get('Drawing ทั้งหมด'))}</td>"
+                f"<td>{safe_int(item.get('Drawing เสร็จแล้ว'))}</td>"
+                f"<td>{safe_int(item.get('Drawing คงเหลือ'))}</td>"
+                f"<td>{remaining_pct:.1f}%</td>"
+                f"<td><details><summary>ดูรายละเอียด</summary><div class='project-tablet-details'>{detail_html}</div></details></td>"
+                "</tr>"
+            )
             mobile_cards.append(textwrap.dedent(f"""
             <article class="project-mobile-card">
                 <div class="project-mobile-title"><b>{plan_code}</b><span>{status_text}</span></div>
@@ -2289,9 +2394,17 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         .project-responsive-desktop th{position:sticky;top:0;background:#F3F4F6;color:#4B5563;font-weight:600}
         .project-responsive-desktop tr:nth-child(even){background:#FAFAFA}
         .project-responsive-mobile{display:none}
+        .project-responsive-tablet{display:none;width:100%;overflow-x:auto;border:1px solid #D8DEE9;border-radius:10px;background:#FFF}
+        .project-responsive-tablet table{width:100%;border-collapse:collapse;font-size:13px}
+        .project-responsive-tablet th,.project-responsive-tablet td{border-bottom:1px solid #E5E7EB;padding:9px 8px;text-align:left;vertical-align:top}
+        .project-responsive-tablet th{background:#F3F4F6;color:#334155;white-space:nowrap}
+        .project-responsive-tablet summary{cursor:pointer;color:#2563EB;font-weight:600;white-space:nowrap}
+        .project-tablet-details{min-width:260px;display:grid;gap:4px;margin-top:7px;overflow-wrap:anywhere}
+        .device-tablet .project-responsive-desktop{display:none}
+        .device-tablet .project-responsive-tablet{display:block}
+        .device-mobile .project-responsive-desktop{display:none}
+        .device-mobile .project-responsive-mobile{display:block}
         @media (max-width:768px){
-            .project-responsive-desktop{display:none}
-            .project-responsive-mobile{display:block}
             .project-mobile-card{border:1px solid #D8DEE9;border-radius:12px;background:#FFF;padding:12px;margin:0 0 12px;box-shadow:0 2px 8px rgba(15,23,42,.06)}
             .project-mobile-title{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
             .project-mobile-title b{font-size:18px;color:#0F172A}.project-mobile-title span{font-size:13px;color:#475569}
@@ -2305,13 +2418,16 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             .project-mobile-details{display:grid;gap:5px;margin-top:8px;color:#334155;font-size:13px;overflow-wrap:anywhere}
         }
         </style>
-        <div class="project-responsive-desktop"><table><thead><tr>
-        """).strip() + desktop_headers + "</tr></thead><tbody>" + "".join(desktop_rows) + "</tbody></table></div>" + \
-            '<div class="project-responsive-mobile">' + "".join(mobile_cards) + "</div>"
+        """).strip() + f'<div class="project-device device-{device_mode}"><div class="project-responsive-desktop"><table><thead><tr>' + desktop_headers + "</tr></thead><tbody>" + "".join(desktop_rows) + "</tbody></table></div>" + \
+            '<div class="project-responsive-tablet"><table><thead><tr><th>แผนงาน</th><th>สถานะ</th><th>Dwg ทั้งหมด</th><th>Dwg เสร็จแล้ว</th><th>Dwg คงเหลือ</th><th>เหลือ %</th><th>รายละเอียด</th></tr></thead><tbody>' + "".join(tablet_rows) + '</tbody></table></div>' + \
+            '<div class="project-responsive-mobile">' + "".join(mobile_cards) + "</div></div>"
         st.markdown(responsive_project_html, unsafe_allow_html=True)
 
 def render_work_order_readonly(source_df):
     """แสดงใบจ่ายคิวงานสำหรับติดตามเท่านั้น ไม่มีคำสั่งแก้ไข/บันทึก/ลบ"""
+    device_mode = get_device_mode()
+    mobile_view = device_mode == "mobile"
+    tablet_view = device_mode == "tablet"
     st.markdown("### 📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
     st.caption("ข้อมูลสำหรับตรวจสอบสถานการณ์ฝ่ายผลิตเท่านั้น — ไม่สามารถแก้ไข เพิ่ม ลบ หรือเปลี่ยนลำดับคิวจากหน้านี้")
 
@@ -2419,18 +2535,27 @@ def render_work_order_readonly(source_df):
         ("WARN", f"🟡 ใกล้เสร็จ {warn_count}"),
         ("LATE", f"🔴 เกินแผน {late_count}")
     ]
-    for button_col, (filter_key, filter_label) in zip(st.columns(6), quick_filters):
-        with button_col:
-            if st.button(
-                filter_label,
-                key=f"monitor_wo_quick_{filter_key}",
-                type="primary" if selected_quick_filter == filter_key else "secondary",
-                use_container_width=True
-            ):
-                st.session_state.monitor_wo_quick_filter = filter_key
-                selected_quick_filter = filter_key
+    quick_column_count = 2 if mobile_view else (3 if tablet_view else 6)
+    for quick_start in range(0, len(quick_filters), quick_column_count):
+        quick_row = quick_filters[quick_start:quick_start + quick_column_count]
+        for button_col, (filter_key, filter_label) in zip(st.columns(quick_column_count), quick_row):
+            with button_col:
+                if st.button(
+                    filter_label,
+                    key=f"monitor_wo_quick_{filter_key}",
+                    type="primary" if selected_quick_filter == filter_key else "secondary",
+                    use_container_width=True
+                ):
+                    st.session_state.monitor_wo_quick_filter = filter_key
+                    selected_quick_filter = filter_key
 
-    f2, f3, f4, f5 = st.columns([1.15, 1, 1.35, 1])
+    if mobile_view:
+        f2, f3 = st.columns(2)
+        f4, f5 = st.columns(2)
+    elif tablet_view:
+        f2, f3, f4, f5 = st.columns(4)
+    else:
+        f2, f3, f4, f5 = st.columns([1.15, 1, 1.35, 1])
     with f2:
         machine_filter = st.selectbox("🏭 เครื่องจักร", ["🌐 ทุกเครื่อง"] + sorted(work_df["เครื่องจักร / แผนก"].dropna().unique().tolist()), key="monitor_wo_machine")
     with f3:
@@ -2471,35 +2596,90 @@ def render_work_order_readonly(source_df):
         "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", "เริ่มขึ้นงานตามแผน",
         "จบงานตามแผน", "รวม (ชม.)", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)"
     ]
-    styled_view = view_df[display_columns].style.apply(
-        highlight_running_deadlines, planned_finish_map=finish_map, axis=1
-    )
-    st.dataframe(
-        styled_view,
-        hide_index=True,
-        width=1900,
-        height=min(780, max(320, len(view_df) * 34 + 46)),
-        row_height=33,
-        column_config={
-            "ID": None,
-            "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=140),
-            "ลำดับคิว": st.column_config.TextColumn("คิว", width=70),
-            "สถานะ": st.column_config.TextColumn("สถานะ", width=125),
-            "ประเภทงาน": st.column_config.TextColumn("ประเภท", width=105),
-            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=90),
-            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=185),
-            "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
-            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=90),
-            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=185),
-            "กำหนดพร้อมขึ้นงาน": st.column_config.TextColumn("Baseline", width=140),
-            "เริ่มขึ้นงานตามแผน": st.column_config.TextColumn("เริ่มแผน", width=140),
-            "จบงานตามแผน": st.column_config.TextColumn("จบแผน", width=140),
-            "Setup (น.)": st.column_config.NumberColumn("Setup", width=65, format="%d"),
-            "Basic (น.)": st.column_config.NumberColumn("Basic", width=65, format="%d"),
-            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, format="%d"),
-            "รวม (ชม.)": st.column_config.NumberColumn("รวม ชม.", width=75, format="%.2f")
-        }
-    )
+    if mobile_view or tablet_view:
+        page_size_options = [10, 20] if mobile_view else [12, 24]
+        page_size = st.selectbox(
+            "จำนวนคิวต่อหน้า",
+            page_size_options,
+            key=f"monitor_wo_{device_mode}_page_size"
+        )
+        total_pages = max(1, (len(view_df) + page_size - 1) // page_size)
+        page_number = st.selectbox(
+            "หน้ารายการ",
+            list(range(1, total_pages + 1)),
+            format_func=lambda value: f"หน้า {value} / {total_pages}",
+            key=f"monitor_wo_{device_mode}_page"
+        )
+        page_start = (page_number - 1) * page_size
+        device_page_df = view_df.iloc[page_start:page_start + page_size]
+
+        def render_queue_card(queue_item):
+            status_value = safe_str(queue_item.get("สถานะ"), "-")
+            status_color = "#2563EB" if "กำลังผลิต" in status_value else ("#F59E0B" if "พักงาน" in status_value or "รอวัสดุ" in status_value else "#F97316")
+            machine_value = html.escape(safe_str(queue_item.get("เครื่องจักร / แผนก"), "-"))
+            queue_value = html.escape(safe_str(queue_item.get("ลำดับคิว"), "-"))
+            status_safe = html.escape(status_value)
+            st.markdown(
+                f'<div style="border-left:5px solid {status_color};background:#F8FAFC;border-radius:9px;padding:9px 11px;margin:7px 0 3px;">'
+                f'<b>{machine_value}</b> · {queue_value}<br><span style="color:{status_color};font-weight:700;">{status_safe}</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+            main_left, main_right = st.columns(2)
+            main_left.markdown(f"**แผนงาน:** {safe_str(queue_item.get('แผนงาน'), '-')}")
+            main_right.markdown(f"**จำนวน:** {safe_int(queue_item.get('จำนวน'), 0)}")
+            st.markdown(f"**Drawing:** {safe_str(queue_item.get('ชื่อ Drawing.'), '-')}")
+            with st.expander("ดูรายละเอียดคิวงาน"):
+                st.markdown(
+                    f"**วัสดุ:** {safe_str(queue_item.get('วัสดุ'), '-')}  \n"
+                    f"**ขั้นตอน:** {safe_str(queue_item.get('ขั้นตอน (Step)'), '-')}  \n"
+                    f"**Baseline:** {safe_str(queue_item.get('กำหนดพร้อมขึ้นงาน'), '-')}  \n"
+                    f"**เริ่มแผน:** {safe_str(queue_item.get('เริ่มขึ้นงานตามแผน'), '-')}  \n"
+                    f"**จบแผน:** {safe_str(queue_item.get('จบงานตามแผน'), '-')}  \n"
+                    f"**Setup / Basic / โปรแกรม:** {safe_int(queue_item.get('Setup (น.)'))} / {safe_int(queue_item.get('Basic (น.)'))} / {safe_int(queue_item.get('โปรแกรม (น.)'))} นาที  \n"
+                    f"**รวม:** {safe_float(queue_item.get('รวม (ชม.)')):.2f} ชม."
+                )
+
+        if tablet_view:
+            device_records = [row for _, row in device_page_df.iterrows()]
+            for record_start in range(0, len(device_records), 2):
+                card_columns = st.columns(2)
+                for card_column, queue_item in zip(card_columns, device_records[record_start:record_start + 2]):
+                    with card_column:
+                        render_queue_card(queue_item)
+        else:
+            for _, queue_item in device_page_df.iterrows():
+                render_queue_card(queue_item)
+    else:
+        styled_view = view_df[display_columns].style.apply(
+            highlight_running_deadlines, planned_finish_map=finish_map, axis=1
+        )
+        st.dataframe(
+            styled_view,
+            hide_index=True,
+            width=1900,
+            height=min(780, max(320, len(view_df) * 34 + 46)),
+            row_height=33,
+            column_config={
+                "ID": None,
+                "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=140),
+                "ลำดับคิว": st.column_config.TextColumn("คิว", width=70),
+                "สถานะ": st.column_config.TextColumn("สถานะ", width=125),
+                "ประเภทงาน": st.column_config.TextColumn("ประเภท", width=105),
+                "แผนงาน": st.column_config.TextColumn("แผนงาน", width=90),
+                "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=185),
+                "จำนวน": st.column_config.NumberColumn("จำนวน", width=65, format="%d"),
+                "วัสดุ": st.column_config.TextColumn("วัสดุ", width=90),
+                "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=185),
+                "กำหนดพร้อมขึ้นงาน": st.column_config.TextColumn("Baseline", width=140),
+                "เริ่มขึ้นงานตามแผน": st.column_config.TextColumn("เริ่มแผน", width=140),
+                "จบงานตามแผน": st.column_config.TextColumn("จบแผน", width=140),
+                "Setup (น.)": st.column_config.NumberColumn("Setup", width=65, format="%d"),
+                "Basic (น.)": st.column_config.NumberColumn("Basic", width=65, format="%d"),
+                "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, format="%d"),
+                "รวม (ชม.)": st.column_config.NumberColumn("รวม ชม.", width=75, format="%.2f")
+            }
+        )
 
 # ---------------------------------------------------------
 # แท็บเมนูเปลี่ยนมุมมองหลัก
