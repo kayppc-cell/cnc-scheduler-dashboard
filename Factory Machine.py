@@ -801,6 +801,8 @@ for k, v in default_states.items():
 # รองรับ session ที่เปิดค้างจากเวอร์ชันก่อนเปลี่ยนชื่อเมนู
 if st.session_state.get("current_view") == "👷 โหมดช่างหน้าเครื่อง":
     st.session_state.current_view = "👷 โหมดหน้าเครื่อง"
+if st.session_state.get("current_view") == "📈 วิเคราะห์ประสิทธิภาพราย Drawing":
+    st.session_state.current_view = "📈 ติดตามสถานการณ์ฝ่ายผลิต"
 
 MACHINE_LIST = [
     "No.1 Awea", "No.2 Awea", "No.3 Hartford", "No.4 Sanco", "No.5 Hartford",
@@ -2172,6 +2174,133 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             }
         )
 
+def render_work_order_readonly(source_df):
+    """แสดงใบจ่ายคิวงานสำหรับติดตามเท่านั้น ไม่มีคำสั่งแก้ไข/บันทึก/ลบ"""
+    st.markdown("### 📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
+    st.caption("ข้อมูลสำหรับตรวจสอบสถานการณ์ฝ่ายผลิตเท่านั้น — ไม่สามารถแก้ไข เพิ่ม ลบ หรือเปลี่ยนลำดับคิวจากหน้านี้")
+
+    if source_df is None or source_df.empty:
+        st.info("ยังไม่มีข้อมูลคิวงานสำหรับแสดง")
+        return
+
+    work_df = source_df.copy()
+    required_defaults = {
+        "ID": 0, "เลือกเครื่องจักร": "-", "สถานะงาน": "-", "ประเภทงาน": "งานปกติ",
+        "แผนงาน": "-", "ชื่อ Drawing.": "-", "จำนวน": 1, "วัสดุ": "-",
+        "ขั้นตอน (Step)": "-", "วัน-เวลาขึ้นงาน": None, "วัน-เวลาจบงาน": None,
+        "Setup (น.)": 0, "Basic (น.)": 0, "โปรแกรม (น.)": 0
+    }
+    for col_name, default_value in required_defaults.items():
+        if col_name not in work_df.columns:
+            work_df[col_name] = default_value
+
+    active_mask = work_df["สถานะงาน"].astype(str).str.contains("กำลังผลิต|รอคิว|พักงาน|รอวัสดุ", regex=True, na=False)
+    work_df = work_df[active_mask].copy()
+    if work_df.empty:
+        st.success("ขณะนี้ไม่มีงานกำลังผลิต พักงาน หรือรอคิว")
+        return
+
+    work_df["_dt_start"] = work_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
+    work_df["_dt_finish"] = work_df["วัน-เวลาจบงาน"].apply(parse_flexible_datetime)
+    work_df["_priority"] = work_df["สถานะงาน"].astype(str).apply(
+        lambda value: 0 if "กำลังผลิต" in value else (1 if ("พักงาน" in value or "รอวัสดุ" in value) else 2)
+    )
+    work_df = work_df.sort_values(
+        ["เลือกเครื่องจักร", "_priority", "_dt_start", "ID"], na_position="last"
+    ).reset_index(drop=True)
+    work_df["ลำดับคิว"] = "คิวที่ " + (work_df.groupby("เลือกเครื่องจักร").cumcount() + 1).astype(str)
+    work_df["เครื่องจักร / แผนก"] = work_df["เลือกเครื่องจักร"].map(lambda value: safe_str(value, "-"))
+    work_df["สถานะ"] = work_df["สถานะงาน"].map(lambda value: safe_str(value, "-"))
+    baseline_source = (
+        work_df["กำหนดพร้อมขึ้นงาน (Baseline)"]
+        if "กำหนดพร้อมขึ้นงาน (Baseline)" in work_df.columns
+        else work_df["วัน-เวลาขึ้นงาน"]
+    )
+    work_df["กำหนดพร้อมขึ้นงาน"] = baseline_source.apply(format_thai_datetime)
+    work_df["เริ่มขึ้นงานตามแผน"] = work_df["_dt_start"].apply(format_thai_datetime)
+    work_df["จบงานตามแผน"] = work_df["_dt_finish"].apply(format_thai_datetime)
+    for numeric_col in ["Setup (น.)", "Basic (น.)", "โปรแกรม (น.)"]:
+        work_df[numeric_col] = pd.to_numeric(work_df[numeric_col], errors="coerce").fillna(0)
+    work_df["รวม (ชม.)"] = (
+        (work_df["Setup (น.)"] + work_df["Basic (น.)"] + work_df["โปรแกรม (น.)"]) / 60.0
+    ).round(2)
+
+    now_check = get_bangkok_now().replace(tzinfo=None)
+    finish_map = dict(zip(work_df["ID"].astype(str), work_df["_dt_finish"]))
+    status_options = ["🌐 ทั้งหมด", "🟦 กำลังผลิต", "🟧 รอคิว", "🟨 พักงาน", "🟡 ใกล้เสร็จภายใน 1 ชม.", "🔴 เกินแผน"]
+    f1, f2, f3, f4, f5 = st.columns([1.15, 1.15, 1, 1.35, 1])
+    with f1:
+        status_filter = st.selectbox("🚦 สถานะ", status_options, key="monitor_wo_status")
+    with f2:
+        machine_filter = st.selectbox("🏭 เครื่องจักร", ["🌐 ทุกเครื่อง"] + sorted(work_df["เครื่องจักร / แผนก"].dropna().unique().tolist()), key="monitor_wo_machine")
+    with f3:
+        plan_filter = st.selectbox("📌 แผนงาน", ["🌐 ทุกแผนงาน"] + sorted(work_df["แผนงาน"].dropna().astype(str).unique().tolist()), key="monitor_wo_plan")
+    with f4:
+        drawing_filter = st.selectbox("📄 Drawing", ["🌐 ทุก Drawing"] + sorted(work_df["ชื่อ Drawing."].dropna().astype(str).unique().tolist()), key="monitor_wo_drawing")
+    with f5:
+        material_filter = st.selectbox("🔩 วัสดุ", ["🌐 ทุกวัสดุ"] + sorted(work_df["วัสดุ"].dropna().astype(str).unique().tolist()), key="monitor_wo_material")
+
+    view_df = work_df.copy()
+    if "กำลังผลิต" in status_filter:
+        view_df = view_df[view_df["สถานะ"].str.contains("กำลังผลิต", na=False)]
+    elif "รอคิว" in status_filter:
+        view_df = view_df[view_df["สถานะ"].str.contains("รอคิว", na=False)]
+    elif "พักงาน" in status_filter:
+        view_df = view_df[view_df["สถานะ"].str.contains("พักงาน|รอวัสดุ", regex=True, na=False)]
+    elif "ใกล้เสร็จ" in status_filter:
+        view_df = view_df[view_df["_dt_finish"].apply(
+            lambda value: value is not None and pd.notna(value) and 0 <= (value - now_check).total_seconds() <= 3600
+        )]
+    elif "เกินแผน" in status_filter:
+        view_df = view_df[view_df["_dt_finish"].apply(
+            lambda value: value is not None and pd.notna(value) and value < now_check
+        )]
+
+    if machine_filter != "🌐 ทุกเครื่อง":
+        view_df = view_df[view_df["เครื่องจักร / แผนก"].map(normalize_filter_key) == normalize_filter_key(machine_filter)]
+    if plan_filter != "🌐 ทุกแผนงาน":
+        view_df = view_df[view_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(plan_filter)]
+    if drawing_filter != "🌐 ทุก Drawing":
+        view_df = view_df[view_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(drawing_filter)]
+    if material_filter != "🌐 ทุกวัสดุ":
+        view_df = view_df[view_df["วัสดุ"].map(normalize_filter_key) == normalize_filter_key(material_filter)]
+
+    st.caption(f"แสดงผล {len(view_df):,} จากคิวงานทั้งหมด {len(work_df):,} รายการ")
+    display_columns = [
+        "ID", "เครื่องจักร / แผนก", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.",
+        "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", "เริ่มขึ้นงานตามแผน",
+        "จบงานตามแผน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)"
+    ]
+    styled_view = view_df[display_columns].style.apply(
+        highlight_running_deadlines, planned_finish_map=finish_map, axis=1
+    )
+    st.dataframe(
+        styled_view,
+        hide_index=True,
+        width=1500,
+        height=min(680, max(260, len(view_df) * 31 + 42)),
+        row_height=30,
+        column_config={
+            "ID": None,
+            "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=115),
+            "ลำดับคิว": st.column_config.TextColumn("คิว", width=60),
+            "สถานะ": st.column_config.TextColumn("สถานะ", width=105),
+            "ประเภทงาน": st.column_config.TextColumn("ประเภท", width=90),
+            "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75),
+            "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=150),
+            "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, format="%d"),
+            "วัสดุ": st.column_config.TextColumn("วัสดุ", width=75),
+            "ขั้นตอน (Step)": st.column_config.TextColumn("ขั้นตอน", width=150),
+            "กำหนดพร้อมขึ้นงาน": st.column_config.TextColumn("Baseline", width=135),
+            "เริ่มขึ้นงานตามแผน": st.column_config.TextColumn("เริ่มแผน", width=135),
+            "จบงานตามแผน": st.column_config.TextColumn("จบแผน", width=135),
+            "Setup (น.)": st.column_config.NumberColumn("Setup", width=65, format="%d"),
+            "Basic (น.)": st.column_config.NumberColumn("Basic", width=65, format="%d"),
+            "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, format="%d"),
+            "รวม (ชม.)": st.column_config.NumberColumn("รวม ชม.", width=75, format="%.2f")
+        }
+    )
+
 # ---------------------------------------------------------
 # แท็บเมนูเปลี่ยนมุมมองหลัก
 # ---------------------------------------------------------
@@ -2601,7 +2730,7 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
 nav_options = [
     "👷 โหมดหน้าเครื่อง", 
     "📊 แดชบอร์ดภาพรวมโรงงาน", 
-    "📈 วิเคราะห์ประสิทธิภาพราย Drawing", 
+    "📈 ติดตามสถานการณ์ฝ่ายผลิต", 
     "📑 รายงานสรุปประจำเดือน", 
     "📺 จอทีวีกลางโรงงาน (TV Live)",
     "🛒 จัดซื้อและต้นทุนแผนงาน"
@@ -5802,10 +5931,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
 # ---------------------------------------------------------
-# VIEW 3: วิเคราะห์ประสิทธิภาพราย Drawing
+# VIEW 3: ติดตามสถานการณ์ฝ่ายผลิต
 # ---------------------------------------------------------
-elif st.session_state.current_view == "📈 วิเคราะห์ประสิทธิภาพราย Drawing":
-    st.subheader("📈 วิเคราะห์และเปรียบเทียบเวลาทำงานจริงราย Drawing (Drawing Performance Analysis)")
+elif st.session_state.current_view == "📈 ติดตามสถานการณ์ฝ่ายผลิต":
+    st.subheader("📈 ติดตามสถานการณ์ฝ่ายผลิต")
     
     df_db = fetch_jobs_from_supabase()
 
@@ -5816,6 +5945,10 @@ elif st.session_state.current_view == "📈 วิเคราะห์ประ
             st.info("ยังไม่มีข้อมูลรายการสั่งผลิตสำหรับแสดงแผนงาน Production")
         else:
             render_project_master_dashboard(df_db, is_admin=False, read_only=True)
+
+    # ใบจ่ายคิวอยู่ใต้แผนงาน Production และเป็นตารางอ่านอย่างเดียว
+    with st.expander("📋 ใบจ่ายคิวงานหน้าเครื่อง (ดูอย่างเดียว)", expanded=True):
+        render_work_order_readonly(df_db)
 
     st.divider()
     st.markdown("### 📊 ผลวิเคราะห์ประสิทธิภาพตาม Drawing")
