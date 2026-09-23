@@ -2155,7 +2155,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             delete_table,
             key=delete_editor_key,
             hide_index=True,
-            width=1900,
+            use_container_width=True,
             height=min(620, max(300, len(delete_table) * 36 + 42)),
             row_height=34,
             disabled=[col for col in delete_table.columns if col != "เลือกลบ"],
@@ -2217,7 +2217,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         st.dataframe(
             display_summary,
             hide_index=True,
-            width=1900,
+            use_container_width=True,
             height=min(620, max(300, len(display_summary) * 36 + 42)),
             row_height=34,
             column_config={
