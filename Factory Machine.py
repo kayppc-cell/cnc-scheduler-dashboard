@@ -1623,6 +1623,46 @@ def render_machine_activity_dashboard(calc_df):
             fig_reason.update_layout(height=max(260, 42 * len(reason_counts)), margin=dict(l=10, r=10, t=45, b=10))
             st.plotly_chart(fig_reason, use_container_width=True)
 
+def calculate_plan_drawing_progress(plan_jobs):
+    """สรุปความคืบหน้าระดับ Drawing โดย Drawing จะเสร็จเมื่อทุก Step เสร็จสิ้นแล้ว"""
+    if plan_jobs is None or plan_jobs.empty:
+        return {
+            "drawing_total": 0,
+            "drawing_completed": 0,
+            "drawing_remaining": 0,
+            "remaining_pct": 0.0,
+            "completed_pct": 0.0
+        }
+
+    drawing_column = next(
+        (name for name in ["ชื่อ Drawing.", "ชื่อ Drawing", "Drawing", "drawing_name"] if name in plan_jobs.columns),
+        None
+    )
+    status_column = "สถานะงาน" if "สถานะงาน" in plan_jobs.columns else None
+    drawing_steps = {}
+    for row_index, job in plan_jobs.iterrows():
+        drawing_name = safe_str(job.get(drawing_column), "") if drawing_column else ""
+        drawing_key = normalize_filter_key(drawing_name)
+        if not drawing_key:
+            # งานที่ไม่มีชื่อ Drawing ต้องไม่ถูกรวมกันเป็น Drawing เดียวโดยไม่ตั้งใจ
+            drawing_key = f"__row_{row_index}"
+        is_finished = "เสร็จสิ้น" in safe_str(job.get(status_column), "") if status_column else False
+        drawing_steps.setdefault(drawing_key, []).append(is_finished)
+
+    drawing_total = len(drawing_steps)
+    drawing_completed = sum(1 for step_flags in drawing_steps.values() if step_flags and all(step_flags))
+    drawing_remaining = max(0, drawing_total - drawing_completed)
+    remaining_pct = (drawing_remaining / drawing_total * 100.0) if drawing_total else 0.0
+    completed_pct = (drawing_completed / drawing_total * 100.0) if drawing_total else 0.0
+    return {
+        "drawing_total": drawing_total,
+        "drawing_completed": drawing_completed,
+        "drawing_remaining": drawing_remaining,
+        "remaining_pct": round(remaining_pct, 1),
+        "completed_pct": round(completed_pct, 1)
+    }
+
+
 def render_project_master_dashboard(calc_df, is_admin, read_only=False):
     if read_only:
         st.markdown("### 🗓️ แผนงาน Production")
@@ -1758,6 +1798,10 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
     for _, master in master_df.iterrows():
         code = safe_str(master["plan_code"])
         customer_start, customer_due = master["customer_start"], master["customer_due"]
+        all_plan_jobs = calc_df[
+            calc_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(code)
+        ].copy() if "แผนงาน" in calc_df.columns else pd.DataFrame()
+        drawing_progress = calculate_plan_drawing_progress(all_plan_jobs)
         sub = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(code)].copy()
         valid_starts = [v for v in sub["_start"] if v is not None and not pd.isna(v)]
         valid_finishes = [v for v in sub["_finish"] if v is not None and not pd.isna(v)]
@@ -1794,17 +1838,20 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             status = "🟡 เริ่มก่อนกรอบ Production"
         else:
             status = "🟢 อยู่ในแผน"
-        drawing_count = sub.get("ชื่อ Drawing.", pd.Series(index=sub.index, dtype=object)).dropna().nunique()
         planned_hours = pd.to_numeric(
             sub.get("รวม (ชม.)", pd.Series(index=sub.index, dtype=float)), errors="coerce"
         ).fillna(0.0).sum()
         shown_risky_drawings = risky_drawings or delayed_drawings
         shown_risky_machines = risky_machines or delayed_machines
-        rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "คิวดีเลย์": delayed_count, "ดีเลย์สูงสุด (ชม.)": round(max_delay_hours, 1), "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": shown_risky_drawings or "-", "เครื่องเสี่ยง": shown_risky_machines or "-", "จำนวน Drawing": drawing_count, "ชั่วโมงแผน": round(planned_hours, 2)})
+        rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "คิวดีเลย์": delayed_count, "ดีเลย์สูงสุด (ชม.)": round(max_delay_hours, 1), "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": shown_risky_drawings or "-", "เครื่องเสี่ยง": shown_risky_machines or "-", "Drawing ทั้งหมด": drawing_progress["drawing_total"], "Drawing เสร็จแล้ว": drawing_progress["drawing_completed"], "Drawing คงเหลือ": drawing_progress["drawing_remaining"], "งานคงเหลือ (%)": drawing_progress["remaining_pct"], "งานเสร็จ (%)": drawing_progress["completed_pct"], "ชั่วโมงแผน": round(planned_hours, 2)})
         customer_text = f"Production: {project_short_date(customer_start)}–{project_short_date(customer_due)}"
         gantt_rows.append({"แผนงาน": f"{code} | Production", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลา Production", "สถานะ": status, "ข้อความ": customer_text})
         if production_start and production_finish:
             production_text = f"ผลิต: {project_short_date(production_start)}–{project_short_date(production_finish)}"
+            production_text += (
+                f" • เหลือ {drawing_progress['remaining_pct']:.1f}% "
+                f"({drawing_progress['drawing_remaining']}/{drawing_progress['drawing_total']} Drawing)"
+            )
             if late_hours > 0:
                 production_text += f" • เกิน {late_hours / 24.0:.1f} วัน"
             elif delayed_count > 0:
@@ -2007,7 +2054,10 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         f"<td style='text-align:right'>{safe_float(item.get('เกินกำหนด (ชม.)')):,.1f}</td>"
         f"<td class='drawing'>{html.escape(safe_str(item.get('Drawing เสี่ยง'), '-'))}</td>"
         f"<td>{html.escape(safe_str(item.get('เครื่องเสี่ยง'), '-'))}</td>"
-        f"<td style='text-align:center'>{safe_int(item.get('จำนวน Drawing'))}</td>"
+        f"<td style='text-align:center'>{safe_int(item.get('Drawing ทั้งหมด'))}</td>"
+        f"<td style='text-align:center'>{safe_int(item.get('Drawing เสร็จแล้ว'))}</td>"
+        f"<td style='text-align:center'>{safe_int(item.get('Drawing คงเหลือ'))}</td>"
+        f"<td style='text-align:right'>{safe_float(item.get('งานคงเหลือ (%)')):,.1f}%</td>"
         f"<td style='text-align:right'>{safe_float(item.get('ชั่วโมงแผน')):,.2f}</td>"
         "</tr>"
         for _, item in display_summary.iterrows()
@@ -2079,7 +2129,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         <div class="kpis"><div class="kpi">แผนงานทั้งหมด<b>${{d.total}}</b></div><div class="kpi">อยู่ในแผน<b>${{d.on_plan}}</b></div><div class="kpi">เสี่ยง / เกินกำหนด<b>${{d.risk}}</b></div><div class="kpi">ช่วงเวลาซ้อนกัน<b>${{d.overlap}}</b></div></div>
         <h2>1. ช่วงเวลาแผนหลักเทียบแผนผลิต</h2>${{chartHtml}}
         <div class="panels"><div class="panel"><h2>2. จุดที่ต้องตัดสินใจ</h2><ul>${{d.decisions}}</ul></div><div class="panel"><h2>3. แผนที่เวลาซ้อนกัน</h2><ul>${{d.overlaps}}</ul></div></div>
-        <h2>4. ตารางแผนงาน Production</h2><table><thead><tr><th>แผนงาน</th><th>เริ่ม Production</th><th>สิ้นสุด Production</th><th>เริ่มผลิต</th><th>จบผลิต</th><th>สถานะ</th><th>คิวดีเลย์</th><th>ดีเลย์สูงสุด (ชม.)</th><th>เกิน Production (ชม.)</th><th class="drawing">Drawing เสี่ยง</th><th>เครื่องเสี่ยง</th><th>Drawing</th><th>ชั่วโมงแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+        <h2>4. ตารางแผนงาน Production</h2><table><thead><tr><th>แผนงาน</th><th>เริ่ม Production</th><th>สิ้นสุด Production</th><th>เริ่มผลิต</th><th>จบผลิต</th><th>สถานะ</th><th>คิวดีเลย์</th><th>ดีเลย์สูงสุด (ชม.)</th><th>เกิน Production (ชม.)</th><th class="drawing">Drawing เสี่ยง</th><th>เครื่องเสี่ยง</th><th>Drawing ทั้งหมด</th><th>เสร็จแล้ว</th><th>คงเหลือ</th><th>งานคงเหลือ</th><th>ชั่วโมงแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
         <div class="foot">PES Production Monitoring System</div></body></html>`;
         const printWin = window.open('', '_blank');
         if (!printWin) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
@@ -2115,7 +2165,12 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 "เครื่องเสี่ยง": st.column_config.TextColumn("เครื่องเสี่ยง", width=240),
                 "สถานะ": st.column_config.TextColumn(width=270),
                 "คิวดีเลย์": st.column_config.NumberColumn(width="small"),
-                "ดีเลย์สูงสุด (ชม.)": st.column_config.NumberColumn(format="%.1f", width="small")
+                "ดีเลย์สูงสุด (ชม.)": st.column_config.NumberColumn(format="%.1f", width="small"),
+                "Drawing ทั้งหมด": st.column_config.NumberColumn(width="small"),
+                "Drawing เสร็จแล้ว": st.column_config.NumberColumn(width="small"),
+                "Drawing คงเหลือ": st.column_config.NumberColumn(width="small"),
+                "งานคงเหลือ (%)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100, width="medium"),
+                "งานเสร็จ (%)": st.column_config.NumberColumn(format="%.1f%%", width="small")
             }
         )
         selected_delete_codes = edited_delete_table.loc[
@@ -2170,7 +2225,12 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 "เครื่องเสี่ยง": st.column_config.TextColumn("เครื่องเสี่ยง", width=240),
                 "สถานะ": st.column_config.TextColumn(width=270),
                 "คิวดีเลย์": st.column_config.NumberColumn(width="small"),
-                "ดีเลย์สูงสุด (ชม.)": st.column_config.NumberColumn(format="%.1f", width="small")
+                "ดีเลย์สูงสุด (ชม.)": st.column_config.NumberColumn(format="%.1f", width="small"),
+                "Drawing ทั้งหมด": st.column_config.NumberColumn(width="small"),
+                "Drawing เสร็จแล้ว": st.column_config.NumberColumn(width="small"),
+                "Drawing คงเหลือ": st.column_config.NumberColumn(width="small"),
+                "งานคงเหลือ (%)": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100, width="medium"),
+                "งานเสร็จ (%)": st.column_config.NumberColumn(format="%.1f%%", width="small")
             }
         )
 
