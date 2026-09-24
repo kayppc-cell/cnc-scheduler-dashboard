@@ -3175,6 +3175,27 @@ def update_department_work_order(task_id, payload):
     except Exception:
         return False
 
+def delete_department_work_orders(task_ids):
+    """ลบได้เฉพาะรายการประวัติที่เสร็จแล้ว โดยตรวจสถานะซ้ำที่ฐานข้อมูล"""
+    clean_ids = sorted({safe_int(task_id) for task_id in task_ids if safe_int(task_id) > 0})
+    if not clean_ids:
+        return False, "ไม่พบรายการที่เลือก"
+    try:
+        endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
+        id_filter = ",".join(str(task_id) for task_id in clean_ids)
+        res = requests.delete(
+            endpoint,
+            headers=get_supabase_headers(),
+            params={"id": f"in.({id_filter})", "status": "eq.✅ เสร็จแล้ว"},
+            timeout=8
+        )
+        if res.status_code in [200, 204]:
+            fetch_department_work_orders.clear()
+            return True, ""
+        return False, safe_str(res.text, "ลบรายการไม่สำเร็จ")
+    except Exception as exc:
+        return False, safe_str(exc)
+
 def render_people_work_center(department):
     is_qc = department == "QC"
     icon = "🧪" if is_qc else "🤖"
@@ -3288,21 +3309,163 @@ def render_people_work_center(department):
     due_series = tasks.get("due_at", pd.Series(pd.NaT, index=tasks.index))
     overdue_mask = due_series.notna() & (due_series < now) & ~status_text.str.contains("เสร็จ", na=False)
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("งานทั้งหมด", len(tasks))
+    k1.metric("คิวงานปัจจุบัน", int((~status_text.str.contains("เสร็จ", na=False)).sum()))
     k2.metric("กำลังทำ", int(status_text.str.contains("กำลังทำ", na=False).sum()))
     k3.metric("พัก/รอ", int(status_text.str.contains("พักงาน|รอรับงาน", regex=True, na=False).sum()))
     k4.metric("เกินกำหนด", int(overdue_mask.sum()))
 
-    f1, f2, f3 = st.columns([2, 2, 4])
+    if is_qc:
+        qc_status_chart = pd.DataFrame({
+            "สถานะ": DEPT_TASK_STATUSES,
+            "จำนวนใบงาน": [int((status_text == status_name).sum()) for status_name in DEPT_TASK_STATUSES]
+        })
+        qc_status_fig = px.bar(
+            qc_status_chart,
+            x="สถานะ",
+            y="จำนวนใบงาน",
+            color="สถานะ",
+            text="จำนวนใบงาน",
+            title="📊 แผนภูมิจำนวนใบงาน QC แยกตามสถานะ",
+            color_discrete_map={
+                "🟧 รอรับงาน": "#F97316",
+                "🟦 กำลังทำ": "#2563EB",
+                "🟨 พักงาน": "#EAB308",
+                "✅ เสร็จแล้ว": "#16A34A"
+            }
+        )
+        qc_status_fig.update_traces(textposition="outside", cliponaxis=False)
+        qc_status_fig.update_layout(
+            height=330,
+            showlegend=False,
+            margin=dict(l=10, r=10, t=55, b=10),
+            xaxis_title="สถานะใบงาน",
+            yaxis_title="จำนวนใบงาน",
+            yaxis=dict(dtick=1, rangemode="tozero")
+        )
+        st.plotly_chart(qc_status_fig, use_container_width=True, config={"displayModeBar": False})
+
+    finished_mask = status_text.str.contains("เสร็จ", na=False)
+    active_tasks = tasks[~finished_mask].copy()
+    finished_tasks = tasks[finished_mask].copy()
+
+    with st.expander(f"✅ ตารางประวัติงานที่เสร็จแล้ว ({len(finished_tasks)} รายการ)", expanded=False):
+        history_quick = st.radio(
+            "⚡ ตัวกรองเร็วประวัติงาน",
+            ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้"],
+            horizontal=True,
+            key=f"{department}_history_quick"
+        )
+        history_search = st.text_input(
+            "🔍 ค้นหาประวัติงาน",
+            placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ",
+            key=f"{department}_history_search"
+        )
+        history_shown = finished_tasks.copy()
+        history_finish = history_shown.get("actual_finish", pd.Series(pd.NaT, index=history_shown.index))
+        if history_quick == "วันนี้":
+            history_shown = history_shown[history_finish.dt.date == now.date()]
+        elif history_quick == "7 วันล่าสุด":
+            history_shown = history_shown[history_finish >= now - timedelta(days=7)]
+        elif history_quick == "เดือนนี้":
+            history_shown = history_shown[
+                (history_finish.dt.year == now.year) & (history_finish.dt.month == now.month)
+            ]
+        if history_search.strip():
+            history_q = history_search.strip().lower()
+            history_mask = pd.Series(False, index=history_shown.index)
+            for history_col in ["plan_code", "drawing_name", "title", "assignee", "work_type"]:
+                if history_col in history_shown.columns:
+                    history_mask |= history_shown[history_col].fillna("").astype(str).str.lower().str.contains(history_q, regex=False)
+            history_shown = history_shown[history_mask]
+
+        history_cols = [
+            "id", "priority", "work_type", "plan_code", "drawing_name", "title", "assignee",
+            "planned_start_at", "due_at", "actual_start", "actual_finish", "estimated_hours", "result_note"
+        ]
+        history_cols = [col for col in history_cols if col in history_shown.columns]
+        history_display = history_shown[history_cols].copy()
+        for date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish"]:
+            if date_col in history_display.columns:
+                history_display[date_col] = history_display[date_col].apply(
+                    lambda value: value.strftime("%d/%m/%Y %H:%M")
+                    if pd.notna(value) and hasattr(value, "strftime") else "-"
+                )
+        st.dataframe(
+            history_display,
+            hide_index=True,
+            use_container_width=True,
+            height=min(450, 80 + len(history_display) * 36),
+            column_config={
+                "id": st.column_config.NumberColumn("เลขที่ใบงาน", width="small", format="%d"),
+                "priority": st.column_config.TextColumn("ความเร่งด่วน", width="small"),
+                "work_type": st.column_config.TextColumn("ประเภทงาน", width="large"),
+                "plan_code": st.column_config.TextColumn("แผนงาน", width="small"),
+                "drawing_name": st.column_config.TextColumn("Drawing (ถ้ามี)", width="medium"),
+                "title": st.column_config.TextColumn("ชื่อบริษัทลูกค้า", width="medium"),
+                "assignee": st.column_config.TextColumn("ผู้รับผิดชอบ/ทีม", width="medium"),
+                "planned_start_at": st.column_config.TextColumn("กำหนดเริ่ม", width="medium"),
+                "due_at": st.column_config.TextColumn("กำหนดเสร็จ", width="medium"),
+                "actual_start": st.column_config.TextColumn("เริ่มจริง", width="medium"),
+                "actual_finish": st.column_config.TextColumn("เสร็จจริง", width="medium"),
+                "estimated_hours": st.column_config.NumberColumn("ระยะเวลาประมาณ (ชม.)", width="medium", format="%.2f"),
+                "result_note": st.column_config.TextColumn("หมายเหตุงานเสร็จ", width="large")
+            }
+        )
+        history_ids = history_shown["id"].tolist() if not history_shown.empty else []
+        history_lookup = history_shown.set_index("id") if history_ids else pd.DataFrame()
+        delete_history_ids = st.multiselect(
+            "🗑️ เลือกรายการประวัติที่ต้องการลบ",
+            history_ids,
+            format_func=lambda task_id: (
+                f"#{task_id} | {safe_str(history_lookup.loc[task_id].get('title'), '-')} | "
+                f"{safe_str(history_lookup.loc[task_id].get('drawing_name'), '-')}"
+            ),
+            key=f"{department}_delete_history_ids"
+        )
+        confirm_history_delete = st.checkbox(
+            "ยืนยันว่าต้องการลบรายการที่เลือกถาวร",
+            disabled=not delete_history_ids,
+            key=f"{department}_confirm_history_delete"
+        )
+        if st.button(
+            f"🗑️ ยืนยันลบประวัติที่เลือก ({len(delete_history_ids)} รายการ)",
+            disabled=(not delete_history_ids or not confirm_history_delete),
+            type="primary",
+            use_container_width=True,
+            key=f"{department}_delete_history_button"
+        ):
+            delete_ok, delete_message = delete_department_work_orders(delete_history_ids)
+            if delete_ok:
+                st.success("ลบประวัติงานที่เลือกเรียบร้อย")
+                st.rerun()
+            else:
+                st.error(f"ลบประวัติไม่สำเร็จ: {delete_message}")
+
+    st.markdown("#### 📋 ตารางคิวงานปัจจุบัน")
+    queue_quick = st.radio(
+        "⚡ ตัวกรองเร็วคิวงาน",
+        ["ทั้งหมด", "รอรับงาน", "กำลังทำ", "พักงาน", "เกินกำหนด", "เร่งด่วน"],
+        horizontal=True,
+        key=f"{department}_queue_quick"
+    )
+    f1, f2 = st.columns([2, 4])
     with f1:
-        status_filter = st.selectbox("สถานะ", ["ทั้งหมด"] + DEPT_TASK_STATUSES, key=f"{department}_status_filter")
-    with f2:
         priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
-    with f3:
+    with f2:
         search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ", key=f"{department}_search")
-    shown = tasks.copy()
-    if status_filter != "ทั้งหมด":
-        shown = shown[shown["status"].astype(str) == status_filter]
+    shown = active_tasks.copy()
+    shown_status = shown.get("status", pd.Series(index=shown.index, dtype=str)).fillna("").astype(str)
+    shown_due = shown.get("due_at", pd.Series(pd.NaT, index=shown.index))
+    if queue_quick == "รอรับงาน":
+        shown = shown[shown_status.str.contains("รอรับงาน", na=False)]
+    elif queue_quick == "กำลังทำ":
+        shown = shown[shown_status.str.contains("กำลังทำ", na=False)]
+    elif queue_quick == "พักงาน":
+        shown = shown[shown_status.str.contains("พักงาน", na=False)]
+    elif queue_quick == "เกินกำหนด":
+        shown = shown[shown_due.notna() & (shown_due < now)]
+    elif queue_quick == "เร่งด่วน":
+        shown = shown[shown.get("priority", pd.Series(index=shown.index, dtype=str)).astype(str).isin(["เร่งด่วน", "วิกฤต"])]
     if priority_filter != "ทั้งหมด":
         shown = shown[shown["priority"].astype(str) == priority_filter]
     if search_text.strip():
@@ -3314,8 +3477,6 @@ def render_people_work_center(department):
         shown = shown[mask]
 
     display_cols = ["id", "priority", "status", "work_type", "plan_code", "drawing_name", "title", "assignee", "planned_start_at", "due_at", "estimated_hours"]
-    if is_qc:
-        display_cols += ["qc_result", "qc_reject_qty"]
     display_cols = [c for c in display_cols if c in shown.columns]
     shown_display = shown[display_cols].copy()
     for date_col in ["planned_start_at", "due_at"]:
@@ -3341,8 +3502,6 @@ def render_people_work_center(department):
             "planned_start_at": st.column_config.TextColumn("กำหนดเริ่ม (วัน/เดือน/ปี)", width="medium"),
             "due_at": st.column_config.TextColumn("กำหนดเสร็จ (วัน/เดือน/ปี)", width="medium"),
             "estimated_hours": st.column_config.NumberColumn("ระยะเวลาทำงานโดยประมาณ (ชม.)", width="medium", format="%.2f"),
-            "qc_result": st.column_config.TextColumn("ผลตรวจ QC", width="small"),
-            "qc_reject_qty": st.column_config.NumberColumn("จำนวนไม่ผ่าน", width="small", format="%d"),
         }
     )
 
@@ -3385,21 +3544,12 @@ def render_people_work_center(department):
         with a2:
             with st.expander("✅ บันทึกงานเสร็จ", expanded=False):
                 with st.form(f"{department}_finish_{selected_id}"):
-                    finish_note = st.text_area("ผลการทำงาน/หมายเหตุ")
-                    qc_result = st.selectbox("ผลตรวจ", ["ผ่าน", "ไม่ผ่าน", "ผ่านแบบมีเงื่อนไข"]) if is_qc else "เสร็จ"
-                    qc_inspected = st.number_input("จำนวนที่ตรวจ", min_value=0, step=1) if is_qc else 0
-                    qc_pass = st.number_input("จำนวนผ่าน", min_value=0, step=1) if is_qc else 0
-                    qc_reject = st.number_input("จำนวนไม่ผ่าน", min_value=0, step=1) if is_qc else 0
+                    finish_note = st.text_area("หมายเหตุงานเสร็จ (ถ้ามี)")
                     finish_submit = st.form_submit_button("✅ ยืนยันงานเสร็จ", type="primary", use_container_width=True)
                 if finish_submit:
-                    if is_qc and qc_pass + qc_reject > qc_inspected:
-                        st.warning("จำนวนผ่าน + ไม่ผ่าน ต้องไม่เกินจำนวนที่ตรวจ")
-                    else:
-                        payload = {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": finish_note or None}
-                        if is_qc:
-                            payload.update({"qc_result": qc_result, "qc_inspected_qty": qc_inspected, "qc_pass_qty": qc_pass, "qc_reject_qty": qc_reject})
-                        if update_department_work_order(selected_id, payload):
-                            st.rerun()
+                    payload = {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": finish_note or None}
+                    if update_department_work_order(selected_id, payload):
+                        st.rerun()
     elif "พักงาน" in task_status:
         if st.button("▶️ Resume งาน", type="primary", use_container_width=True, key=f"{department}_resume_{selected_id}"):
             hold_start = parse_flexible_datetime(task.get("hold_started_at"))
