@@ -3549,6 +3549,16 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
         m_active = m_active.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
 
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
+        machine_has_paused = any("พักงาน" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
+        piece_mode = "Batch" not in run_mode
+        active_queue_order_ids = [safe_int(v) for v in m_active["ID"].tolist()]
+        piece_resume_allowed_id = None
+        if piece_mode and not machine_any_running:
+            first_paused = m_active[
+                m_active["สถานะงาน"].astype(str).str.contains("พักงาน", na=False)
+            ]
+            if not first_paused.empty:
+                piece_resume_allowed_id = safe_int(first_paused.iloc[0]["ID"])
         next_available_start_found = False
 
         for queue_idx, step_row in m_active.iterrows():
@@ -3627,7 +3637,7 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
                 can_start = is_step_waiting and not machine_any_running
             else:
                 can_start = False
-                if is_step_waiting and not machine_any_running and not next_available_start_found:
+                if is_step_waiting and not machine_any_running and not machine_has_paused and not next_available_start_found:
                     can_start = True
                     next_available_start_found = True
 
@@ -3692,14 +3702,38 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
 
                 if not is_step_finished:
                     if is_step_hold:
-                        resume_blocked = blocking_running_row is not None
-                        if resume_blocked:
+                        resume_sequence_blocked = bool(
+                            piece_mode and target_id != piece_resume_allowed_id
+                        )
+                        resume_blocked = blocking_running_row is not None or resume_sequence_blocked
+                        if blocking_running_row is not None:
                             st.warning(f"🔒 ยัง Resume ไม่ได้: {selected_m} กำลังรัน {blocking_running_text} กรุณาพักหรือจบงานนั้นก่อน")
+                        elif resume_sequence_blocked:
+                            st.info("🔒 โหมดรันทีละคิว: ต้อง Resume และ Finish คิวพักลำดับก่อนหน้าให้เสร็จก่อน")
                         if st.button("▶️ Resume Step เดิม (แก้ไขพร้อมแล้ว)", key=f"btn_resume_{target_id}", type="primary", disabled=resume_blocked, use_container_width=True):
                             live_blocker = get_other_running_job(selected_m, target_id)
                             if live_blocker:
                                 st.error(f"Resume ไม่ได้ เพราะเครื่องกำลังรัน {running_job_label(live_blocker)}")
                                 st.stop()
+                            if piece_mode:
+                                # ตรวจลำดับซ้ำจากสถานะล่าสุด เพื่อกันการเปิดหลายหน้าจอแล้วกดข้ามคิว
+                                fetch_jobs_from_supabase.clear()
+                                fresh_resume_jobs = fetch_jobs_from_supabase()
+                                fresh_machine_jobs = fresh_resume_jobs[
+                                    fresh_resume_jobs["เลือกเครื่องจักร"].eq(selected_m) &
+                                    fresh_resume_jobs["ID"].apply(safe_int).isin(active_queue_order_ids)
+                                ].copy()
+                                fresh_status_by_id = {
+                                    safe_int(row["ID"]): safe_str(row.get("สถานะงาน"), "")
+                                    for _, row in fresh_machine_jobs.iterrows()
+                                }
+                                fresh_first_paused_id = next((
+                                    queue_id for queue_id in active_queue_order_ids
+                                    if "พักงาน" in fresh_status_by_id.get(queue_id, "")
+                                ), None)
+                                if fresh_first_paused_id != target_id:
+                                    st.error("Resume ไม่ได้: คิวนี้ไม่ใช่คิวพักลำดับแรก กรุณารีเฟรชและทำคิวก่อนหน้าให้เสร็จก่อน")
+                                    st.stop()
                             resume_now = get_bangkok_now().replace(tzinfo=None)
                             resume_payload = {"status": "🟦 กำลังผลิต", "hold_started_at": None}
                             hold_started_dt = parse_flexible_datetime(s_hold_started)
