@@ -3118,8 +3118,214 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
         <script>function printTotalCost(){{const d={pdf_payload};const w=window.open('','_blank');if(!w){{alert('กรุณาอนุญาต Pop-up');return;}}w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>TPC Total Project Cost</title><style>@page{{size:A3 landscape;margin:10mm}}body{{font-family:Tahoma,Arial;font-size:10px;color:#172033}}h1{{font-size:20px}}.head{{display:flex;justify-content:space-between;border-bottom:3px solid #1E3E62}}.kpi{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}}.kpi div{{border:1px solid #CBD5E1;padding:9px;text-align:center}}.kpi b{{display:block;font-size:16px}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #CBD5E1;padding:5px}}th{{background:#1E3E62;color:white}}.num{{text-align:right}}</style></head><body><div class="head"><div><h1>ต้นทุนรวมทั้งแผน</h1><p>${{d.mode}} | แผน: ${{d.plan}}</p></div><p>วันที่ออกรายงาน: ${{d.print_date}}</p></div><div class="kpi"><div>ค่าเครื่องจริง<b>${{d.machine}}</b></div><div>ยอดผูกพันจัดซื้อ<b>${{d.committed}}</b></div><div>ต้นทุนจัดซื้อจริง<b>${{d.purchase}}</b></div><div>ต้นทุนรวมจริง<b>${{d.total}}</b></div></div><table><thead><tr><th>แผนงาน</th><th>ค่าเครื่องจริง</th><th>วัตถุดิบ</th><th>Part</th><th>งานจ้าง Maker</th><th>Tool/สิ้นเปลือง</th><th>อื่น ๆ</th><th>ยอดผูกพัน</th><th>จัดซื้อจริง</th><th>รวมจริง</th></tr></thead><tbody>${{d.rows}}</tbody></table></body></html>`);w.document.close();w.focus();setTimeout(()=>w.print(),600);}}</script>
         """, height=48)
 
+# =========================================================
+# โมดูลคิวงานบุคคล/ทีม: QC และ Automation (แยกจากลูกโซ่เครื่องจักร)
+# =========================================================
+DEPT_TASK_STATUSES = ["🟧 รอรับงาน", "🟦 กำลังทำ", "🟨 พักงาน", "✅ เสร็จแล้ว"]
+DEPT_PRIORITIES = ["ปกติ", "เร่งด่วน", "วิกฤต"]
+QC_WORK_TYPES = ["ตรวจรับชิ้นงาน", "ตรวจระหว่างผลิต", "ตรวจขั้นสุดท้าย", "ตรวจแก้ไข/Rework", "ตรวจหน้างาน", "อื่น ๆ"]
+AUTO_WORK_TYPES = ["ออกแบบระบบ/เขียนแบบ", "ประกอบตู้ Control", "Wiring", "เขียนโปรแกรม PLC/HMI", "ติดตั้งหน้างาน", "Commissioning/Test Run", "แก้ไข Breakdown", "ปรับปรุงเครื่องจักร", "อื่น ๆ"]
+
+@st.cache_data(ttl=5, show_spinner=False)
+def fetch_department_work_orders(department):
+    try:
+        endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
+        res = requests.get(
+            endpoint, headers=get_supabase_headers(),
+            params={"select": "*", "department": f"eq.{department}", "order": "created_at.desc"},
+            timeout=8
+        )
+        if res.status_code == 404:
+            return None
+        if res.status_code != 200:
+            return pd.DataFrame()
+        return pd.DataFrame(res.json())
+    except Exception:
+        return pd.DataFrame()
+
+def insert_department_work_order(payload):
+    try:
+        endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
+        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
+        if res.status_code in [200, 201]:
+            fetch_department_work_orders.clear()
+            return True, ""
+        return False, safe_str(res.text, "บันทึกใบงานไม่สำเร็จ")
+    except Exception as exc:
+        return False, safe_str(exc)
+
+def update_department_work_order(task_id, payload):
+    try:
+        endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders?id=eq.{safe_int(task_id)}"
+        payload = {**payload, "updated_at": get_bangkok_str()}
+        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
+        if res.status_code in [200, 204]:
+            fetch_department_work_orders.clear()
+            return True
+        return False
+    except Exception:
+        return False
+
+def render_people_work_center(department):
+    is_qc = department == "QC"
+    icon = "🧪" if is_qc else "🤖"
+    title = "งานตรวจสอบ QC" if is_qc else "ใบสั่งงาน Automation"
+    work_types = QC_WORK_TYPES if is_qc else AUTO_WORK_TYPES
+    st.subheader(f"{icon} {title}")
+    st.caption("คิวงานบุคคล/ทีม — แยกจากเวลาลูกโซ่เครื่องจักร Production")
+
+    tasks = fetch_department_work_orders(department)
+    if tasks is None:
+        st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL ที่แนบมาก่อนใช้งานโหมดนี้")
+        return
+
+    with st.expander(f"➕ สร้าง{'ใบตรวจ QC' if is_qc else 'ใบสั่งงาน Automation'}ใหม่", expanded=False):
+        with st.form(f"create_{department}_work_order", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                work_type = st.selectbox("ประเภทงาน", work_types)
+                plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ")
+                drawing_name = st.text_input("Drawing (ถ้ามี)")
+            with c2:
+                task_title = st.text_input("หัวข้องาน *")
+                assignee = st.text_input("ผู้รับผิดชอบ/ทีม *")
+                requester = st.text_input("ผู้สั่งงาน/ผู้ส่งตรวจ")
+            with c3:
+                priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES)
+                relationship = st.selectbox("ความสัมพันธ์กับ Production", ["งานอิสระ", "ทำต่อจาก Production", "ทำคู่ขนานกับ Production"])
+                due_date = st.date_input("กำหนดเสร็จ", value=get_bangkok_now().date())
+                due_time = st.time_input("เวลา", value=dtime(17, 30))
+            details = st.text_area("รายละเอียดคำสั่งงาน / จุดที่ต้องตรวจ *")
+            checklist = st.text_area("Checklist / เกณฑ์ยอมรับ", placeholder="พิมพ์หัวข้อละหนึ่งบรรทัด")
+            estimated_hours = st.number_input("ชั่วโมงประมาณการ", min_value=0.0, value=1.0, step=0.5)
+            submitted = st.form_submit_button("💾 สร้างใบงาน", type="primary", use_container_width=True)
+        if submitted:
+            if not task_title.strip() or not assignee.strip() or not details.strip():
+                st.warning("กรุณากรอกหัวข้องาน ผู้รับผิดชอบ และรายละเอียดงาน")
+            else:
+                due_at = datetime.combine(due_date, due_time).strftime("%Y-%m-%d %H:%M:%S")
+                ok, message = insert_department_work_order({
+                    "department": department, "work_type": work_type, "title": task_title.strip(),
+                    "plan_code": plan_code.strip() or None, "drawing_name": drawing_name.strip() or None,
+                    "requester": requester.strip() or None, "assignee": assignee.strip(),
+                    "priority": priority, "relationship_type": relationship, "due_at": due_at,
+                    "estimated_hours": estimated_hours, "details": details.strip(),
+                    "checklist": checklist.strip() or None, "status": "🟧 รอรับงาน"
+                })
+                if ok:
+                    st.success("สร้างใบงานเรียบร้อย")
+                    st.rerun()
+                else:
+                    st.error(f"สร้างใบงานไม่สำเร็จ: {message}")
+
+    if tasks.empty:
+        st.info("ยังไม่มีใบงานในแผนกนี้")
+        return
+
+    tasks = tasks.copy()
+    for col in ["due_at", "actual_start", "actual_finish", "hold_started_at", "created_at"]:
+        if col in tasks.columns:
+            tasks[col] = pd.to_datetime(tasks[col].apply(parse_flexible_datetime), errors="coerce")
+    now = get_bangkok_now().replace(tzinfo=None)
+    status_text = tasks.get("status", pd.Series(index=tasks.index, dtype=str)).fillna("").astype(str)
+    due_series = tasks.get("due_at", pd.Series(pd.NaT, index=tasks.index))
+    overdue_mask = due_series.notna() & (due_series < now) & ~status_text.str.contains("เสร็จ", na=False)
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("งานทั้งหมด", len(tasks))
+    k2.metric("กำลังทำ", int(status_text.str.contains("กำลังทำ", na=False).sum()))
+    k3.metric("พัก/รอ", int(status_text.str.contains("พักงาน|รอรับงาน", regex=True, na=False).sum()))
+    k4.metric("เกินกำหนด", int(overdue_mask.sum()))
+
+    f1, f2, f3 = st.columns([2, 2, 4])
+    with f1:
+        status_filter = st.selectbox("สถานะ", ["ทั้งหมด"] + DEPT_TASK_STATUSES, key=f"{department}_status_filter")
+    with f2:
+        priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
+    with f3:
+        search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, หัวข้องาน, ผู้รับผิดชอบ", key=f"{department}_search")
+    shown = tasks.copy()
+    if status_filter != "ทั้งหมด":
+        shown = shown[shown["status"].astype(str) == status_filter]
+    if priority_filter != "ทั้งหมด":
+        shown = shown[shown["priority"].astype(str) == priority_filter]
+    if search_text.strip():
+        q = search_text.strip().lower()
+        search_cols = [c for c in ["plan_code", "drawing_name", "title", "assignee", "work_type"] if c in shown.columns]
+        mask = pd.Series(False, index=shown.index)
+        for col in search_cols:
+            mask |= shown[col].fillna("").astype(str).str.lower().str.contains(q, regex=False)
+        shown = shown[mask]
+
+    display_cols = ["id", "priority", "status", "work_type", "plan_code", "drawing_name", "title", "assignee", "due_at"]
+    if is_qc:
+        display_cols += ["qc_result", "qc_reject_qty"]
+    display_cols = [c for c in display_cols if c in shown.columns]
+    st.dataframe(shown[display_cols], hide_index=True, use_container_width=True, height=min(520, 80 + len(shown) * 36))
+
+    option_ids = shown["id"].tolist() if not shown.empty else []
+    if not option_ids:
+        st.info("ไม่พบใบงานตามตัวกรอง")
+        return
+    task_lookup = shown.set_index("id")
+    selected_id = st.selectbox(
+        "เลือกใบงานเพื่อบันทึกสถานะ",
+        option_ids,
+        format_func=lambda task_id: f"#{task_id} | {safe_str(task_lookup.loc[task_id].get('title'), '-')} | {safe_str(task_lookup.loc[task_id].get('assignee'), '-')}",
+        key=f"{department}_selected_task"
+    )
+    task = task_lookup.loc[selected_id]
+    task_status = safe_str(task.get("status"), "🟧 รอรับงาน")
+    st.info(
+        f"**{safe_str(task.get('title'), '-')}**  \n"
+        f"ผู้รับผิดชอบ: {safe_str(task.get('assignee'), '-')} | แผน: {safe_str(task.get('plan_code'), '-')} | Drawing: {safe_str(task.get('drawing_name'), '-')}  \n"
+        f"รายละเอียด: {safe_str(task.get('details'), '-')}"
+    )
+
+    if "รอรับงาน" in task_status:
+        if st.button("▶️ Start งาน", type="primary", use_container_width=True, key=f"{department}_start_{selected_id}"):
+            if update_department_work_order(selected_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
+                st.rerun()
+    elif "กำลังทำ" in task_status:
+        a1, a2 = st.columns(2)
+        with a1:
+            with st.form(f"{department}_pause_{selected_id}"):
+                pause_reason = st.selectbox("เหตุผลการพัก", ["รอข้อมูล", "รอชิ้นงาน", "รออุปกรณ์/อะไหล่", "งานด่วนแทรก", "รอการตัดสินใจ", "อื่น ๆ"])
+                pause_note = st.text_input("หมายเหตุ")
+                pause_submit = st.form_submit_button("⏸️ พักงาน", use_container_width=True)
+            if pause_submit:
+                if update_department_work_order(selected_id, {"status": "🟨 พักงาน", "hold_started_at": get_bangkok_str(), "pause_reason": pause_reason, "pause_note": pause_note or None}):
+                    st.rerun()
+        with a2:
+            with st.expander("✅ บันทึกงานเสร็จ", expanded=False):
+                with st.form(f"{department}_finish_{selected_id}"):
+                    finish_note = st.text_area("ผลการทำงาน/หมายเหตุ")
+                    qc_result = st.selectbox("ผลตรวจ", ["ผ่าน", "ไม่ผ่าน", "ผ่านแบบมีเงื่อนไข"]) if is_qc else "เสร็จ"
+                    qc_inspected = st.number_input("จำนวนที่ตรวจ", min_value=0, step=1) if is_qc else 0
+                    qc_pass = st.number_input("จำนวนผ่าน", min_value=0, step=1) if is_qc else 0
+                    qc_reject = st.number_input("จำนวนไม่ผ่าน", min_value=0, step=1) if is_qc else 0
+                    finish_submit = st.form_submit_button("✅ ยืนยันงานเสร็จ", type="primary", use_container_width=True)
+                if finish_submit:
+                    if is_qc and qc_pass + qc_reject > qc_inspected:
+                        st.warning("จำนวนผ่าน + ไม่ผ่าน ต้องไม่เกินจำนวนที่ตรวจ")
+                    else:
+                        payload = {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": finish_note or None}
+                        if is_qc:
+                            payload.update({"qc_result": qc_result, "qc_inspected_qty": qc_inspected, "qc_pass_qty": qc_pass, "qc_reject_qty": qc_reject})
+                        if update_department_work_order(selected_id, payload):
+                            st.rerun()
+    elif "พักงาน" in task_status:
+        if st.button("▶️ Resume งาน", type="primary", use_container_width=True, key=f"{department}_resume_{selected_id}"):
+            hold_start = parse_flexible_datetime(task.get("hold_started_at"))
+            pause_total = safe_float(task.get("paused_seconds"), 0.0)
+            if hold_start is not None:
+                pause_total += max(0.0, (now - hold_start).total_seconds())
+            if update_department_work_order(selected_id, {"status": "🟦 กำลังทำ", "hold_started_at": None, "paused_seconds": pause_total}):
+                st.rerun()
+
 nav_options = [
     "👷 โหมดหน้าเครื่อง", 
+    "🧪 งานตรวจสอบ QC",
+    "🤖 ใบสั่งงาน Automation",
     "📊 แดชบอร์ดภาพรวมโรงงาน", 
     "📈 ติดตามสถานการณ์ฝ่ายผลิต", 
     "📑 รายงานสรุปประจำเดือน", 
@@ -3141,7 +3347,13 @@ else:
 # ---------------------------------------------------------
 # VIEW 1: โหมดหน้าเครื่อง
 # ---------------------------------------------------------
-if st.session_state.current_view == "👷 โหมดหน้าเครื่อง":
+if st.session_state.current_view == "🧪 งานตรวจสอบ QC":
+    render_people_work_center("QC")
+
+elif st.session_state.current_view == "🤖 ใบสั่งงาน Automation":
+    render_people_work_center("AUTOMATION")
+
+elif st.session_state.current_view == "👷 โหมดหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
 
     operator_finish_feedback = st.session_state.pop("operator_finish_feedback", None)
@@ -8249,10 +8461,9 @@ components.html("""
 
     setTimeout(function() {
         try {
-            const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
-            if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {
-                radioBtns[4].click();
-            }
+            const radioBtns = Array.from(window.parent.document.querySelectorAll('input[type="radio"]'));
+            const tvRadio = radioBtns.find(btn => btn.checked && String(btn.value || '').includes('จอทีวี'));
+            if (tvRadio) tvRadio.click();
         } catch(err) {}
     }, 30000);
 </script>
