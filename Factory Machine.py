@@ -3123,7 +3123,16 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
 # =========================================================
 DEPT_TASK_STATUSES = ["🟧 รอรับงาน", "🟦 กำลังทำ", "🟨 พักงาน", "✅ เสร็จแล้ว"]
 DEPT_PRIORITIES = ["ปกติ", "เร่งด่วน", "วิกฤต"]
-QC_WORK_TYPES = ["ตรวจรับชิ้นงาน", "ตรวจระหว่างผลิต", "ตรวจขั้นสุดท้าย", "ตรวจแก้ไข/Rework", "ตรวจหน้างาน", "อื่น ๆ"]
+QC_WORK_TYPES = [
+    "ตรวจรับ Check ชิ้นงาน",
+    "Assy ปรับประกอบ",
+    "ตรวจเช็คปรับประกอบตาม 3D",
+    "ตัด Epoxy ทากาว",
+    "เก็บรายละเอียดทำสีตีเส้น",
+    "ทำ Data Sheet",
+    "ตรวจ Check บนเครื่อง CNC",
+    "ตรวจ Check นอกสถานที่"
+]
 AUTO_WORK_TYPES = ["ออกแบบระบบ/เขียนแบบ", "ประกอบตู้ Control", "Wiring", "เขียนโปรแกรม PLC/HMI", "ติดตั้งหน้างาน", "Commissioning/Test Run", "แก้ไข Breakdown", "ปรับปรุงเครื่องจักร", "อื่น ๆ"]
 
 @st.cache_data(ttl=5, show_spinner=False)
@@ -3187,28 +3196,48 @@ def render_people_work_center(department):
                 plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ")
                 drawing_name = st.text_input("Drawing (ถ้ามี)")
             with c2:
-                task_title = st.text_input("หัวข้องาน *")
+                task_title = st.text_input("ชื่อบริษัทลูกค้า *")
                 assignee = st.text_input("ผู้รับผิดชอบ/ทีม *")
                 requester = st.text_input("ผู้สั่งงาน/ผู้ส่งตรวจ")
             with c3:
                 priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES)
-                relationship = st.selectbox("ความสัมพันธ์กับ Production", ["งานอิสระ", "ทำต่อจาก Production", "ทำคู่ขนานกับ Production"])
-                due_date = st.date_input("กำหนดเสร็จ", value=get_bangkok_now().date())
-                due_time = st.time_input("เวลา", value=dtime(17, 30))
+                relationship = st.selectbox("ความสัมพันธ์กับ Production", ["งานทั่วไป", "ทำต่อจาก Production", "ทำคู่ขนานกับ Production"])
+            t1, t2, t3, t4 = st.columns(4)
+            with t1:
+                planned_start_date = st.date_input("วันที่กำหนดเริ่มงาน", value=get_bangkok_now().date())
+            with t2:
+                planned_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=dtime(8, 30))
+            with t3:
+                due_date = st.date_input("วันที่กำหนดเสร็จงาน", value=get_bangkok_now().date())
+            with t4:
+                due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30))
             details = st.text_area("รายละเอียดคำสั่งงาน / จุดที่ต้องตรวจ *")
-            checklist = st.text_area("Checklist / เกณฑ์ยอมรับ", placeholder="พิมพ์หัวข้อละหนึ่งบรรทัด")
-            estimated_hours = st.number_input("ชั่วโมงประมาณการ", min_value=0.0, value=1.0, step=0.5)
+            checklist = "" if is_qc else st.text_area("Checklist / เกณฑ์ยอมรับ", placeholder="พิมพ์หัวข้อละหนึ่งบรรทัด")
+            estimated_hours = st.number_input("ระยะเวลาทำงานโดยประมาณ (ชั่วโมง)", min_value=0.0, value=1.0, step=0.5)
+            st.caption("ระบบจะตรวจชั่วโมงที่ทำงานได้จริงในช่วงกำหนด โดยหักเวลาพัก เวลานอกกะ และวันอาทิตย์ตามปฏิทินโรงงาน")
             submitted = st.form_submit_button("💾 สร้างใบงาน", type="primary", use_container_width=True)
         if submitted:
+            planned_start_at = datetime.combine(planned_start_date, planned_start_time)
+            due_at_dt = datetime.combine(due_date, due_time)
+            available_work_hours = get_work_capacity_between(planned_start_at, due_at_dt) if due_at_dt > planned_start_at else 0.0
             if not task_title.strip() or not assignee.strip() or not details.strip():
-                st.warning("กรุณากรอกหัวข้องาน ผู้รับผิดชอบ และรายละเอียดงาน")
+                st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
+            elif due_at_dt <= planned_start_at:
+                st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
+            elif estimated_hours > available_work_hours + 0.001:
+                st.warning(
+                    f"ช่วงเวลานี้มีเวลาทำงานตามกะเพียง {available_work_hours:.2f} ชั่วโมง "
+                    f"ซึ่งน้อยกว่าระยะเวลาประมาณ {estimated_hours:.2f} ชั่วโมง กรุณาขยายกำหนดเสร็จงาน"
+                )
             else:
-                due_at = datetime.combine(due_date, due_time).strftime("%Y-%m-%d %H:%M:%S")
+                planned_start_at_text = planned_start_at.strftime("%Y-%m-%d %H:%M:%S")
+                due_at = due_at_dt.strftime("%Y-%m-%d %H:%M:%S")
                 ok, message = insert_department_work_order({
                     "department": department, "work_type": work_type, "title": task_title.strip(),
                     "plan_code": plan_code.strip() or None, "drawing_name": drawing_name.strip() or None,
                     "requester": requester.strip() or None, "assignee": assignee.strip(),
-                    "priority": priority, "relationship_type": relationship, "due_at": due_at,
+                    "priority": priority, "relationship_type": relationship,
+                    "planned_start_at": planned_start_at_text, "due_at": due_at,
                     "estimated_hours": estimated_hours, "details": details.strip(),
                     "checklist": checklist.strip() or None, "status": "🟧 รอรับงาน"
                 })
@@ -3223,7 +3252,7 @@ def render_people_work_center(department):
         return
 
     tasks = tasks.copy()
-    for col in ["due_at", "actual_start", "actual_finish", "hold_started_at", "created_at"]:
+    for col in ["planned_start_at", "due_at", "actual_start", "actual_finish", "hold_started_at", "created_at"]:
         if col in tasks.columns:
             tasks[col] = pd.to_datetime(tasks[col].apply(parse_flexible_datetime), errors="coerce")
     now = get_bangkok_now().replace(tzinfo=None)
@@ -3242,7 +3271,7 @@ def render_people_work_center(department):
     with f2:
         priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
     with f3:
-        search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, หัวข้องาน, ผู้รับผิดชอบ", key=f"{department}_search")
+        search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ", key=f"{department}_search")
     shown = tasks.copy()
     if status_filter != "ทั้งหมด":
         shown = shown[shown["status"].astype(str) == status_filter]
@@ -3256,7 +3285,7 @@ def render_people_work_center(department):
             mask |= shown[col].fillna("").astype(str).str.lower().str.contains(q, regex=False)
         shown = shown[mask]
 
-    display_cols = ["id", "priority", "status", "work_type", "plan_code", "drawing_name", "title", "assignee", "due_at"]
+    display_cols = ["id", "priority", "status", "work_type", "plan_code", "drawing_name", "title", "assignee", "planned_start_at", "due_at", "estimated_hours"]
     if is_qc:
         display_cols += ["qc_result", "qc_reject_qty"]
     display_cols = [c for c in display_cols if c in shown.columns]
@@ -3276,8 +3305,11 @@ def render_people_work_center(department):
     task = task_lookup.loc[selected_id]
     task_status = safe_str(task.get("status"), "🟧 รอรับงาน")
     st.info(
-        f"**{safe_str(task.get('title'), '-')}**  \n"
+        f"**บริษัทลูกค้า: {safe_str(task.get('title'), '-')}**  \n"
         f"ผู้รับผิดชอบ: {safe_str(task.get('assignee'), '-')} | แผน: {safe_str(task.get('plan_code'), '-')} | Drawing: {safe_str(task.get('drawing_name'), '-')}  \n"
+        f"กำหนดเริ่ม: {parse_flexible_datetime(task.get('planned_start_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('planned_start_at')) else '-'} | "
+        f"กำหนดเสร็จ: {parse_flexible_datetime(task.get('due_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('due_at')) else '-'} | "
+        f"ประมาณ: {safe_float(task.get('estimated_hours'), 0.0):.2f} ชม.  \n"
         f"รายละเอียด: {safe_str(task.get('details'), '-')}"
     )
 
