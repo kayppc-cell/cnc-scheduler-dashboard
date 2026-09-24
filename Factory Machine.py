@@ -811,13 +811,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ลิงก์สำหรับจอทีวีโดยเฉพาะ: เติม ?view=tv ต่อท้าย URL ของแอป
-# โหมดนี้แสดง TV Live ทันทีและซ่อนหัวเว็บ/เมนูเลือกโหมด โดยไม่แก้ข้อมูลการผลิต
+# ลิงก์จอทีวีฝ่ายผลิต: ?view=tv | ลิงก์จอทีวี QC & Automation: ?view=tv-qc
+# ทั้งสองโหมดซ่อนหัวเว็บ/เมนูเลือกโหมดและเป็นหน้าดูอย่างเดียว
 try:
     tv_link_view = safe_str(st.query_params.get("view", ""), "").strip().lower()
 except Exception:
     tv_link_view = ""
-tv_only_mode = tv_link_view in {"tv", "tv-live", "tvlive"}
+tv_production_only_mode = tv_link_view in {"tv", "tv-live", "tvlive", "tv-production"}
+tv_department_only_mode = tv_link_view in {"tv-qc", "tv-qc-auto", "tv-department", "tv-automation"}
+tv_only_mode = tv_production_only_mode or tv_department_only_mode
 
 header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>Timing Process Control (TPC)</h1><p>จ.-ศ. (08:30-20:00 น.) | ส. (08:30-17:00 น.) | เบรกเช้า 10:00-10:10 น. | พักเที่ยง 12:00-13:00 น. | เบรกบ่าย 15:00-15:10 น. | หยุดวันอาทิตย์</p></div></div>'''
 if not tv_only_mode:
@@ -3748,19 +3750,23 @@ def render_department_operator_mode():
 
 nav_options = [
     "👷 โหมดหน้าเครื่อง", 
+    "👤 โหมดผู้ปฏิบัติงาน",
     "🧪 งานตรวจสอบ QC",
     "🤖 ใบสั่งงาน Automation",
-    "👤 โหมดผู้ปฏิบัติงาน",
     "📊 แดชบอร์ดภาพรวมโรงงาน", 
     "📈 ติดตามสถานการณ์ฝ่ายผลิต", 
     "📑 รายงานสรุปประจำเดือน", 
-    "📺 จอทีวีกลางโรงงาน (TV Live)",
+    "📺 จอทีวีแสดงงานแผนกผลิต",
+    "📺 จอทีวีแสดงงานแผนก QC&Automatin",
     "🛒 จัดซื้อและต้นทุนแผนงาน"
 ]
 
 if tv_only_mode:
-    # URL เฉพาะทีวีต้องอยู่หน้า TV Live เสมอ แม้ session เดิมเคยเปิดหน้าอื่น
-    st.session_state.current_view = "📺 จอทีวีกลางโรงงาน (TV Live)"
+    # URL เฉพาะทีวีต้องอยู่หน้าจอที่กำหนดเสมอ แม้ session เดิมเคยเปิดหน้าอื่น
+    st.session_state.current_view = (
+        "📺 จอทีวีแสดงงานแผนก QC&Automatin"
+        if tv_department_only_mode else "📺 จอทีวีแสดงงานแผนกผลิต"
+    )
 else:
     cur_idx = nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0
     selected_tab = st.radio("เลือกมุมมอง:", nav_options, index=cur_idx, horizontal=True, label_visibility="collapsed")
@@ -8382,12 +8388,158 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.info(f"ℹ️ ยังไม่มีประวัติงานที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' ในเดือน {month_names[selected_month_idx-1]} {selected_year}")
 
 # ---------------------------------------------------------
-# VIEW 5: จอทีวีกลางโรงงาน (Shop Floor TV Live Dashboard)
+# VIEW 5: จอทีวีแสดงงานแผนกผลิต และจอทีวีแสดงงานแผนก QC&Automatin
 # ---------------------------------------------------------
 elif st.session_state.current_view == "🛒 จัดซื้อและต้นทุนแผนงาน":
     render_purchase_cost_module()
 
-elif st.session_state.current_view == "📺 จอทีวีกลางโรงงาน (TV Live)":
+elif st.session_state.current_view == "📺 จอทีวีแสดงงานแผนก QC&Automatin":
+    st.cache_data.clear()
+    qc_tv_tasks = fetch_department_work_orders("QC")
+    auto_tv_tasks = fetch_department_work_orders("AUTOMATION")
+    tv_dept_frames = [
+        frame for frame in [qc_tv_tasks, auto_tv_tasks]
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    ]
+    tv_dept_tasks = pd.concat(tv_dept_frames, ignore_index=True) if tv_dept_frames else pd.DataFrame()
+    tv_dept_now = get_bangkok_now().replace(tzinfo=None)
+
+    if not tv_dept_tasks.empty:
+        for tv_date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish", "hold_started_at"]:
+            if tv_date_col in tv_dept_tasks.columns:
+                tv_dept_tasks[tv_date_col] = pd.to_datetime(
+                    tv_dept_tasks[tv_date_col].apply(parse_flexible_datetime), errors="coerce"
+                )
+
+    dept_tv_cards = []
+    dept_tv_running = 0
+    dept_tv_hold = 0
+    dept_tv_waiting = 0
+    dept_tv_overdue = 0
+    dept_tv_idle = 0
+
+    for tv_operator in DEPARTMENT_ASSIGNEES[1:]:
+        if tv_dept_tasks.empty:
+            operator_active = pd.DataFrame()
+        else:
+            operator_rows = tv_dept_tasks[
+                tv_dept_tasks["assignee"].fillna("").astype(str) == tv_operator
+            ].copy()
+            operator_active = operator_rows[
+                ~operator_rows.get("status", pd.Series(index=operator_rows.index, dtype=str)).fillna("").astype(str).str.contains("เสร็จ", na=False)
+            ].copy()
+
+        if operator_active.empty:
+            dept_tv_idle += 1
+            dept_tv_cards.append(f"""
+            <div class="dept-tv-card dept-tv-idle">
+                <div class="dept-tv-name">👤 {html.escape(tv_operator)}</div>
+                <div class="dept-tv-status">⚪ ไม่มีคิวงาน</div>
+                <div class="dept-tv-empty">พร้อมรับงานใหม่</div>
+            </div>
+            """)
+            continue
+
+        def dept_tv_sort_rank(row):
+            status_value = safe_str(row.get("status"), "")
+            status_rank = 0 if "กำลังทำ" in status_value else (1 if "พักงาน" in status_value else 2)
+            due_value = parse_flexible_datetime(row.get("due_at")) or datetime.max
+            return status_rank, due_value
+
+        operator_active["_tv_rank"] = operator_active.apply(dept_tv_sort_rank, axis=1)
+        operator_active = operator_active.sort_values("_tv_rank")
+        current_task = operator_active.iloc[0]
+        current_status = safe_str(current_task.get("status"), "🟧 รอรับงาน")
+        current_due = parse_flexible_datetime(current_task.get("due_at"))
+        is_overdue = current_due is not None and current_due < tv_dept_now
+        if is_overdue:
+            card_class, status_label = "dept-tv-overdue", "🔴 เกินกำหนด"
+            dept_tv_overdue += 1
+        elif "กำลังทำ" in current_status:
+            card_class, status_label = "dept-tv-running", "🟢 กำลังทำ"
+            dept_tv_running += 1
+        elif "พักงาน" in current_status:
+            card_class, status_label = "dept-tv-hold", "🟡 พักงาน"
+            dept_tv_hold += 1
+        else:
+            card_class, status_label = "dept-tv-waiting", "🟠 รอรับงาน"
+            dept_tv_waiting += 1
+
+        current_department = "QC" if safe_str(current_task.get("department")) == "QC" else "Automation"
+        due_text = current_due.strftime("%d/%m/%Y %H:%M") if current_due is not None else "-"
+        current_start = parse_flexible_datetime(current_task.get("actual_start"))
+        paused_seconds = safe_float(current_task.get("paused_seconds"), 0.0)
+        if current_start is not None:
+            elapsed_seconds = get_net_actual_work_seconds(current_start, tv_dept_now, paused_seconds)
+            elapsed_text = format_duration_short(elapsed_seconds)
+        else:
+            elapsed_text = "ยังไม่ Start"
+        remaining_count = max(0, len(operator_active) - 1)
+        extra_queue_html = f'<div class="dept-tv-next">📚 มีคิวถัดไปอีก {remaining_count} งาน</div>' if remaining_count else '<div class="dept-tv-next">📚 ไม่มีคิวถัดไป</div>'
+        dept_tv_cards.append(f"""
+        <div class="dept-tv-card {card_class}">
+            <div class="dept-tv-top"><div class="dept-tv-name">👤 {html.escape(tv_operator)}</div><div class="dept-tv-status">{status_label}</div></div>
+            <div class="dept-tv-dept">🏢 {current_department} | ⚡ {html.escape(safe_str(current_task.get('priority'), 'ปกติ'))}</div>
+            <div class="dept-tv-company">🏭 {html.escape(safe_str(current_task.get('title'), '-'))}</div>
+            <div class="dept-tv-line">🧰 {html.escape(safe_str(current_task.get('work_type'), '-'))}</div>
+            <div class="dept-tv-line">📌 แผน: {html.escape(safe_str(current_task.get('plan_code'), '-'))}</div>
+            <div class="dept-tv-line">📄 Drawing: {html.escape(safe_str(current_task.get('drawing_name'), '-'))}</div>
+            <div class="dept-tv-line">⏱️ เวลาทำงาน: {html.escape(elapsed_text)}</div>
+            <div class="dept-tv-due">🏁 กำหนดเสร็จ: {due_text}</div>
+            {extra_queue_html}
+        </div>
+        """)
+
+    st.markdown(f"""
+    <style>
+      .dept-tv-wrap {{ background:#071124; min-height:100vh; padding:10px; color:#F8FAFC; font-family:Tahoma,Arial,sans-serif; }}
+      .dept-tv-header {{ display:flex; justify-content:space-between; align-items:center; gap:15px; background:#0F172A; border:2px solid #1D4ED8; border-radius:14px; padding:12px 18px; margin-bottom:10px; }}
+      .dept-tv-title {{ color:#38BDF8; font-size:25px; font-weight:900; }}
+      .dept-tv-sub {{ color:#CBD5E1; font-size:13px; margin-top:3px; }}
+      .dept-tv-clock {{ font-size:28px; font-weight:900; color:#FFFFFF; text-align:right; }}
+      .dept-tv-summary {{ font-size:13px; text-align:right; color:#E2E8F0; margin-top:4px; }}
+      .dept-tv-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }}
+      .dept-tv-card {{ min-height:205px; border-radius:13px; padding:12px 14px; border:3px solid transparent; box-shadow:0 4px 12px rgba(0,0,0,.3); overflow:hidden; }}
+      .dept-tv-running {{ background:linear-gradient(145deg,#065F46,#047857); border-color:#34D399; }}
+      .dept-tv-hold {{ background:linear-gradient(145deg,#92400E,#B45309); border-color:#FBBF24; }}
+      .dept-tv-waiting {{ background:linear-gradient(145deg,#1E3A8A,#1D4ED8); border-color:#60A5FA; }}
+      .dept-tv-overdue {{ background:linear-gradient(145deg,#991B1B,#DC2626); border-color:#FDE047; animation:deptAlert 1.2s ease-in-out infinite; }}
+      .dept-tv-idle {{ background:linear-gradient(145deg,#334155,#475569); border-color:#94A3B8; }}
+      @keyframes deptAlert {{ 50% {{ border-color:#FFFFFF; box-shadow:0 0 15px rgba(253,224,71,.9); }} }}
+      .dept-tv-top {{ display:flex; justify-content:space-between; gap:8px; align-items:flex-start; border-bottom:1px solid rgba(255,255,255,.28); padding-bottom:7px; margin-bottom:7px; }}
+      .dept-tv-name {{ font-size:18px; font-weight:900; }}
+      .dept-tv-status {{ font-size:14px; font-weight:900; white-space:nowrap; }}
+      .dept-tv-dept {{ font-size:13px; font-weight:800; color:#FDE68A; margin-bottom:5px; }}
+      .dept-tv-company {{ font-size:17px; font-weight:900; margin:4px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      .dept-tv-line {{ font-size:12.5px; margin:3px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      .dept-tv-due {{ background:rgba(15,23,42,.48); border-radius:7px; padding:5px 7px; font-size:12.5px; font-weight:800; margin-top:6px; }}
+      .dept-tv-next {{ margin-top:6px; font-size:12px; color:#E2E8F0; }}
+      .dept-tv-empty {{ display:flex; align-items:center; justify-content:center; height:125px; font-size:20px; color:#CBD5E1; }}
+      @media(max-width:1000px) {{ .dept-tv-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
+      @media(max-width:650px) {{ .dept-tv-grid {{ grid-template-columns:1fr; }} .dept-tv-header {{ align-items:flex-start; }} .dept-tv-title {{font-size:18px}} .dept-tv-clock {{font-size:20px}} }}
+    </style>
+    <div class="dept-tv-wrap">
+      <div class="dept-tv-header">
+        <div><div class="dept-tv-title">📺 จอทีวีแสดงงานแผนก QC&Automatin</div><div class="dept-tv-sub">สถานะใบงานแบบ Real-time | ผู้ปฏิบัติงาน 9 คน | Auto 30s</div></div>
+        <div><div id="dept-tv-clock" class="dept-tv-clock">{tv_dept_now.strftime('%H:%M:%S')} น.</div><div class="dept-tv-summary">🟢 ทำ {dept_tv_running} | 🟡 พัก {dept_tv_hold} | 🟠 รอ {dept_tv_waiting} | 🔴 เกิน {dept_tv_overdue} | ⚪ ว่าง {dept_tv_idle}</div></div>
+      </div>
+      <div class="dept-tv-grid">{''.join(dept_tv_cards)}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    components.html("""
+    <script>
+      function updateDeptTvClock() {
+        try {
+          const el = window.parent.document.getElementById('dept-tv-clock');
+          if (el) el.innerText = new Date().toLocaleTimeString('th-TH', {hour12:false}) + ' น.';
+        } catch(e) {}
+      }
+      setInterval(updateDeptTvClock, 1000); updateDeptTvClock();
+      setTimeout(function(){ try { window.parent.location.reload(); } catch(e) {} }, 30000);
+    </script>
+    """, height=0)
+
+elif st.session_state.current_view == "📺 จอทีวีแสดงงานแผนกผลิต":
     st.cache_data.clear()
     df_live = fetch_jobs_from_supabase()
     tv_events = fetch_job_events(500)
@@ -8719,7 +8871,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
     <div class="tv-live-header" style="background:#0F172A; border:2px solid #1E3A8A; border-radius:14px; padding:12px 20px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
         <div>
             <div class="tv-live-title" style="font-size:21px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
-                <span>📺 PES SHOP FLOOR LIVE MONITOR (22 สถานี)</span>
+                <span>📺 จอทีวีแสดงงานแผนกผลิต (22 สถานี)</span>
                 <span class="tv-auto-badge" style="font-size:11.5px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:2px 8px; border-radius:16px;">Auto 30s</span>
             </div>
             <div style="color:#94A3B8; font-size:12.5px; margin-top:2px;">
@@ -8820,7 +8972,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
         td:nth-child(1) {{ width:10%; font-weight:700; }} td:nth-child(4) {{ width:19%; }} .running {{ color:#047857; font-weight:700; }} .hold {{ color:#B45309; font-weight:700; }} .idle {{ color:#64748B; font-weight:700; }}
         .foot {{ text-align:right; margin-top:8px; }}
         </style></head><body>
-        <div class="head"><div><h1>Timing Process Control (TPC)</h1><div class="sub">รายงานสถานะจอทีวีกลางโรงงาน - Shop Floor Live Monitor</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
+        <div class="head"><div><h1>Timing Process Control (TPC)</h1><div class="sub">รายงานสถานะจอทีวีแสดงงานแผนกผลิต - Shop Floor Live Monitor</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
         <div class="kpis"><div class="kpi">สถานีทั้งหมด<b>${{d.stations}}</b></div><div class="kpi">กำลังรัน<b>${{d.running}}</b></div><div class="kpi">พักงาน<b>${{d.hold}}</b></div><div class="kpi">เครื่องว่าง<b>${{d.idle}}</b></div><div class="kpi">หลุดแผน<b>${{d.overdue}}</b></div></div>
         <table><thead><tr><th>เครื่องจักร</th><th>สถานะ</th><th>แผนงาน</th><th>Drawing / คิวถัดไป</th><th>ขั้นตอน</th><th>เริ่มจริง</th><th>เริ่มตามแผน</th><th>จบตามแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
         <div class="foot">PES Production Monitoring System</div></body></html>`;
@@ -8891,7 +9043,12 @@ components.html("""
         try {
             const radioBtns = Array.from(window.parent.document.querySelectorAll('input[type="radio"]'));
             const tvRadio = radioBtns.find(btn => btn.checked && String(btn.value || '').includes('จอทีวี'));
-            if (tvRadio) tvRadio.click();
+            if (tvRadio) {
+                tvRadio.click();
+            } else {
+                const viewParam = new URLSearchParams(window.parent.location.search).get('view');
+                if (viewParam) window.parent.location.reload();
+            }
         } catch(err) {}
     }, 30000);
 </script>
