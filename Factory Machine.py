@@ -3118,266 +3118,8 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
         <script>function printTotalCost(){{const d={pdf_payload};const w=window.open('','_blank');if(!w){{alert('กรุณาอนุญาต Pop-up');return;}}w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>TPC Total Project Cost</title><style>@page{{size:A3 landscape;margin:10mm}}body{{font-family:Tahoma,Arial;font-size:10px;color:#172033}}h1{{font-size:20px}}.head{{display:flex;justify-content:space-between;border-bottom:3px solid #1E3E62}}.kpi{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}}.kpi div{{border:1px solid #CBD5E1;padding:9px;text-align:center}}.kpi b{{display:block;font-size:16px}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #CBD5E1;padding:5px}}th{{background:#1E3E62;color:white}}.num{{text-align:right}}</style></head><body><div class="head"><div><h1>ต้นทุนรวมทั้งแผน</h1><p>${{d.mode}} | แผน: ${{d.plan}}</p></div><p>วันที่ออกรายงาน: ${{d.print_date}}</p></div><div class="kpi"><div>ค่าเครื่องจริง<b>${{d.machine}}</b></div><div>ยอดผูกพันจัดซื้อ<b>${{d.committed}}</b></div><div>ต้นทุนจัดซื้อจริง<b>${{d.purchase}}</b></div><div>ต้นทุนรวมจริง<b>${{d.total}}</b></div></div><table><thead><tr><th>แผนงาน</th><th>ค่าเครื่องจริง</th><th>วัตถุดิบ</th><th>Part</th><th>งานจ้าง Maker</th><th>Tool/สิ้นเปลือง</th><th>อื่น ๆ</th><th>ยอดผูกพัน</th><th>จัดซื้อจริง</th><th>รวมจริง</th></tr></thead><tbody>${{d.rows}}</tbody></table></body></html>`);w.document.close();w.focus();setTimeout(()=>w.print(),600);}}</script>
         """, height=48)
 
-# =========================================================
-# โมดูลคิวงานบุคคล/ทีม: QC และ Automation (แยกจากลูกโซ่เครื่องจักร)
-# =========================================================
-DEPT_TASK_STATUSES = ["🟧 รอรับงาน", "🟦 กำลังทำ", "🟨 พักงาน", "✅ เสร็จแล้ว"]
-DEPT_PRIORITIES = ["ปกติ", "เร่งด่วน", "วิกฤต"]
-QC_WORK_TYPES = [
-    "ตรวจรับ Check ชิ้นงาน",
-    "Assy ปรับประกอบ",
-    "ตรวจเช็คปรับประกอบตาม 3D",
-    "ตัด Epoxy ทากาว",
-    "เก็บรายละเอียดทำสีตีเส้น",
-    "ทำ Data Sheet",
-    "ตรวจ Check บนเครื่อง CNC",
-    "ตรวจ Check นอกสถานที่"
-]
-AUTO_WORK_TYPES = ["ออกแบบระบบ/เขียนแบบ", "ประกอบตู้ Control", "Wiring", "เขียนโปรแกรม PLC/HMI", "ติดตั้งหน้างาน", "Commissioning/Test Run", "แก้ไข Breakdown", "ปรับปรุงเครื่องจักร", "อื่น ๆ"]
-
-@st.cache_data(ttl=5, show_spinner=False)
-def fetch_department_work_orders(department):
-    try:
-        endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
-        res = requests.get(
-            endpoint, headers=get_supabase_headers(),
-            params={"select": "*", "department": f"eq.{department}", "order": "created_at.desc"},
-            timeout=8
-        )
-        if res.status_code == 404:
-            return None
-        if res.status_code != 200:
-            return pd.DataFrame()
-        return pd.DataFrame(res.json())
-    except Exception:
-        return pd.DataFrame()
-
-def insert_department_work_order(payload):
-    try:
-        endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
-        res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
-        if res.status_code in [200, 201]:
-            fetch_department_work_orders.clear()
-            return True, ""
-        return False, safe_str(res.text, "บันทึกใบงานไม่สำเร็จ")
-    except Exception as exc:
-        return False, safe_str(exc)
-
-def update_department_work_order(task_id, payload):
-    try:
-        endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders?id=eq.{safe_int(task_id)}"
-        payload = {**payload, "updated_at": get_bangkok_str()}
-        res = requests.patch(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
-        if res.status_code in [200, 204]:
-            fetch_department_work_orders.clear()
-            return True
-        return False
-    except Exception:
-        return False
-
-def render_people_work_center(department):
-    is_qc = department == "QC"
-    icon = "🧪" if is_qc else "🤖"
-    title = "งานตรวจสอบ QC" if is_qc else "ใบสั่งงาน Automation"
-    work_types = QC_WORK_TYPES if is_qc else AUTO_WORK_TYPES
-    st.subheader(f"{icon} {title}")
-    st.caption("คิวงานบุคคล/ทีม — แยกจากเวลาลูกโซ่เครื่องจักร Production")
-
-    tasks = fetch_department_work_orders(department)
-    if tasks is None:
-        st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL ที่แนบมาก่อนใช้งานโหมดนี้")
-        return
-
-    with st.expander(f"➕ สร้าง{'ใบตรวจ QC' if is_qc else 'ใบสั่งงาน Automation'}ใหม่", expanded=False):
-        # ใช้ widget ปกติแทน st.form เพื่อคำนวณชั่วโมงใหม่ทันทีเมื่อเปลี่ยนวัน/เวลา
-        with st.container():
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                work_type = st.selectbox("ประเภทงาน", work_types)
-                plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ")
-                drawing_name = st.text_input("Drawing (ถ้ามี)")
-            with c2:
-                task_title = st.text_input("ชื่อบริษัทลูกค้า *")
-                assignee = st.text_input("ผู้รับผิดชอบ/ทีม *")
-                requester = st.text_input("ผู้สั่งงาน/ผู้ส่งตรวจ")
-            with c3:
-                priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES)
-                relationship = st.selectbox("ความสัมพันธ์กับ Production", ["งานทั่วไป", "ทำต่อจาก Production", "ทำคู่ขนานกับ Production"])
-            t1, t2, t3, t4 = st.columns(4)
-            with t1:
-                planned_start_date = st.date_input("วันที่กำหนดเริ่มงาน", value=get_bangkok_now().date())
-            with t2:
-                planned_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=dtime(8, 30))
-            with t3:
-                due_date = st.date_input("วันที่กำหนดเสร็จงาน", value=get_bangkok_now().date())
-            with t4:
-                due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30))
-            details = st.text_area("รายละเอียดคำสั่งงาน / จุดที่ต้องตรวจ *")
-            checklist = "" if is_qc else st.text_area("Checklist / เกณฑ์ยอมรับ", placeholder="พิมพ์หัวข้อละหนึ่งบรรทัด")
-            planned_start_preview = datetime.combine(planned_start_date, planned_start_time)
-            due_at_preview = datetime.combine(due_date, due_time)
-            estimated_hours = round(
-                get_work_capacity_between(planned_start_preview, due_at_preview), 2
-            ) if due_at_preview > planned_start_preview else 0.0
-            st.number_input(
-                "ระยะเวลาทำงานโดยประมาณ (ชั่วโมง) — คำนวณอัตโนมัติ",
-                min_value=0.0,
-                value=float(estimated_hours),
-                step=0.01,
-                disabled=True,
-                key=(
-                    f"{department}_auto_estimated_hours_"
-                    f"{planned_start_preview.isoformat()}_{due_at_preview.isoformat()}"
-                )
-            )
-            st.caption("คำนวณเฉพาะเวลาทำงานตามกะ โดยหักเบรกเช้า พักเที่ยง เบรกบ่าย พักเย็น เวลานอกกะ และวันอาทิตย์แล้ว")
-            if due_at_preview <= planned_start_preview:
-                st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
-            elif estimated_hours <= 0:
-                st.warning("ช่วงเวลาที่เลือกไม่มีเวลาทำงานตามกะ กรุณาปรับวันหรือเวลา")
-            submitted = st.button(
-                "💾 สร้างใบงาน",
-                type="primary",
-                use_container_width=True,
-                disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
-                key=f"{department}_create_work_order_submit"
-            )
-        if submitted:
-            planned_start_at = datetime.combine(planned_start_date, planned_start_time)
-            due_at_dt = datetime.combine(due_date, due_time)
-            if not task_title.strip() or not assignee.strip() or not details.strip():
-                st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
-            elif due_at_dt <= planned_start_at:
-                st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
-            else:
-                planned_start_at_text = planned_start_at.strftime("%Y-%m-%d %H:%M:%S")
-                due_at = due_at_dt.strftime("%Y-%m-%d %H:%M:%S")
-                ok, message = insert_department_work_order({
-                    "department": department, "work_type": work_type, "title": task_title.strip(),
-                    "plan_code": plan_code.strip() or None, "drawing_name": drawing_name.strip() or None,
-                    "requester": requester.strip() or None, "assignee": assignee.strip(),
-                    "priority": priority, "relationship_type": relationship,
-                    "planned_start_at": planned_start_at_text, "due_at": due_at,
-                    "estimated_hours": estimated_hours, "details": details.strip(),
-                    "checklist": checklist.strip() or None, "status": "🟧 รอรับงาน"
-                })
-                if ok:
-                    st.success("สร้างใบงานเรียบร้อย")
-                    st.rerun()
-                else:
-                    st.error(f"สร้างใบงานไม่สำเร็จ: {message}")
-
-    if tasks.empty:
-        st.info("ยังไม่มีใบงานในแผนกนี้")
-        return
-
-    tasks = tasks.copy()
-    for col in ["planned_start_at", "due_at", "actual_start", "actual_finish", "hold_started_at", "created_at"]:
-        if col in tasks.columns:
-            tasks[col] = pd.to_datetime(tasks[col].apply(parse_flexible_datetime), errors="coerce")
-    now = get_bangkok_now().replace(tzinfo=None)
-    status_text = tasks.get("status", pd.Series(index=tasks.index, dtype=str)).fillna("").astype(str)
-    due_series = tasks.get("due_at", pd.Series(pd.NaT, index=tasks.index))
-    overdue_mask = due_series.notna() & (due_series < now) & ~status_text.str.contains("เสร็จ", na=False)
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("งานทั้งหมด", len(tasks))
-    k2.metric("กำลังทำ", int(status_text.str.contains("กำลังทำ", na=False).sum()))
-    k3.metric("พัก/รอ", int(status_text.str.contains("พักงาน|รอรับงาน", regex=True, na=False).sum()))
-    k4.metric("เกินกำหนด", int(overdue_mask.sum()))
-
-    f1, f2, f3 = st.columns([2, 2, 4])
-    with f1:
-        status_filter = st.selectbox("สถานะ", ["ทั้งหมด"] + DEPT_TASK_STATUSES, key=f"{department}_status_filter")
-    with f2:
-        priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
-    with f3:
-        search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ", key=f"{department}_search")
-    shown = tasks.copy()
-    if status_filter != "ทั้งหมด":
-        shown = shown[shown["status"].astype(str) == status_filter]
-    if priority_filter != "ทั้งหมด":
-        shown = shown[shown["priority"].astype(str) == priority_filter]
-    if search_text.strip():
-        q = search_text.strip().lower()
-        search_cols = [c for c in ["plan_code", "drawing_name", "title", "assignee", "work_type"] if c in shown.columns]
-        mask = pd.Series(False, index=shown.index)
-        for col in search_cols:
-            mask |= shown[col].fillna("").astype(str).str.lower().str.contains(q, regex=False)
-        shown = shown[mask]
-
-    display_cols = ["id", "priority", "status", "work_type", "plan_code", "drawing_name", "title", "assignee", "planned_start_at", "due_at", "estimated_hours"]
-    if is_qc:
-        display_cols += ["qc_result", "qc_reject_qty"]
-    display_cols = [c for c in display_cols if c in shown.columns]
-    st.dataframe(shown[display_cols], hide_index=True, use_container_width=True, height=min(520, 80 + len(shown) * 36))
-
-    option_ids = shown["id"].tolist() if not shown.empty else []
-    if not option_ids:
-        st.info("ไม่พบใบงานตามตัวกรอง")
-        return
-    task_lookup = shown.set_index("id")
-    selected_id = st.selectbox(
-        "เลือกใบงานเพื่อบันทึกสถานะ",
-        option_ids,
-        format_func=lambda task_id: f"#{task_id} | {safe_str(task_lookup.loc[task_id].get('title'), '-')} | {safe_str(task_lookup.loc[task_id].get('assignee'), '-')}",
-        key=f"{department}_selected_task"
-    )
-    task = task_lookup.loc[selected_id]
-    task_status = safe_str(task.get("status"), "🟧 รอรับงาน")
-    st.info(
-        f"**บริษัทลูกค้า: {safe_str(task.get('title'), '-')}**  \n"
-        f"ผู้รับผิดชอบ: {safe_str(task.get('assignee'), '-')} | แผน: {safe_str(task.get('plan_code'), '-')} | Drawing: {safe_str(task.get('drawing_name'), '-')}  \n"
-        f"กำหนดเริ่ม: {parse_flexible_datetime(task.get('planned_start_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('planned_start_at')) else '-'} | "
-        f"กำหนดเสร็จ: {parse_flexible_datetime(task.get('due_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('due_at')) else '-'} | "
-        f"ประมาณ: {safe_float(task.get('estimated_hours'), 0.0):.2f} ชม.  \n"
-        f"รายละเอียด: {safe_str(task.get('details'), '-')}"
-    )
-
-    if "รอรับงาน" in task_status:
-        if st.button("▶️ Start งาน", type="primary", use_container_width=True, key=f"{department}_start_{selected_id}"):
-            if update_department_work_order(selected_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
-                st.rerun()
-    elif "กำลังทำ" in task_status:
-        a1, a2 = st.columns(2)
-        with a1:
-            with st.form(f"{department}_pause_{selected_id}"):
-                pause_reason = st.selectbox("เหตุผลการพัก", ["รอข้อมูล", "รอชิ้นงาน", "รออุปกรณ์/อะไหล่", "งานด่วนแทรก", "รอการตัดสินใจ", "อื่น ๆ"])
-                pause_note = st.text_input("หมายเหตุ")
-                pause_submit = st.form_submit_button("⏸️ พักงาน", use_container_width=True)
-            if pause_submit:
-                if update_department_work_order(selected_id, {"status": "🟨 พักงาน", "hold_started_at": get_bangkok_str(), "pause_reason": pause_reason, "pause_note": pause_note or None}):
-                    st.rerun()
-        with a2:
-            with st.expander("✅ บันทึกงานเสร็จ", expanded=False):
-                with st.form(f"{department}_finish_{selected_id}"):
-                    finish_note = st.text_area("ผลการทำงาน/หมายเหตุ")
-                    qc_result = st.selectbox("ผลตรวจ", ["ผ่าน", "ไม่ผ่าน", "ผ่านแบบมีเงื่อนไข"]) if is_qc else "เสร็จ"
-                    qc_inspected = st.number_input("จำนวนที่ตรวจ", min_value=0, step=1) if is_qc else 0
-                    qc_pass = st.number_input("จำนวนผ่าน", min_value=0, step=1) if is_qc else 0
-                    qc_reject = st.number_input("จำนวนไม่ผ่าน", min_value=0, step=1) if is_qc else 0
-                    finish_submit = st.form_submit_button("✅ ยืนยันงานเสร็จ", type="primary", use_container_width=True)
-                if finish_submit:
-                    if is_qc and qc_pass + qc_reject > qc_inspected:
-                        st.warning("จำนวนผ่าน + ไม่ผ่าน ต้องไม่เกินจำนวนที่ตรวจ")
-                    else:
-                        payload = {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": finish_note or None}
-                        if is_qc:
-                            payload.update({"qc_result": qc_result, "qc_inspected_qty": qc_inspected, "qc_pass_qty": qc_pass, "qc_reject_qty": qc_reject})
-                        if update_department_work_order(selected_id, payload):
-                            st.rerun()
-    elif "พักงาน" in task_status:
-        if st.button("▶️ Resume งาน", type="primary", use_container_width=True, key=f"{department}_resume_{selected_id}"):
-            hold_start = parse_flexible_datetime(task.get("hold_started_at"))
-            pause_total = safe_float(task.get("paused_seconds"), 0.0)
-            if hold_start is not None:
-                pause_total += max(0.0, (now - hold_start).total_seconds())
-            if update_department_work_order(selected_id, {"status": "🟦 กำลังทำ", "hold_started_at": None, "paused_seconds": pause_total}):
-                st.rerun()
-
 nav_options = [
     "👷 โหมดหน้าเครื่อง", 
-    "🧪 งานตรวจสอบ QC",
-    "🤖 ใบสั่งงาน Automation",
     "📊 แดชบอร์ดภาพรวมโรงงาน", 
     "📈 ติดตามสถานการณ์ฝ่ายผลิต", 
     "📑 รายงานสรุปประจำเดือน", 
@@ -3399,13 +3141,7 @@ else:
 # ---------------------------------------------------------
 # VIEW 1: โหมดหน้าเครื่อง
 # ---------------------------------------------------------
-if st.session_state.current_view == "🧪 งานตรวจสอบ QC":
-    render_people_work_center("QC")
-
-elif st.session_state.current_view == "🤖 ใบสั่งงาน Automation":
-    render_people_work_center("AUTOMATION")
-
-elif st.session_state.current_view == "👷 โหมดหน้าเครื่อง":
+if st.session_state.current_view == "👷 โหมดหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
 
     operator_finish_feedback = st.session_state.pop("operator_finish_feedback", None)
@@ -3421,23 +3157,6 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             st.info(feedback_message)
 
     df_all = fetch_jobs_from_supabase()
-    operator_events = fetch_job_events(1000)
-
-    def get_operator_pause_text(job_id):
-        """แสดงสาเหตุพักล่าสุดของคิว; ไม่ใช้ข้อความสาเหตุแบบตายตัว"""
-        if not operator_events.empty and {"job_id", "event_type"}.issubset(operator_events.columns):
-            job_ids = pd.to_numeric(operator_events["job_id"], errors="coerce")
-            matched = operator_events[
-                (job_ids == safe_int(job_id)) &
-                (operator_events["event_type"].astype(str) == "Pause Step")
-            ]
-            if not matched.empty:
-                reason = safe_str(matched.iloc[0].get("reason"), "").strip()
-                if reason == "หยุดคิวทั้งหมดจาก Batch Processing":
-                    return "⏸️ หยุดคิวชั่วคราวจาก Batch Processing"
-                if reason:
-                    return f"🟨 พักงานชั่วคราว — {reason}"
-        return "🟨 พักงานชั่วคราว รอขึ้นงาน"
     
     c_m_sel, c_mode_sel = st.columns([2, 2])
     with c_m_sel:
@@ -3483,10 +3202,9 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             """, unsafe_allow_html=True)
         elif not hold_now.empty:
             h_cur = hold_now.iloc[0]
-            banner_pause_text = html.escape(get_operator_pause_text(h_cur.get("ID")))
             st.markdown(f"""
             <div class="shop-live-banner shop-live-hold">
-                <div>🛑 <b>{selected_m}: {banner_pause_text}</b></div>
+                <div>🛑 <b>{selected_m}: เครื่องหยุดพักงานชั่วคราว (รอเบิกวัสดุใหม่)</b></div>
                 <div style="font-size:12.5px;">📌 <b>แผนงาน:</b> {h_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {h_cur.get('ชื่อ Drawing.', '-')}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -3503,7 +3221,6 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
         if "Batch" in run_mode:
             waiting_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("รอคิว")]
             running_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
-            hold_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
             batch_guard = st.session_state.get("batch_bulk_guard")
             guard_now = get_bangkok_now().replace(tzinfo=None)
             guard_expired = False
@@ -3550,40 +3267,6 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             st.rerun()
                     with b_c2:
                         if st.button(
-                            f"🔎 ตรวจรายการก่อน Resume รวม ({len(hold_jobs)} คิว)",
-                            disabled=(len(hold_jobs) == 0),
-                            type="secondary",
-                            use_container_width=True,
-                            key="prepare_batch_resume"
-                        ):
-                            st.session_state.batch_bulk_guard = {
-                                "action": "resume",
-                                "machine": selected_m,
-                                "ids": [safe_int(v) for v in hold_jobs["ID"].tolist()],
-                                "armed_at": get_bangkok_str(),
-                                "nonce": uuid.uuid4().hex
-                            }
-                            st.rerun()
-
-                    b_c3, b_c4 = st.columns(2)
-                    with b_c3:
-                        if st.button(
-                            f"🔎 ตรวจรายการก่อนหยุดคิวทั้งหมด ({len(running_jobs)} คิว)",
-                            disabled=(len(running_jobs) == 0),
-                            type="secondary",
-                            use_container_width=True,
-                            key="prepare_batch_pause"
-                        ):
-                            st.session_state.batch_bulk_guard = {
-                                "action": "pause",
-                                "machine": selected_m,
-                                "ids": [safe_int(v) for v in running_jobs["ID"].tolist()],
-                                "armed_at": get_bangkok_str(),
-                                "nonce": uuid.uuid4().hex
-                            }
-                            st.rerun()
-                    with b_c4:
-                        if st.button(
                             f"🔎 ตรวจรายการก่อน Finish รวม ({len(running_jobs)} คิว)",
                             disabled=(len(running_jobs) == 0),
                             type="secondary",
@@ -3601,20 +3284,10 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 else:
                     guard_action = batch_guard.get("action")
                     guard_ids = {safe_int(v) for v in batch_guard.get("ids", [])}
-                    if guard_action == "start":
-                        review_source = waiting_jobs
-                    elif guard_action == "resume":
-                        review_source = hold_jobs
-                    else:
-                        review_source = running_jobs
+                    review_source = waiting_jobs if guard_action == "start" else running_jobs
                     review_jobs = review_source[review_source["ID"].apply(safe_int).isin(guard_ids)].copy()
-                    action_labels = {
-                        "start": ("Start", "🚀"),
-                        "resume": ("Resume", "▶️"),
-                        "pause": ("หยุดคิว", "⏸️"),
-                        "finish": ("Finish", "🏁")
-                    }
-                    action_th, action_icon = action_labels.get(guard_action, ("ดำเนินการ", "⚙️"))
+                    action_th = "Start" if guard_action == "start" else "Finish"
+                    action_icon = "🚀" if guard_action == "start" else "🏁"
 
                     st.warning(
                         f"⚠️ กำลังจะ {action_th} รวมจำนวน {len(guard_ids)} คิวบนเครื่อง {selected_m} "
@@ -3657,12 +3330,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             # อ่านข้อมูลล่าสุดซ้ำก่อนบันทึก และทำเฉพาะ ID ที่ผู้ใช้ตรวจไว้เท่านั้น
                             fetch_jobs_from_supabase.clear()
                             fresh_jobs = fetch_jobs_from_supabase()
-                            if guard_action == "start":
-                                expected_status_text = "รอคิว"
-                            elif guard_action == "resume":
-                                expected_status_text = "พักงาน"
-                            else:
-                                expected_status_text = "กำลังผลิต"
+                            expected_status_text = "รอคิว" if guard_action == "start" else "กำลังผลิต"
                             fresh_batch_jobs = fresh_jobs[
                                 (fresh_jobs["เลือกเครื่องจักร"] == selected_m) &
                                 (fresh_jobs["ID"].apply(safe_int).isin(guard_ids)) &
@@ -3697,27 +3365,6 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                                     }
                                     if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
                                         payload["actual_start"] = now_str
-                                elif guard_action == "resume":
-                                    current = progress["steps"][idx]
-                                    hold_started_dt = parse_flexible_datetime(r.get("เริ่มพักจริง"))
-                                    pause_delta = 0.0
-                                    if hold_started_dt is not None and pd.notna(hold_started_dt):
-                                        pause_delta = get_work_seconds_between(hold_started_dt, confirm_now)
-                                    current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + pause_delta
-                                    payload = {
-                                        "status": "🟦 กำลังผลิต",
-                                        "hold_started_at": None,
-                                        "paused_seconds": safe_float(r.get("เวลาพักสะสม (วินาที)"), 0.0) + pause_delta,
-                                        "step_progress": progress
-                                    }
-                                    if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
-                                        payload["actual_start"] = now_str
-                                elif guard_action == "pause":
-                                    payload = {
-                                        "status": "🟨 พักงาน (รอวัสดุ)",
-                                        "hold_started_at": now_str,
-                                        "step_progress": progress
-                                    }
                                 else:
                                     progress["steps"][idx]["finished_at"] = now_str
                                     if idx < len(progress["steps"]) - 1:
@@ -3727,30 +3374,12 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                                     else:
                                         payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str, "step_progress": progress}
                                         fully_finished_rows.append(r)
-                                update_ok = update_supabase_job(int(r["ID"]), payload)
-                                update_results.append(update_ok)
-                                if update_ok and guard_action in {"pause", "resume"}:
-                                    current_step = progress["steps"][idx]
-                                    log_job_event(
-                                        safe_int(r["ID"]),
-                                        safe_str(r.get("แผนงาน"), "-"),
-                                        safe_str(r.get("ชื่อ Drawing."), "-"),
-                                        selected_m,
-                                        "Pause Step" if guard_action == "pause" else "Resume Step",
-                                        idx + 1,
-                                        safe_str(current_step.get("name"), safe_str(r.get("ขั้นตอน (Step)"), "-")),
-                                        "หยุดคิวทั้งหมดจาก Batch Processing" if guard_action == "pause" else "Resume คิวทั้งหมดจาก Batch Processing",
-                                        "คำสั่งแบบกลุ่มโดยผู้ใช้งานหน้าเครื่อง"
-                                    )
+                                update_results.append(update_supabase_job(int(r["ID"]), payload))
 
                             st.session_state.pop("batch_bulk_guard", None)
                             if update_results and all(update_results):
                                 if guard_action == "start":
                                     st.toast("เริ่มจับเวลาจริงทุกคิวที่ยืนยันเรียบร้อย!", icon="🚀")
-                                elif guard_action == "resume":
-                                    st.toast("Resume คิวทั้งหมดและคำนวณเวลาพักสะสมเรียบร้อย!", icon="▶️")
-                                elif guard_action == "pause":
-                                    st.toast("หยุดคิวทั้งหมดและเริ่มจับเวลาพักเรียบร้อย!", icon="⏸️")
                                 elif fully_finished_rows:
                                     st.session_state.operator_finish_feedback = build_operator_finish_feedback(
                                         pd.DataFrame(fully_finished_rows), confirm_now
@@ -3813,16 +3442,6 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
         m_active = m_active.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
 
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
-        machine_has_paused = any("พักงาน" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
-        piece_mode = "Batch" not in run_mode
-        active_queue_order_ids = [safe_int(v) for v in m_active["ID"].tolist()]
-        piece_resume_allowed_id = None
-        if piece_mode and not machine_any_running:
-            first_paused = m_active[
-                m_active["สถานะงาน"].astype(str).str.contains("พักงาน", na=False)
-            ]
-            if not first_paused.empty:
-                piece_resume_allowed_id = safe_int(first_paused.iloc[0]["ID"])
         next_available_start_found = False
 
         for queue_idx, step_row in m_active.iterrows():
@@ -3852,8 +3471,6 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             is_step_finished = "เสร็จสิ้น" in s_status
             is_step_waiting = not is_step_running and not is_step_finished and not is_step_hold
             is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
-            pause_status_text = get_operator_pause_text(target_id) if is_step_hold else ""
-            pause_status_html = html.escape(pause_status_text)
             other_running_rows = m_all_jobs[
                 (m_all_jobs["ID"].apply(safe_int) != target_id)
                 & m_all_jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต", na=False)
@@ -3901,14 +3518,14 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 can_start = is_step_waiting and not machine_any_running
             else:
                 can_start = False
-                if is_step_waiting and not machine_any_running and not machine_has_paused and not next_available_start_found:
+                if is_step_waiting and not machine_any_running and not next_available_start_found:
                     can_start = True
                     next_available_start_found = True
 
             if is_step_hold:
                 header_box_class = "op-job-header op-job-header-hold"
                 badge_gradient = "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)"
-                status_badge_html = f'<span class="badge-chip badge-hold">{pause_status_html}</span>'
+                status_badge_html = '<span class="badge-chip badge-hold">🛑 พักงาน (รอวัสดุใหม่)</span>'
             elif is_step_running:
                 if is_running_overdue:
                     header_box_class = "op-job-header op-job-header-overdue"
@@ -3957,7 +3574,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                     if is_running_overdue:
                         st.error(f"🚨 งานนี้กำลังผลิตและเกินเวลาจบตามแผนแล้ว {overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที")
                 elif is_step_hold:
-                    st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>{pause_status_html}</span>", unsafe_allow_html=True)
+                    st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
                 else:
                     if can_start:
                         st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800;'>🟧 พร้อมเริ่มงาน (Ready to Start)</span>", unsafe_allow_html=True)
@@ -3966,38 +3583,14 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
 
                 if not is_step_finished:
                     if is_step_hold:
-                        resume_sequence_blocked = bool(
-                            piece_mode and target_id != piece_resume_allowed_id
-                        )
-                        resume_blocked = blocking_running_row is not None or resume_sequence_blocked
-                        if blocking_running_row is not None:
+                        resume_blocked = blocking_running_row is not None
+                        if resume_blocked:
                             st.warning(f"🔒 ยัง Resume ไม่ได้: {selected_m} กำลังรัน {blocking_running_text} กรุณาพักหรือจบงานนั้นก่อน")
-                        elif resume_sequence_blocked:
-                            st.info("🔒 โหมดรันทีละคิว: ต้อง Resume และ Finish คิวพักลำดับก่อนหน้าให้เสร็จก่อน")
                         if st.button("▶️ Resume Step เดิม (แก้ไขพร้อมแล้ว)", key=f"btn_resume_{target_id}", type="primary", disabled=resume_blocked, use_container_width=True):
                             live_blocker = get_other_running_job(selected_m, target_id)
                             if live_blocker:
                                 st.error(f"Resume ไม่ได้ เพราะเครื่องกำลังรัน {running_job_label(live_blocker)}")
                                 st.stop()
-                            if piece_mode:
-                                # ตรวจลำดับซ้ำจากสถานะล่าสุด เพื่อกันการเปิดหลายหน้าจอแล้วกดข้ามคิว
-                                fetch_jobs_from_supabase.clear()
-                                fresh_resume_jobs = fetch_jobs_from_supabase()
-                                fresh_machine_jobs = fresh_resume_jobs[
-                                    fresh_resume_jobs["เลือกเครื่องจักร"].eq(selected_m) &
-                                    fresh_resume_jobs["ID"].apply(safe_int).isin(active_queue_order_ids)
-                                ].copy()
-                                fresh_status_by_id = {
-                                    safe_int(row["ID"]): safe_str(row.get("สถานะงาน"), "")
-                                    for _, row in fresh_machine_jobs.iterrows()
-                                }
-                                fresh_first_paused_id = next((
-                                    queue_id for queue_id in active_queue_order_ids
-                                    if "พักงาน" in fresh_status_by_id.get(queue_id, "")
-                                ), None)
-                                if fresh_first_paused_id != target_id:
-                                    st.error("Resume ไม่ได้: คิวนี้ไม่ใช่คิวพักลำดับแรก กรุณารีเฟรชและทำคิวก่อนหน้าให้เสร็จก่อน")
-                                    st.stop()
                             resume_now = get_bangkok_now().replace(tzinfo=None)
                             resume_payload = {"status": "🟦 กำลังผลิต", "hold_started_at": None}
                             hold_started_dt = parse_flexible_datetime(s_hold_started)
@@ -8230,7 +7823,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
             time_info_combined = f'''
             <div style="font-size:13px; font-weight:700; color:#FEF3C7; line-height:1.5;">
-                <div>⚠️ <b>{'เครื่องจักรขัดข้อง' if is_breakdown else 'พักงาน'}:</b> {hold_reason or 'รอขึ้นงาน'}{h_start_txt}</div>
+                <div>⚠️ <b>{'เครื่องจักรขัดข้อง' if is_breakdown else 'พักงาน'}:</b> {hold_reason or 'รอเบิกวัสดุใหม่'}{h_start_txt}</div>
                 {hold_start_variance_html}
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
@@ -8513,9 +8106,10 @@ components.html("""
 
     setTimeout(function() {
         try {
-            const radioBtns = Array.from(window.parent.document.querySelectorAll('input[type="radio"]'));
-            const tvRadio = radioBtns.find(btn => btn.checked && String(btn.value || '').includes('จอทีวี'));
-            if (tvRadio) tvRadio.click();
+            const radioBtns = window.parent.document.querySelectorAll('input[type="radio"]');
+            if (radioBtns && radioBtns.length >= 5 && radioBtns[4].checked) {
+                radioBtns[4].click();
+            }
         } catch(err) {}
     }, 30000);
 </script>
