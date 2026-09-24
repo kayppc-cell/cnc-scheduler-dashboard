@@ -3219,79 +3219,174 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
         st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
     else:
         if "Batch" in run_mode:
-            st.markdown("""
-            <div class="batch-toolbar">
-                <div>
-                    <b style="color:#1E3A8A; font-size:14.5px;">📦 แผงควบคุมการรันงานแบบกลุ่ม (Batch Processing Mode)</b><br>
-                    <span style="font-size:12px; color:#64748B;">เหมาะสำหรับงานที่เซ็ตทูลครั้งเดียวแล้วรัน Step เดียวกันต่อเนื่องหลายๆ คิว</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            b_c1, b_c2 = st.columns(2)
             waiting_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("รอคิว")]
             running_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
+            batch_guard = st.session_state.get("batch_bulk_guard")
+            guard_now = get_bangkok_now().replace(tzinfo=None)
+            guard_expired = False
+            if batch_guard:
+                armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
+                guard_expired = armed_at is None or (guard_now - armed_at).total_seconds() > 15
+                if guard_expired or batch_guard.get("machine") != selected_m:
+                    st.session_state.pop("batch_bulk_guard", None)
+                    batch_guard = None
 
-            with b_c1:
-                if st.button(f"🚀 Start รวมทุกงานที่รอคิว ({len(waiting_jobs)} คิว)", disabled=(len(waiting_jobs) == 0), type="primary", use_container_width=True):
-                    now_str = get_bangkok_str()
-                    update_results = []
-                    for _, r in waiting_jobs.iterrows():
-                        progress = normalize_step_progress(
-                            r.get("ติดตาม Step"), r.get("ขั้นตอน (Step)"), r.get("สถานะงาน"),
-                            r.get("เริ่มจริง"), r.get("เสร็จจริง")
-                        )
-                        idx = progress["current_index"]
-                        current = progress["steps"][idx]
-                        batch_now = parse_flexible_datetime(now_str)
-                        pending_dt = parse_flexible_datetime(current.get("pending_pause_started_at"))
-                        if current.get("started_at") and pending_dt is not None and pd.notna(pending_dt):
-                            current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + get_work_seconds_between(pending_dt, batch_now)
-                        elif not current.get("started_at"):
-                            current["started_at"] = now_str
-                        current.pop("pending_pause_started_at", None)
-                        start_payload = {
-                            "status": "🟦 กำลังผลิต", "actual_finish": None,
-                            "hold_started_at": None, "step_progress": progress
-                        }
-                        if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
-                            start_payload["actual_start"] = now_str
-                        update_results.append(update_supabase_job(int(r["ID"]), start_payload))
-                    if update_results and all(update_results):
-                        st.toast("เริ่มจับเวลาจริงทุกคิวพร้อมกันเรียบร้อย!", icon="🚀")
-                        st.rerun()
-                    else:
-                        st.error("Start แบบกลุ่มไม่สำเร็จครบทุกรายการ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
+            with st.expander(
+                "🔒 เปิดแผงควบคุม Batch Processing",
+                expanded=bool(batch_guard)
+            ):
+                st.markdown("""
+                <div class="batch-toolbar">
+                    <div>
+                        <b style="color:#1E3A8A; font-size:14.5px;">📦 แผงควบคุมการรันงานแบบกลุ่ม (Batch Processing Mode)</b><br>
+                        <span style="font-size:12px; color:#64748B;">คำสั่งรวมต้องตรวจรายการและยืนยัน 2 ชั้นก่อนบันทึกทุกครั้ง</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
-            with b_c2:
-                if st.button(f"🏁 Finish รวมทุกงานที่กำลังรัน ({len(running_jobs)} คิว)", disabled=(len(running_jobs) == 0), type="secondary", use_container_width=True):
-                    batch_finish_dt = get_bangkok_now().replace(tzinfo=None)
-                    now_str = batch_finish_dt.strftime("%Y-%m-%d %H:%M:%S")
-                    update_results = []
-                    fully_finished_rows = []
-                    for _, r in running_jobs.iterrows():
-                        progress = normalize_step_progress(
-                            r.get("ติดตาม Step"), r.get("ขั้นตอน (Step)"), r.get("สถานะงาน"),
-                            r.get("เริ่มจริง"), r.get("เสร็จจริง")
+                if guard_expired:
+                    st.warning("⌛ การยืนยันครั้งก่อนหมดอายุแล้ว กรุณาตรวจรายการใหม่")
+
+                if not batch_guard:
+                    b_c1, b_c2 = st.columns(2)
+                    with b_c1:
+                        if st.button(
+                            f"🔎 ตรวจรายการก่อน Start รวม ({len(waiting_jobs)} คิว)",
+                            disabled=(len(waiting_jobs) == 0),
+                            type="secondary",
+                            use_container_width=True,
+                            key="prepare_batch_start"
+                        ):
+                            st.session_state.batch_bulk_guard = {
+                                "action": "start",
+                                "machine": selected_m,
+                                "ids": [safe_int(v) for v in waiting_jobs["ID"].tolist()],
+                                "armed_at": get_bangkok_str(),
+                                "nonce": uuid.uuid4().hex
+                            }
+                            st.rerun()
+                    with b_c2:
+                        if st.button(
+                            f"🔎 ตรวจรายการก่อน Finish รวม ({len(running_jobs)} คิว)",
+                            disabled=(len(running_jobs) == 0),
+                            type="secondary",
+                            use_container_width=True,
+                            key="prepare_batch_finish"
+                        ):
+                            st.session_state.batch_bulk_guard = {
+                                "action": "finish",
+                                "machine": selected_m,
+                                "ids": [safe_int(v) for v in running_jobs["ID"].tolist()],
+                                "armed_at": get_bangkok_str(),
+                                "nonce": uuid.uuid4().hex
+                            }
+                            st.rerun()
+                else:
+                    guard_action = batch_guard.get("action")
+                    guard_ids = {safe_int(v) for v in batch_guard.get("ids", [])}
+                    review_source = waiting_jobs if guard_action == "start" else running_jobs
+                    review_jobs = review_source[review_source["ID"].apply(safe_int).isin(guard_ids)].copy()
+                    action_th = "Start" if guard_action == "start" else "Finish"
+                    action_icon = "🚀" if guard_action == "start" else "🏁"
+
+                    st.warning(
+                        f"⚠️ กำลังจะ {action_th} รวมจำนวน {len(guard_ids)} คิวบนเครื่อง {selected_m} "
+                        "กรุณาตรวจรายการก่อนยืนยัน"
+                    )
+                    review_lines = []
+                    for review_no, (_, review_row) in enumerate(review_jobs.iterrows(), start=1):
+                        review_lines.append(
+                            f"{review_no}. แผน {safe_str(review_row.get('แผนงาน'), '-')} | "
+                            f"Drawing {safe_str(review_row.get('ชื่อ Drawing.'), '-')} | "
+                            f"Step {safe_str(review_row.get('ขั้นตอน (Step)'), '-')}"
                         )
-                        idx = progress["current_index"]
-                        progress["steps"][idx]["finished_at"] = now_str
-                        if idx < len(progress["steps"]) - 1:
-                            progress["current_index"] = idx + 1
-                            progress["steps"][idx + 1]["started_at"] = now_str
-                            payload = {"status": "🟦 กำลังผลิต", "actual_finish": None, "step_progress": progress}
-                        else:
-                            payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str, "step_progress": progress}
-                            fully_finished_rows.append(r)
-                        update_results.append(update_supabase_job(int(r["ID"]), payload))
-                    if update_results and all(update_results):
-                        if fully_finished_rows:
-                            st.session_state.operator_finish_feedback = build_operator_finish_feedback(
-                                pd.DataFrame(fully_finished_rows), batch_finish_dt
-                            )
-                        st.rerun()
-                    else:
-                        st.error("Finish แบบกลุ่มไม่สำเร็จครบทุกรายการ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
+                    st.markdown("  \n".join(review_lines) if review_lines else "⚠️ ไม่พบรายการตามสถานะเดิม")
+
+                    confirm_key = f"batch_bulk_confirm_{batch_guard.get('nonce', 'current')}"
+                    confirmed = st.checkbox(
+                        f"ตรวจสอบรายการแล้ว ยืนยัน {action_th} งานพร้อมกัน",
+                        key=confirm_key
+                    )
+                    confirm_col, cancel_col = st.columns(2)
+                    with cancel_col:
+                        if st.button("ยกเลิกคำสั่งรวม", use_container_width=True, key=f"cancel_{confirm_key}"):
+                            st.session_state.pop("batch_bulk_guard", None)
+                            st.rerun()
+                    with confirm_col:
+                        if st.button(
+                            f"{action_icon} ยืนยัน {action_th} {len(guard_ids)} คิว",
+                            disabled=not confirmed,
+                            type="primary",
+                            use_container_width=True,
+                            key=f"execute_{confirm_key}"
+                        ):
+                            confirm_now = get_bangkok_now().replace(tzinfo=None)
+                            armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
+                            if armed_at is None or (confirm_now - armed_at).total_seconds() > 15:
+                                st.session_state.pop("batch_bulk_guard", None)
+                                st.error("⌛ การยืนยันหมดอายุแล้ว กรุณาเปิดตรวจรายการใหม่")
+                                st.rerun()
+
+                            # อ่านข้อมูลล่าสุดซ้ำก่อนบันทึก และทำเฉพาะ ID ที่ผู้ใช้ตรวจไว้เท่านั้น
+                            fetch_jobs_from_supabase.clear()
+                            fresh_jobs = fetch_jobs_from_supabase()
+                            expected_status_text = "รอคิว" if guard_action == "start" else "กำลังผลิต"
+                            fresh_batch_jobs = fresh_jobs[
+                                (fresh_jobs["เลือกเครื่องจักร"] == selected_m) &
+                                (fresh_jobs["ID"].apply(safe_int).isin(guard_ids)) &
+                                (fresh_jobs["สถานะงาน"].astype(str).str.contains(expected_status_text, na=False))
+                            ].copy()
+                            fresh_ids = {safe_int(v) for v in fresh_batch_jobs["ID"].tolist()}
+                            if fresh_ids != guard_ids:
+                                st.session_state.pop("batch_bulk_guard", None)
+                                st.error("⚠️ สถานะคิวมีการเปลี่ยนแปลง ระบบยกเลิกคำสั่งรวม กรุณาตรวจรายการใหม่")
+                                st.rerun()
+
+                            now_str = confirm_now.strftime("%Y-%m-%d %H:%M:%S")
+                            update_results = []
+                            fully_finished_rows = []
+                            for _, r in fresh_batch_jobs.iterrows():
+                                progress = normalize_step_progress(
+                                    r.get("ติดตาม Step"), r.get("ขั้นตอน (Step)"), r.get("สถานะงาน"),
+                                    r.get("เริ่มจริง"), r.get("เสร็จจริง")
+                                )
+                                idx = progress["current_index"]
+                                if guard_action == "start":
+                                    current = progress["steps"][idx]
+                                    pending_dt = parse_flexible_datetime(current.get("pending_pause_started_at"))
+                                    if current.get("started_at") and pending_dt is not None and pd.notna(pending_dt):
+                                        current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + get_work_seconds_between(pending_dt, confirm_now)
+                                    elif not current.get("started_at"):
+                                        current["started_at"] = now_str
+                                    current.pop("pending_pause_started_at", None)
+                                    payload = {
+                                        "status": "🟦 กำลังผลิต", "actual_finish": None,
+                                        "hold_started_at": None, "step_progress": progress
+                                    }
+                                    if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
+                                        payload["actual_start"] = now_str
+                                else:
+                                    progress["steps"][idx]["finished_at"] = now_str
+                                    if idx < len(progress["steps"]) - 1:
+                                        progress["current_index"] = idx + 1
+                                        progress["steps"][idx + 1]["started_at"] = now_str
+                                        payload = {"status": "🟦 กำลังผลิต", "actual_finish": None, "step_progress": progress}
+                                    else:
+                                        payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str, "step_progress": progress}
+                                        fully_finished_rows.append(r)
+                                update_results.append(update_supabase_job(int(r["ID"]), payload))
+
+                            st.session_state.pop("batch_bulk_guard", None)
+                            if update_results and all(update_results):
+                                if guard_action == "start":
+                                    st.toast("เริ่มจับเวลาจริงทุกคิวที่ยืนยันเรียบร้อย!", icon="🚀")
+                                elif fully_finished_rows:
+                                    st.session_state.operator_finish_feedback = build_operator_finish_feedback(
+                                        pd.DataFrame(fully_finished_rows), confirm_now
+                                    )
+                                st.rerun()
+                            else:
+                                st.error(f"{action_th} แบบกลุ่มไม่สำเร็จครบทุกรายการ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
 
         # หาแผนงาน+Drawing ล่าสุดที่เพิ่ง Finish และยังมี Step ค้างบนเครื่องนี้
         # เพื่อให้ Step 2, Step 3 อยู่ต่อกัน ไม่ถูกคิวอื่นดันลงไปท้ายหน้า
@@ -6360,20 +6455,52 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
         sel_dw_limit = st.selectbox("🎯 การแสดงผลกราฟแท่งคู่:", ["🌐 แสดงทั้งหมดในเดือนนี้", "🔴 Top 10 ช้ากว่าแผนสูงสุด (Critical Delays)", "🟢 Top 10 เร็วกว่าแผนสูงสุด (High Efficiency)"])
 
     if not df_db.empty:
-        finished_all = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
-        
-        if not finished_all.empty:
-            finished_all["Target_Date"] = pd.to_datetime(
-                finished_all["เสร็จจริง"].apply(parse_flexible_datetime), errors="coerce"
+        # วิเคราะห์ในระดับ Drawing เต็มงาน: ทุก Step ของ Drawing ต้อง Finish ครบก่อน
+        # และจัดเข้าเดือนตามเวลา Finish ของ Step สุดท้าย ไม่ใช่เดือนของแต่ละ Step
+        done_statuses = {"🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"}
+        drawing_key_cols = ["แผนงาน", "ชื่อ Drawing."]
+        performance_source = df_db.copy()
+        performance_source["Target_Date"] = pd.to_datetime(
+            performance_source["เสร็จจริง"].apply(parse_flexible_datetime), errors="coerce"
+        )
+        performance_source["_step_done"] = performance_source["สถานะงาน"].isin(done_statuses)
+
+        drawing_completion = (
+            performance_source
+            .groupby(drawing_key_cols, dropna=False)
+            .agg(
+                ทุกขั้นตอนเสร็จ=("_step_done", "all"),
+                ทุกขั้นตอนมีเวลา_finish=("Target_Date", lambda s: bool(s.notna().all())),
+                Drawing_Finish=("Target_Date", "max")
             )
-            missing_finish_date_count = int(finished_all["Target_Date"].isna().sum())
-            if missing_finish_date_count:
-                st.warning(f"⚠️ งานที่ระบุว่าเสร็จแล้วแต่ไม่มีเวลา Finish จริง {missing_finish_date_count} รายการ จะไม่ถูกนำไปลงเดือนใดจนกว่าจะมีเวลา Finish")
-            
-            monthly_dw_jobs = finished_all[
-                (finished_all["Target_Date"].dt.month == sel_dw_month) &
-                (finished_all["Target_Date"].dt.year == sel_dw_year)
-            ].copy()
+            .reset_index()
+        )
+
+        complete_drawings = drawing_completion[
+            drawing_completion["ทุกขั้นตอนเสร็จ"] &
+            drawing_completion["ทุกขั้นตอนมีเวลา_finish"]
+        ].copy()
+        missing_finish_drawing_count = int((
+            drawing_completion["ทุกขั้นตอนเสร็จ"] &
+            ~drawing_completion["ทุกขั้นตอนมีเวลา_finish"]
+        ).sum())
+        if missing_finish_drawing_count:
+            st.warning(
+                f"⚠️ Drawing ที่ทุก Step ระบุว่าเสร็จแล้ว แต่มีเวลา Finish จริงไม่ครบ "
+                f"{missing_finish_drawing_count} Drawing จะยังไม่ถูกนำมาวิเคราะห์"
+            )
+
+        if not complete_drawings.empty:
+            selected_drawing_keys = complete_drawings[
+                (complete_drawings["Drawing_Finish"].dt.month == sel_dw_month) &
+                (complete_drawings["Drawing_Finish"].dt.year == sel_dw_year)
+            ][drawing_key_cols]
+
+            monthly_dw_jobs = performance_source.merge(
+                selected_drawing_keys,
+                on=drawing_key_cols,
+                how="inner"
+            ).copy()
 
             if not monthly_dw_jobs.empty:
                 monthly_dw_jobs = build_performance_metrics(monthly_dw_jobs)
@@ -6483,6 +6610,22 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
                     )
                 st.caption("ℹ️ เวลาจริงสุทธิ = Finish − Start − เวลาพักสะสม | ความแม่นยำ = 100 − %ความคลาดเคลื่อนจากเวลาแผน")
 
+                st.caption("**🔎 ค้นหาเร็วตามผลเทียบแผน:**")
+                perf_q1, perf_q2, perf_q3, perf_q4 = st.columns(4)
+                drawing_perf_quick_filter = st.session_state.get("drawing_perf_quick_filter", "ALL")
+                quick_filter_buttons = [
+                    (perf_q1, "ALL", f"🌐 ทั้งหมด ({len(df_draw_full)})", "btn_dw_perf_all"),
+                    (perf_q2, "LATE", f"🔴 ช้ากว่าแผน ({count_late})", "btn_dw_perf_late"),
+                    (perf_q3, "ON_TARGET", f"🟡 ตรงตามแผน ({count_target})", "btn_dw_perf_target"),
+                    (perf_q4, "FAST", f"🟢 เร็วกว่าแผน ({count_fast})", "btn_dw_perf_fast"),
+                ]
+                for quick_col, quick_value, quick_label, quick_key in quick_filter_buttons:
+                    with quick_col:
+                        quick_type = "primary" if drawing_perf_quick_filter == quick_value else "secondary"
+                        if st.button(quick_label, type=quick_type, use_container_width=True, key=quick_key):
+                            st.session_state.drawing_perf_quick_filter = quick_value
+                            drawing_perf_quick_filter = quick_value
+
                 f_col1, f_col2 = st.columns([2.5, 4])
                 with f_col1:
                     plan_list = ["🌐 ทุกแผนงาน"] + sorted(list(df_draw_full["แผนงาน"].unique()))
@@ -6491,6 +6634,10 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
                     search_dw = st.text_input("🔍 ค้นหาชื่อ Drawing หรือ เครื่องจักร (แผนภูมิกราฟ):", placeholder="พิมพ์ชื่อ Drawing หรือชื่อเครื่องจักรเพื่อกรองกราฟ...")
 
                 df_draw_filtered = df_draw_full.copy()
+                if drawing_perf_quick_filter != "ALL":
+                    df_draw_filtered = df_draw_filtered[
+                        df_draw_filtered["สถานะกลุ่ม"] == drawing_perf_quick_filter
+                    ]
                 if selected_plan_filter != "🌐 ทุกแผนงาน":
                     df_draw_filtered = df_draw_filtered[df_draw_filtered["แผนงาน"] == selected_plan_filter]
                 if search_dw.strip() != "":
@@ -6542,7 +6689,12 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
                         key="search_drawing_table_input"
                     )
 
-                    df_table_display = df_draw_full.copy().sort_values(by="แผนงาน")
+                    df_table_display = df_draw_full.copy()
+                    if drawing_perf_quick_filter != "ALL":
+                        df_table_display = df_table_display[
+                            df_table_display["สถานะกลุ่ม"] == drawing_perf_quick_filter
+                        ]
+                    df_table_display = df_table_display.sort_values(by="แผนงาน")
                     if search_dw_table.strip() != "":
                         q_dt = search_dw_table.strip().lower()
                         df_table_display = df_table_display[
