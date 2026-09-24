@@ -3157,6 +3157,23 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
             st.info(feedback_message)
 
     df_all = fetch_jobs_from_supabase()
+    operator_events = fetch_job_events(1000)
+
+    def get_operator_pause_text(job_id):
+        """แสดงสาเหตุพักล่าสุดของคิว; ไม่ใช้ข้อความสาเหตุแบบตายตัว"""
+        if not operator_events.empty and {"job_id", "event_type"}.issubset(operator_events.columns):
+            job_ids = pd.to_numeric(operator_events["job_id"], errors="coerce")
+            matched = operator_events[
+                (job_ids == safe_int(job_id)) &
+                (operator_events["event_type"].astype(str) == "Pause Step")
+            ]
+            if not matched.empty:
+                reason = safe_str(matched.iloc[0].get("reason"), "").strip()
+                if reason == "หยุดคิวทั้งหมดจาก Batch Processing":
+                    return "⏸️ หยุดคิวชั่วคราวจาก Batch Processing"
+                if reason:
+                    return f"🟨 พักงานชั่วคราว — {reason}"
+        return "🟨 พักงานชั่วคราว รอขึ้นงาน"
     
     c_m_sel, c_mode_sel = st.columns([2, 2])
     with c_m_sel:
@@ -3202,9 +3219,10 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
             """, unsafe_allow_html=True)
         elif not hold_now.empty:
             h_cur = hold_now.iloc[0]
+            banner_pause_text = html.escape(get_operator_pause_text(h_cur.get("ID")))
             st.markdown(f"""
             <div class="shop-live-banner shop-live-hold">
-                <div>🛑 <b>{selected_m}: เครื่องหยุดพักงานชั่วคราว (รอเบิกวัสดุใหม่)</b></div>
+                <div>🛑 <b>{selected_m}: {banner_pause_text}</b></div>
                 <div style="font-size:12.5px;">📌 <b>แผนงาน:</b> {h_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {h_cur.get('ชื่อ Drawing.', '-')}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -3560,6 +3578,8 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
             is_step_finished = "เสร็จสิ้น" in s_status
             is_step_waiting = not is_step_running and not is_step_finished and not is_step_hold
             is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
+            pause_status_text = get_operator_pause_text(target_id) if is_step_hold else ""
+            pause_status_html = html.escape(pause_status_text)
             other_running_rows = m_all_jobs[
                 (m_all_jobs["ID"].apply(safe_int) != target_id)
                 & m_all_jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต", na=False)
@@ -3614,7 +3634,7 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
             if is_step_hold:
                 header_box_class = "op-job-header op-job-header-hold"
                 badge_gradient = "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)"
-                status_badge_html = '<span class="badge-chip badge-hold">🛑 พักงาน (รอวัสดุใหม่)</span>'
+                status_badge_html = f'<span class="badge-chip badge-hold">{pause_status_html}</span>'
             elif is_step_running:
                 if is_running_overdue:
                     header_box_class = "op-job-header op-job-header-overdue"
@@ -3663,7 +3683,7 @@ if st.session_state.current_view == "👷 โหมดหน้าเครื�
                     if is_running_overdue:
                         st.error(f"🚨 งานนี้กำลังผลิตและเกินเวลาจบตามแผนแล้ว {overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที")
                 elif is_step_hold:
-                    st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>🟨 พักงานชั่วคราว (ชิ้นงานมีปัญหา / รอเบิกวัสดุใหม่) 🛑</span>", unsafe_allow_html=True)
+                    st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>{pause_status_html}</span>", unsafe_allow_html=True)
                 else:
                     if can_start:
                         st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800;'>🟧 พร้อมเริ่มงาน (Ready to Start)</span>", unsafe_allow_html=True)
@@ -7912,7 +7932,7 @@ elif st.session_state.current_view == "📺 จอทีวีกลางโร
 
             time_info_combined = f'''
             <div style="font-size:13px; font-weight:700; color:#FEF3C7; line-height:1.5;">
-                <div>⚠️ <b>{'เครื่องจักรขัดข้อง' if is_breakdown else 'พักงาน'}:</b> {hold_reason or 'รอเบิกวัสดุใหม่'}{h_start_txt}</div>
+                <div>⚠️ <b>{'เครื่องจักรขัดข้อง' if is_breakdown else 'พักงาน'}:</b> {hold_reason or 'รอขึ้นงาน'}{h_start_txt}</div>
                 {hold_start_variance_html}
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
