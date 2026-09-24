@@ -3189,7 +3189,8 @@ def render_people_work_center(department):
         return
 
     with st.expander(f"➕ สร้าง{'ใบตรวจ QC' if is_qc else 'ใบสั่งงาน Automation'}ใหม่", expanded=False):
-        with st.form(f"create_{department}_work_order", clear_on_submit=True):
+        # ใช้ widget ปกติแทน st.form เพื่อคำนวณชั่วโมงใหม่ทันทีเมื่อเปลี่ยนวัน/เวลา
+        with st.container():
             c1, c2, c3 = st.columns(3)
             with c1:
                 work_type = st.selectbox("ประเภทงาน", work_types)
@@ -3213,22 +3214,41 @@ def render_people_work_center(department):
                 due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30))
             details = st.text_area("รายละเอียดคำสั่งงาน / จุดที่ต้องตรวจ *")
             checklist = "" if is_qc else st.text_area("Checklist / เกณฑ์ยอมรับ", placeholder="พิมพ์หัวข้อละหนึ่งบรรทัด")
-            estimated_hours = st.number_input("ระยะเวลาทำงานโดยประมาณ (ชั่วโมง)", min_value=0.0, value=1.0, step=0.5)
-            st.caption("ระบบจะตรวจชั่วโมงที่ทำงานได้จริงในช่วงกำหนด โดยหักเวลาพัก เวลานอกกะ และวันอาทิตย์ตามปฏิทินโรงงาน")
-            submitted = st.form_submit_button("💾 สร้างใบงาน", type="primary", use_container_width=True)
+            planned_start_preview = datetime.combine(planned_start_date, planned_start_time)
+            due_at_preview = datetime.combine(due_date, due_time)
+            estimated_hours = round(
+                get_work_capacity_between(planned_start_preview, due_at_preview), 2
+            ) if due_at_preview > planned_start_preview else 0.0
+            st.number_input(
+                "ระยะเวลาทำงานโดยประมาณ (ชั่วโมง) — คำนวณอัตโนมัติ",
+                min_value=0.0,
+                value=float(estimated_hours),
+                step=0.01,
+                disabled=True,
+                key=(
+                    f"{department}_auto_estimated_hours_"
+                    f"{planned_start_preview.isoformat()}_{due_at_preview.isoformat()}"
+                )
+            )
+            st.caption("คำนวณเฉพาะเวลาทำงานตามกะ โดยหักเบรกเช้า พักเที่ยง เบรกบ่าย พักเย็น เวลานอกกะ และวันอาทิตย์แล้ว")
+            if due_at_preview <= planned_start_preview:
+                st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
+            elif estimated_hours <= 0:
+                st.warning("ช่วงเวลาที่เลือกไม่มีเวลาทำงานตามกะ กรุณาปรับวันหรือเวลา")
+            submitted = st.button(
+                "💾 สร้างใบงาน",
+                type="primary",
+                use_container_width=True,
+                disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
+                key=f"{department}_create_work_order_submit"
+            )
         if submitted:
             planned_start_at = datetime.combine(planned_start_date, planned_start_time)
             due_at_dt = datetime.combine(due_date, due_time)
-            available_work_hours = get_work_capacity_between(planned_start_at, due_at_dt) if due_at_dt > planned_start_at else 0.0
             if not task_title.strip() or not assignee.strip() or not details.strip():
                 st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
             elif due_at_dt <= planned_start_at:
                 st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
-            elif estimated_hours > available_work_hours + 0.001:
-                st.warning(
-                    f"ช่วงเวลานี้มีเวลาทำงานตามกะเพียง {available_work_hours:.2f} ชั่วโมง "
-                    f"ซึ่งน้อยกว่าระยะเวลาประมาณ {estimated_hours:.2f} ชั่วโมง กรุณาขยายกำหนดเสร็จงาน"
-                )
             else:
                 planned_start_at_text = planned_start_at.strftime("%Y-%m-%d %H:%M:%S")
                 due_at = due_at_dt.strftime("%Y-%m-%d %H:%M:%S")
