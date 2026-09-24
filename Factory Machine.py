@@ -3134,6 +3134,18 @@ QC_WORK_TYPES = [
     "ตรวจ Check นอกสถานที่"
 ]
 AUTO_WORK_TYPES = ["ออกแบบระบบ/เขียนแบบ", "ประกอบตู้ Control", "Wiring", "เขียนโปรแกรม PLC/HMI", "ติดตั้งหน้างาน", "Commissioning/Test Run", "แก้ไข Breakdown", "ปรับปรุงเครื่องจักร", "อื่น ๆ"]
+DEPARTMENT_ASSIGNEES = [
+    "— เลือกผู้รับผิดชอบ —",
+    "พนารัตน์ ใยสำลี",
+    "เชาวรินทร์ สีเหลือง",
+    "ภัทรวดี ชีตารักษ์",
+    "Mr.Win Zaw Lat",
+    "สายันต์ กลับเป็นสุข",
+    "ปวีณ์กร ลิอุบล",
+    "นพดลสุรแสน",
+    "พฤหัส หาเรือนทอง",
+    "ไพรัตน์ อยู่พุ่มพฤกษ์"
+]
 
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_department_work_orders(department):
@@ -3219,7 +3231,7 @@ def render_people_work_center(department):
                 drawing_name = st.text_input("Drawing (ถ้ามี)")
             with c2:
                 task_title = st.text_input("ชื่อบริษัทลูกค้า *")
-                assignee = st.text_input("ผู้รับผิดชอบ/ทีม *")
+                assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", DEPARTMENT_ASSIGNEES)
                 requester = st.text_input("ผู้สั่งงาน/ผู้ส่งตรวจ")
             with c3:
                 priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES)
@@ -3274,7 +3286,7 @@ def render_people_work_center(department):
         if submitted:
             planned_start_at = datetime.combine(planned_start_date, planned_start_time)
             due_at_dt = datetime.combine(due_date, due_time)
-            if not task_title.strip() or not assignee.strip() or not details.strip():
+            if not task_title.strip() or assignee == "— เลือกผู้รับผิดชอบ —" or not details.strip():
                 st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
             elif due_at_dt <= planned_start_at:
                 st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
@@ -3559,10 +3571,186 @@ def render_people_work_center(department):
             if update_department_work_order(selected_id, {"status": "🟦 กำลังทำ", "hold_started_at": None, "paused_seconds": pause_total}):
                 st.rerun()
 
+def render_department_operator_mode():
+    """หน้าปฏิบัติงานรวม QC/Automation แยกคิวตามชื่อผู้รับผิดชอบ"""
+    st.subheader("👤 โหมดผู้ปฏิบัติงาน")
+    st.caption("เลือกชื่อผู้ปฏิบัติงานเพื่อดูและบันทึกสถานะเฉพาะใบงานที่ได้รับมอบหมาย")
+
+    qc_tasks = fetch_department_work_orders("QC")
+    automation_tasks = fetch_department_work_orders("AUTOMATION")
+    if qc_tasks is None or automation_tasks is None:
+        st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL สำหรับโหมด QC/Automation ก่อน")
+        return
+    task_frames = [frame for frame in [qc_tasks, automation_tasks] if isinstance(frame, pd.DataFrame) and not frame.empty]
+    all_tasks = pd.concat(task_frames, ignore_index=True) if task_frames else pd.DataFrame()
+
+    operator_names = DEPARTMENT_ASSIGNEES[1:]
+    active_counts = {}
+    for operator_name in operator_names:
+        if all_tasks.empty:
+            active_counts[operator_name] = 0
+        else:
+            operator_status = all_tasks.get("status", pd.Series(index=all_tasks.index, dtype=str)).fillna("").astype(str)
+            operator_assignee = all_tasks.get("assignee", pd.Series(index=all_tasks.index, dtype=str)).fillna("").astype(str)
+            active_counts[operator_name] = int(((operator_assignee == operator_name) & ~operator_status.str.contains("เสร็จ", na=False)).sum())
+
+    selected_operator = st.selectbox(
+        "เลือกชื่อผู้ปฏิบัติงาน",
+        operator_names,
+        format_func=lambda name: f"{name} — คิวปัจจุบัน {active_counts.get(name, 0)} งาน",
+        key="department_operator_name"
+    )
+    if all_tasks.empty:
+        st.info("ยังไม่มีใบงาน QC หรือ Automation ในระบบ")
+        return
+
+    person_tasks = all_tasks[all_tasks["assignee"].fillna("").astype(str) == selected_operator].copy()
+    for date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish", "hold_started_at", "created_at"]:
+        if date_col in person_tasks.columns:
+            person_tasks[date_col] = pd.to_datetime(person_tasks[date_col].apply(parse_flexible_datetime), errors="coerce")
+
+    person_status = person_tasks.get("status", pd.Series(index=person_tasks.index, dtype=str)).fillna("").astype(str)
+    active_tasks = person_tasks[~person_status.str.contains("เสร็จ", na=False)].copy()
+    finished_tasks = person_tasks[person_status.str.contains("เสร็จ", na=False)].copy()
+    operator_now = get_bangkok_now().replace(tzinfo=None)
+
+    o1, o2, o3, o4 = st.columns(4)
+    o1.metric("คิวปัจจุบัน", len(active_tasks))
+    o2.metric("กำลังทำ", int(active_tasks.get("status", pd.Series(dtype=str)).astype(str).str.contains("กำลังทำ", na=False).sum()))
+    o3.metric("พักงาน", int(active_tasks.get("status", pd.Series(dtype=str)).astype(str).str.contains("พักงาน", na=False).sum()))
+    o4.metric("เสร็จแล้ว", len(finished_tasks))
+
+    operator_quick = st.radio(
+        "⚡ ตัวกรองเร็ว",
+        ["ทั้งหมด", "รอรับงาน", "กำลังทำ", "พักงาน", "เกินกำหนด", "เร่งด่วน"],
+        horizontal=True,
+        key="operator_quick_filter"
+    )
+    operator_search = st.text_input(
+        "🔍 ค้นหาใบงานของฉัน",
+        placeholder="บริษัทลูกค้า, แผนงาน, Drawing, ประเภทงาน",
+        key="operator_task_search"
+    )
+    shown = active_tasks.copy()
+    shown_status = shown.get("status", pd.Series(index=shown.index, dtype=str)).fillna("").astype(str)
+    shown_due = shown.get("due_at", pd.Series(pd.NaT, index=shown.index))
+    if operator_quick == "รอรับงาน":
+        shown = shown[shown_status.str.contains("รอรับงาน", na=False)]
+    elif operator_quick == "กำลังทำ":
+        shown = shown[shown_status.str.contains("กำลังทำ", na=False)]
+    elif operator_quick == "พักงาน":
+        shown = shown[shown_status.str.contains("พักงาน", na=False)]
+    elif operator_quick == "เกินกำหนด":
+        shown = shown[shown_due.notna() & (shown_due < operator_now)]
+    elif operator_quick == "เร่งด่วน":
+        shown = shown[shown.get("priority", pd.Series(index=shown.index, dtype=str)).astype(str).isin(["เร่งด่วน", "วิกฤต"])]
+    if operator_search.strip():
+        operator_q = operator_search.strip().lower()
+        operator_mask = pd.Series(False, index=shown.index)
+        for operator_col in ["title", "plan_code", "drawing_name", "work_type", "details"]:
+            if operator_col in shown.columns:
+                operator_mask |= shown[operator_col].fillna("").astype(str).str.lower().str.contains(operator_q, regex=False)
+        shown = shown[operator_mask]
+
+    operator_cols = ["id", "department", "priority", "status", "work_type", "title", "plan_code", "drawing_name", "planned_start_at", "due_at", "estimated_hours"]
+    operator_cols = [col for col in operator_cols if col in shown.columns]
+    operator_display = shown[operator_cols].copy()
+    if "department" in operator_display.columns:
+        operator_display["department"] = operator_display["department"].replace({"QC": "QC", "AUTOMATION": "Automation"})
+    for date_col in ["planned_start_at", "due_at"]:
+        if date_col in operator_display.columns:
+            operator_display[date_col] = operator_display[date_col].apply(
+                lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) and hasattr(value, "strftime") else "-"
+            )
+    st.dataframe(
+        operator_display,
+        hide_index=True,
+        use_container_width=True,
+        height=min(430, 80 + len(operator_display) * 36),
+        column_config={
+            "id": st.column_config.NumberColumn("เลขที่ใบงาน", width="small", format="%d"),
+            "department": st.column_config.TextColumn("แผนกงาน", width="small"),
+            "priority": st.column_config.TextColumn("ความเร่งด่วน", width="small"),
+            "status": st.column_config.TextColumn("สถานะ", width="medium"),
+            "work_type": st.column_config.TextColumn("ประเภทงาน", width="large"),
+            "title": st.column_config.TextColumn("ชื่อบริษัทลูกค้า", width="medium"),
+            "plan_code": st.column_config.TextColumn("แผนงาน", width="small"),
+            "drawing_name": st.column_config.TextColumn("Drawing (ถ้ามี)", width="medium"),
+            "planned_start_at": st.column_config.TextColumn("กำหนดเริ่ม", width="medium"),
+            "due_at": st.column_config.TextColumn("กำหนดเสร็จ", width="medium"),
+            "estimated_hours": st.column_config.NumberColumn("ระยะเวลาประมาณ (ชม.)", width="medium", format="%.2f")
+        }
+    )
+
+    if shown.empty:
+        st.info(f"ไม่พบคิวงานปัจจุบันของ {selected_operator} ตามตัวกรองที่เลือก")
+    else:
+        operator_lookup = shown.set_index("id")
+        selected_task_id = st.selectbox(
+            "เลือกใบงานที่จะดำเนินการ",
+            shown["id"].tolist(),
+            format_func=lambda task_id: (
+                f"#{task_id} | {safe_str(operator_lookup.loc[task_id].get('department'), '-')} | "
+                f"{safe_str(operator_lookup.loc[task_id].get('title'), '-')} | "
+                f"{safe_str(operator_lookup.loc[task_id].get('drawing_name'), '-')}"
+            ),
+            key="operator_selected_task"
+        )
+        selected_task = operator_lookup.loc[selected_task_id]
+        selected_status = safe_str(selected_task.get("status"), "🟧 รอรับงาน")
+        st.info(
+            f"**บริษัทลูกค้า: {safe_str(selected_task.get('title'), '-')}**  \n"
+            f"แผนกงาน: {safe_str(selected_task.get('department'), '-')} | ประเภทงาน: {safe_str(selected_task.get('work_type'), '-')}  \n"
+            f"แผน: {safe_str(selected_task.get('plan_code'), '-')} | Drawing: {safe_str(selected_task.get('drawing_name'), '-')}  \n"
+            f"รายละเอียด: {safe_str(selected_task.get('details'), '-')}"
+        )
+        if "รอรับงาน" in selected_status:
+            if st.button("▶️ Start งาน", type="primary", use_container_width=True, key=f"operator_start_{selected_task_id}"):
+                if update_department_work_order(selected_task_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
+                    st.rerun()
+        elif "กำลังทำ" in selected_status:
+            op_a1, op_a2 = st.columns(2)
+            with op_a1:
+                with st.form(f"operator_pause_{selected_task_id}"):
+                    operator_pause_reason = st.selectbox("เหตุผลการพัก", ["รอข้อมูล", "รอชิ้นงาน", "รออุปกรณ์/อะไหล่", "งานด่วนแทรก", "รอการตัดสินใจ", "อื่น ๆ"])
+                    operator_pause_note = st.text_input("หมายเหตุ")
+                    operator_pause_submit = st.form_submit_button("⏸️ พักงาน", use_container_width=True)
+                if operator_pause_submit:
+                    if update_department_work_order(selected_task_id, {"status": "🟨 พักงาน", "hold_started_at": get_bangkok_str(), "pause_reason": operator_pause_reason, "pause_note": operator_pause_note or None}):
+                        st.rerun()
+            with op_a2:
+                with st.form(f"operator_finish_{selected_task_id}"):
+                    operator_finish_note = st.text_area("หมายเหตุงานเสร็จ (ถ้ามี)")
+                    operator_finish_submit = st.form_submit_button("✅ Finish งาน", type="primary", use_container_width=True)
+                if operator_finish_submit:
+                    if update_department_work_order(selected_task_id, {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": operator_finish_note or None}):
+                        st.rerun()
+        elif "พักงาน" in selected_status:
+            if st.button("▶️ Resume งาน", type="primary", use_container_width=True, key=f"operator_resume_{selected_task_id}"):
+                operator_hold_start = parse_flexible_datetime(selected_task.get("hold_started_at"))
+                operator_pause_total = safe_float(selected_task.get("paused_seconds"), 0.0)
+                if operator_hold_start is not None:
+                    operator_pause_total += max(0.0, (operator_now - operator_hold_start).total_seconds())
+                if update_department_work_order(selected_task_id, {"status": "🟦 กำลังทำ", "hold_started_at": None, "paused_seconds": operator_pause_total}):
+                    st.rerun()
+
+    with st.expander(f"✅ ประวัติงานของ {selected_operator} ({len(finished_tasks)} รายการ)", expanded=False):
+        if finished_tasks.empty:
+            st.info("ยังไม่มีงานที่เสร็จแล้ว")
+        else:
+            finished_display = finished_tasks[[col for col in ["id", "department", "work_type", "title", "plan_code", "drawing_name", "actual_start", "actual_finish"] if col in finished_tasks.columns]].copy()
+            for date_col in ["actual_start", "actual_finish"]:
+                if date_col in finished_display.columns:
+                    finished_display[date_col] = finished_display[date_col].apply(
+                        lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) and hasattr(value, "strftime") else "-"
+                    )
+            st.dataframe(finished_display, hide_index=True, use_container_width=True)
+
 nav_options = [
     "👷 โหมดหน้าเครื่อง", 
     "🧪 งานตรวจสอบ QC",
     "🤖 ใบสั่งงาน Automation",
+    "👤 โหมดผู้ปฏิบัติงาน",
     "📊 แดชบอร์ดภาพรวมโรงงาน", 
     "📈 ติดตามสถานการณ์ฝ่ายผลิต", 
     "📑 รายงานสรุปประจำเดือน", 
@@ -3589,6 +3777,9 @@ if st.session_state.current_view == "🧪 งานตรวจสอบ QC":
 
 elif st.session_state.current_view == "🤖 ใบสั่งงาน Automation":
     render_people_work_center("AUTOMATION")
+
+elif st.session_state.current_view == "👤 โหมดผู้ปฏิบัติงาน":
+    render_department_operator_mode()
 
 elif st.session_state.current_view == "👷 โหมดหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
