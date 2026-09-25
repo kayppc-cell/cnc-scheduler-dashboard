@@ -3439,10 +3439,14 @@ def render_qc_time_cost_table(qc_tasks, now):
             st.info("ยังไม่มีใบงาน QC สำหรับคำนวณเวลาและต้นทุน")
             return
 
-        filtered_tasks = qc_tasks.copy()
+        finished_status = qc_tasks.get("status", pd.Series(index=qc_tasks.index, dtype=str)).fillna("").astype(str)
+        filtered_tasks = qc_tasks[finished_status.str.contains("เสร็จ", na=False)].copy()
+        if filtered_tasks.empty:
+            st.info("ยังไม่มีใบงาน QC ที่เสร็จแล้วสำหรับคำนวณเวลาและต้นทุน")
+            return
         quick_filter = st.radio(
             "⚡ ค้นหาเร็ว",
-            ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "รอรับงาน", "กำลังทำ", "พักงาน", "เสร็จแล้ว"],
+            ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้"],
             horizontal=True,
             key="qc_cost_quick_filter"
         )
@@ -3462,7 +3466,6 @@ def render_qc_time_cost_table(qc_tasks, now):
         with qf3:
             cost_search = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, ประเภทงาน, บริษัทลูกค้า", key="qc_cost_search")
 
-        status_for_filter = filtered_tasks.get("status", pd.Series(index=filtered_tasks.index, dtype=str)).fillna("").astype(str)
         reference_dates = filtered_tasks.apply(
             lambda row: (
                 parse_flexible_datetime(row.get("actual_finish"))
@@ -3478,8 +3481,6 @@ def render_qc_time_cost_table(qc_tasks, now):
             filtered_tasks = filtered_tasks[reference_dates.apply(lambda value: value is not None and seven_days_ago <= value <= now)]
         elif quick_filter == "เดือนนี้":
             filtered_tasks = filtered_tasks[reference_dates.apply(lambda value: value is not None and value.year == now.year and value.month == now.month)]
-        elif quick_filter != "ทั้งหมด":
-            filtered_tasks = filtered_tasks[status_for_filter.str.contains(quick_filter, na=False)]
 
         if selected_cost_plan != "ทุกแผนงาน":
             filtered_tasks = filtered_tasks[
@@ -3535,6 +3536,7 @@ def render_qc_time_cost_table(qc_tasks, now):
                 "Drawing": safe_str(task_row.get("drawing_name"), "-"),
                 "ประเภทงาน": safe_str(task_row.get("work_type"), "-"),
                 "ผู้รับผิดชอบ": assignee_name,
+                "เสร็จจริง": actual_finish.strftime("%d/%m/%Y %H:%M") if actual_finish is not None else "-",
                 "เวลาประมาณรวม (ช.ม)": round(planned_hours, 2),
                 "เวลาจริงสุทธิ (ช.ม)": round(actual_hours, 2),
                 "เรท (บาท/ช.ม)": hourly_rate,
@@ -3545,10 +3547,22 @@ def render_qc_time_cost_table(qc_tasks, now):
         cost_df = pd.DataFrame(cost_rows)
         total_planned_cost = pd.to_numeric(cost_df["ต้นทุนตามแผน (บาท)"], errors="coerce").sum()
         total_actual_cost = pd.to_numeric(cost_df["ต้นทุนจริง (บาท)"], errors="coerce").sum()
-        c1, c2, c3 = st.columns(3)
-        c1.metric("จำนวนใบงาน QC", f"{len(cost_df):,}")
-        c2.metric("ต้นทุนตามแผนรวม", f"{total_planned_cost:,.2f} บาท")
-        c3.metric("ต้นทุนจริงสะสม", f"{total_actual_cost:,.2f} บาท")
+        total_actual_hours = pd.to_numeric(cost_df["เวลาจริงสุทธิ (ช.ม)"], errors="coerce").sum()
+        cost_difference = total_actual_cost - total_planned_cost
+        cost_difference_pct = (
+            (cost_difference / total_planned_cost) * 100.0
+            if total_planned_cost > 0 else 0.0
+        )
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("💰 ต้นทุนจริงสุทธิที่เลือก", f"{total_actual_cost:,.2f} บาท")
+        c2.metric("📋 ต้นทุนตามแผนที่เลือก", f"{total_planned_cost:,.2f} บาท")
+        c3.metric(
+            "📊 ผลต่างต้นทุน",
+            f"{cost_difference:,.2f} บาท",
+            delta=f"{cost_difference_pct:+.2f}%",
+            delta_color="inverse"
+        )
+        c4.metric("⏱️ เวลาเดินจริงสุทธิที่เลือก", f"{total_actual_hours:,.2f} ชม.")
         if missing_rate_names:
             st.warning("ยังไม่กำหนดเรตราคา: " + ", ".join(sorted(missing_rate_names)))
 
@@ -3563,6 +3577,7 @@ def render_qc_time_cost_table(qc_tasks, now):
                 "Drawing": st.column_config.TextColumn("Drawing", width="medium"),
                 "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width="large"),
                 "ผู้รับผิดชอบ": st.column_config.TextColumn("ผู้รับผิดชอบ", width="medium"),
+                "เสร็จจริง": st.column_config.TextColumn("เสร็จจริง", width="medium"),
                 "เวลาประมาณรวม (ช.ม)": st.column_config.NumberColumn("เวลาประมาณรวม (ช.ม)", format="%.2f"),
                 "เวลาจริงสุทธิ (ช.ม)": st.column_config.NumberColumn("เวลาจริงสุทธิ (ช.ม)", format="%.2f"),
                 "เรท (บาท/ช.ม)": st.column_config.NumberColumn("เรท (บาท/ช.ม)", format="%.2f"),
@@ -3570,6 +3585,48 @@ def render_qc_time_cost_table(qc_tasks, now):
                 "ต้นทุนจริง (บาท)": st.column_config.NumberColumn("ต้นทุนจริง (บาท)", format="%.2f"),
             }
         )
+
+        pdf_rows = "".join(
+            "<tr>"
+            f"<td>{html.escape(safe_str(row.get('แผนงาน'), '-'))}</td>"
+            f"<td>{html.escape(safe_str(row.get('Drawing'), '-'))}</td>"
+            f"<td>{html.escape(safe_str(row.get('ประเภทงาน'), '-'))}</td>"
+            f"<td>{html.escape(safe_str(row.get('ผู้รับผิดชอบ'), '-'))}</td>"
+            f"<td>{html.escape(safe_str(row.get('เสร็จจริง'), '-'))}</td>"
+            f"<td class='num'>{safe_float(row.get('เวลาประมาณรวม (ช.ม)'), 0.0):,.2f}</td>"
+            f"<td class='num'>{safe_float(row.get('เวลาจริงสุทธิ (ช.ม)'), 0.0):,.2f}</td>"
+            f"<td class='num'>{safe_float(row.get('เรท (บาท/ช.ม)'), 0.0):,.2f}</td>"
+            f"<td class='num'>{safe_float(row.get('ต้นทุนตามแผน (บาท)'), 0.0):,.2f}</td>"
+            f"<td class='num'>{safe_float(row.get('ต้นทุนจริง (บาท)'), 0.0):,.2f}</td>"
+            "</tr>"
+            for _, row in cost_df.iterrows()
+        )
+        pdf_payload = json.dumps({
+            "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
+            "quick_filter": quick_filter,
+            "plan_filter": selected_cost_plan,
+            "assignee_filter": selected_cost_assignee,
+            "search": cost_search.strip() or "-",
+            "count": len(cost_df),
+            "planned_total": f"{total_planned_cost:,.2f}",
+            "actual_total": f"{total_actual_cost:,.2f}",
+            "difference": f"{cost_difference:,.2f}",
+            "difference_pct": f"{cost_difference_pct:+.2f}%",
+            "actual_hours": f"{total_actual_hours:,.2f}",
+            "rows": pdf_rows
+        }, ensure_ascii=False).replace("<", "\\u003c")
+        components.html(f"""
+        <button onclick="printQcCost()" style="display:block;width:260px;max-width:100%;margin:8px auto;background:#DC2626;color:#fff;border:0;padding:10px 16px;border-radius:8px;font-weight:700;cursor:pointer;box-shadow:0 3px 8px rgba(185,28,28,.24);">🖨️ พิมพ์ / บันทึก PDF</button>
+        <script>
+        function printQcCost(){{
+          const d={pdf_payload};
+          const w=window.open('','_blank');
+          if(!w){{alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน');return;}}
+          w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>TPC QC Time and Cost</title><style>@page{{size:A4 landscape;margin:9mm}}body{{font-family:Tahoma,Arial,sans-serif;color:#172033;font-size:10px}}h1{{font-size:20px;margin:0}}.head{{display:flex;justify-content:space-between;border-bottom:3px solid #1E3E62;padding-bottom:8px}}.sub{{color:#475569;line-height:1.6}}.kpi{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}}.kpi div{{border:1px solid #CBD5E1;border-radius:6px;padding:8px;text-align:center}}.kpi b{{display:block;font-size:15px;margin-top:4px}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #CBD5E1;padding:5px;vertical-align:top}}th{{background:#1E3E62;color:white}}.num{{text-align:right;white-space:nowrap}}</style></head><body><div class="head"><div><h1>ตารางคำนวณเวลาและต้นทุน QC</h1><div class="sub">เฉพาะใบงานที่เสร็จแล้ว<br>ช่วง: ${{d.quick_filter}} | แผน: ${{d.plan_filter}} | ผู้รับผิดชอบ: ${{d.assignee_filter}} | ค้นหา: ${{d.search}}</div></div><div>วันที่ออกรายงาน<br><b>${{d.print_date}}</b></div></div><div class="kpi"><div>ต้นทุนจริงสุทธิ<b>${{d.actual_total}} บาท</b></div><div>ต้นทุนตามแผน<b>${{d.planned_total}} บาท</b></div><div>ผลต่างต้นทุน<b>${{d.difference}} บาท (${{d.difference_pct}})</b></div><div>เวลาเดินจริงสุทธิ<b>${{d.actual_hours}} ชม.</b></div></div><table><thead><tr><th>แผนงาน</th><th>Drawing</th><th>ประเภทงาน</th><th>ผู้รับผิดชอบ</th><th>เสร็จจริง</th><th>เวลาแผน</th><th>เวลาจริง</th><th>เรท/ชม.</th><th>ต้นทุนแผน</th><th>ต้นทุนจริง</th></tr></thead><tbody>${{d.rows}}</tbody></table></body></html>`);
+          w.document.close();w.focus();setTimeout(()=>w.print(),600);
+        }}
+        </script>
+        """, height=52)
 
 def render_people_work_center(department):
     is_qc = department == "QC"
