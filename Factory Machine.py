@@ -3398,7 +3398,16 @@ def render_people_work_center(department):
                 requester = st.text_input("ผู้สั่งงาน/ผู้ส่งตรวจ")
             with c3:
                 priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES)
-                relationship = st.selectbox("ความสัมพันธ์กับ Production", ["งานทั่วไป", "ทำต่อจาก Production", "ทำคู่ขนานกับ Production"])
+                relationship = st.selectbox(
+                    "ลักษณะงานที่ Check",
+                    [
+                        "งานทั่วไป",
+                        "ตรวจเช็ค โครงสร้าง Base Fram",
+                        "ตรวจเช็ค Part ชิ้น",
+                        "ทำต่อจาก Production",
+                        "ทำคู่ขนานกับ Production"
+                    ]
+                )
             t1, t2, t3, t4 = st.columns(4)
             with t1:
                 planned_start_date = st.date_input(
@@ -3789,7 +3798,13 @@ def render_people_work_center(department):
     edit_assignees = DEPARTMENT_ASSIGNEES if current_assignee in DEPARTMENT_ASSIGNEES else DEPARTMENT_ASSIGNEES + [current_assignee]
     current_priority = safe_str(task.get("priority"), DEPT_PRIORITIES[0])
     edit_priorities = DEPT_PRIORITIES if current_priority in DEPT_PRIORITIES else [current_priority] + DEPT_PRIORITIES
-    relationship_options = ["งานทั่วไป", "ทำต่อจาก Production", "ทำคู่ขนานกับ Production"]
+    relationship_options = [
+        "งานทั่วไป",
+        "ตรวจเช็ค โครงสร้าง Base Fram",
+        "ตรวจเช็ค Part ชิ้น",
+        "ทำต่อจาก Production",
+        "ทำคู่ขนานกับ Production"
+    ]
     current_relationship = safe_str(task.get("relationship_type"), relationship_options[0])
     if current_relationship not in relationship_options:
         relationship_options = [current_relationship] + relationship_options
@@ -3808,7 +3823,7 @@ def render_people_work_center(department):
                 edit_requester = st.text_input("ผู้สั่งงาน/ผู้ส่งตรวจ", value=safe_str(task.get("requester"), ""))
             with ec3:
                 edit_priority = st.selectbox("ความเร่งด่วน", edit_priorities, index=edit_priorities.index(current_priority))
-                edit_relationship = st.selectbox("ความสัมพันธ์กับ Production", relationship_options, index=relationship_options.index(current_relationship))
+                edit_relationship = st.selectbox("ลักษณะงานที่ Check", relationship_options, index=relationship_options.index(current_relationship))
             et1, et2, et3, et4 = st.columns(4)
             with et1:
                 edit_start_date = st.date_input("วันที่กำหนดเริ่มงาน", value=edit_start_dt.date(), format="DD/MM/YYYY")
