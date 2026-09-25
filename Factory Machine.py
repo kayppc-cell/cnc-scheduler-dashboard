@@ -812,7 +812,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ลิงก์จอทีวีฝ่ายผลิต: ?view=tv | ลิงก์จอทีวี QC & Automation: ?view=tv-qc
-# ทั้งสองโหมดซ่อนหัวเว็บ/เมนูเลือกโหมดและเป็นหน้าดูอย่างเดียว
+# ลิงก์ผู้ปฏิบัติงาน: ?view=operator
+# โหมดลิงก์เฉพาะหน้าจะซ่อนหัวเว็บและเมนูเลือกโหมด
 try:
     tv_link_view = safe_str(st.query_params.get("view", ""), "").strip().lower()
 except Exception:
@@ -821,9 +822,11 @@ tv_production_only_mode = tv_link_view in {"tv", "tv-live", "tvlive", "tv-produc
 tv_department_only_mode = tv_link_view in {"tv-qc", "tv-qc-auto", "tv-department", "tv-automation"}
 tv_department_menu_refresh_mode = tv_link_view == "tv-qc-menu"
 tv_only_mode = tv_production_only_mode or tv_department_only_mode
+operator_only_mode = tv_link_view in {"operator", "operator-mode", "worker", "work-operator"}
+standalone_only_mode = tv_only_mode or operator_only_mode
 
 header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>Timing Process Control (TPC)</h1><p>จ.-ศ. (08:30-20:00 น.) | ส. (08:30-17:00 น.) | เบรกเช้า 10:00-10:10 น. | พักเที่ยง 12:00-13:00 น. | เบรกบ่าย 15:00-15:10 น. | หยุดวันอาทิตย์</p></div></div>'''
-if not tv_only_mode:
+if not standalone_only_mode:
     st.markdown(header_content, unsafe_allow_html=True)
 
 # =========================================================
@@ -3382,7 +3385,7 @@ def render_department_finished_history(finished_tasks, department, now):
                 "actual_start": st.column_config.TextColumn("เริ่มจริง", width=108),
                 "actual_finish": st.column_config.TextColumn("เสร็จจริง", width=108),
                 "actual_work_hours": st.column_config.NumberColumn("เวลาจริง (ชม.)", width=92, format="%.2f"),
-                "estimated_hours": st.column_config.NumberColumn("เวลาประมาณ", width=86, format="%.2f"),
+                "estimated_hours": st.column_config.NumberColumn("เวลาประมาณรวม (ช.ม)", width=110, format="%.2f"),
                 "result_note": st.column_config.TextColumn("หมายเหตุ", width=120)
             }
         )
@@ -3442,7 +3445,7 @@ def render_people_work_center(department):
         for widget_key in create_widget_keys:
             st.session_state.pop(widget_key, None)
 
-    with st.expander(f"➕ สร้าง{'ใบตรวจ QC' if is_qc else 'ใบสั่งงาน Automation'}ใหม่", expanded=False):
+    with st.expander("➕ สร้างใบงาน", expanded=False):
         # ใช้ widget ปกติแทน st.form เพื่อคำนวณชั่วโมงใหม่ทันทีเมื่อเปลี่ยนวัน/เวลา
         with st.container():
             c1, c2, c3 = st.columns(3)
@@ -3493,7 +3496,7 @@ def render_people_work_center(department):
                 get_work_capacity_between(planned_start_preview, due_at_preview), 2
             ) if due_at_preview > planned_start_preview else 0.0
             st.number_input(
-                "ระยะเวลาทำงานโดยประมาณ (ชั่วโมง) — คำนวณอัตโนมัติ",
+                "เวลาประมาณรวม (ช.ม) — คำนวณอัตโนมัติ",
                 min_value=0.0,
                 value=float(estimated_hours),
                 step=0.01,
@@ -3765,7 +3768,7 @@ def render_people_work_center(department):
                 "actual_start": st.column_config.TextColumn("เริ่มจริง", width=108),
                 "actual_finish": st.column_config.TextColumn("เสร็จจริง", width=108),
                 "actual_work_hours": st.column_config.NumberColumn("เวลาจริง (ชม.)", width=92, format="%.2f"),
-                "estimated_hours": st.column_config.NumberColumn("เวลาประมาณ", width=86, format="%.2f"),
+                "estimated_hours": st.column_config.NumberColumn("เวลาประมาณรวม (ช.ม)", width=110, format="%.2f"),
                 "result_note": st.column_config.TextColumn("หมายเหตุ", width=120)
             }
         )
@@ -3882,7 +3885,7 @@ def render_people_work_center(department):
         key=f"{department}_queue_delete_editor",
         column_config={
             "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width="small", help="ติ๊กได้เฉพาะคิวที่ยังรอรับงาน"),
-            "id": st.column_config.NumberColumn("เลขที่ใบงาน", width="small", format="%d"),
+            "id": None,
             "priority": st.column_config.TextColumn("ความเร่งด่วน", width="small"),
             "status": st.column_config.TextColumn("สถานะ", width="medium"),
             "work_type": st.column_config.TextColumn("ประเภทงาน", width="large"),
@@ -3892,7 +3895,7 @@ def render_people_work_center(department):
             "assignee": st.column_config.TextColumn("ผู้รับผิดชอบ/ทีม", width="medium"),
             "planned_start_at": st.column_config.TextColumn("กำหนดเริ่ม (วัน/เดือน/ปี)", width="medium"),
             "due_at": st.column_config.TextColumn("กำหนดเสร็จ (วัน/เดือน/ปี)", width="medium"),
-            "estimated_hours": st.column_config.NumberColumn("ระยะเวลาทำงานโดยประมาณ (ชม.)", width="medium", format="%.2f"),
+            "estimated_hours": st.column_config.NumberColumn("เวลาประมาณรวม (ช.ม)", width="medium", format="%.2f"),
         }
     )
 
@@ -3918,8 +3921,7 @@ def render_people_work_center(department):
 
     if protected_queue_ids:
         st.warning(
-            "🔒 รายการที่เริ่มทำหรือพักงานแล้วไม่สามารถลบได้ กรุณายกเลิกเครื่องหมายหน้าเลขที่ใบงาน: "
-            + ", ".join(str(task_id) for task_id in protected_queue_ids)
+            f"🔒 มีรายการที่เลือก {len(protected_queue_ids)} รายการซึ่งเริ่มทำหรือพักงานแล้ว จึงไม่สามารถลบได้ กรุณายกเลิกเครื่องหมายเลือกรายการดังกล่าว"
         )
     confirm_queue_delete = st.checkbox(
         f"ยืนยันลบคิวที่เลือก {len(deletable_queue_ids)} รายการ",
@@ -4053,6 +4055,8 @@ def render_department_operator_mode():
     """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
     st.subheader("👤 โหมดผู้ปฏิบัติงาน")
     st.caption("หน้าปฏิบัติการสำหรับ Start / พัก / Resume / Finish — ทำงานตามลำดับคิว")
+    if not operator_only_mode:
+        st.markdown("[🔗 เปิดลิงก์เฉพาะโหมดผู้ปฏิบัติงาน](?view=operator)")
 
     qc_tasks = fetch_department_work_orders("QC")
     automation_tasks = fetch_department_work_orders("AUTOMATION")
@@ -4199,12 +4203,15 @@ nav_options = [
     "🛒 จัดซื้อและต้นทุนแผนงาน"
 ]
 
-if tv_only_mode:
-    # URL เฉพาะทีวีต้องอยู่หน้าจอที่กำหนดเสมอ แม้ session เดิมเคยเปิดหน้าอื่น
-    st.session_state.current_view = (
-        "📺 จอทีวีแสดงงานแผนก QC&Automatin"
-        if tv_department_only_mode else "📺 จอทีวีแสดงงานแผนกผลิต"
-    )
+if standalone_only_mode:
+    # URL เฉพาะหน้าต้องอยู่หน้าจอที่กำหนดเสมอ แม้ session เดิมเคยเปิดหน้าอื่น
+    if operator_only_mode:
+        st.session_state.current_view = "👤 โหมดผู้ปฏิบัติงาน"
+    else:
+        st.session_state.current_view = (
+            "📺 จอทีวีแสดงงานแผนก QC&Automatin"
+            if tv_department_only_mode else "📺 จอทีวีแสดงงานแผนกผลิต"
+        )
 else:
     cur_idx = nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0
     selected_tab = st.radio("เลือกมุมมอง:", nav_options, index=cur_idx, horizontal=True, label_visibility="collapsed")
