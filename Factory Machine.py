@@ -3439,9 +3439,71 @@ def render_qc_time_cost_table(qc_tasks, now):
             st.info("ยังไม่มีใบงาน QC สำหรับคำนวณเวลาและต้นทุน")
             return
 
+        filtered_tasks = qc_tasks.copy()
+        quick_filter = st.radio(
+            "⚡ ค้นหาเร็ว",
+            ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "รอรับงาน", "กำลังทำ", "พักงาน", "เสร็จแล้ว"],
+            horizontal=True,
+            key="qc_cost_quick_filter"
+        )
+        filter_plan_options = sorted(
+            value for value in filtered_tasks.get("plan_code", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
+            if value
+        )
+        filter_assignee_options = sorted(
+            value for value in filtered_tasks.get("assignee", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
+            if value
+        )
+        qf1, qf2, qf3 = st.columns([1.4, 1.8, 3.0])
+        with qf1:
+            selected_cost_plan = st.selectbox("📌 เลขแผน", ["ทุกแผนงาน"] + filter_plan_options, key="qc_cost_plan_filter")
+        with qf2:
+            selected_cost_assignee = st.selectbox("👤 ผู้รับผิดชอบ", ["ทุกคน"] + filter_assignee_options, key="qc_cost_assignee_filter")
+        with qf3:
+            cost_search = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, ประเภทงาน, บริษัทลูกค้า", key="qc_cost_search")
+
+        status_for_filter = filtered_tasks.get("status", pd.Series(index=filtered_tasks.index, dtype=str)).fillna("").astype(str)
+        reference_dates = filtered_tasks.apply(
+            lambda row: (
+                parse_flexible_datetime(row.get("actual_finish"))
+                or parse_flexible_datetime(row.get("actual_start"))
+                or parse_flexible_datetime(row.get("planned_start_at"))
+            ),
+            axis=1
+        )
+        if quick_filter == "วันนี้":
+            filtered_tasks = filtered_tasks[reference_dates.apply(lambda value: value is not None and value.date() == now.date())]
+        elif quick_filter == "7 วันล่าสุด":
+            seven_days_ago = now - timedelta(days=7)
+            filtered_tasks = filtered_tasks[reference_dates.apply(lambda value: value is not None and seven_days_ago <= value <= now)]
+        elif quick_filter == "เดือนนี้":
+            filtered_tasks = filtered_tasks[reference_dates.apply(lambda value: value is not None and value.year == now.year and value.month == now.month)]
+        elif quick_filter != "ทั้งหมด":
+            filtered_tasks = filtered_tasks[status_for_filter.str.contains(quick_filter, na=False)]
+
+        if selected_cost_plan != "ทุกแผนงาน":
+            filtered_tasks = filtered_tasks[
+                filtered_tasks.get("plan_code", pd.Series(index=filtered_tasks.index, dtype=str)).fillna("").astype(str).str.strip() == selected_cost_plan
+            ]
+        if selected_cost_assignee != "ทุกคน":
+            filtered_tasks = filtered_tasks[
+                filtered_tasks.get("assignee", pd.Series(index=filtered_tasks.index, dtype=str)).fillna("").astype(str).str.strip() == selected_cost_assignee
+            ]
+        if cost_search.strip():
+            search_value = cost_search.strip().lower()
+            search_mask = pd.Series(False, index=filtered_tasks.index)
+            for search_column in ["plan_code", "drawing_name", "work_type", "title", "assignee", "status"]:
+                if search_column in filtered_tasks.columns:
+                    search_mask |= filtered_tasks[search_column].fillna("").astype(str).str.lower().str.contains(search_value, regex=False)
+            filtered_tasks = filtered_tasks[search_mask]
+
+        if filtered_tasks.empty:
+            st.info("ไม่พบข้อมูลเวลาและต้นทุน QC ตามตัวกรอง")
+            return
+
         cost_rows = []
         missing_rate_names = set()
-        for _, task_row in qc_tasks.iterrows():
+        for _, task_row in filtered_tasks.iterrows():
             assignee_name = safe_str(task_row.get("assignee"), "ไม่ระบุ")
             hourly_rate = get_qc_hourly_rate(assignee_name)
             if hourly_rate is None:
@@ -3773,9 +3835,6 @@ def render_people_work_center(department):
     active_tasks = tasks[~finished_mask].copy()
     finished_tasks = tasks[finished_mask].copy()
 
-    if is_qc:
-        render_qc_time_cost_table(tasks, now)
-
     if False:  # ตารางชุดเก่าเลิกใช้แล้ว; ตารางใหม่จะแสดงใต้ตารางคิวงานปัจจุบัน
         history_quick = st.radio(
             "⚡ ตัวกรองเร็วประวัติงาน",
@@ -4039,6 +4098,8 @@ def render_people_work_center(department):
     if not option_ids:
         st.info("ไม่พบใบงานตามตัวกรอง")
         render_department_finished_history(finished_tasks, department, now)
+        if is_qc:
+            render_qc_time_cost_table(tasks, now)
         return
     task_lookup = shown.set_index("id")
     selected_id = st.selectbox(
@@ -4140,6 +4201,8 @@ def render_people_work_center(department):
                     st.error("บันทึกการแก้ไขไม่สำเร็จ")
 
     render_department_finished_history(finished_tasks, department, now)
+    if is_qc:
+        render_qc_time_cost_table(tasks, now)
 
 def render_department_operator_mode():
     """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
