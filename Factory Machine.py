@@ -8538,20 +8538,24 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           if (el) el.innerText = new Date().toLocaleTimeString('th-TH', {hour12:false}) + ' น.';
         } catch(e) {}
       }
-      function lockDeptTvView() {
-        try {
-          const url = new URL(window.parent.location.href);
-          url.searchParams.set('view', 'tv-qc');
-          window.parent.history.replaceState({}, '', url.toString());
-        } catch(e) {}
-      }
-      // ล็อก URL ก่อน Auto Refresh เพื่อไม่ให้ session ใหม่กลับไปโหมดหน้าเครื่อง
-      lockDeptTvView();
       setInterval(updateDeptTvClock, 1000); updateDeptTvClock();
       setTimeout(function(){
         try {
-          lockDeptTvView();
-          window.parent.location.reload();
+          // ถ้าเปิดจากเมนูปกติ ให้กดแท็บเดิมซ้ำเพื่อ refresh ภายใน session
+          // จึงไม่เปลี่ยนเป็นโหมดทีวีเต็มหน้าจอและไม่กลับไปโหมดหน้าเครื่อง
+          const radioBtns = Array.from(window.parent.document.querySelectorAll('input[type="radio"]'));
+          const qcTvRadio = radioBtns.find(btn =>
+            btn.checked && String(btn.value || '').includes('QC&Automatin')
+          );
+          if (qcTvRadio) {
+            qcTvRadio.click();
+          } else {
+            // ลิงก์ทีวีเฉพาะ ?view=tv-qc ไม่มีเมนู จึง reload ได้โดยคง query เดิม
+            const viewParam = new URLSearchParams(window.parent.location.search).get('view');
+            if (viewParam === 'tv-qc' || viewParam === 'tv-qc-auto' || viewParam === 'tv-department' || viewParam === 'tv-automation') {
+              window.parent.location.reload();
+            }
+          }
         } catch(e) {}
       }, 30000);
     </script>
