@@ -819,6 +819,7 @@ except Exception:
     tv_link_view = ""
 tv_production_only_mode = tv_link_view in {"tv", "tv-live", "tvlive", "tv-production"}
 tv_department_only_mode = tv_link_view in {"tv-qc", "tv-qc-auto", "tv-department", "tv-automation"}
+tv_department_menu_refresh_mode = tv_link_view == "tv-qc-menu"
 tv_only_mode = tv_production_only_mode or tv_department_only_mode
 
 header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>Timing Process Control (TPC)</h1><p>จ.-ศ. (08:30-20:00 น.) | ส. (08:30-17:00 น.) | เบรกเช้า 10:00-10:10 น. | พักเที่ยง 12:00-13:00 น. | เบรกบ่าย 15:00-15:10 น. | หยุดวันอาทิตย์</p></div></div>'''
@@ -833,7 +834,11 @@ VIEWER_PASSWORD = "pes1234"
 
 default_states = {
     "user_role": None,
-    "current_view": "👷 โหมดหน้าเครื่อง",
+    # tv-qc-menu ใช้สำหรับ Auto Refresh จากเมนูปกติ โดยยังคงแถบเมนูไว้
+    "current_view": (
+        "📺 จอทีวีแสดงงานแผนก QC&Automatin"
+        if tv_department_menu_refresh_mode else "👷 โหมดหน้าเครื่อง"
+    ),
     "active_select_all": False,
     "finish_select_all": False,
     "scroll_to_bottom": False,
@@ -3177,6 +3182,34 @@ def insert_department_work_order(payload):
     except Exception as exc:
         return False, safe_str(exc)
 
+def department_work_order_duplicate_exists(tasks, payload):
+    """กันการกดสร้างซ้ำ โดยเทียบข้อมูลระบุตัวงานหลักของคิวที่ยังไม่เสร็จ"""
+    if not isinstance(tasks, pd.DataFrame) or tasks.empty:
+        return False
+    compare_cols = [
+        "department", "work_type", "title", "plan_code", "drawing_name", "assignee",
+        "planned_start_at", "due_at"
+    ]
+    candidate = tasks.copy()
+    status_series = candidate.get("status", pd.Series(index=candidate.index, dtype=str)).fillna("").astype(str)
+    candidate = candidate[~status_series.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)]
+    if candidate.empty:
+        return False
+    duplicate_mask = pd.Series(True, index=candidate.index)
+    for col_name in compare_cols:
+        incoming = payload.get(col_name)
+        if col_name in ["planned_start_at", "due_at"]:
+            incoming_dt = parse_flexible_datetime(incoming)
+            existing = candidate.get(col_name, pd.Series(index=candidate.index, dtype=object)).apply(parse_flexible_datetime)
+            duplicate_mask &= existing.apply(
+                lambda value: value is not None and incoming_dt is not None and value == incoming_dt
+            )
+        else:
+            incoming_key = normalize_filter_key(incoming)
+            existing = candidate.get(col_name, pd.Series(index=candidate.index, dtype=object)).apply(normalize_filter_key)
+            duplicate_mask &= existing == incoming_key
+    return bool(duplicate_mask.any())
+
 def update_department_work_order(task_id, payload):
     try:
         endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders?id=eq.{safe_int(task_id)}"
@@ -3207,6 +3240,26 @@ def delete_department_work_orders(task_ids):
             fetch_department_work_orders.clear()
             return True, ""
         return False, safe_str(res.text, "ลบรายการไม่สำเร็จ")
+    except Exception as exc:
+        return False, safe_str(exc)
+
+def delete_waiting_department_work_order(task_id):
+    """ลบได้เฉพาะใบงานที่ยังรอรับงาน เพื่อป้องกันการลบเวลาจริงที่เริ่มบันทึกแล้ว"""
+    clean_id = safe_int(task_id, 0)
+    if clean_id <= 0:
+        return False, "ไม่พบเลขที่ใบงาน"
+    try:
+        endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
+        res = requests.delete(
+            endpoint,
+            headers=get_supabase_headers(),
+            params={"id": f"eq.{clean_id}", "status": "eq.🟧 รอรับงาน"},
+            timeout=8
+        )
+        if res.status_code in [200, 204]:
+            fetch_department_work_orders.clear()
+            return True, ""
+        return False, safe_str(res.text, "ลบคิวไม่สำเร็จ")
     except Exception as exc:
         return False, safe_str(exc)
 
@@ -3295,7 +3348,7 @@ def render_people_work_center(department):
             else:
                 planned_start_at_text = planned_start_at.strftime("%Y-%m-%d %H:%M:%S")
                 due_at = due_at_dt.strftime("%Y-%m-%d %H:%M:%S")
-                ok, message = insert_department_work_order({
+                create_payload = {
                     "department": department, "work_type": work_type, "title": task_title.strip(),
                     "plan_code": plan_code.strip() or None, "drawing_name": drawing_name.strip() or None,
                     "requester": requester.strip() or None, "assignee": assignee.strip(),
@@ -3303,12 +3356,16 @@ def render_people_work_center(department):
                     "planned_start_at": planned_start_at_text, "due_at": due_at,
                     "estimated_hours": estimated_hours, "details": details.strip(),
                     "checklist": checklist.strip() or None, "status": "🟧 รอรับงาน"
-                })
-                if ok:
-                    st.success("สร้างใบงานเรียบร้อย")
-                    st.rerun()
+                }
+                if department_work_order_duplicate_exists(tasks, create_payload):
+                    st.warning("⚠️ ไม่ได้สร้างใบงาน เนื่องจากพบคิวงานเดิมที่มีข้อมูลตรงกันอยู่แล้ว กรุณาตรวจสอบตารางคิวงานปัจจุบัน")
                 else:
-                    st.error(f"สร้างใบงานไม่สำเร็จ: {message}")
+                    ok, message = insert_department_work_order(create_payload)
+                    if ok:
+                        st.success("สร้างใบงานเรียบร้อย")
+                        st.rerun()
+                    else:
+                        st.error(f"สร้างใบงานไม่สำเร็จ: {message}")
 
     if tasks.empty:
         st.info("ยังไม่มีใบงานในแผนกนี้")
@@ -3541,6 +3598,103 @@ def render_people_work_center(department):
         f"รายละเอียด: {safe_str(task.get('details'), '-')}"
     )
 
+    edit_start_dt = parse_flexible_datetime(task.get("planned_start_at")) or now
+    edit_due_dt = parse_flexible_datetime(task.get("due_at")) or (edit_start_dt + timedelta(hours=1))
+    current_work_type = safe_str(task.get("work_type"), work_types[0])
+    edit_work_types = work_types if current_work_type in work_types else [current_work_type] + work_types
+    current_assignee = safe_str(task.get("assignee"), DEPARTMENT_ASSIGNEES[0])
+    edit_assignees = DEPARTMENT_ASSIGNEES if current_assignee in DEPARTMENT_ASSIGNEES else DEPARTMENT_ASSIGNEES + [current_assignee]
+    current_priority = safe_str(task.get("priority"), DEPT_PRIORITIES[0])
+    edit_priorities = DEPT_PRIORITIES if current_priority in DEPT_PRIORITIES else [current_priority] + DEPT_PRIORITIES
+    relationship_options = ["งานทั่วไป", "ทำต่อจาก Production", "ทำคู่ขนานกับ Production"]
+    current_relationship = safe_str(task.get("relationship_type"), relationship_options[0])
+    if current_relationship not in relationship_options:
+        relationship_options = [current_relationship] + relationship_options
+
+    with st.expander("✏️ แก้ไข / 🗑️ ลบใบงานที่เลือก", expanded=False):
+        st.caption("แก้ไขข้อมูลได้ทุกสถานะ แต่ลบได้เฉพาะงานที่ยังรอรับงานและยังไม่เริ่มจับเวลา")
+        with st.form(f"{department}_edit_task_{selected_id}"):
+            ec1, ec2, ec3 = st.columns(3)
+            with ec1:
+                edit_work_type = st.selectbox("ประเภทงาน", edit_work_types, index=edit_work_types.index(current_work_type))
+                edit_plan_code = st.text_input("แผนงาน", value=safe_str(task.get("plan_code"), ""))
+                edit_drawing = st.text_input("Drawing (ถ้ามี)", value=safe_str(task.get("drawing_name"), ""))
+            with ec2:
+                edit_title = st.text_input("ชื่อบริษัทลูกค้า *", value=safe_str(task.get("title"), ""))
+                edit_assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", edit_assignees, index=edit_assignees.index(current_assignee))
+                edit_requester = st.text_input("ผู้สั่งงาน/ผู้ส่งตรวจ", value=safe_str(task.get("requester"), ""))
+            with ec3:
+                edit_priority = st.selectbox("ความเร่งด่วน", edit_priorities, index=edit_priorities.index(current_priority))
+                edit_relationship = st.selectbox("ความสัมพันธ์กับ Production", relationship_options, index=relationship_options.index(current_relationship))
+            et1, et2, et3, et4 = st.columns(4)
+            with et1:
+                edit_start_date = st.date_input("วันที่กำหนดเริ่มงาน", value=edit_start_dt.date(), format="DD/MM/YYYY")
+            with et2:
+                edit_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=edit_start_dt.time().replace(microsecond=0))
+            with et3:
+                edit_due_date = st.date_input("วันที่กำหนดเสร็จงาน", value=edit_due_dt.date(), format="DD/MM/YYYY")
+            with et4:
+                edit_due_time = st.time_input("เวลากำหนดเสร็จงาน", value=edit_due_dt.time().replace(microsecond=0))
+            edit_details = st.text_area("รายละเอียดคำสั่งงาน / จุดที่ต้องตรวจ *", value=safe_str(task.get("details"), ""))
+            edit_checklist = "" if is_qc else st.text_area("Checklist / เกณฑ์ยอมรับ", value=safe_str(task.get("checklist"), ""))
+            edit_submit = st.form_submit_button("💾 บันทึกการแก้ไข", type="primary", use_container_width=True)
+
+        if edit_submit:
+            edit_start_at = datetime.combine(edit_start_date, edit_start_time)
+            edit_due_at = datetime.combine(edit_due_date, edit_due_time)
+            edit_estimated_hours = round(get_work_capacity_between(edit_start_at, edit_due_at), 2) if edit_due_at > edit_start_at else 0.0
+            if not edit_title.strip() or edit_assignee == "— เลือกผู้รับผิดชอบ —" or not edit_details.strip():
+                st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
+            elif edit_due_at <= edit_start_at or edit_estimated_hours <= 0:
+                st.warning("กำหนดเสร็จต้องอยู่หลังเวลาเริ่มและต้องมีเวลาทำงานตามกะ")
+            else:
+                edit_payload = {
+                    "work_type": edit_work_type,
+                    "title": edit_title.strip(),
+                    "plan_code": edit_plan_code.strip() or None,
+                    "drawing_name": edit_drawing.strip() or None,
+                    "requester": edit_requester.strip() or None,
+                    "assignee": edit_assignee,
+                    "priority": edit_priority,
+                    "relationship_type": edit_relationship,
+                    "planned_start_at": edit_start_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    "due_at": edit_due_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    "estimated_hours": edit_estimated_hours,
+                    "details": edit_details.strip(),
+                    "checklist": edit_checklist.strip() or None,
+                }
+                other_tasks = tasks[tasks.get("id", pd.Series(index=tasks.index)).apply(safe_int) != safe_int(selected_id)].copy()
+                duplicate_payload = {**edit_payload, "department": department}
+                if department_work_order_duplicate_exists(other_tasks, duplicate_payload):
+                    st.warning("⚠️ บันทึกไม่ได้ เพราะพบใบงานอื่นที่มีข้อมูลตรงกันอยู่แล้ว")
+                elif update_department_work_order(selected_id, edit_payload):
+                    st.success("บันทึกการแก้ไขเรียบร้อย")
+                    st.rerun()
+                else:
+                    st.error("บันทึกการแก้ไขไม่สำเร็จ")
+
+        can_delete_waiting = "รอรับงาน" in task_status and parse_flexible_datetime(task.get("actual_start")) is None
+        st.divider()
+        confirm_delete_waiting = st.checkbox(
+            "ยืนยันว่าต้องการลบใบงานที่เลือกถาวร",
+            disabled=not can_delete_waiting,
+            key=f"{department}_confirm_delete_waiting_{selected_id}"
+        )
+        if not can_delete_waiting:
+            st.caption("🔒 งานนี้เริ่มทำหรือบันทึกเวลาแล้ว จึงไม่อนุญาตให้ลบ สามารถแก้ไขข้อมูลหรือ Finish งานแทนได้")
+        if st.button(
+            "🗑️ ลบใบงานที่เลือก",
+            disabled=(not can_delete_waiting or not confirm_delete_waiting),
+            use_container_width=True,
+            key=f"{department}_delete_waiting_{selected_id}"
+        ):
+            delete_ok, delete_message = delete_waiting_department_work_order(selected_id)
+            if delete_ok:
+                st.success("ลบใบงานที่รอรับงานเรียบร้อย")
+                st.rerun()
+            else:
+                st.error(f"ลบใบงานไม่สำเร็จ: {delete_message}")
+
     if "รอรับงาน" in task_status:
         if st.button("▶️ Start งาน", type="primary", use_container_width=True, key=f"{department}_start_{selected_id}"):
             if update_department_work_order(selected_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
@@ -3574,9 +3728,9 @@ def render_people_work_center(department):
                 st.rerun()
 
 def render_department_operator_mode():
-    """หน้าปฏิบัติงานรวม QC/Automation แยกคิวตามชื่อผู้รับผิดชอบ"""
+    """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
     st.subheader("👤 โหมดผู้ปฏิบัติงาน")
-    st.caption("เลือกชื่อผู้ปฏิบัติงานเพื่อดูและบันทึกสถานะเฉพาะใบงานที่ได้รับมอบหมาย")
+    st.caption("หน้าปฏิบัติการสำหรับ Start / พัก / Resume / Finish — ทำงานตามลำดับคิว")
 
     qc_tasks = fetch_department_work_orders("QC")
     automation_tasks = fetch_department_work_orders("AUTOMATION")
@@ -3591,162 +3745,121 @@ def render_department_operator_mode():
     for operator_name in operator_names:
         if all_tasks.empty:
             active_counts[operator_name] = 0
-        else:
-            operator_status = all_tasks.get("status", pd.Series(index=all_tasks.index, dtype=str)).fillna("").astype(str)
-            operator_assignee = all_tasks.get("assignee", pd.Series(index=all_tasks.index, dtype=str)).fillna("").astype(str)
-            active_counts[operator_name] = int(((operator_assignee == operator_name) & ~operator_status.str.contains("เสร็จ", na=False)).sum())
+            continue
+        all_status = all_tasks.get("status", pd.Series(index=all_tasks.index, dtype=str)).fillna("").astype(str)
+        all_assignee = all_tasks.get("assignee", pd.Series(index=all_tasks.index, dtype=str)).fillna("").astype(str)
+        active_counts[operator_name] = int(
+            ((all_assignee == operator_name) & ~all_status.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)).sum()
+        )
 
     selected_operator = st.selectbox(
         "เลือกชื่อผู้ปฏิบัติงาน",
         operator_names,
-        format_func=lambda name: f"{name} — คิวปัจจุบัน {active_counts.get(name, 0)} งาน",
+        format_func=lambda name: f"{name} — มี {active_counts.get(name, 0)} คิว",
         key="department_operator_name"
     )
     if all_tasks.empty:
-        st.info("ยังไม่มีใบงาน QC หรือ Automation ในระบบ")
+        st.info("ยังไม่มีคิวงานที่ได้รับมอบหมาย")
         return
 
-    person_tasks = all_tasks[all_tasks["assignee"].fillna("").astype(str) == selected_operator].copy()
+    person_tasks = all_tasks[all_tasks.get("assignee", pd.Series(index=all_tasks.index, dtype=str)).fillna("").astype(str) == selected_operator].copy()
     for date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish", "hold_started_at", "created_at"]:
         if date_col in person_tasks.columns:
             person_tasks[date_col] = pd.to_datetime(person_tasks[date_col].apply(parse_flexible_datetime), errors="coerce")
-
     person_status = person_tasks.get("status", pd.Series(index=person_tasks.index, dtype=str)).fillna("").astype(str)
-    active_tasks = person_tasks[~person_status.str.contains("เสร็จ", na=False)].copy()
-    finished_tasks = person_tasks[person_status.str.contains("เสร็จ", na=False)].copy()
+    active_tasks = person_tasks[~person_status.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)].copy()
+    if active_tasks.empty:
+        st.success(f"✅ {selected_operator} ยังไม่มีคิวงานค้าง พร้อมรับงานใหม่")
+        return
+
     operator_now = get_bangkok_now().replace(tzinfo=None)
-
-    o1, o2, o3, o4 = st.columns(4)
-    o1.metric("คิวปัจจุบัน", len(active_tasks))
-    o2.metric("กำลังทำ", int(active_tasks.get("status", pd.Series(dtype=str)).astype(str).str.contains("กำลังทำ", na=False).sum()))
-    o3.metric("พักงาน", int(active_tasks.get("status", pd.Series(dtype=str)).astype(str).str.contains("พักงาน", na=False).sum()))
-    o4.metric("เสร็จแล้ว", len(finished_tasks))
-
-    operator_quick = st.radio(
-        "⚡ ตัวกรองเร็ว",
-        ["ทั้งหมด", "รอรับงาน", "กำลังทำ", "พักงาน", "เกินกำหนด", "เร่งด่วน"],
-        horizontal=True,
-        key="operator_quick_filter"
+    active_status = active_tasks.get("status", pd.Series(index=active_tasks.index, dtype=str)).fillna("").astype(str)
+    active_tasks["_queue_rank"] = active_status.apply(
+        lambda value: 0 if "กำลังทำ" in value else (1 if "พักงาน" in value else 2)
     )
-    operator_search = st.text_input(
-        "🔍 ค้นหาใบงานของฉัน",
-        placeholder="บริษัทลูกค้า, แผนงาน, Drawing, ประเภทงาน",
-        key="operator_task_search"
-    )
-    shown = active_tasks.copy()
-    shown_status = shown.get("status", pd.Series(index=shown.index, dtype=str)).fillna("").astype(str)
-    shown_due = shown.get("due_at", pd.Series(pd.NaT, index=shown.index))
-    if operator_quick == "รอรับงาน":
-        shown = shown[shown_status.str.contains("รอรับงาน", na=False)]
-    elif operator_quick == "กำลังทำ":
-        shown = shown[shown_status.str.contains("กำลังทำ", na=False)]
-    elif operator_quick == "พักงาน":
-        shown = shown[shown_status.str.contains("พักงาน", na=False)]
-    elif operator_quick == "เกินกำหนด":
-        shown = shown[shown_due.notna() & (shown_due < operator_now)]
-    elif operator_quick == "เร่งด่วน":
-        shown = shown[shown.get("priority", pd.Series(index=shown.index, dtype=str)).astype(str).isin(["เร่งด่วน", "วิกฤต"])]
-    if operator_search.strip():
-        operator_q = operator_search.strip().lower()
-        operator_mask = pd.Series(False, index=shown.index)
-        for operator_col in ["title", "plan_code", "drawing_name", "work_type", "details"]:
-            if operator_col in shown.columns:
-                operator_mask |= shown[operator_col].fillna("").astype(str).str.lower().str.contains(operator_q, regex=False)
-        shown = shown[operator_mask]
+    active_tasks["_queue_plan"] = active_tasks.get("planned_start_at", pd.Series(pd.NaT, index=active_tasks.index))
+    active_tasks["_queue_due"] = active_tasks.get("due_at", pd.Series(pd.NaT, index=active_tasks.index))
+    active_tasks = active_tasks.sort_values(
+        ["_queue_rank", "_queue_plan", "_queue_due", "id"],
+        ascending=[True, True, True, True],
+        na_position="last"
+    ).reset_index(drop=True)
 
-    operator_cols = ["id", "department", "priority", "status", "work_type", "title", "plan_code", "drawing_name", "planned_start_at", "due_at", "estimated_hours"]
-    operator_cols = [col for col in operator_cols if col in shown.columns]
-    operator_display = shown[operator_cols].copy()
-    if "department" in operator_display.columns:
-        operator_display["department"] = operator_display["department"].replace({"QC": "QC", "AUTOMATION": "Automation"})
-    for date_col in ["planned_start_at", "due_at"]:
-        if date_col in operator_display.columns:
-            operator_display[date_col] = operator_display[date_col].apply(
-                lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) and hasattr(value, "strftime") else "-"
-            )
-    st.dataframe(
-        operator_display,
-        hide_index=True,
-        use_container_width=True,
-        height=min(430, 80 + len(operator_display) * 36),
-        column_config={
-            "id": st.column_config.NumberColumn("เลขที่ใบงาน", width="small", format="%d"),
-            "department": st.column_config.TextColumn("แผนกงาน", width="small"),
-            "priority": st.column_config.TextColumn("ความเร่งด่วน", width="small"),
-            "status": st.column_config.TextColumn("สถานะ", width="medium"),
-            "work_type": st.column_config.TextColumn("ประเภทงาน", width="large"),
-            "title": st.column_config.TextColumn("ชื่อบริษัทลูกค้า", width="medium"),
-            "plan_code": st.column_config.TextColumn("แผนงาน", width="small"),
-            "drawing_name": st.column_config.TextColumn("Drawing (ถ้ามี)", width="medium"),
-            "planned_start_at": st.column_config.TextColumn("กำหนดเริ่ม", width="medium"),
-            "due_at": st.column_config.TextColumn("กำหนดเสร็จ", width="medium"),
-            "estimated_hours": st.column_config.NumberColumn("ระยะเวลาประมาณ (ชม.)", width="medium", format="%.2f")
-        }
-    )
-
-    if shown.empty:
-        st.info(f"ไม่พบคิวงานปัจจุบันของ {selected_operator} ตามตัวกรองที่เลือก")
+    current_task = active_tasks.iloc[0]
+    current_task_id = safe_int(current_task.get("id"), 0)
+    current_status = safe_str(current_task.get("status"), "🟧 รอรับงาน")
+    if "กำลังทำ" in current_status:
+        banner_class, banner_text = "shop-live-running", "🟢 กำลังทำงาน"
+    elif "พักงาน" in current_status:
+        banner_class, banner_text = "shop-live-hold", "🟡 พักงาน — กด Resume เพื่อทำต่อ"
     else:
-        operator_lookup = shown.set_index("id")
-        selected_task_id = st.selectbox(
-            "เลือกใบงานที่จะดำเนินการ",
-            shown["id"].tolist(),
-            format_func=lambda task_id: (
-                f"#{task_id} | {safe_str(operator_lookup.loc[task_id].get('department'), '-')} | "
-                f"{safe_str(operator_lookup.loc[task_id].get('title'), '-')} | "
-                f"{safe_str(operator_lookup.loc[task_id].get('drawing_name'), '-')}"
-            ),
-            key="operator_selected_task"
-        )
-        selected_task = operator_lookup.loc[selected_task_id]
-        selected_status = safe_str(selected_task.get("status"), "🟧 รอรับงาน")
-        st.info(
-            f"**บริษัทลูกค้า: {safe_str(selected_task.get('title'), '-')}**  \n"
-            f"แผนกงาน: {safe_str(selected_task.get('department'), '-')} | ประเภทงาน: {safe_str(selected_task.get('work_type'), '-')}  \n"
-            f"แผน: {safe_str(selected_task.get('plan_code'), '-')} | Drawing: {safe_str(selected_task.get('drawing_name'), '-')}  \n"
-            f"รายละเอียด: {safe_str(selected_task.get('details'), '-')}"
-        )
-        if "รอรับงาน" in selected_status:
-            if st.button("▶️ Start งาน", type="primary", use_container_width=True, key=f"operator_start_{selected_task_id}"):
-                if update_department_work_order(selected_task_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
+        banner_class, banner_text = "shop-live-idle", "🟠 พร้อม Start คิวแรก"
+    st.markdown(
+        f'<div class="shop-live-banner {banner_class}"><span>👤 {html.escape(selected_operator)}</span><span>{banner_text} | คงเหลือ {len(active_tasks)} คิว</span></div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown("### 📋 คิวงานของฉัน")
+    for queue_index, (_, queue_task) in enumerate(active_tasks.iterrows(), start=1):
+        task_id = safe_int(queue_task.get("id"), 0)
+        task_status = safe_str(queue_task.get("status"), "🟧 รอรับงาน")
+        task_due = parse_flexible_datetime(queue_task.get("due_at"))
+        is_overdue = task_due is not None and task_due < operator_now
+        is_current = task_id == current_task_id
+        department_label = "QC" if safe_str(queue_task.get("department")) == "QC" else "Automation"
+        planned_text = parse_flexible_datetime(queue_task.get("planned_start_at"))
+        planned_text = planned_text.strftime("%d/%m/%Y %H:%M") if planned_text else "-"
+        due_text = task_due.strftime("%d/%m/%Y %H:%M") if task_due else "-"
+        status_label = "🚨 เกินกำหนด" if is_overdue else task_status
+        border_color = "#DC2626" if is_overdue else ("#16A34A" if is_current else "#CBD5E1")
+        background = "#FFF1F2" if is_overdue else ("#ECFDF5" if is_current else "#F8FAFC")
+        lock_text = "🎯 คิวปัจจุบัน — พร้อมควบคุมงาน" if is_current else f"🔒 รอคิวก่อนหน้าเสร็จ — คิวที่ {queue_index}"
+        card_class = "step-card-overdue" if is_overdue else ""
+        st.markdown(f"""
+        <div class="step-card {card_class}" style="border:2px solid {border_color};background:{background};">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
+            <b style="font-size:18px;">คิวที่ {queue_index} | {html.escape(safe_str(queue_task.get('title'), '-'))}</b>
+            <b>{html.escape(status_label)}</b>
+          </div>
+          <div style="margin-top:8px;"><b>🏢 แผนก:</b> {department_label} | <b>🧰 ประเภทงาน:</b> {html.escape(safe_str(queue_task.get('work_type'), '-'))}</div>
+          <div><b>📌 แผน:</b> {html.escape(safe_str(queue_task.get('plan_code'), '-'))} | <b>📄 Drawing:</b> {html.escape(safe_str(queue_task.get('drawing_name'), '-'))}</div>
+          <div><b>🗓️ กำหนดเริ่ม:</b> {planned_text} | <b>🏁 กำหนดเสร็จ:</b> {due_text}</div>
+          <div style="margin-top:6px;"><b>📝 รายละเอียด:</b> {html.escape(safe_str(queue_task.get('details'), '-'))}</div>
+          <div style="margin-top:9px;font-weight:800;color:{'#047857' if is_current else '#64748B'};">{lock_text}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not is_current:
+            continue
+        if "รอรับงาน" in task_status:
+            if st.button("▶️ Start งานคิวปัจจุบัน", type="primary", use_container_width=True, key=f"operator_start_{task_id}"):
+                if update_department_work_order(task_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
                     st.rerun()
-        elif "กำลังทำ" in selected_status:
+        elif "กำลังทำ" in task_status:
             op_a1, op_a2 = st.columns(2)
             with op_a1:
-                with st.form(f"operator_pause_{selected_task_id}"):
+                with st.form(f"operator_pause_{task_id}"):
                     operator_pause_reason = st.selectbox("เหตุผลการพัก", ["รอข้อมูล", "รอชิ้นงาน", "รออุปกรณ์/อะไหล่", "งานด่วนแทรก", "รอการตัดสินใจ", "อื่น ๆ"])
                     operator_pause_note = st.text_input("หมายเหตุ")
                     operator_pause_submit = st.form_submit_button("⏸️ พักงาน", use_container_width=True)
                 if operator_pause_submit:
-                    if update_department_work_order(selected_task_id, {"status": "🟨 พักงาน", "hold_started_at": get_bangkok_str(), "pause_reason": operator_pause_reason, "pause_note": operator_pause_note or None}):
+                    if update_department_work_order(task_id, {"status": "🟨 พักงาน", "hold_started_at": get_bangkok_str(), "pause_reason": operator_pause_reason, "pause_note": operator_pause_note or None}):
                         st.rerun()
             with op_a2:
-                with st.form(f"operator_finish_{selected_task_id}"):
+                with st.form(f"operator_finish_{task_id}"):
                     operator_finish_note = st.text_area("หมายเหตุงานเสร็จ (ถ้ามี)")
                     operator_finish_submit = st.form_submit_button("✅ Finish งาน", type="primary", use_container_width=True)
                 if operator_finish_submit:
-                    if update_department_work_order(selected_task_id, {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": operator_finish_note or None}):
+                    if update_department_work_order(task_id, {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": operator_finish_note or None}):
                         st.rerun()
-        elif "พักงาน" in selected_status:
-            if st.button("▶️ Resume งาน", type="primary", use_container_width=True, key=f"operator_resume_{selected_task_id}"):
-                operator_hold_start = parse_flexible_datetime(selected_task.get("hold_started_at"))
-                operator_pause_total = safe_float(selected_task.get("paused_seconds"), 0.0)
+        elif "พักงาน" in task_status:
+            if st.button("▶️ Resume งานคิวปัจจุบัน", type="primary", use_container_width=True, key=f"operator_resume_{task_id}"):
+                operator_hold_start = parse_flexible_datetime(queue_task.get("hold_started_at"))
+                operator_pause_total = safe_float(queue_task.get("paused_seconds"), 0.0)
                 if operator_hold_start is not None:
                     operator_pause_total += max(0.0, (operator_now - operator_hold_start).total_seconds())
-                if update_department_work_order(selected_task_id, {"status": "🟦 กำลังทำ", "hold_started_at": None, "paused_seconds": operator_pause_total}):
+                if update_department_work_order(task_id, {"status": "🟦 กำลังทำ", "hold_started_at": None, "paused_seconds": operator_pause_total}):
                     st.rerun()
-
-    with st.expander(f"✅ ประวัติงานของ {selected_operator} ({len(finished_tasks)} รายการ)", expanded=False):
-        if finished_tasks.empty:
-            st.info("ยังไม่มีงานที่เสร็จแล้ว")
-        else:
-            finished_display = finished_tasks[[col for col in ["id", "department", "work_type", "title", "plan_code", "drawing_name", "actual_start", "actual_finish"] if col in finished_tasks.columns]].copy()
-            for date_col in ["actual_start", "actual_finish"]:
-                if date_col in finished_display.columns:
-                    finished_display[date_col] = finished_display[date_col].apply(
-                        lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) and hasattr(value, "strftime") else "-"
-                    )
-            st.dataframe(finished_display, hide_index=True, use_container_width=True)
 
 nav_options = [
     "👷 โหมดหน้าเครื่อง", 
@@ -3772,6 +3885,12 @@ else:
     selected_tab = st.radio("เลือกมุมมอง:", nav_options, index=cur_idx, horizontal=True, label_visibility="collapsed")
 
     if selected_tab != st.session_state.current_view:
+        # เมื่อผู้ใช้เปลี่ยนออกจากจอทีวี QC ให้ยกเลิกตัวล็อก refresh แบบมีเมนู
+        if tv_department_menu_refresh_mode:
+            try:
+                st.query_params.clear()
+            except Exception:
+                pass
         st.session_state.current_view = selected_tab
         st.rerun()
 
@@ -8417,9 +8536,11 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
     dept_tv_waiting = 0
     dept_tv_overdue = 0
     dept_tv_idle = 0
+    dept_tv_done = 0
 
     for tv_operator in DEPARTMENT_ASSIGNEES[1:]:
         if tv_dept_tasks.empty:
+            operator_rows = pd.DataFrame()
             operator_active = pd.DataFrame()
         else:
             operator_rows = tv_dept_tasks[
@@ -8430,14 +8551,47 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             ].copy()
 
         if operator_active.empty:
-            dept_tv_idle += 1
-            dept_tv_cards.append(f"""
-            <div class="dept-tv-card dept-tv-idle">
-                <div class="dept-tv-name">👤 {html.escape(tv_operator)}</div>
-                <div class="dept-tv-status">⚪ ไม่มีคิวงาน</div>
-                <div class="dept-tv-empty">พร้อมรับงานใหม่</div>
-            </div>
-            """)
+            recent_finished = pd.DataFrame()
+            if not operator_rows.empty:
+                finished_mask = operator_rows.get(
+                    "status", pd.Series(index=operator_rows.index, dtype=str)
+                ).fillna("").astype(str).str.contains("เสร็จ", na=False)
+                recent_finished = operator_rows[finished_mask].copy()
+                if not recent_finished.empty and "actual_finish" in recent_finished.columns:
+                    recent_finished = recent_finished.sort_values("actual_finish", ascending=False)
+
+            show_recent_done = False
+            last_finished = None
+            if not recent_finished.empty:
+                last_finished = recent_finished.iloc[0]
+                last_finish_at = parse_flexible_datetime(last_finished.get("actual_finish"))
+                show_recent_done = (
+                    last_finish_at is not None
+                    and 0 <= (tv_dept_now - last_finish_at).total_seconds() <= 300
+                )
+
+            if show_recent_done:
+                dept_tv_done += 1
+                dept_tv_cards.append(f"""
+                <div class="dept-tv-card dept-tv-done">
+                    <div class="dept-tv-mascot dept-tv-mascot-done" title="งานเสร็จแล้ว"><span class="dept-tv-mascot-main">🧑‍🔧</span><span class="dept-tv-mascot-mini">👍</span></div>
+                    <div class="dept-tv-name">👤 {html.escape(tv_operator)}</div>
+                    <div class="dept-tv-status">✅ งานเสร็จแล้ว</div>
+                    <div class="dept-tv-company">🏭 {html.escape(safe_str(last_finished.get('title'), '-'))}</div>
+                    <div class="dept-tv-line">🧰 {html.escape(safe_str(last_finished.get('work_type'), '-'))}</div>
+                    <div class="dept-tv-empty">ยอดเยี่ยม! พร้อมรับงานถัดไป</div>
+                </div>
+                """)
+            else:
+                dept_tv_idle += 1
+                dept_tv_cards.append(f"""
+                <div class="dept-tv-card dept-tv-idle">
+                    <div class="dept-tv-mascot dept-tv-mascot-idle" title="ไม่มีคิวงาน"><span class="dept-tv-mascot-main">🧑‍🔧</span><span class="dept-tv-mascot-mini">💤</span></div>
+                    <div class="dept-tv-name">👤 {html.escape(tv_operator)}</div>
+                    <div class="dept-tv-status">⚪ ไม่มีคิวงาน</div>
+                    <div class="dept-tv-empty">พร้อมรับงานใหม่</div>
+                </div>
+                """)
             continue
 
         def dept_tv_sort_rank(row):
@@ -8465,6 +8619,21 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             card_class, status_label = "dept-tv-waiting", "🟠 รอรับงาน"
             dept_tv_waiting += 1
 
+        pause_reason = safe_str(current_task.get("pause_reason"), "")
+        work_type_text = safe_str(current_task.get("work_type"), "")
+        is_breakdown = "ขัดข้อง" in pause_reason or "breakdown" in work_type_text.casefold()
+        if is_overdue:
+            mascot_class, mascot_main, mascot_mini, mascot_title = "dept-tv-mascot-alert", "🧑‍🔧", "🚨", "เกินกำหนด"
+        elif is_breakdown and "พักงาน" in current_status:
+            mascot_class, mascot_main, mascot_mini, mascot_title = "dept-tv-mascot-repair", "🧑‍🔧", "🛠️", "กำลังตรวจแก้ไขงานขัดข้อง"
+        elif "กำลังทำ" in current_status:
+            mascot_class, mascot_main, mascot_mini, mascot_title = "dept-tv-mascot-running", "🧑‍🔧", "⚙️", "กำลังทำงาน"
+        elif "พักงาน" in current_status:
+            mascot_class, mascot_main, mascot_mini, mascot_title = "dept-tv-mascot-hold", "🧑‍🔧", "🔧", "พักงาน"
+        else:
+            mascot_class, mascot_main, mascot_mini, mascot_title = "dept-tv-mascot-waiting", "🧑‍🔧", "⏳", "รอรับงาน"
+        mascot_html = f'<div class="dept-tv-mascot {mascot_class}" title="{mascot_title}"><span class="dept-tv-mascot-main">{mascot_main}</span><span class="dept-tv-mascot-mini">{mascot_mini}</span></div>'
+
         current_department = "QC" if safe_str(current_task.get("department")) == "QC" else "Automation"
         due_text = current_due.strftime("%d/%m/%Y %H:%M") if current_due is not None else "-"
         current_start = parse_flexible_datetime(current_task.get("actual_start"))
@@ -8478,6 +8647,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         extra_queue_html = f'<div class="dept-tv-next">📚 มีคิวถัดไปอีก {remaining_count} งาน</div>' if remaining_count else '<div class="dept-tv-next">📚 ไม่มีคิวถัดไป</div>'
         dept_tv_cards.append(f"""
         <div class="dept-tv-card {card_class}">
+            {mascot_html}
             <div class="dept-tv-top"><div class="dept-tv-name">👤 {html.escape(tv_operator)}</div><div class="dept-tv-status">{status_label}</div></div>
             <div class="dept-tv-dept">🏢 {current_department} | ⚡ {html.escape(safe_str(current_task.get('priority'), 'ปกติ'))}</div>
             <div class="dept-tv-company">🏭 {html.escape(safe_str(current_task.get('title'), '-'))}</div>
@@ -8503,13 +8673,32 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
       .dept-tv-clock {{ font-size:28px; font-weight:900; color:#FFFFFF; text-align:right; }}
       .dept-tv-summary {{ font-size:13px; text-align:right; color:#E2E8F0; margin-top:4px; }}
       .dept-tv-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }}
-      .dept-tv-card {{ min-height:205px; border-radius:13px; padding:12px 14px; border:3px solid transparent; box-shadow:0 4px 12px rgba(0,0,0,.3); overflow:hidden; }}
+      .dept-tv-card {{ position:relative; min-height:205px; border-radius:13px; padding:12px 76px 12px 14px; border:3px solid transparent; box-shadow:0 4px 12px rgba(0,0,0,.3); overflow:hidden; }}
       .dept-tv-running {{ background:linear-gradient(145deg,#065F46,#047857); border-color:#34D399; }}
       .dept-tv-hold {{ background:linear-gradient(145deg,#92400E,#B45309); border-color:#FBBF24; }}
       .dept-tv-waiting {{ background:linear-gradient(145deg,#1E3A8A,#1D4ED8); border-color:#60A5FA; }}
       .dept-tv-overdue {{ background:linear-gradient(145deg,#991B1B,#DC2626); border-color:#FDE047; animation:deptAlert 1.2s ease-in-out infinite; }}
       .dept-tv-idle {{ background:linear-gradient(145deg,#334155,#475569); border-color:#94A3B8; }}
+      .dept-tv-done {{ background:linear-gradient(145deg,#14532D,#15803D); border-color:#86EFAC; }}
       @keyframes deptAlert {{ 50% {{ border-color:#FFFFFF; box-shadow:0 0 15px rgba(253,224,71,.9); }} }}
+      .dept-tv-mascot {{ position:absolute; right:11px; top:50%; transform:translateY(-50%); width:52px; height:52px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(15,23,42,.42); border:2px solid rgba(255,255,255,.65); z-index:2; }}
+      .dept-tv-mascot-main {{ display:block; font-size:29px; transform-origin:50% 85%; }}
+      .dept-tv-mascot-mini {{ position:absolute; right:-5px; bottom:-6px; font-size:18px; }}
+      @keyframes deptMascotWork {{ 0%,100% {{ transform:translateY(0) rotate(-4deg); }} 50% {{ transform:translateY(-5px) rotate(5deg); }} }}
+      @keyframes deptMascotGear {{ to {{ transform:rotate(360deg); }} }}
+      @keyframes deptMascotWait {{ 0%,100% {{ transform:translateY(0); }} 50% {{ transform:translateY(-2px) scale(.94); }} }}
+      @keyframes deptMascotAlert {{ 0%,100% {{ transform:translateX(0) rotate(0); }} 25% {{ transform:translateX(-3px) rotate(-7deg); }} 75% {{ transform:translateX(3px) rotate(7deg); }} }}
+      @keyframes deptMascotSleep {{ 0%,100% {{ opacity:.68; transform:scale(.94); }} 50% {{ opacity:1; transform:scale(1.06); }} }}
+      @keyframes deptMascotDone {{ 0%,100% {{ transform:translateY(0) rotate(-5deg); }} 45% {{ transform:translateY(-6px) rotate(6deg) scale(1.08); }} }}
+      @keyframes deptMascotRepair {{ 0%,100% {{ transform:rotate(-7deg); }} 50% {{ transform:rotate(9deg) translateY(-3px); }} }}
+      .dept-tv-mascot-running .dept-tv-mascot-main {{ animation:deptMascotWork .85s ease-in-out infinite; }}
+      .dept-tv-mascot-running .dept-tv-mascot-mini {{ animation:deptMascotGear 1.25s linear infinite; }}
+      .dept-tv-mascot-hold .dept-tv-mascot-main, .dept-tv-mascot-waiting .dept-tv-mascot-main {{ animation:deptMascotWait 1.6s ease-in-out infinite; }}
+      .dept-tv-mascot-alert .dept-tv-mascot-main, .dept-tv-mascot-alert .dept-tv-mascot-mini {{ animation:deptMascotAlert .55s ease-in-out infinite; }}
+      .dept-tv-mascot-idle .dept-tv-mascot-main, .dept-tv-mascot-idle .dept-tv-mascot-mini {{ animation:deptMascotSleep 2.1s ease-in-out infinite; }}
+      .dept-tv-mascot-done .dept-tv-mascot-main {{ animation:deptMascotDone .9s ease-in-out infinite; }}
+      .dept-tv-mascot-done .dept-tv-mascot-mini {{ animation:deptMascotWait .75s ease-in-out infinite; }}
+      .dept-tv-mascot-repair .dept-tv-mascot-main, .dept-tv-mascot-repair .dept-tv-mascot-mini {{ animation:deptMascotRepair .72s ease-in-out infinite; }}
       .dept-tv-top {{ display:flex; justify-content:space-between; gap:8px; align-items:flex-start; border-bottom:1px solid rgba(255,255,255,.28); padding-bottom:7px; margin-bottom:7px; }}
       .dept-tv-name {{ font-size:18px; font-weight:900; }}
       .dept-tv-status {{ font-size:14px; font-weight:900; white-space:nowrap; }}
@@ -8524,8 +8713,8 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
     </style>
     <div class="dept-tv-wrap">
       <div class="dept-tv-header">
-        <div><div class="dept-tv-title">📺 จอทีวีแสดงงานแผนก QC&Automatin</div><div class="dept-tv-sub">สถานะใบงานแบบ Real-time | ผู้ปฏิบัติงาน 9 คน | Auto 30s</div></div>
-        <div><div id="dept-tv-clock" class="dept-tv-clock">{tv_dept_now.strftime('%H:%M:%S')} น.</div><div class="dept-tv-summary">🟢 ทำ {dept_tv_running} | 🟡 พัก {dept_tv_hold} | 🟠 รอ {dept_tv_waiting} | 🔴 เกิน {dept_tv_overdue} | ⚪ ว่าง {dept_tv_idle}</div></div>
+        <div><div class="dept-tv-title">📺 จอทีวีแสดงงานแผนก QC&Automatin</div><div class="dept-tv-sub">สถานะใบงานแบบ Real-time | ผู้ปฏิบัติงาน 9 คน | รีเฟรชใน <span id="dept-tv-refresh-count">30</span> ว.</div></div>
+        <div><div id="dept-tv-clock" class="dept-tv-clock">{tv_dept_now.strftime('%H:%M:%S')} น.</div><div class="dept-tv-summary">🟢 ทำ {dept_tv_running} | 🟡 พัก {dept_tv_hold} | 🟠 รอ {dept_tv_waiting} | 🔴 เกิน {dept_tv_overdue} | ✅ เสร็จ {dept_tv_done} | ⚪ ว่าง {dept_tv_idle}</div></div>
       </div>
       <div class="dept-tv-grid">{dept_tv_cards_html}</div>
     </div>
@@ -8538,17 +8727,28 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           if (el) el.innerText = new Date().toLocaleTimeString('th-TH', {hour12:false}) + ' น.';
         } catch(e) {}
       }
+      let deptTvRefreshRemaining = 30;
+      function updateDeptTvRefreshCount() {
+        try {
+          deptTvRefreshRemaining = Math.max(0, deptTvRefreshRemaining - 1);
+          const el = window.parent.document.getElementById('dept-tv-refresh-count');
+          if (el) el.innerText = String(deptTvRefreshRemaining);
+        } catch(e) {}
+      }
       setInterval(updateDeptTvClock, 1000); updateDeptTvClock();
+      setInterval(updateDeptTvRefreshCount, 1000);
       setTimeout(function(){
         try {
-          // ถ้าเปิดจากเมนูปกติ ให้กดแท็บเดิมซ้ำเพื่อ refresh ภายใน session
-          // จึงไม่เปลี่ยนเป็นโหมดทีวีเต็มหน้าจอและไม่กลับไปโหมดหน้าเครื่อง
+          // ถ้าเปิดจากเมนูปกติ ใช้ tv-qc-menu เพื่อ reload ข้อมูลจริง
+          // แต่ไม่เข้าโหมดทีวีเฉพาะ จึงยังคงหัวเว็บและเมนูไว้เหมือนเดิม
           const radioBtns = Array.from(window.parent.document.querySelectorAll('input[type="radio"]'));
           const qcTvRadio = radioBtns.find(btn =>
             btn.checked && String(btn.value || '').includes('QC&Automatin')
           );
           if (qcTvRadio) {
-            qcTvRadio.click();
+            const url = new URL(window.parent.location.href);
+            url.searchParams.set('view', 'tv-qc-menu');
+            window.parent.location.replace(url.toString());
           } else {
             // ลิงก์ทีวีเฉพาะ ?view=tv-qc ไม่มีเมนู จึง reload ได้โดยคง query เดิม
             const viewParam = new URLSearchParams(window.parent.location.search).get('view');
