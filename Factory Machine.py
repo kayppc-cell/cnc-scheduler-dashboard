@@ -8538,8 +8538,22 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           if (el) el.innerText = new Date().toLocaleTimeString('th-TH', {hour12:false}) + ' น.';
         } catch(e) {}
       }
+      function lockDeptTvView() {
+        try {
+          const url = new URL(window.parent.location.href);
+          url.searchParams.set('view', 'tv-qc');
+          window.parent.history.replaceState({}, '', url.toString());
+        } catch(e) {}
+      }
+      // ล็อก URL ก่อน Auto Refresh เพื่อไม่ให้ session ใหม่กลับไปโหมดหน้าเครื่อง
+      lockDeptTvView();
       setInterval(updateDeptTvClock, 1000); updateDeptTvClock();
-      setTimeout(function(){ try { window.parent.location.reload(); } catch(e) {} }, 30000);
+      setTimeout(function(){
+        try {
+          lockDeptTvView();
+          window.parent.location.reload();
+        } catch(e) {}
+      }, 30000);
     </script>
     """, height=0)
 
