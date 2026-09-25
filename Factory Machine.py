@@ -3263,6 +3263,114 @@ def delete_waiting_department_work_order(task_id):
     except Exception as exc:
         return False, safe_str(exc)
 
+def render_department_finished_history(finished_tasks, department, now):
+    """ตารางประวัติสำหรับผู้ควบคุม แสดงใต้ตารางคิวและเลือกลบจากแถวได้โดยตรง"""
+    if False:  # ย้ายตารางประวัติไปแสดงใต้ตารางคิวงานปัจจุบันแล้ว
+        history_quick = st.radio(
+            "⚡ ตัวกรองเร็วประวัติงาน",
+            ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้"],
+            horizontal=True,
+            key=f"{department}_history_quick_v2"
+        )
+        history_search = st.text_input(
+            "🔍 ค้นหาประวัติงาน",
+            placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ",
+            key=f"{department}_history_search_v2"
+        )
+        history_shown = finished_tasks.copy()
+        history_finish = history_shown.get("actual_finish", pd.Series(pd.NaT, index=history_shown.index))
+        if history_quick == "วันนี้":
+            history_shown = history_shown[history_finish.dt.date == now.date()]
+        elif history_quick == "7 วันล่าสุด":
+            history_shown = history_shown[history_finish >= now - timedelta(days=7)]
+        elif history_quick == "เดือนนี้":
+            history_shown = history_shown[
+                (history_finish.dt.year == now.year) & (history_finish.dt.month == now.month)
+            ]
+        if history_search.strip():
+            history_q = history_search.strip().lower()
+            history_mask = pd.Series(False, index=history_shown.index)
+            for history_col in ["plan_code", "drawing_name", "title", "assignee", "work_type"]:
+                if history_col in history_shown.columns:
+                    history_mask |= history_shown[history_col].fillna("").astype(str).str.lower().str.contains(history_q, regex=False)
+            history_shown = history_shown[history_mask]
+
+        history_cols = [
+            "id", "priority", "work_type", "plan_code", "drawing_name", "title", "assignee",
+            "planned_start_at", "due_at", "actual_start", "actual_finish", "estimated_hours", "result_note"
+        ]
+        history_cols = [col for col in history_cols if col in history_shown.columns]
+        history_display = history_shown[history_cols].copy()
+        actual_work_hours = history_shown.apply(
+            lambda row: (
+                round(get_net_actual_work_seconds(
+                    parse_flexible_datetime(row.get("actual_start")),
+                    parse_flexible_datetime(row.get("actual_finish")),
+                    safe_float(row.get("paused_seconds"), 0.0)
+                ) / 3600.0, 2)
+                if parse_flexible_datetime(row.get("actual_start")) is not None
+                and parse_flexible_datetime(row.get("actual_finish")) is not None
+                else None
+            ), axis=1
+        )
+        if "actual_finish" in history_display.columns:
+            history_display.insert(history_display.columns.get_loc("actual_finish") + 1, "actual_work_hours", actual_work_hours)
+        history_display.insert(0, "เลือก", False)
+        for date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish"]:
+            if date_col in history_display.columns:
+                history_display[date_col] = history_display[date_col].apply(
+                    lambda value: value.strftime("%d/%m/%Y %H:%M")
+                    if pd.notna(value) and hasattr(value, "strftime") else "-"
+                )
+
+        history_editor = st.data_editor(
+            history_display,
+            hide_index=True,
+            use_container_width=True,
+            height=min(450, 80 + len(history_display) * 36),
+            disabled=[col for col in history_display.columns if col != "เลือก"],
+            key=f"{department}_history_delete_editor_v2",
+            column_config={
+                "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width=58),
+                "id": st.column_config.NumberColumn("เลขที่", width=58, format="%d"),
+                "priority": st.column_config.TextColumn("เร่งด่วน", width=72),
+                "work_type": st.column_config.TextColumn("ประเภทงาน", width=135),
+                "plan_code": st.column_config.TextColumn("แผน", width=68),
+                "drawing_name": st.column_config.TextColumn("Drawing", width=120),
+                "title": st.column_config.TextColumn("บริษัทลูกค้า", width=105),
+                "assignee": st.column_config.TextColumn("ผู้รับผิดชอบ", width=112),
+                "planned_start_at": st.column_config.TextColumn("กำหนดเริ่ม", width=108),
+                "due_at": st.column_config.TextColumn("กำหนดเสร็จ", width=108),
+                "actual_start": st.column_config.TextColumn("เริ่มจริง", width=108),
+                "actual_finish": st.column_config.TextColumn("เสร็จจริง", width=108),
+                "actual_work_hours": st.column_config.NumberColumn("เวลาจริง (ชม.)", width=92, format="%.2f"),
+                "estimated_hours": st.column_config.NumberColumn("เวลาประมาณ", width=86, format="%.2f"),
+                "result_note": st.column_config.TextColumn("หมายเหตุ", width=120)
+            }
+        )
+        selected_history_rows = history_editor[
+            history_editor.get("เลือก", pd.Series(False, index=history_editor.index)).fillna(False).astype(bool)
+        ]
+        selected_history_ids = [safe_int(value, 0) for value in selected_history_rows.get("id", pd.Series(dtype=int)).tolist()]
+        selected_history_ids = [task_id for task_id in selected_history_ids if task_id > 0]
+        confirm_history_delete = st.checkbox(
+            f"ยืนยันลบประวัติที่ติ๊กเลือก {len(selected_history_ids)} รายการ",
+            disabled=not selected_history_ids,
+            key=f"{department}_confirm_history_table_delete_v2"
+        )
+        if st.button(
+            f"🗑️ ลบประวัติที่ติ๊กเลือก ({len(selected_history_ids)} รายการ)",
+            disabled=(not selected_history_ids or not confirm_history_delete),
+            use_container_width=True,
+            key=f"{department}_delete_history_from_table_v2"
+        ):
+            delete_ok, delete_message = delete_department_work_orders(selected_history_ids)
+            if delete_ok:
+                st.success(f"ลบประวัติที่เลือกเรียบร้อย {len(selected_history_ids)} รายการ")
+                st.rerun()
+            else:
+                st.error(f"ลบประวัติไม่สำเร็จ: {delete_message}")
+
 def render_people_work_center(department):
     is_qc = department == "QC"
     icon = "🧪" if is_qc else "🤖"
@@ -3653,10 +3761,11 @@ def render_people_work_center(department):
     option_ids = shown["id"].tolist() if not shown.empty else []
     if not option_ids:
         st.info("ไม่พบใบงานตามตัวกรอง")
+        render_department_finished_history(finished_tasks, department, now)
         return
     task_lookup = shown.set_index("id")
     selected_id = st.selectbox(
-        "เลือกใบงานเพื่อบันทึกสถานะ",
+        "เลือกใบงานเพื่อแก้ไขข้อมูล",
         option_ids,
         format_func=lambda task_id: f"#{task_id} | {safe_str(task_lookup.loc[task_id].get('title'), '-')} | {safe_str(task_lookup.loc[task_id].get('assignee'), '-')}",
         key=f"{department}_selected_task"
@@ -3747,37 +3856,8 @@ def render_people_work_center(department):
                 else:
                     st.error("บันทึกการแก้ไขไม่สำเร็จ")
 
-    if "รอรับงาน" in task_status:
-        if st.button("▶️ Start งาน", type="primary", use_container_width=True, key=f"{department}_start_{selected_id}"):
-            if update_department_work_order(selected_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
-                st.rerun()
-    elif "กำลังทำ" in task_status:
-        a1, a2 = st.columns(2)
-        with a1:
-            with st.form(f"{department}_pause_{selected_id}"):
-                pause_reason = st.selectbox("เหตุผลการพัก", ["รอข้อมูล", "รอชิ้นงาน", "รออุปกรณ์/อะไหล่", "งานด่วนแทรก", "รอการตัดสินใจ", "อื่น ๆ"])
-                pause_note = st.text_input("หมายเหตุ")
-                pause_submit = st.form_submit_button("⏸️ พักงาน", use_container_width=True)
-            if pause_submit:
-                if update_department_work_order(selected_id, {"status": "🟨 พักงาน", "hold_started_at": get_bangkok_str(), "pause_reason": pause_reason, "pause_note": pause_note or None}):
-                    st.rerun()
-        with a2:
-            with st.expander("✅ บันทึกงานเสร็จ", expanded=False):
-                with st.form(f"{department}_finish_{selected_id}"):
-                    finish_note = st.text_area("หมายเหตุงานเสร็จ (ถ้ามี)")
-                    finish_submit = st.form_submit_button("✅ ยืนยันงานเสร็จ", type="primary", use_container_width=True)
-                if finish_submit:
-                    payload = {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": finish_note or None}
-                    if update_department_work_order(selected_id, payload):
-                        st.rerun()
-    elif "พักงาน" in task_status:
-        if st.button("▶️ Resume งาน", type="primary", use_container_width=True, key=f"{department}_resume_{selected_id}"):
-            hold_start = parse_flexible_datetime(task.get("hold_started_at"))
-            pause_total = safe_float(task.get("paused_seconds"), 0.0)
-            if hold_start is not None:
-                pause_total += max(0.0, (now - hold_start).total_seconds())
-            if update_department_work_order(selected_id, {"status": "🟦 กำลังทำ", "hold_started_at": None, "paused_seconds": pause_total}):
-                st.rerun()
+    st.info("ℹ️ การ Start / พัก / Resume / Finish งาน ทำได้เฉพาะในโหมดผู้ปฏิบัติงานเท่านั้น")
+    render_department_finished_history(finished_tasks, department, now)
 
 def render_department_operator_mode():
     """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
