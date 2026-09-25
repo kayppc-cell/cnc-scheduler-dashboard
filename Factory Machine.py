@@ -1863,7 +1863,13 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         valid_finishes = [v for v in sub["_finish"] if v is not None and not pd.isna(v)]
         production_start = min(valid_starts) if valid_starts else None
         production_finish = max(valid_finishes) if valid_finishes else None
-        late_hours = max(0.0, (production_finish - customer_due).total_seconds() / 3600.0) if production_finish and customer_due else 0.0
+        # ชั่วโมงเกินกรอบ Production ต้องใช้เวลาทำงานสุทธิชุดเดียวกับ Auto-Chain
+        # เพื่อไม่รวมช่วงพัก เวลานอกกะ และวันหยุด
+        late_hours = (
+            get_work_capacity_between(customer_due, production_finish)
+            if production_finish and customer_due and production_finish > customer_due
+            else 0.0
+        )
         early_hours = max(0.0, (customer_start - production_start).total_seconds() / 3600.0) if production_start and customer_start else 0.0
         risky_mask = sub["_finish"].apply(
             lambda v: v is not None and not pd.isna(v) and customer_due is not None and v > customer_due
@@ -1873,13 +1879,20 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         risky_machines = ", ".join(risky.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3))
         # สถานะคิวหน้างานต้องส่งผลถึงระดับแผน แม้วันจบรวมที่วางไว้ยังไม่เกิน Production
         # เพื่อไม่ให้แผนเป็นสีเขียวทั้งที่มีงานกำลังผลิต/รอคิวซึ่งเลยเวลาจบของตัวเองแล้ว
-        delayed_mask = sub["_finish"].apply(
-            lambda v: v is not None and not pd.isna(v) and v < project_now
+        # คิวดีเลย์ต้องเทียบกับเวลาจบตามแผนเดิมของแต่ละคิว ไม่ใช้เวลาจบลูกโซ่
+        # ที่ถูกเลื่อนตามสถานการณ์ปัจจุบัน เพราะจะทำให้จำนวนคิวกับชั่วโมงดีเลย์ไม่สัมพันธ์กัน
+        sub["_baseline_finish_for_delay"] = sub.apply(get_job_planned_finish, axis=1)
+        delayed_mask = sub["_baseline_finish_for_delay"].apply(
+            lambda value: value is not None and not pd.isna(value) and value < project_now
         ).astype(bool)
         delayed = sub.loc[delayed_mask].copy()
         delayed_count = len(delayed)
         max_delay_hours = max(
-            [max(0.0, (project_now - value).total_seconds() / 3600.0) for value in delayed["_finish"]],
+            [
+                get_work_capacity_between(value, project_now)
+                for value in delayed["_baseline_finish_for_delay"]
+                if value is not None and not pd.isna(value) and value < project_now
+            ],
             default=0.0
         )
         delayed_drawings = ", ".join(delayed.get("ชื่อ Drawing.", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(4))
@@ -1918,7 +1931,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 f"({drawing_progress['drawing_remaining']}/{drawing_progress['drawing_total']} Drawing)"
             )
             if late_hours > 0:
-                production_text += f" • เกิน {late_hours / 24.0:.1f} วัน"
+                production_text += f" • เกิน {late_hours:.1f} ชม.ทำงาน"
             elif delayed_count > 0:
                 production_text += f" • ดีเลย์ {delayed_count} คิว"
             production_type = "แผนผลิตเกินกำหนด" if late_hours > 0 else ("แผนผลิตมีคิวดีเลย์" if delayed_count > 0 else "แผนผลิต")
