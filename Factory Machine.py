@@ -8490,6 +8490,10 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         </div>
         """)
 
+    # ตัดช่องว่าง/บรรทัดว่างระหว่างการ์ด เพื่อไม่ให้ Markdown ตีความ
+    # การ์ดลำดับที่ 2 เป็นต้นไปเป็น code block แล้วแสดงแท็ก HTML ออกมาตรง ๆ
+    dept_tv_cards_html = "".join(card.strip() for card in dept_tv_cards)
+
     st.markdown(f"""
     <style>
       .dept-tv-wrap {{ background:#071124; min-height:100vh; padding:10px; color:#F8FAFC; font-family:Tahoma,Arial,sans-serif; }}
@@ -8523,7 +8527,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         <div><div class="dept-tv-title">📺 จอทีวีแสดงงานแผนก QC&Automatin</div><div class="dept-tv-sub">สถานะใบงานแบบ Real-time | ผู้ปฏิบัติงาน 9 คน | Auto 30s</div></div>
         <div><div id="dept-tv-clock" class="dept-tv-clock">{tv_dept_now.strftime('%H:%M:%S')} น.</div><div class="dept-tv-summary">🟢 ทำ {dept_tv_running} | 🟡 พัก {dept_tv_hold} | 🟠 รอ {dept_tv_waiting} | 🔴 เกิน {dept_tv_overdue} | ⚪ ว่าง {dept_tv_idle}</div></div>
       </div>
-      <div class="dept-tv-grid">{''.join(dept_tv_cards)}</div>
+      <div class="dept-tv-grid">{dept_tv_cards_html}</div>
     </div>
     """, unsafe_allow_html=True)
     components.html("""
