@@ -3455,6 +3455,28 @@ def render_people_work_center(department):
         ]
         history_cols = [col for col in history_cols if col in history_shown.columns]
         history_display = history_shown[history_cols].copy()
+        actual_work_hours = history_shown.apply(
+            lambda row: (
+                round(
+                    get_net_actual_work_seconds(
+                        parse_flexible_datetime(row.get("actual_start")),
+                        parse_flexible_datetime(row.get("actual_finish")),
+                        safe_float(row.get("paused_seconds"), 0.0)
+                    ) / 3600.0,
+                    2
+                )
+                if parse_flexible_datetime(row.get("actual_start")) is not None
+                and parse_flexible_datetime(row.get("actual_finish")) is not None
+                else None
+            ),
+            axis=1
+        )
+        if "actual_finish" in history_display.columns:
+            history_display.insert(
+                history_display.columns.get_loc("actual_finish") + 1,
+                "actual_work_hours",
+                actual_work_hours
+            )
         for date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish"]:
             if date_col in history_display.columns:
                 history_display[date_col] = history_display[date_col].apply(
@@ -3467,19 +3489,20 @@ def render_people_work_center(department):
             use_container_width=True,
             height=min(450, 80 + len(history_display) * 36),
             column_config={
-                "id": st.column_config.NumberColumn("เลขที่ใบงาน", width="small", format="%d"),
-                "priority": st.column_config.TextColumn("ความเร่งด่วน", width="small"),
-                "work_type": st.column_config.TextColumn("ประเภทงาน", width="large"),
-                "plan_code": st.column_config.TextColumn("แผนงาน", width="small"),
-                "drawing_name": st.column_config.TextColumn("Drawing (ถ้ามี)", width="medium"),
-                "title": st.column_config.TextColumn("ชื่อบริษัทลูกค้า", width="medium"),
-                "assignee": st.column_config.TextColumn("ผู้รับผิดชอบ/ทีม", width="medium"),
-                "planned_start_at": st.column_config.TextColumn("กำหนดเริ่ม", width="medium"),
-                "due_at": st.column_config.TextColumn("กำหนดเสร็จ", width="medium"),
-                "actual_start": st.column_config.TextColumn("เริ่มจริง", width="medium"),
-                "actual_finish": st.column_config.TextColumn("เสร็จจริง", width="medium"),
-                "estimated_hours": st.column_config.NumberColumn("ระยะเวลาประมาณ (ชม.)", width="medium", format="%.2f"),
-                "result_note": st.column_config.TextColumn("หมายเหตุงานเสร็จ", width="large")
+                "id": st.column_config.NumberColumn("เลขที่", width=58, format="%d"),
+                "priority": st.column_config.TextColumn("เร่งด่วน", width=72),
+                "work_type": st.column_config.TextColumn("ประเภทงาน", width=135),
+                "plan_code": st.column_config.TextColumn("แผน", width=68),
+                "drawing_name": st.column_config.TextColumn("Drawing", width=120),
+                "title": st.column_config.TextColumn("บริษัทลูกค้า", width=105),
+                "assignee": st.column_config.TextColumn("ผู้รับผิดชอบ", width=112),
+                "planned_start_at": st.column_config.TextColumn("กำหนดเริ่ม", width=108),
+                "due_at": st.column_config.TextColumn("กำหนดเสร็จ", width=108),
+                "actual_start": st.column_config.TextColumn("เริ่มจริง", width=108),
+                "actual_finish": st.column_config.TextColumn("เสร็จจริง", width=108),
+                "actual_work_hours": st.column_config.NumberColumn("เวลาจริง (ชม.)", width=92, format="%.2f"),
+                "estimated_hours": st.column_config.NumberColumn("เวลาประมาณ", width=86, format="%.2f"),
+                "result_note": st.column_config.TextColumn("หมายเหตุ", width=120)
             }
         )
         history_ids = history_shown["id"].tolist() if not history_shown.empty else []
@@ -3550,18 +3573,22 @@ def render_people_work_center(department):
     display_cols = ["id", "priority", "status", "work_type", "plan_code", "drawing_name", "title", "assignee", "planned_start_at", "due_at", "estimated_hours"]
     display_cols = [c for c in display_cols if c in shown.columns]
     shown_display = shown[display_cols].copy()
+    shown_display.insert(0, "เลือก", False)
     for date_col in ["planned_start_at", "due_at"]:
         if date_col in shown_display.columns:
             shown_display[date_col] = shown_display[date_col].apply(
                 lambda value: value.strftime("%d/%m/%Y %H:%M")
                 if pd.notna(value) and hasattr(value, "strftime") else "-"
             )
-    st.dataframe(
+    queue_delete_editor = st.data_editor(
         shown_display,
         hide_index=True,
         use_container_width=True,
         height=min(520, 80 + len(shown_display) * 36),
+        disabled=[col for col in shown_display.columns if col != "เลือก"],
+        key=f"{department}_queue_delete_editor",
         column_config={
+            "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width="small", help="ติ๊กได้เฉพาะคิวที่ยังรอรับงาน"),
             "id": st.column_config.NumberColumn("เลขที่ใบงาน", width="small", format="%d"),
             "priority": st.column_config.TextColumn("ความเร่งด่วน", width="small"),
             "status": st.column_config.TextColumn("สถานะ", width="medium"),
@@ -3575,6 +3602,53 @@ def render_people_work_center(department):
             "estimated_hours": st.column_config.NumberColumn("ระยะเวลาทำงานโดยประมาณ (ชม.)", width="medium", format="%.2f"),
         }
     )
+
+    selected_queue_rows = queue_delete_editor[
+        queue_delete_editor.get("เลือก", pd.Series(False, index=queue_delete_editor.index)).fillna(False).astype(bool)
+    ]
+    selected_queue_ids = [safe_int(value, 0) for value in selected_queue_rows.get("id", pd.Series(dtype=int)).tolist()]
+    selected_queue_ids = [task_id for task_id in selected_queue_ids if task_id > 0]
+    shown_by_id = shown.set_index("id") if not shown.empty and "id" in shown.columns else pd.DataFrame()
+    deletable_queue_ids = []
+    protected_queue_ids = []
+    for task_id in selected_queue_ids:
+        if task_id not in shown_by_id.index:
+            protected_queue_ids.append(task_id)
+            continue
+        selected_row = shown_by_id.loc[task_id]
+        selected_row_status = safe_str(selected_row.get("status"), "")
+        selected_row_started = parse_flexible_datetime(selected_row.get("actual_start"))
+        if "รอรับงาน" in selected_row_status and selected_row_started is None:
+            deletable_queue_ids.append(task_id)
+        else:
+            protected_queue_ids.append(task_id)
+
+    if protected_queue_ids:
+        st.warning(
+            "🔒 รายการที่เริ่มทำหรือพักงานแล้วไม่สามารถลบได้ กรุณายกเลิกเครื่องหมายหน้าเลขที่ใบงาน: "
+            + ", ".join(str(task_id) for task_id in protected_queue_ids)
+        )
+    confirm_queue_delete = st.checkbox(
+        f"ยืนยันลบคิวที่เลือก {len(deletable_queue_ids)} รายการ",
+        disabled=(not deletable_queue_ids or bool(protected_queue_ids)),
+        key=f"{department}_confirm_queue_table_delete"
+    )
+    if st.button(
+        f"🗑️ ลบคิวที่ติ๊กเลือก ({len(deletable_queue_ids)} รายการ)",
+        disabled=(not confirm_queue_delete or not deletable_queue_ids or bool(protected_queue_ids)),
+        use_container_width=True,
+        key=f"{department}_delete_queue_from_table"
+    ):
+        delete_failures = []
+        for task_id in deletable_queue_ids:
+            delete_ok, delete_message = delete_waiting_department_work_order(task_id)
+            if not delete_ok:
+                delete_failures.append(f"#{task_id}: {delete_message}")
+        if delete_failures:
+            st.error("ลบบางรายการไม่สำเร็จ — " + " | ".join(delete_failures))
+        else:
+            st.success(f"ลบคิวที่เลือกเรียบร้อย {len(deletable_queue_ids)} รายการ")
+            st.rerun()
 
     option_ids = shown["id"].tolist() if not shown.empty else []
     if not option_ids:
@@ -3611,8 +3685,8 @@ def render_people_work_center(department):
     if current_relationship not in relationship_options:
         relationship_options = [current_relationship] + relationship_options
 
-    with st.expander("✏️ แก้ไข / 🗑️ ลบใบงานที่เลือก", expanded=False):
-        st.caption("แก้ไขข้อมูลได้ทุกสถานะ แต่ลบได้เฉพาะงานที่ยังรอรับงานและยังไม่เริ่มจับเวลา")
+    with st.expander("✏️ แก้ไขใบงานที่เลือก", expanded=False):
+        st.caption("แก้ไขข้อมูลใบงานที่เลือก ส่วนการลบให้ติ๊กจากตารางคิวงานปัจจุบันด้านบน")
         with st.form(f"{department}_edit_task_{selected_id}"):
             ec1, ec2, ec3 = st.columns(3)
             with ec1:
@@ -3672,28 +3746,6 @@ def render_people_work_center(department):
                     st.rerun()
                 else:
                     st.error("บันทึกการแก้ไขไม่สำเร็จ")
-
-        can_delete_waiting = "รอรับงาน" in task_status and parse_flexible_datetime(task.get("actual_start")) is None
-        st.divider()
-        confirm_delete_waiting = st.checkbox(
-            "ยืนยันว่าต้องการลบใบงานที่เลือกถาวร",
-            disabled=not can_delete_waiting,
-            key=f"{department}_confirm_delete_waiting_{selected_id}"
-        )
-        if not can_delete_waiting:
-            st.caption("🔒 งานนี้เริ่มทำหรือบันทึกเวลาแล้ว จึงไม่อนุญาตให้ลบ สามารถแก้ไขข้อมูลหรือ Finish งานแทนได้")
-        if st.button(
-            "🗑️ ลบใบงานที่เลือก",
-            disabled=(not can_delete_waiting or not confirm_delete_waiting),
-            use_container_width=True,
-            key=f"{department}_delete_waiting_{selected_id}"
-        ):
-            delete_ok, delete_message = delete_waiting_department_work_order(selected_id)
-            if delete_ok:
-                st.success("ลบใบงานที่รอรับงานเรียบร้อย")
-                st.rerun()
-            else:
-                st.error(f"ลบใบงานไม่สำเร็จ: {delete_message}")
 
     if "รอรับงาน" in task_status:
         if st.button("▶️ Start งาน", type="primary", use_container_width=True, key=f"{department}_start_{selected_id}"):
