@@ -3535,11 +3535,12 @@ def render_people_work_center(department):
             qc_timeline["ผู้ปฏิบัติงาน"] = qc_timeline.get("assignee", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่ระบุ").astype(str)
             qc_timeline["Drawing"] = qc_timeline.get("drawing_name", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่มี Drawing").astype(str)
             qc_timeline["สถานะ"] = qc_timeline.get("status", pd.Series(index=qc_timeline.index, dtype=str)).fillna("🟧 รอรับงาน").astype(str)
-            qc_timeline["รายการงาน"] = qc_timeline.apply(
+            qc_timeline["เลขที่ใบงาน"] = qc_timeline.get("id", pd.Series(index=qc_timeline.index, dtype=int)).apply(
+                lambda value: safe_int(value, 0)
+            )
+            qc_timeline["ข้อความบนแท่ง"] = qc_timeline.apply(
                 lambda row: (
-                    f"ใบงาน #{safe_int(row.get('id'), 0)} | "
-                    f"แผน {safe_str(row.get('เลขแผน'), '-')} | "
-                    f"{safe_str(row.get('ผู้ปฏิบัติงาน'), '-')} | "
+                    f"{safe_str(row.get('เลขแผน'), '-')} | "
                     f"{safe_str(row.get('Drawing'), '-')}"
                 ),
                 axis=1
@@ -3556,10 +3557,12 @@ def render_people_work_center(department):
                 qc_timeline,
                 x_start="planned_start_at",
                 x_end="due_at",
-                y="รายการงาน",
+                y="ผู้ปฏิบัติงาน",
                 color="สถานะ",
-                text="เลขแผน",
+                text="ข้อความบนแท่ง",
                 hover_data={
+                    "เลขที่ใบงาน": True,
+                    "เลขแผน": True,
                     "ผู้ปฏิบัติงาน": True,
                     "Drawing": True,
                     "กำหนดเริ่ม": True,
@@ -3568,9 +3571,9 @@ def render_people_work_center(department):
                     "เสร็จจริง": True,
                     "planned_start_at": False,
                     "due_at": False,
-                    "รายการงาน": False
+                    "ข้อความบนแท่ง": False
                 },
-                title="📊 แผนภูมิช่วงเวลาใบงาน QC รายแผน / ผู้ปฏิบัติงาน / Drawing",
+                title="📊 แผนภูมิช่วงเวลาใบงาน QC รายผู้ปฏิบัติงาน",
             color_discrete_map={
                 "🟧 รอรับงาน": "#F97316",
                 "🟦 กำลังทำ": "#2563EB",
@@ -3579,14 +3582,20 @@ def render_people_work_center(department):
             }
             )
             qc_status_fig.update_traces(textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=11))
-            qc_status_fig.update_yaxes(autorange="reversed", title="ใบงาน | แผน | ผู้ปฏิบัติงาน | Drawing")
-            qc_status_fig.update_xaxes(title="วัน/เดือน เวลา", tickformat="%d/%m<br>%H:%M")
+            qc_status_fig.update_yaxes(autorange="reversed", title="ผู้ปฏิบัติงาน", fixedrange=True)
+            qc_status_fig.update_xaxes(title="วัน/เดือน เวลา", tickformat="%d/%m<br>%H:%M", fixedrange=True)
+            qc_operator_count = max(1, qc_timeline["ผู้ปฏิบัติงาน"].nunique())
             qc_status_fig.update_layout(
-                height=max(360, min(900, 135 + len(qc_timeline) * 46)),
+                height=max(360, min(700, 160 + qc_operator_count * 62)),
                 legend_title_text="สถานะใบงาน",
-                margin=dict(l=10, r=15, t=65, b=20)
+                margin=dict(l=10, r=15, t=65, b=20),
+                dragmode=False
             )
-            st.plotly_chart(qc_status_fig, use_container_width=True, config={"displayModeBar": True, "scrollZoom": True})
+            st.plotly_chart(
+                qc_status_fig,
+                use_container_width=True,
+                config={"displayModeBar": False, "scrollZoom": False, "doubleClick": False}
+            )
         else:
             st.info("ยังไม่มีใบงาน QC ที่มีกำหนดเริ่มและกำหนดเสร็จสำหรับแสดงแผนภูมิ")
 
