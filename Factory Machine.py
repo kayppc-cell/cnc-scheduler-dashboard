@@ -3163,7 +3163,8 @@ QC_WORK_TYPES = [
     "เก็บรายละเอียดทำสีตีเส้น",
     "ทำ Data Sheet",
     "ตรวจ Check บนเครื่อง CNC",
-    "ตรวจ Check นอกสถานที่"
+    "ตรวจ Check นอกสถานที่",
+    "Laser Mark text"
 ]
 AUTO_WORK_TYPES = ["ออกแบบระบบ/เขียนแบบ", "ประกอบตู้ Control", "Wiring", "เขียนโปรแกรม PLC/HMI", "ติดตั้งหน้างาน", "Commissioning/Test Run", "แก้ไข Breakdown", "ปรับปรุงเครื่องจักร", "อื่น ๆ"]
 QC_ASSIGNEES = [
@@ -3177,7 +3178,8 @@ QC_ASSIGNEES = [
     "นพดลสุรแสน",
     "พฤหัส หาเรือนทอง",
     "ไพรัตน์ อยู่พุ่มพฤกษ์",
-    "สัมพันธ์ รักวิถี"
+    "สัมพันธ์ รักวิถี",
+    "วันชัย สอรัต"
 ]
 AUTOMATION_ASSIGNEES = [
     "— เลือกผู้รับผิดชอบ —",
@@ -3194,6 +3196,24 @@ AUTOMATION_ASSIGNEES = [
 
 def get_department_assignees(department):
     return QC_ASSIGNEES if department == "QC" else AUTOMATION_ASSIGNEES
+
+QC_HOURLY_RATES = {
+    normalize_filter_key("พนารัตน์ ใยสำลี"): 300.0,
+    normalize_filter_key("Mr.Win Zaw Lat"): 300.0,
+    normalize_filter_key("WIN ZAW LAT"): 300.0,
+    normalize_filter_key("สายันต์ กลับเป็นสุข"): 300.0,
+    normalize_filter_key("ปวีณ์กร ลิอุบล"): 1200.0,
+    normalize_filter_key("นพดลสุรแสน"): 300.0,
+    normalize_filter_key("นพดล สุระแสน"): 300.0,
+    normalize_filter_key("พฤหัส หาเรือนทอง"): 1200.0,
+    normalize_filter_key("ไพรัตน์ อยู่พุ่มพฤกษ์"): 1200.0,
+    normalize_filter_key("เชาวรินทร์ สีเหลือง"): 300.0,
+    normalize_filter_key("ภัทรวดี ชีตารักษ์"): 300.0,
+    normalize_filter_key("วันชัย สอรัต"): 300.0,
+}
+
+def get_qc_hourly_rate(assignee):
+    return QC_HOURLY_RATES.get(normalize_filter_key(assignee))
 
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_department_work_orders(department):
@@ -3412,6 +3432,83 @@ def render_department_finished_history(finished_tasks, department, now):
             else:
                 st.error(f"ลบประวัติไม่สำเร็จ: {delete_message}")
 
+def render_qc_time_cost_table(qc_tasks, now):
+    """สรุปเวลาและต้นทุนแรงงาน QC จากเวลาแผนและเวลาเดินจริงสุทธิ"""
+    with st.expander("💰 ตารางคำนวณเวลาและต้นทุน QC", expanded=False):
+        if qc_tasks is None or qc_tasks.empty:
+            st.info("ยังไม่มีใบงาน QC สำหรับคำนวณเวลาและต้นทุน")
+            return
+
+        cost_rows = []
+        missing_rate_names = set()
+        for _, task_row in qc_tasks.iterrows():
+            assignee_name = safe_str(task_row.get("assignee"), "ไม่ระบุ")
+            hourly_rate = get_qc_hourly_rate(assignee_name)
+            if hourly_rate is None:
+                missing_rate_names.add(assignee_name)
+
+            planned_hours = max(0.0, safe_float(task_row.get("estimated_hours"), 0.0))
+            actual_start = parse_flexible_datetime(task_row.get("actual_start"))
+            actual_finish = parse_flexible_datetime(task_row.get("actual_finish"))
+            task_status = safe_str(task_row.get("status"), "-")
+            actual_end = actual_finish
+            if actual_end is None and actual_start is not None and ("กำลังทำ" in task_status or "พักงาน" in task_status):
+                actual_end = now
+
+            paused_seconds = max(0.0, safe_float(task_row.get("paused_seconds"), 0.0))
+            if "พักงาน" in task_status and actual_end is not None:
+                hold_started_at = parse_flexible_datetime(task_row.get("hold_started_at"))
+                if hold_started_at is not None and hold_started_at < actual_end:
+                    paused_seconds += get_work_seconds_between(hold_started_at, actual_end)
+
+            actual_hours = 0.0
+            if actual_start is not None and actual_end is not None and actual_end > actual_start:
+                actual_hours = get_net_actual_work_seconds(actual_start, actual_end, paused_seconds) / 3600.0
+
+            planned_cost = planned_hours * hourly_rate if hourly_rate is not None else None
+            actual_cost = actual_hours * hourly_rate if hourly_rate is not None else None
+            cost_rows.append({
+                "สถานะ": task_status,
+                "แผนงาน": safe_str(task_row.get("plan_code"), "-"),
+                "Drawing": safe_str(task_row.get("drawing_name"), "-"),
+                "ประเภทงาน": safe_str(task_row.get("work_type"), "-"),
+                "ผู้รับผิดชอบ": assignee_name,
+                "เวลาประมาณรวม (ช.ม)": round(planned_hours, 2),
+                "เวลาจริงสุทธิ (ช.ม)": round(actual_hours, 2),
+                "เรท (บาท/ช.ม)": hourly_rate,
+                "ต้นทุนตามแผน (บาท)": round(planned_cost, 2) if planned_cost is not None else None,
+                "ต้นทุนจริง (บาท)": round(actual_cost, 2) if actual_cost is not None else None,
+            })
+
+        cost_df = pd.DataFrame(cost_rows)
+        total_planned_cost = pd.to_numeric(cost_df["ต้นทุนตามแผน (บาท)"], errors="coerce").sum()
+        total_actual_cost = pd.to_numeric(cost_df["ต้นทุนจริง (บาท)"], errors="coerce").sum()
+        c1, c2, c3 = st.columns(3)
+        c1.metric("จำนวนใบงาน QC", f"{len(cost_df):,}")
+        c2.metric("ต้นทุนตามแผนรวม", f"{total_planned_cost:,.2f} บาท")
+        c3.metric("ต้นทุนจริงสะสม", f"{total_actual_cost:,.2f} บาท")
+        if missing_rate_names:
+            st.warning("ยังไม่กำหนดเรตราคา: " + ", ".join(sorted(missing_rate_names)))
+
+        st.dataframe(
+            cost_df,
+            hide_index=True,
+            use_container_width=True,
+            height=min(520, 80 + len(cost_df) * 36),
+            column_config={
+                "สถานะ": st.column_config.TextColumn("สถานะ", width="medium"),
+                "แผนงาน": st.column_config.TextColumn("แผนงาน", width="small"),
+                "Drawing": st.column_config.TextColumn("Drawing", width="medium"),
+                "ประเภทงาน": st.column_config.TextColumn("ประเภทงาน", width="large"),
+                "ผู้รับผิดชอบ": st.column_config.TextColumn("ผู้รับผิดชอบ", width="medium"),
+                "เวลาประมาณรวม (ช.ม)": st.column_config.NumberColumn("เวลาประมาณรวม (ช.ม)", format="%.2f"),
+                "เวลาจริงสุทธิ (ช.ม)": st.column_config.NumberColumn("เวลาจริงสุทธิ (ช.ม)", format="%.2f"),
+                "เรท (บาท/ช.ม)": st.column_config.NumberColumn("เรท (บาท/ช.ม)", format="%.2f"),
+                "ต้นทุนตามแผน (บาท)": st.column_config.NumberColumn("ต้นทุนตามแผน (บาท)", format="%.2f"),
+                "ต้นทุนจริง (บาท)": st.column_config.NumberColumn("ต้นทุนจริง (บาท)", format="%.2f"),
+            }
+        )
+
 def render_people_work_center(department):
     is_qc = department == "QC"
     icon = "🧪" if is_qc else "🤖"
@@ -3426,38 +3523,28 @@ def render_people_work_center(department):
         st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL ที่แนบมาก่อนใช้งานโหมดนี้")
         return
 
-    create_widget_keys = [
-        f"{department}_create_work_type",
-        f"{department}_create_plan_code",
-        f"{department}_create_drawing_name",
-        f"{department}_create_task_title",
-        f"{department}_create_assignee",
-        f"{department}_create_priority",
-        f"{department}_create_relationship",
-        f"{department}_create_planned_start_date",
-        f"{department}_create_planned_start_time",
-        f"{department}_create_due_date",
-        f"{department}_create_due_time",
-        f"{department}_create_details",
-    ]
-    reset_create_form_key = f"{department}_reset_create_work_order_form"
-    if st.session_state.pop(reset_create_form_key, False):
-        for widget_key in create_widget_keys:
-            st.session_state.pop(widget_key, None)
+    # เปลี่ยนรุ่น key ของแบบฟอร์มหลังบันทึกสำเร็จ เพื่อบังคับให้ Streamlit
+    # สร้าง widget ชุดใหม่และไม่คืนค่าชุดเดิมจากฝั่งเบราว์เซอร์
+    create_form_version_key = f"{department}_create_form_version"
+    if create_form_version_key not in st.session_state:
+        st.session_state[create_form_version_key] = 0
+    create_form_version = safe_int(st.session_state.get(create_form_version_key), 0)
+    def create_widget_key(field_name):
+        return f"{department}_create_{field_name}_v{create_form_version}"
 
     with st.expander("➕ สร้างใบงาน", expanded=False):
         # ใช้ widget ปกติแทน st.form เพื่อคำนวณชั่วโมงใหม่ทันทีเมื่อเปลี่ยนวัน/เวลา
         with st.container():
             c1, c2, c3 = st.columns(3)
             with c1:
-                work_type = st.selectbox("ประเภทงาน", work_types, key=f"{department}_create_work_type")
-                plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ", key=f"{department}_create_plan_code")
-                drawing_name = st.text_input("Drawing (ถ้ามี)", key=f"{department}_create_drawing_name")
+                work_type = st.selectbox("ประเภทงาน", work_types, key=create_widget_key("work_type"))
+                plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ", key=create_widget_key("plan_code"))
+                drawing_name = st.text_input("Drawing (ถ้ามี)", key=create_widget_key("drawing_name"))
             with c2:
-                task_title = st.text_input("ชื่อบริษัทลูกค้า *", key=f"{department}_create_task_title")
-                assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", department_assignees, key=f"{department}_create_assignee")
+                task_title = st.text_input("ชื่อบริษัทลูกค้า *", key=create_widget_key("task_title"))
+                assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", department_assignees, key=create_widget_key("assignee"))
             with c3:
-                priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES, key=f"{department}_create_priority")
+                priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES, key=create_widget_key("priority"))
                 relationship = st.selectbox(
                     "ลักษณะงานที่ทำ",
                     [
@@ -3467,7 +3554,7 @@ def render_people_work_center(department):
                         "ทำต่อจาก Production",
                         "ทำคู่ขนานกับ Production"
                     ],
-                    key=f"{department}_create_relationship"
+                    key=create_widget_key("relationship")
                 )
             t1, t2, t3, t4 = st.columns(4)
             with t1:
@@ -3475,20 +3562,20 @@ def render_people_work_center(department):
                     "วันที่กำหนดเริ่มงาน",
                     value=get_bangkok_now().date(),
                     format="DD/MM/YYYY",
-                    key=f"{department}_create_planned_start_date"
+                    key=create_widget_key("planned_start_date")
                 )
             with t2:
-                planned_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=dtime(8, 30), key=f"{department}_create_planned_start_time")
+                planned_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=dtime(8, 30), key=create_widget_key("planned_start_time"))
             with t3:
                 due_date = st.date_input(
                     "วันที่กำหนดเสร็จงาน",
                     value=get_bangkok_now().date(),
                     format="DD/MM/YYYY",
-                    key=f"{department}_create_due_date"
+                    key=create_widget_key("due_date")
                 )
             with t4:
-                due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30), key=f"{department}_create_due_time")
-            details = st.text_area("รายละเอียดงาน *", key=f"{department}_create_details")
+                due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30), key=create_widget_key("due_time"))
+            details = st.text_area("รายละเอียดงาน *", key=create_widget_key("details"))
             checklist = ""
             planned_start_preview = datetime.combine(planned_start_date, planned_start_time)
             due_at_preview = datetime.combine(due_date, due_time)
@@ -3502,7 +3589,7 @@ def render_people_work_center(department):
                 step=0.01,
                 disabled=True,
                 key=(
-                    f"{department}_auto_estimated_hours_"
+                    f"{department}_auto_estimated_hours_v{create_form_version}_"
                     f"{planned_start_preview.isoformat()}_{due_at_preview.isoformat()}"
                 )
             )
@@ -3516,7 +3603,7 @@ def render_people_work_center(department):
                 type="primary",
                 use_container_width=True,
                 disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
-                key=f"{department}_create_work_order_submit"
+                key=create_widget_key("work_order_submit")
             )
         if submitted:
             planned_start_at = datetime.combine(planned_start_date, planned_start_time)
@@ -3542,7 +3629,7 @@ def render_people_work_center(department):
                 else:
                     ok, message = insert_department_work_order(create_payload)
                     if ok:
-                        st.session_state[reset_create_form_key] = True
+                        st.session_state[create_form_version_key] = create_form_version + 1
                         st.success("สร้างใบงานเรียบร้อย")
                         st.rerun()
                     else:
@@ -3685,6 +3772,9 @@ def render_people_work_center(department):
     finished_mask = status_text.str.contains("เสร็จ", na=False)
     active_tasks = tasks[~finished_mask].copy()
     finished_tasks = tasks[finished_mask].copy()
+
+    if is_qc:
+        render_qc_time_cost_table(tasks, now)
 
     if False:  # ตารางชุดเก่าเลิกใช้แล้ว; ตารางใหม่จะแสดงใต้ตารางคิวงานปัจจุบัน
         history_quick = st.radio(
