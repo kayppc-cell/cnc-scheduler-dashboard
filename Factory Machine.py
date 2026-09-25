@@ -3384,20 +3384,39 @@ def render_people_work_center(department):
         st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL ที่แนบมาก่อนใช้งานโหมดนี้")
         return
 
+    create_widget_keys = [
+        f"{department}_create_work_type",
+        f"{department}_create_plan_code",
+        f"{department}_create_drawing_name",
+        f"{department}_create_task_title",
+        f"{department}_create_assignee",
+        f"{department}_create_priority",
+        f"{department}_create_relationship",
+        f"{department}_create_planned_start_date",
+        f"{department}_create_planned_start_time",
+        f"{department}_create_due_date",
+        f"{department}_create_due_time",
+        f"{department}_create_details",
+        f"{department}_create_checklist",
+    ]
+    reset_create_form_key = f"{department}_reset_create_work_order_form"
+    if st.session_state.pop(reset_create_form_key, False):
+        for widget_key in create_widget_keys:
+            st.session_state.pop(widget_key, None)
+
     with st.expander(f"➕ สร้าง{'ใบตรวจ QC' if is_qc else 'ใบสั่งงาน Automation'}ใหม่", expanded=False):
         # ใช้ widget ปกติแทน st.form เพื่อคำนวณชั่วโมงใหม่ทันทีเมื่อเปลี่ยนวัน/เวลา
         with st.container():
             c1, c2, c3 = st.columns(3)
             with c1:
-                work_type = st.selectbox("ประเภทงาน", work_types)
-                plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ")
-                drawing_name = st.text_input("Drawing (ถ้ามี)")
+                work_type = st.selectbox("ประเภทงาน", work_types, key=f"{department}_create_work_type")
+                plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ", key=f"{department}_create_plan_code")
+                drawing_name = st.text_input("Drawing (ถ้ามี)", key=f"{department}_create_drawing_name")
             with c2:
-                task_title = st.text_input("ชื่อบริษัทลูกค้า *")
-                assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", DEPARTMENT_ASSIGNEES)
-                requester = st.text_input("ผู้สั่งงาน/ผู้ส่งตรวจ")
+                task_title = st.text_input("ชื่อบริษัทลูกค้า *", key=f"{department}_create_task_title")
+                assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", DEPARTMENT_ASSIGNEES, key=f"{department}_create_assignee")
             with c3:
-                priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES)
+                priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES, key=f"{department}_create_priority")
                 relationship = st.selectbox(
                     "ลักษณะงานที่ Check",
                     [
@@ -3406,27 +3425,30 @@ def render_people_work_center(department):
                         "ตรวจเช็ค Part ชิ้น",
                         "ทำต่อจาก Production",
                         "ทำคู่ขนานกับ Production"
-                    ]
+                    ],
+                    key=f"{department}_create_relationship"
                 )
             t1, t2, t3, t4 = st.columns(4)
             with t1:
                 planned_start_date = st.date_input(
                     "วันที่กำหนดเริ่มงาน",
                     value=get_bangkok_now().date(),
-                    format="DD/MM/YYYY"
+                    format="DD/MM/YYYY",
+                    key=f"{department}_create_planned_start_date"
                 )
             with t2:
-                planned_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=dtime(8, 30))
+                planned_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=dtime(8, 30), key=f"{department}_create_planned_start_time")
             with t3:
                 due_date = st.date_input(
                     "วันที่กำหนดเสร็จงาน",
                     value=get_bangkok_now().date(),
-                    format="DD/MM/YYYY"
+                    format="DD/MM/YYYY",
+                    key=f"{department}_create_due_date"
                 )
             with t4:
-                due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30))
-            details = st.text_area("รายละเอียดคำสั่งงาน / จุดที่ต้องตรวจ *")
-            checklist = "" if is_qc else st.text_area("Checklist / เกณฑ์ยอมรับ", placeholder="พิมพ์หัวข้อละหนึ่งบรรทัด")
+                due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30), key=f"{department}_create_due_time")
+            details = st.text_area("รายละเอียดคำสั่งงาน / จุดที่ต้องตรวจ *", key=f"{department}_create_details")
+            checklist = "" if is_qc else st.text_area("Checklist / เกณฑ์ยอมรับ", placeholder="พิมพ์หัวข้อละหนึ่งบรรทัด", key=f"{department}_create_checklist")
             planned_start_preview = datetime.combine(planned_start_date, planned_start_time)
             due_at_preview = datetime.combine(due_date, due_time)
             estimated_hours = round(
@@ -3468,7 +3490,7 @@ def render_people_work_center(department):
                 create_payload = {
                     "department": department, "work_type": work_type, "title": task_title.strip(),
                     "plan_code": plan_code.strip() or None, "drawing_name": drawing_name.strip() or None,
-                    "requester": requester.strip() or None, "assignee": assignee.strip(),
+                    "assignee": assignee.strip(),
                     "priority": priority, "relationship_type": relationship,
                     "planned_start_at": planned_start_at_text, "due_at": due_at,
                     "estimated_hours": estimated_hours, "details": details.strip(),
@@ -3479,6 +3501,7 @@ def render_people_work_center(department):
                 else:
                     ok, message = insert_department_work_order(create_payload)
                     if ok:
+                        st.session_state[reset_create_form_key] = True
                         st.success("สร้างใบงานเรียบร้อย")
                         st.rerun()
                     else:
@@ -3503,34 +3526,68 @@ def render_people_work_center(department):
     k4.metric("เกินกำหนด", int(overdue_mask.sum()))
 
     if is_qc:
-        qc_status_chart = pd.DataFrame({
-            "สถานะ": DEPT_TASK_STATUSES,
-            "จำนวนใบงาน": [int((status_text == status_name).sum()) for status_name in DEPT_TASK_STATUSES]
-        })
-        qc_status_fig = px.bar(
-            qc_status_chart,
-            x="สถานะ",
-            y="จำนวนใบงาน",
-            color="สถานะ",
-            text="จำนวนใบงาน",
-            title="📊 แผนภูมิจำนวนใบงาน QC แยกตามสถานะ",
+        qc_timeline = tasks.copy()
+        qc_timeline = qc_timeline[
+            qc_timeline["planned_start_at"].notna() & qc_timeline["due_at"].notna()
+        ].copy()
+        if not qc_timeline.empty:
+            qc_timeline["เลขแผน"] = qc_timeline.get("plan_code", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่ระบุแผน").astype(str)
+            qc_timeline["ผู้ปฏิบัติงาน"] = qc_timeline.get("assignee", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่ระบุ").astype(str)
+            qc_timeline["Drawing"] = qc_timeline.get("drawing_name", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่มี Drawing").astype(str)
+            qc_timeline["สถานะ"] = qc_timeline.get("status", pd.Series(index=qc_timeline.index, dtype=str)).fillna("🟧 รอรับงาน").astype(str)
+            qc_timeline["รายการงาน"] = qc_timeline.apply(
+                lambda row: (
+                    f"แผน {safe_str(row.get('เลขแผน'), '-')} | "
+                    f"{safe_str(row.get('ผู้ปฏิบัติงาน'), '-')} | "
+                    f"{safe_str(row.get('Drawing'), '-')}"
+                ),
+                axis=1
+            )
+            qc_timeline["กำหนดเริ่ม"] = qc_timeline["planned_start_at"].dt.strftime("%d/%m/%Y %H:%M")
+            qc_timeline["กำหนดเสร็จ"] = qc_timeline["due_at"].dt.strftime("%d/%m/%Y %H:%M")
+            qc_timeline["เริ่มจริง"] = qc_timeline.get("actual_start", pd.Series(pd.NaT, index=qc_timeline.index)).apply(
+                lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) else "ยังไม่ Start"
+            )
+            qc_timeline["เสร็จจริง"] = qc_timeline.get("actual_finish", pd.Series(pd.NaT, index=qc_timeline.index)).apply(
+                lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) else "-"
+            )
+            qc_status_fig = px.timeline(
+                qc_timeline,
+                x_start="planned_start_at",
+                x_end="due_at",
+                y="รายการงาน",
+                color="สถานะ",
+                text="เลขแผน",
+                hover_data={
+                    "ผู้ปฏิบัติงาน": True,
+                    "Drawing": True,
+                    "กำหนดเริ่ม": True,
+                    "กำหนดเสร็จ": True,
+                    "เริ่มจริง": True,
+                    "เสร็จจริง": True,
+                    "planned_start_at": False,
+                    "due_at": False,
+                    "รายการงาน": False
+                },
+                title="📊 แผนภูมิช่วงเวลาใบงาน QC รายแผน / ผู้ปฏิบัติงาน / Drawing",
             color_discrete_map={
                 "🟧 รอรับงาน": "#F97316",
                 "🟦 กำลังทำ": "#2563EB",
                 "🟨 พักงาน": "#EAB308",
                 "✅ เสร็จแล้ว": "#16A34A"
             }
-        )
-        qc_status_fig.update_traces(textposition="outside", cliponaxis=False)
-        qc_status_fig.update_layout(
-            height=330,
-            showlegend=False,
-            margin=dict(l=10, r=10, t=55, b=10),
-            xaxis_title="สถานะใบงาน",
-            yaxis_title="จำนวนใบงาน",
-            yaxis=dict(dtick=1, rangemode="tozero")
-        )
-        st.plotly_chart(qc_status_fig, use_container_width=True, config={"displayModeBar": False})
+            )
+            qc_status_fig.update_traces(textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=11))
+            qc_status_fig.update_yaxes(autorange="reversed", title="แผน | ผู้ปฏิบัติงาน | Drawing")
+            qc_status_fig.update_xaxes(title="วัน/เดือน เวลา", tickformat="%d/%m<br>%H:%M")
+            qc_status_fig.update_layout(
+                height=max(360, min(900, 135 + len(qc_timeline) * 46)),
+                legend_title_text="สถานะใบงาน",
+                margin=dict(l=10, r=15, t=65, b=20)
+            )
+            st.plotly_chart(qc_status_fig, use_container_width=True, config={"displayModeBar": True, "scrollZoom": True})
+        else:
+            st.info("ยังไม่มีใบงาน QC ที่มีกำหนดเริ่มและกำหนดเสร็จสำหรับแสดงแผนภูมิ")
 
     finished_mask = status_text.str.contains("เสร็จ", na=False)
     active_tasks = tasks[~finished_mask].copy()
@@ -3820,7 +3877,6 @@ def render_people_work_center(department):
             with ec2:
                 edit_title = st.text_input("ชื่อบริษัทลูกค้า *", value=safe_str(task.get("title"), ""))
                 edit_assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", edit_assignees, index=edit_assignees.index(current_assignee))
-                edit_requester = st.text_input("ผู้สั่งงาน/ผู้ส่งตรวจ", value=safe_str(task.get("requester"), ""))
             with ec3:
                 edit_priority = st.selectbox("ความเร่งด่วน", edit_priorities, index=edit_priorities.index(current_priority))
                 edit_relationship = st.selectbox("ลักษณะงานที่ Check", relationship_options, index=relationship_options.index(current_relationship))
@@ -3851,7 +3907,6 @@ def render_people_work_center(department):
                     "title": edit_title.strip(),
                     "plan_code": edit_plan_code.strip() or None,
                     "drawing_name": edit_drawing.strip() or None,
-                    "requester": edit_requester.strip() or None,
                     "assignee": edit_assignee,
                     "priority": edit_priority,
                     "relationship_type": edit_relationship,
@@ -4085,10 +4140,25 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 if reason:
                     return f"🟨 พักงานชั่วคราว — {reason}"
         return "🟨 พักงานชั่วคราว รอขึ้นงาน"
+
+    machine_queue_counts = {machine_name: 0 for machine_name in MACHINE_LIST}
+    if isinstance(df_all, pd.DataFrame) and not df_all.empty:
+        active_machine_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
+        active_machine_rows = df_all[
+            df_all.get("สถานะงาน", pd.Series(index=df_all.index, dtype=str)).isin(active_machine_statuses)
+        ]
+        if not active_machine_rows.empty and "เลือกเครื่องจักร" in active_machine_rows.columns:
+            counted_queues = active_machine_rows.groupby("เลือกเครื่องจักร").size().to_dict()
+            machine_queue_counts.update({safe_str(name): int(count) for name, count in counted_queues.items()})
     
     c_m_sel, c_mode_sel = st.columns([2, 2])
     with c_m_sel:
-        selected_m = st.selectbox("🏭 เลือกเครื่องจักร / แผนก:", MACHINE_LIST, key="op_machine_select")
+        selected_m = st.selectbox(
+            "🏭 เลือกเครื่องจักร / แผนก:",
+            MACHINE_LIST,
+            format_func=lambda machine_name: f"{machine_name} — มี {machine_queue_counts.get(machine_name, 0)} คิว",
+            key="op_machine_select"
+        )
     with c_mode_sel:
         run_mode = st.radio("⚙️ รูปแบบการผลิต:", ["🔹 รันทีละคิว (Piece by Piece)", "📦 รันรวมหลายงานพร้อมกัน (Batch Processing)"], horizontal=True)
 
@@ -8781,8 +8851,11 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         mascot_html = f'<div class="dept-tv-mascot {mascot_class}" title="{mascot_title}"><span class="dept-tv-mascot-main">{mascot_main}</span><span class="dept-tv-mascot-mini">{mascot_mini}</span></div>'
 
         current_department = "QC" if safe_str(current_task.get("department")) == "QC" else "Automation"
+        planned_start = parse_flexible_datetime(current_task.get("planned_start_at"))
+        planned_start_text = planned_start.strftime("%d/%m/%Y %H:%M") if planned_start is not None else "-"
         due_text = current_due.strftime("%d/%m/%Y %H:%M") if current_due is not None else "-"
         current_start = parse_flexible_datetime(current_task.get("actual_start"))
+        actual_start_text = current_start.strftime("%d/%m/%Y %H:%M") if current_start is not None else "ยังไม่ Start"
         paused_seconds = safe_float(current_task.get("paused_seconds"), 0.0)
         if current_start is not None:
             elapsed_seconds = get_net_actual_work_seconds(current_start, tv_dept_now, paused_seconds)
@@ -8800,6 +8873,8 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             <div class="dept-tv-line">🧰 {html.escape(safe_str(current_task.get('work_type'), '-'))}</div>
             <div class="dept-tv-line">📌 แผน: {html.escape(safe_str(current_task.get('plan_code'), '-'))}</div>
             <div class="dept-tv-line">📄 Drawing: {html.escape(safe_str(current_task.get('drawing_name'), '-'))}</div>
+            <div class="dept-tv-time-row">📅 กำหนดเริ่ม: {planned_start_text}</div>
+            <div class="dept-tv-time-row">🚀 เริ่มจริง: {actual_start_text}</div>
             <div class="dept-tv-line">⏱️ เวลาทำงาน: {html.escape(elapsed_text)}</div>
             <div class="dept-tv-due">🏁 กำหนดเสร็จ: {due_text}</div>
             {extra_queue_html}
@@ -8851,6 +8926,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
       .dept-tv-dept {{ font-size:13px; font-weight:800; color:#FDE68A; margin-bottom:5px; }}
       .dept-tv-company {{ font-size:17px; font-weight:900; margin:4px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
       .dept-tv-line {{ font-size:12.5px; margin:3px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      .dept-tv-time-row {{ font-size:12.5px; margin:3px 0; font-weight:800; color:#F8FAFC; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
       .dept-tv-due {{ background:rgba(15,23,42,.48); border-radius:7px; padding:5px 7px; font-size:12.5px; font-weight:800; margin-top:6px; }}
       .dept-tv-next {{ margin-top:6px; font-size:12px; color:#E2E8F0; }}
       .dept-tv-empty {{ display:flex; align-items:center; justify-content:center; height:125px; font-size:20px; color:#CBD5E1; }}
