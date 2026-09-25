@@ -1894,9 +1894,18 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             status = "🟡 เริ่มก่อนกรอบ Production"
         else:
             status = "🟢 อยู่ในแผน"
-        planned_hours = pd.to_numeric(
-            sub.get("รวม (ชม.)", pd.Series(index=sub.index, dtype=float)), errors="coerce"
-        ).fillna(0.0).sum()
+        # คำนวณชั่วโมงแผนจากข้อมูลต้นทางโดยตรง เพื่อให้ใช้ได้ทั้งหน้าแดชบอร์ด
+        # และหน้าติดตามสถานการณ์ฝ่ายผลิตซึ่งส่ง df_db ดิบเข้ามาโดยยังไม่มีคอลัมน์ รวม (ชม.)
+        setup_minutes = pd.to_numeric(
+            sub.get("Setup (น.)", pd.Series(0.0, index=sub.index)), errors="coerce"
+        ).fillna(DEFAULT_SETUP_MINUTES)
+        basic_minutes = pd.to_numeric(
+            sub.get("Basic (น.)", pd.Series(0.0, index=sub.index)), errors="coerce"
+        ).fillna(DEFAULT_BASIC_MINUTES)
+        program_minutes = pd.to_numeric(
+            sub.get("โปรแกรม (น.)", pd.Series(0.0, index=sub.index)), errors="coerce"
+        ).fillna(DEFAULT_PROGRAM_MINUTES)
+        planned_hours = ((setup_minutes + basic_minutes + program_minutes) / 60.0).sum()
         shown_risky_drawings = risky_drawings or delayed_drawings
         shown_risky_machines = risky_machines or delayed_machines
         rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "คิวดีเลย์": delayed_count, "ดีเลย์สูงสุด (ชม.)": round(max_delay_hours, 1), "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": shown_risky_drawings or "-", "เครื่องเสี่ยง": shown_risky_machines or "-", "Drawing ทั้งหมด": drawing_progress["drawing_total"], "Drawing เสร็จแล้ว": drawing_progress["drawing_completed"], "Drawing คงเหลือ": drawing_progress["drawing_remaining"], "งานคงเหลือ (%)": drawing_progress["remaining_pct"], "งานเสร็จ (%)": drawing_progress["completed_pct"], "ชั่วโมงแผน": round(planned_hours, 2)})
@@ -3541,6 +3550,16 @@ def render_people_work_center(department):
             qc_timeline["ผู้ปฏิบัติงาน"] = qc_timeline.get("assignee", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่ระบุ").astype(str)
             qc_timeline["Drawing"] = qc_timeline.get("drawing_name", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่มี Drawing").astype(str)
             qc_timeline["สถานะ"] = qc_timeline.get("status", pd.Series(index=qc_timeline.index, dtype=str)).fillna("🟧 รอรับงาน").astype(str)
+            qc_alert_now = get_bangkok_now().replace(tzinfo=None)
+            qc_minutes_to_due = (qc_timeline["due_at"] - qc_alert_now).dt.total_seconds() / 60.0
+            # ใช้สีเตือนบนกราฟเท่านั้น โดยไม่แก้สถานะงานจริงในฐานข้อมูล
+            qc_timeline["สถานะกราฟ"] = qc_timeline["สถานะ"]
+            qc_timeline.loc[
+                (qc_minutes_to_due >= 0) & (qc_minutes_to_due <= 30), "สถานะกราฟ"
+            ] = "🟡 ใกล้ครบกำหนด (ไม่เกิน 30 นาที)"
+            qc_timeline.loc[
+                qc_minutes_to_due < 0, "สถานะกราฟ"
+            ] = "🔴 เลยกำหนดเสร็จ"
             qc_timeline["เลขที่ใบงาน"] = qc_timeline.get("id", pd.Series(index=qc_timeline.index, dtype=int)).apply(
                 lambda value: safe_int(value, 0)
             )
@@ -3564,7 +3583,7 @@ def render_people_work_center(department):
                 x_start="planned_start_at",
                 x_end="due_at",
                 y="ผู้ปฏิบัติงาน",
-                color="สถานะ",
+                color="สถานะกราฟ",
                 text="ข้อความบนแท่ง",
                 hover_data={
                     "เลขที่ใบงาน": True,
@@ -3575,6 +3594,7 @@ def render_people_work_center(department):
                     "กำหนดเสร็จ": True,
                     "เริ่มจริง": True,
                     "เสร็จจริง": True,
+                    "สถานะกราฟ": False,
                     "planned_start_at": False,
                     "due_at": False,
                     "ข้อความบนแท่ง": False
@@ -3584,7 +3604,9 @@ def render_people_work_center(department):
                 "🟧 รอรับงาน": "#F97316",
                 "🟦 กำลังทำ": "#2563EB",
                 "🟨 พักงาน": "#EAB308",
-                "✅ เสร็จแล้ว": "#16A34A"
+                "✅ เสร็จแล้ว": "#16A34A",
+                "🟡 ใกล้ครบกำหนด (ไม่เกิน 30 นาที)": "#FACC15",
+                "🔴 เลยกำหนดเสร็จ": "#DC2626"
             }
             )
             qc_status_fig.update_traces(textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=11))
@@ -3616,7 +3638,7 @@ def render_people_work_center(department):
             qc_operator_count = max(1, qc_timeline["ผู้ปฏิบัติงาน"].nunique())
             qc_status_fig.update_layout(
                 height=max(360, min(700, 160 + qc_operator_count * 62)),
-                legend_title_text="สถานะใบงาน",
+                legend_title_text="สถานะ/การแจ้งเตือน",
                 margin=dict(l=10, r=15, t=65, b=20),
                 dragmode=False
             )
