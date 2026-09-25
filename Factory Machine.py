@@ -3265,7 +3265,7 @@ def delete_waiting_department_work_order(task_id):
 
 def render_department_finished_history(finished_tasks, department, now):
     """ตารางประวัติสำหรับผู้ควบคุม แสดงใต้ตารางคิวและเลือกลบจากแถวได้โดยตรง"""
-    if False:  # ย้ายตารางประวัติไปแสดงใต้ตารางคิวงานปัจจุบันแล้ว
+    with st.expander(f"✅ ตารางประวัติงานที่เสร็จแล้ว ({len(finished_tasks)} รายการ)", expanded=False):
         history_quick = st.radio(
             "⚡ ตัวกรองเร็วประวัติงาน",
             ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้"],
@@ -3527,7 +3527,7 @@ def render_people_work_center(department):
     active_tasks = tasks[~finished_mask].copy()
     finished_tasks = tasks[finished_mask].copy()
 
-    with st.expander(f"✅ ตารางประวัติงานที่เสร็จแล้ว ({len(finished_tasks)} รายการ)", expanded=False):
+    if False:  # ตารางชุดเก่าเลิกใช้แล้ว; ตารางใหม่จะแสดงใต้ตารางคิวงานปัจจุบัน
         history_quick = st.radio(
             "⚡ ตัวกรองเร็วประวัติงาน",
             ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้"],
@@ -3856,7 +3856,6 @@ def render_people_work_center(department):
                 else:
                     st.error("บันทึกการแก้ไขไม่สำเร็จ")
 
-    st.info("ℹ️ การ Start / พัก / Resume / Finish งาน ทำได้เฉพาะในโหมดผู้ปฏิบัติงานเท่านั้น")
     render_department_finished_history(finished_tasks, department, now)
 
 def render_department_operator_mode():
