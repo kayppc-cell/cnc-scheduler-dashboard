@@ -3527,6 +3527,12 @@ def render_people_work_center(department):
 
     if is_qc:
         qc_timeline = tasks.copy()
+        qc_timeline_status = qc_timeline.get(
+            "status", pd.Series(index=qc_timeline.index, dtype=str)
+        ).fillna("").astype(str)
+        qc_timeline = qc_timeline[
+            ~qc_timeline_status.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)
+        ].copy()
         qc_timeline = qc_timeline[
             qc_timeline["planned_start_at"].notna() & qc_timeline["due_at"].notna()
         ].copy()
@@ -3582,8 +3588,31 @@ def render_people_work_center(department):
             }
             )
             qc_status_fig.update_traces(textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=11))
-            qc_status_fig.update_yaxes(autorange="reversed", title="ผู้ปฏิบัติงาน", fixedrange=True)
-            qc_status_fig.update_xaxes(title="วัน/เดือน เวลา", tickformat="%d/%m<br>%H:%M", fixedrange=True)
+            qc_status_fig.update_yaxes(
+                autorange="reversed",
+                title="ผู้ปฏิบัติงาน",
+                fixedrange=True,
+                showline=True,
+                linewidth=1.5,
+                linecolor="#64748B",
+                showgrid=True,
+                gridcolor="#D7DEE8",
+                gridwidth=1,
+                ticks="outside"
+            )
+            qc_status_fig.update_xaxes(
+                title="วัน/เดือน เวลา",
+                tickformat="%d/%m<br>%H:%M",
+                fixedrange=True,
+                showline=True,
+                linewidth=1.5,
+                linecolor="#64748B",
+                showgrid=True,
+                gridcolor="#D7DEE8",
+                gridwidth=1,
+                ticks="outside",
+                zeroline=False
+            )
             qc_operator_count = max(1, qc_timeline["ผู้ปฏิบัติงาน"].nunique())
             qc_status_fig.update_layout(
                 height=max(360, min(700, 160 + qc_operator_count * 62)),
@@ -3597,7 +3626,7 @@ def render_people_work_center(department):
                 config={"displayModeBar": False, "scrollZoom": False, "doubleClick": False}
             )
         else:
-            st.info("ยังไม่มีใบงาน QC ที่มีกำหนดเริ่มและกำหนดเสร็จสำหรับแสดงแผนภูมิ")
+            st.info("ยังไม่มีใบงาน QC ปัจจุบันที่มีกำหนดเริ่มและกำหนดเสร็จสำหรับแสดงแผนภูมิ")
 
     finished_mask = status_text.str.contains("เสร็จ", na=False)
     active_tasks = tasks[~finished_mask].copy()
