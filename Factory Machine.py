@@ -3163,7 +3163,7 @@ QC_WORK_TYPES = [
     "ตรวจ Check นอกสถานที่"
 ]
 AUTO_WORK_TYPES = ["ออกแบบระบบ/เขียนแบบ", "ประกอบตู้ Control", "Wiring", "เขียนโปรแกรม PLC/HMI", "ติดตั้งหน้างาน", "Commissioning/Test Run", "แก้ไข Breakdown", "ปรับปรุงเครื่องจักร", "อื่น ๆ"]
-DEPARTMENT_ASSIGNEES = [
+QC_ASSIGNEES = [
     "— เลือกผู้รับผิดชอบ —",
     "พนารัตน์ ใยสำลี",
     "เชาวรินทร์ สีเหลือง",
@@ -3173,8 +3173,24 @@ DEPARTMENT_ASSIGNEES = [
     "ปวีณ์กร ลิอุบล",
     "นพดลสุรแสน",
     "พฤหัส หาเรือนทอง",
-    "ไพรัตน์ อยู่พุ่มพฤกษ์"
+    "ไพรัตน์ อยู่พุ่มพฤกษ์",
+    "สัมพันธ์ รักวิถี"
 ]
+AUTOMATION_ASSIGNEES = [
+    "— เลือกผู้รับผิดชอบ —",
+    "สมเกียรติ บุญยัง",
+    "สมศักดิ์ เถื่อนคำ",
+    "คมสันต์ วิรุณพันธ์",
+    "วัยวัฒน์ สุขพันธ์",
+    "สันติพงษ์ จันทร์ศิริ",
+    "รัชพล รอดเทศ",
+    "ไพรัฐ เอี่ยมไพโรจน์",
+    "ภูเบศร์ กรานเคารพ",
+    "ปรีชา แจ้งใจ"
+]
+
+def get_department_assignees(department):
+    return QC_ASSIGNEES if department == "QC" else AUTOMATION_ASSIGNEES
 
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_department_work_orders(department):
@@ -3398,6 +3414,7 @@ def render_people_work_center(department):
     icon = "🧪" if is_qc else "🤖"
     title = "งานตรวจสอบ QC" if is_qc else "ใบสั่งงาน Automation"
     work_types = QC_WORK_TYPES if is_qc else AUTO_WORK_TYPES
+    department_assignees = get_department_assignees(department)
     st.subheader(f"{icon} {title}")
     st.caption("คิวงานบุคคล/ทีม — แยกจากเวลาลูกโซ่เครื่องจักร Production")
 
@@ -3419,7 +3436,6 @@ def render_people_work_center(department):
         f"{department}_create_due_date",
         f"{department}_create_due_time",
         f"{department}_create_details",
-        f"{department}_create_checklist",
     ]
     reset_create_form_key = f"{department}_reset_create_work_order_form"
     if st.session_state.pop(reset_create_form_key, False):
@@ -3436,11 +3452,11 @@ def render_people_work_center(department):
                 drawing_name = st.text_input("Drawing (ถ้ามี)", key=f"{department}_create_drawing_name")
             with c2:
                 task_title = st.text_input("ชื่อบริษัทลูกค้า *", key=f"{department}_create_task_title")
-                assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", DEPARTMENT_ASSIGNEES, key=f"{department}_create_assignee")
+                assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", department_assignees, key=f"{department}_create_assignee")
             with c3:
                 priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES, key=f"{department}_create_priority")
                 relationship = st.selectbox(
-                    "ลักษณะงานที่ Check",
+                    "ลักษณะงานที่ทำ",
                     [
                         "งานทั่วไป",
                         "ตรวจเช็ค โครงสร้าง Base Fram",
@@ -3469,8 +3485,8 @@ def render_people_work_center(department):
                 )
             with t4:
                 due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30), key=f"{department}_create_due_time")
-            details = st.text_area("รายละเอียดคำสั่งงาน / จุดที่ต้องตรวจ *", key=f"{department}_create_details")
-            checklist = "" if is_qc else st.text_area("Checklist / เกณฑ์ยอมรับ", placeholder="พิมพ์หัวข้อละหนึ่งบรรทัด", key=f"{department}_create_checklist")
+            details = st.text_area("รายละเอียดงาน *", key=f"{department}_create_details")
+            checklist = ""
             planned_start_preview = datetime.combine(planned_start_date, planned_start_time)
             due_at_preview = datetime.combine(due_date, due_time)
             estimated_hours = round(
@@ -3790,11 +3806,32 @@ def render_people_work_center(department):
         horizontal=True,
         key=f"{department}_queue_quick"
     )
-    f1, f2 = st.columns([2, 4])
-    with f1:
-        priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
-    with f2:
-        search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ", key=f"{department}_search")
+    plan_filter = "ทุกแผนงาน"
+    assignee_filter = "ทุกคน"
+    if is_qc:
+        plan_options = sorted(
+            value for value in active_tasks.get("plan_code", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
+            if value
+        )
+        assignee_options = sorted(
+            value for value in active_tasks.get("assignee", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
+            if value
+        )
+        f1, f2, f3, f4 = st.columns([1.3, 1.6, 2.0, 3.1])
+        with f1:
+            priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
+        with f2:
+            plan_filter = st.selectbox("📌 เลขแผน", ["ทุกแผนงาน"] + plan_options, key=f"{department}_plan_filter")
+        with f3:
+            assignee_filter = st.selectbox("👤 ผู้ปฏิบัติงาน", ["ทุกคน"] + assignee_options, key=f"{department}_assignee_filter")
+        with f4:
+            search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ", key=f"{department}_search")
+    else:
+        f1, f2 = st.columns([2, 4])
+        with f1:
+            priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
+        with f2:
+            search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ", key=f"{department}_search")
     shown = active_tasks.copy()
     shown_status = shown.get("status", pd.Series(index=shown.index, dtype=str)).fillna("").astype(str)
     shown_due = shown.get("due_at", pd.Series(pd.NaT, index=shown.index))
@@ -3810,6 +3847,14 @@ def render_people_work_center(department):
         shown = shown[shown.get("priority", pd.Series(index=shown.index, dtype=str)).astype(str).isin(["เร่งด่วน", "วิกฤต"])]
     if priority_filter != "ทั้งหมด":
         shown = shown[shown["priority"].astype(str) == priority_filter]
+    if is_qc and plan_filter != "ทุกแผนงาน":
+        shown = shown[
+            shown.get("plan_code", pd.Series(index=shown.index, dtype=str)).fillna("").astype(str).str.strip() == plan_filter
+        ]
+    if is_qc and assignee_filter != "ทุกคน":
+        shown = shown[
+            shown.get("assignee", pd.Series(index=shown.index, dtype=str)).fillna("").astype(str).str.strip() == assignee_filter
+        ]
     if search_text.strip():
         q = search_text.strip().lower()
         search_cols = [c for c in ["plan_code", "drawing_name", "title", "assignee", "work_type"] if c in shown.columns]
@@ -3925,8 +3970,10 @@ def render_people_work_center(department):
     edit_due_dt = parse_flexible_datetime(task.get("due_at")) or (edit_start_dt + timedelta(hours=1))
     current_work_type = safe_str(task.get("work_type"), work_types[0])
     edit_work_types = work_types if current_work_type in work_types else [current_work_type] + work_types
-    current_assignee = safe_str(task.get("assignee"), DEPARTMENT_ASSIGNEES[0])
-    edit_assignees = DEPARTMENT_ASSIGNEES if current_assignee in DEPARTMENT_ASSIGNEES else DEPARTMENT_ASSIGNEES + [current_assignee]
+    current_assignee = safe_str(task.get("assignee"), department_assignees[0])
+    if current_assignee not in department_assignees:
+        current_assignee = department_assignees[0]
+    edit_assignees = department_assignees
     current_priority = safe_str(task.get("priority"), DEPT_PRIORITIES[0])
     edit_priorities = DEPT_PRIORITIES if current_priority in DEPT_PRIORITIES else [current_priority] + DEPT_PRIORITIES
     relationship_options = [
@@ -3953,7 +4000,7 @@ def render_people_work_center(department):
                 edit_assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", edit_assignees, index=edit_assignees.index(current_assignee))
             with ec3:
                 edit_priority = st.selectbox("ความเร่งด่วน", edit_priorities, index=edit_priorities.index(current_priority))
-                edit_relationship = st.selectbox("ลักษณะงานที่ Check", relationship_options, index=relationship_options.index(current_relationship))
+                edit_relationship = st.selectbox("ลักษณะงานที่ทำ", relationship_options, index=relationship_options.index(current_relationship))
             et1, et2, et3, et4 = st.columns(4)
             with et1:
                 edit_start_date = st.date_input("วันที่กำหนดเริ่มงาน", value=edit_start_dt.date(), format="DD/MM/YYYY")
@@ -3963,8 +4010,8 @@ def render_people_work_center(department):
                 edit_due_date = st.date_input("วันที่กำหนดเสร็จงาน", value=edit_due_dt.date(), format="DD/MM/YYYY")
             with et4:
                 edit_due_time = st.time_input("เวลากำหนดเสร็จงาน", value=edit_due_dt.time().replace(microsecond=0))
-            edit_details = st.text_area("รายละเอียดคำสั่งงาน / จุดที่ต้องตรวจ *", value=safe_str(task.get("details"), ""))
-            edit_checklist = "" if is_qc else st.text_area("Checklist / เกณฑ์ยอมรับ", value=safe_str(task.get("checklist"), ""))
+            edit_details = st.text_area("รายละเอียดงาน *", value=safe_str(task.get("details"), ""))
+            edit_checklist = ""
             edit_submit = st.form_submit_button("💾 บันทึกการแก้ไข", type="primary", use_container_width=True)
 
         if edit_submit:
@@ -4015,7 +4062,10 @@ def render_department_operator_mode():
     task_frames = [frame for frame in [qc_tasks, automation_tasks] if isinstance(frame, pd.DataFrame) and not frame.empty]
     all_tasks = pd.concat(task_frames, ignore_index=True) if task_frames else pd.DataFrame()
 
-    operator_names = DEPARTMENT_ASSIGNEES[1:]
+    operator_names = list(dict.fromkeys(QC_ASSIGNEES[1:] + AUTOMATION_ASSIGNEES[1:]))
+    if not all_tasks.empty and "assignee" in all_tasks.columns:
+        existing_operator_names = all_tasks["assignee"].dropna().astype(str).str.strip().tolist()
+        operator_names = list(dict.fromkeys(operator_names + [name for name in existing_operator_names if name]))
     active_counts = {}
     for operator_name in operator_names:
         if all_tasks.empty:
@@ -8828,7 +8878,12 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
     dept_tv_idle = 0
     dept_tv_done = 0
 
-    for tv_operator in DEPARTMENT_ASSIGNEES[1:]:
+    tv_operator_names = list(dict.fromkeys(QC_ASSIGNEES[1:] + AUTOMATION_ASSIGNEES[1:]))
+    if not tv_dept_tasks.empty and "assignee" in tv_dept_tasks.columns:
+        existing_tv_names = tv_dept_tasks["assignee"].dropna().astype(str).str.strip().tolist()
+        tv_operator_names = list(dict.fromkeys(tv_operator_names + [name for name in existing_tv_names if name]))
+
+    for tv_operator in tv_operator_names:
         if tv_dept_tasks.empty:
             operator_rows = pd.DataFrame()
             operator_active = pd.DataFrame()
