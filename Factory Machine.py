@@ -3537,6 +3537,7 @@ def render_people_work_center(department):
             qc_timeline["สถานะ"] = qc_timeline.get("status", pd.Series(index=qc_timeline.index, dtype=str)).fillna("🟧 รอรับงาน").astype(str)
             qc_timeline["รายการงาน"] = qc_timeline.apply(
                 lambda row: (
+                    f"ใบงาน #{safe_int(row.get('id'), 0)} | "
                     f"แผน {safe_str(row.get('เลขแผน'), '-')} | "
                     f"{safe_str(row.get('ผู้ปฏิบัติงาน'), '-')} | "
                     f"{safe_str(row.get('Drawing'), '-')}"
@@ -3578,7 +3579,7 @@ def render_people_work_center(department):
             }
             )
             qc_status_fig.update_traces(textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=11))
-            qc_status_fig.update_yaxes(autorange="reversed", title="แผน | ผู้ปฏิบัติงาน | Drawing")
+            qc_status_fig.update_yaxes(autorange="reversed", title="ใบงาน | แผน | ผู้ปฏิบัติงาน | Drawing")
             qc_status_fig.update_xaxes(title="วัน/เดือน เวลา", tickformat="%d/%m<br>%H:%M")
             qc_status_fig.update_layout(
                 height=max(360, min(900, 135 + len(qc_timeline) * 46)),
@@ -8860,8 +8861,20 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         if current_start is not None:
             elapsed_seconds = get_net_actual_work_seconds(current_start, tv_dept_now, paused_seconds)
             elapsed_text = format_duration_short(elapsed_seconds)
+            if "กำลังทำ" in current_status:
+                dept_timer_start_epoch = to_bangkok_epoch_ms(current_start)
+                dept_timer_render_epoch = to_bangkok_epoch_ms(tv_dept_now)
+                elapsed_display_html = (
+                    f'<span class="dept-tv-live-timer" '
+                    f'data-start-epoch="{dept_timer_start_epoch}" '
+                    f'data-base-work-seconds="{int(elapsed_seconds)}" '
+                    f'data-render-epoch="{dept_timer_render_epoch}">00:00:00</span>'
+                )
+            else:
+                elapsed_display_html = html.escape(elapsed_text)
         else:
             elapsed_text = "ยังไม่ Start"
+            elapsed_display_html = html.escape(elapsed_text)
         remaining_count = max(0, len(operator_active) - 1)
         extra_queue_html = f'<div class="dept-tv-next">📚 มีคิวถัดไปอีก {remaining_count} งาน</div>' if remaining_count else '<div class="dept-tv-next">📚 ไม่มีคิวถัดไป</div>'
         dept_tv_cards.append(f"""
@@ -8875,7 +8888,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             <div class="dept-tv-line">📄 Drawing: {html.escape(safe_str(current_task.get('drawing_name'), '-'))}</div>
             <div class="dept-tv-time-row">📅 กำหนดเริ่ม: {planned_start_text}</div>
             <div class="dept-tv-time-row">🚀 เริ่มจริง: {actual_start_text}</div>
-            <div class="dept-tv-line">⏱️ เวลาทำงาน: {html.escape(elapsed_text)}</div>
+            <div class="dept-tv-line">⏱️ เวลาทำงาน: {elapsed_display_html}</div>
             <div class="dept-tv-due">🏁 กำหนดเสร็จ: {due_text}</div>
             {extra_queue_html}
         </div>
@@ -8927,6 +8940,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
       .dept-tv-company {{ font-size:17px; font-weight:900; margin:4px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
       .dept-tv-line {{ font-size:12.5px; margin:3px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
       .dept-tv-time-row {{ font-size:12.5px; margin:3px 0; font-weight:800; color:#F8FAFC; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      .dept-tv-live-timer {{ font-family:Consolas,monospace; font-size:14px; font-weight:900; color:#FDE047; letter-spacing:.4px; }}
       .dept-tv-due {{ background:rgba(15,23,42,.48); border-radius:7px; padding:5px 7px; font-size:12.5px; font-weight:800; margin-top:6px; }}
       .dept-tv-next {{ margin-top:6px; font-size:12px; color:#E2E8F0; }}
       .dept-tv-empty {{ display:flex; align-items:center; justify-content:center; height:125px; font-size:20px; color:#CBD5E1; }}
@@ -8949,6 +8963,36 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           if (el) el.innerText = new Date().toLocaleTimeString('th-TH', {hour12:false}) + ' น.';
         } catch(e) {}
       }
+      function updateDeptTvTimers() {
+        try {
+          const nowTs = Date.now();
+          const bkkNow = new Date(nowTs + (7 * 60 * 60 * 1000));
+          const day = bkkNow.getUTCDay();
+          const minuteOfDay = bkkNow.getUTCHours() * 60 + bkkNow.getUTCMinutes();
+          const weekdayWindows = [[510,600],[610,720],[780,900],[910,1020],[1050,1200]];
+          const saturdayWindows = [[510,600],[610,720],[780,900],[910,1020]];
+          const windows = day === 0 ? [] : (day === 6 ? saturdayWindows : weekdayWindows);
+          const isWorkingNow = windows.some(w => minuteOfDay >= w[0] && minuteOfDay < w[1]);
+          const timerEls = window.parent.document.querySelectorAll('.dept-tv-live-timer');
+          timerEls.forEach(el => {
+            let totalSecs = Number(el.dataset.liveSeconds);
+            if (!Number.isFinite(totalSecs)) {
+              totalSecs = Number(el.getAttribute('data-base-work-seconds') || '0') || 0;
+            }
+            const lastTs = Number(el.dataset.lastTickEpoch || nowTs);
+            if (isWorkingNow) {
+              totalSecs += Math.max(0, Math.floor((nowTs - lastTs) / 1000));
+            }
+            totalSecs = Math.max(0, Math.floor(totalSecs));
+            el.dataset.liveSeconds = String(totalSecs);
+            el.dataset.lastTickEpoch = String(nowTs);
+            const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+            const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+            const secs = String(totalSecs % 60).padStart(2, '0');
+            el.innerText = hrs + ':' + mins + ':' + secs;
+          });
+        } catch(e) {}
+      }
       let deptTvRefreshRemaining = 30;
       function updateDeptTvRefreshCount() {
         try {
@@ -8958,6 +9002,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         } catch(e) {}
       }
       setInterval(updateDeptTvClock, 1000); updateDeptTvClock();
+      setInterval(updateDeptTvTimers, 1000); updateDeptTvTimers();
       setInterval(updateDeptTvRefreshCount, 1000);
       setTimeout(function(){
         try {
