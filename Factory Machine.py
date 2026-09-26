@@ -3682,7 +3682,7 @@ def render_people_work_center(department):
         template_ids = [0] + list(template_rows.keys())
 
         st.markdown("##### 🧩 Template ใบงาน")
-        template_choice_cols = st.columns([3, 1, 1])
+        template_choice_cols = st.columns([3, 1, 1, 1])
         with template_choice_cols[0]:
             selected_template_id = st.selectbox(
                 "เลือก Template",
@@ -3706,6 +3706,14 @@ def render_people_work_center(department):
             )
         with template_choice_cols[2]:
             st.write("")
+            edit_template = st.button(
+                "✏️ แก้ไข Template",
+                use_container_width=True,
+                disabled=(selected_template_id == 0),
+                key=f"{department}_edit_template"
+            )
+        with template_choice_cols[3]:
+            st.write("")
             delete_template = st.button(
                 "🗑️ ลบ Template",
                 use_container_width=True,
@@ -3715,6 +3723,22 @@ def render_people_work_center(department):
 
         if load_template and selected_template_id in template_rows:
             selected_template = template_rows[selected_template_id]
+            st.session_state.pop(f"{department}_editing_template_id", None)
+            st.session_state[template_defaults_key] = {
+                "work_type": safe_str(selected_template.get("work_type")),
+                "task_title": safe_str(selected_template.get("title")),
+                "assignee": safe_str(selected_template.get("assignee")),
+                "priority": safe_str(selected_template.get("priority")),
+                "relationship": safe_str(selected_template.get("relationship_type")),
+                "details": safe_str(selected_template.get("details")),
+                "template_name": safe_str(selected_template.get("requester")),
+            }
+            st.session_state[create_form_version_key] = create_form_version + 1
+            st.rerun()
+
+        if edit_template and selected_template_id in template_rows:
+            selected_template = template_rows[selected_template_id]
+            st.session_state[f"{department}_editing_template_id"] = selected_template_id
             st.session_state[template_defaults_key] = {
                 "work_type": safe_str(selected_template.get("work_type")),
                 "task_title": safe_str(selected_template.get("title")),
@@ -3730,6 +3754,8 @@ def render_people_work_center(department):
         if delete_template and selected_template_id in template_rows:
             ok, message = delete_waiting_department_work_order(selected_template_id)
             if ok:
+                if safe_int(st.session_state.get(f"{department}_editing_template_id"), 0) == selected_template_id:
+                    st.session_state.pop(f"{department}_editing_template_id", None)
                 st.success("ลบ Template เรียบร้อย")
                 st.rerun()
             else:
@@ -3743,6 +3769,15 @@ def render_people_work_center(department):
 
         # ใช้ widget ปกติแทน st.form เพื่อคำนวณชั่วโมงใหม่ทันทีเมื่อเปลี่ยนวัน/เวลา
         with st.container():
+            editing_template_id = safe_int(
+                st.session_state.get(f"{department}_editing_template_id"), 0
+            )
+            if editing_template_id > 0:
+                editing_template_name = safe_str(
+                    template_rows.get(editing_template_id, {}).get("requester"),
+                    f"Template #{editing_template_id}"
+                )
+                st.info(f"✏️ กำลังแก้ไข Template: {editing_template_name}")
             c1, c2, c3 = st.columns(3)
             with c1:
                 work_type = st.selectbox(
@@ -3837,7 +3872,7 @@ def render_people_work_center(department):
             action_cols = st.columns(2)
             with action_cols[0]:
                 save_template = st.button(
-                    "🧩 บันทึกเป็น Template",
+                    "💾 บันทึกการแก้ไข Template" if editing_template_id > 0 else "🧩 บันทึกเป็น Template",
                     use_container_width=True,
                     key=create_widget_key("save_template")
                 )
@@ -3853,7 +3888,8 @@ def render_people_work_center(department):
         if save_template:
             existing_template_names = {
                 normalize_filter_key(row.get("requester"))
-                for row in template_rows.values()
+                for template_id, row in template_rows.items()
+                if template_id != editing_template_id
             }
             if not template_name.strip():
                 st.warning("กรุณาตั้งชื่อ Template")
@@ -3880,9 +3916,15 @@ def render_people_work_center(department):
                     "result_note": DEPARTMENT_TEMPLATE_MARKER,
                     "status": "🟧 รอรับงาน"
                 }
-                ok, message = insert_department_work_order(template_payload)
+                if editing_template_id > 0:
+                    ok = update_department_work_order(editing_template_id, template_payload)
+                    message = "" if ok else "อัปเดต Template ไม่สำเร็จ"
+                else:
+                    ok, message = insert_department_work_order(template_payload)
                 if ok:
-                    st.success("บันทึก Template เรียบร้อย")
+                    st.session_state.pop(f"{department}_editing_template_id", None)
+                    st.session_state[create_form_version_key] = create_form_version + 1
+                    st.success("บันทึกการแก้ไข Template เรียบร้อย" if editing_template_id > 0 else "บันทึก Template เรียบร้อย")
                     st.rerun()
                 else:
                     st.error(f"บันทึก Template ไม่สำเร็จ: {message}")
