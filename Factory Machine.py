@@ -3194,6 +3194,22 @@ AUTOMATION_ASSIGNEES = [
     "ปรีชา แจ้งใจ"
 ]
 
+# Template ใบงานใช้ตารางเดิมเพื่อให้บันทึกถาวรโดยไม่ต้องเพิ่มโครงสร้างฐานข้อมูล
+# แต่ติด marker ไว้ใน result_note และต้องกรองออกจากคิว/KPI/กราฟ/จอทีวีทุกครั้ง
+DEPARTMENT_TEMPLATE_MARKER = "__TPC_WORK_ORDER_TEMPLATE__"
+
+def split_department_work_order_templates(tasks):
+    """แยกใบงานจริงและ Template โดยไม่แก้ไข DataFrame ต้นฉบับจาก cache"""
+    if not isinstance(tasks, pd.DataFrame):
+        return tasks, pd.DataFrame()
+    if tasks.empty:
+        return tasks.copy(), tasks.copy()
+    marker_series = tasks.get(
+        "result_note", pd.Series(index=tasks.index, dtype=object)
+    ).fillna("").astype(str)
+    template_mask = marker_series.eq(DEPARTMENT_TEMPLATE_MARKER)
+    return tasks.loc[~template_mask].copy(), tasks.loc[template_mask].copy()
+
 def get_department_assignees(department):
     return QC_ASSIGNEES if department == "QC" else AUTOMATION_ASSIGNEES
 
@@ -3641,6 +3657,7 @@ def render_people_work_center(department):
     if tasks is None:
         st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL ที่แนบมาก่อนใช้งานโหมดนี้")
         return
+    tasks, templates = split_department_work_order_templates(tasks)
 
     # เปลี่ยนรุ่น key ของแบบฟอร์มหลังบันทึกสำเร็จ เพื่อบังคับให้ Streamlit
     # สร้าง widget ชุดใหม่และไม่คืนค่าชุดเดิมจากฝั่งเบราว์เซอร์
@@ -3652,27 +3669,115 @@ def render_people_work_center(department):
         return f"{department}_create_{field_name}_v{create_form_version}"
 
     with st.expander("➕ สร้างใบงาน", expanded=False):
+        template_defaults_key = f"{department}_pending_template_defaults"
+        template_defaults = st.session_state.pop(template_defaults_key, {})
+        template_rows = {}
+        if isinstance(templates, pd.DataFrame) and not templates.empty:
+            template_rows = {
+                safe_int(row.get("id")): row
+                for _, row in templates.iterrows()
+                if safe_int(row.get("id")) > 0
+            }
+        template_ids = [0] + list(template_rows.keys())
+
+        st.markdown("##### 🧩 Template ใบงาน")
+        template_choice_cols = st.columns([3, 1, 1])
+        with template_choice_cols[0]:
+            selected_template_id = st.selectbox(
+                "เลือก Template",
+                template_ids,
+                format_func=lambda template_id: (
+                    "— ยังไม่เลือก Template —" if template_id == 0 else
+                    safe_str(
+                        template_rows[template_id].get("requester"),
+                        f"Template #{template_id}"
+                    )
+                ),
+                key=f"{department}_template_selector_{'_'.join(map(str, template_ids))}"
+            )
+        with template_choice_cols[1]:
+            st.write("")
+            load_template = st.button(
+                "📋 เรียกใช้ Template",
+                use_container_width=True,
+                disabled=(selected_template_id == 0),
+                key=f"{department}_load_template"
+            )
+        with template_choice_cols[2]:
+            st.write("")
+            delete_template = st.button(
+                "🗑️ ลบ Template",
+                use_container_width=True,
+                disabled=(selected_template_id == 0),
+                key=f"{department}_delete_template"
+            )
+
+        if load_template and selected_template_id in template_rows:
+            selected_template = template_rows[selected_template_id]
+            st.session_state[template_defaults_key] = {
+                "work_type": safe_str(selected_template.get("work_type")),
+                "task_title": safe_str(selected_template.get("title")),
+                "assignee": safe_str(selected_template.get("assignee")),
+                "priority": safe_str(selected_template.get("priority")),
+                "relationship": safe_str(selected_template.get("relationship_type")),
+                "details": safe_str(selected_template.get("details")),
+                "template_name": safe_str(selected_template.get("requester")),
+            }
+            st.session_state[create_form_version_key] = create_form_version + 1
+            st.rerun()
+
+        if delete_template and selected_template_id in template_rows:
+            ok, message = delete_waiting_department_work_order(selected_template_id)
+            if ok:
+                st.success("ลบ Template เรียบร้อย")
+                st.rerun()
+            else:
+                st.error(f"ลบ Template ไม่สำเร็จ: {message}")
+
+        def default_index(options, default_value, fallback=0):
+            try:
+                return options.index(default_value)
+            except (ValueError, AttributeError):
+                return fallback
+
         # ใช้ widget ปกติแทน st.form เพื่อคำนวณชั่วโมงใหม่ทันทีเมื่อเปลี่ยนวัน/เวลา
         with st.container():
             c1, c2, c3 = st.columns(3)
             with c1:
-                work_type = st.selectbox("ประเภทงาน", work_types, key=create_widget_key("work_type"))
+                work_type = st.selectbox(
+                    "ประเภทงาน", work_types,
+                    index=default_index(work_types, template_defaults.get("work_type")),
+                    key=create_widget_key("work_type")
+                )
                 plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ", key=create_widget_key("plan_code"))
                 drawing_name = st.text_input("Drawing (ถ้ามี)", key=create_widget_key("drawing_name"))
             with c2:
-                task_title = st.text_input("ชื่อบริษัทลูกค้า *", key=create_widget_key("task_title"))
-                assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", department_assignees, key=create_widget_key("assignee"))
+                task_title = st.text_input(
+                    "ชื่อบริษัทลูกค้า *", value=template_defaults.get("task_title", ""),
+                    key=create_widget_key("task_title")
+                )
+                assignee = st.selectbox(
+                    "ผู้รับผิดชอบ/ทีม *", department_assignees,
+                    index=default_index(department_assignees, template_defaults.get("assignee")),
+                    key=create_widget_key("assignee")
+                )
             with c3:
-                priority = st.selectbox("ความเร่งด่วน", DEPT_PRIORITIES, key=create_widget_key("priority"))
+                priority = st.selectbox(
+                    "ความเร่งด่วน", DEPT_PRIORITIES,
+                    index=default_index(DEPT_PRIORITIES, template_defaults.get("priority")),
+                    key=create_widget_key("priority")
+                )
+                relationship_options = [
+                    "งานทั่วไป",
+                    "ตรวจเช็ค โครงสร้าง Base Fram",
+                    "ตรวจเช็ค Part ชิ้น",
+                    "ทำต่อจาก Production",
+                    "ทำคู่ขนานกับ Production"
+                ]
                 relationship = st.selectbox(
                     "ลักษณะงานที่ทำ",
-                    [
-                        "งานทั่วไป",
-                        "ตรวจเช็ค โครงสร้าง Base Fram",
-                        "ตรวจเช็ค Part ชิ้น",
-                        "ทำต่อจาก Production",
-                        "ทำคู่ขนานกับ Production"
-                    ],
+                    relationship_options,
+                    index=default_index(relationship_options, template_defaults.get("relationship")),
                     key=create_widget_key("relationship")
                 )
             t1, t2, t3, t4 = st.columns(4)
@@ -3694,7 +3799,10 @@ def render_people_work_center(department):
                 )
             with t4:
                 due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30), key=create_widget_key("due_time"))
-            details = st.text_area("รายละเอียดงาน *", key=create_widget_key("details"))
+            details = st.text_area(
+                "รายละเอียดงาน *", value=template_defaults.get("details", ""),
+                key=create_widget_key("details")
+            )
             checklist = ""
             planned_start_preview = datetime.combine(planned_start_date, planned_start_time)
             due_at_preview = datetime.combine(due_date, due_time)
@@ -3717,13 +3825,64 @@ def render_people_work_center(department):
                 st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
             elif estimated_hours <= 0:
                 st.warning("ช่วงเวลาที่เลือกไม่มีเวลาทำงานตามกะ กรุณาปรับวันหรือเวลา")
-            submitted = st.button(
-                "💾 สร้างใบงาน",
-                type="primary",
-                use_container_width=True,
-                disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
-                key=create_widget_key("work_order_submit")
+            template_name = st.text_input(
+                "ชื่อ Template",
+                value=template_defaults.get("template_name", ""),
+                placeholder="เช่น ตรวจรับชิ้นงานลูกค้า A",
+                key=create_widget_key("template_name")
             )
+            action_cols = st.columns(2)
+            with action_cols[0]:
+                save_template = st.button(
+                    "🧩 บันทึกเป็น Template",
+                    use_container_width=True,
+                    key=create_widget_key("save_template")
+                )
+            with action_cols[1]:
+                submitted = st.button(
+                    "💾 สร้างใบงาน",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
+                    key=create_widget_key("work_order_submit")
+                )
+
+        if save_template:
+            existing_template_names = {
+                normalize_filter_key(row.get("requester"))
+                for row in template_rows.values()
+            }
+            if not template_name.strip():
+                st.warning("กรุณาตั้งชื่อ Template")
+            elif normalize_filter_key(template_name) in existing_template_names:
+                st.warning("มีชื่อ Template นี้อยู่แล้ว กรุณาใช้ชื่ออื่นหรือลบ Template เดิมก่อน")
+            elif not task_title.strip() or assignee == "— เลือกผู้รับผิดชอบ —" or not details.strip():
+                st.warning("ก่อนบันทึก Template กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
+            else:
+                template_payload = {
+                    "department": department,
+                    "work_type": work_type,
+                    "title": task_title.strip(),
+                    "plan_code": None,
+                    "drawing_name": None,
+                    "assignee": assignee.strip(),
+                    "priority": priority,
+                    "relationship_type": relationship,
+                    "planned_start_at": None,
+                    "due_at": None,
+                    "estimated_hours": 0,
+                    "details": details.strip(),
+                    "checklist": None,
+                    "requester": template_name.strip(),
+                    "result_note": DEPARTMENT_TEMPLATE_MARKER,
+                    "status": "🟧 รอรับงาน"
+                }
+                ok, message = insert_department_work_order(template_payload)
+                if ok:
+                    st.success("บันทึก Template เรียบร้อย")
+                    st.rerun()
+                else:
+                    st.error(f"บันทึก Template ไม่สำเร็จ: {message}")
         if submitted:
             planned_start_at = datetime.combine(planned_start_date, planned_start_time)
             due_at_dt = datetime.combine(due_date, due_time)
@@ -4273,6 +4432,8 @@ def render_department_operator_mode():
     if qc_tasks is None or automation_tasks is None:
         st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL สำหรับโหมด QC/Automation ก่อน")
         return
+    qc_tasks, _ = split_department_work_order_templates(qc_tasks)
+    automation_tasks, _ = split_department_work_order_templates(automation_tasks)
     task_frames = [frame for frame in [qc_tasks, automation_tasks] if isinstance(frame, pd.DataFrame) and not frame.empty]
     all_tasks = pd.concat(task_frames, ignore_index=True) if task_frames else pd.DataFrame()
 
@@ -9073,6 +9234,8 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
     st.cache_data.clear()
     qc_tv_tasks = fetch_department_work_orders("QC")
     auto_tv_tasks = fetch_department_work_orders("AUTOMATION")
+    qc_tv_tasks, _ = split_department_work_order_templates(qc_tv_tasks)
+    auto_tv_tasks, _ = split_department_work_order_templates(auto_tv_tasks)
     tv_dept_frames = [
         frame for frame in [qc_tv_tasks, auto_tv_tasks]
         if isinstance(frame, pd.DataFrame) and not frame.empty
