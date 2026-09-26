@@ -3226,6 +3226,7 @@ QC_HOURLY_RATES = {
     normalize_filter_key("เชาวรินทร์ สีเหลือง"): 300.0,
     normalize_filter_key("ภัทรวดี ชีตารักษ์"): 300.0,
     normalize_filter_key("วันชัย สอรัต"): 300.0,
+    normalize_filter_key("สัมพันธ์ รักวิถี"): 300.0,
 }
 
 def get_qc_hourly_rate(assignee):
