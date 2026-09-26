@@ -3775,6 +3775,8 @@ def render_people_work_center(department):
                     "ทำต่อจาก Production",
                     "ทำคู่ขนานกับ Production"
                 ]
+                if is_qc:
+                    relationship_options.insert(3, "เช็คงานตาม Cad 3D")
                 relationship = st.selectbox(
                     "ลักษณะงานที่ทำ",
                     relationship_options,
