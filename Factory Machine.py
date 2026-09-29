@@ -6184,6 +6184,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 else:
                     normal_template_map = {safe_str(item.get("drawing_name")): item for item in templates}
                     normal_form_version_key = "normal_template_job_form_version"
+                    normal_last_machine_key = "normal_template_last_machine"
+                    normal_last_drawing_key = "normal_template_last_drawing"
                     normal_form_version = safe_int(st.session_state.get(normal_form_version_key), 0)
                     n1, n2, n3 = st.columns([1.2, 2, 1])
                     with n1:
@@ -6193,9 +6195,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             placeholder="เช่น 26-146",
                         )
                     with n2:
+                        normal_drawing_options = list(normal_template_map.keys())
+                        normal_last_drawing = safe_str(st.session_state.get(normal_last_drawing_key), "")
                         normal_drawing = st.selectbox(
                             "Drawing Template",
-                            list(normal_template_map.keys()),
+                            normal_drawing_options,
+                            index=(
+                                normal_drawing_options.index(normal_last_drawing)
+                                if normal_last_drawing in normal_drawing_options else 0
+                            ),
                             key=f"normal_template_drawing_{normal_form_version}",
                         )
                     normal_tpl = normal_template_map[normal_drawing]
@@ -6212,6 +6220,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     n4, n5, n6 = st.columns([1.5, 1, 1])
                     with n4:
                         normal_machine_default = safe_str(normal_tpl.get("machine_name"), MACHINE_LIST[0])
+                        normal_last_machine = safe_str(st.session_state.get(normal_last_machine_key), "")
+                        if normal_last_machine in MACHINE_LIST:
+                            normal_machine_default = normal_last_machine
                         normal_machine = st.selectbox(
                             "เครื่องจักร",
                             MACHINE_LIST,
@@ -6372,8 +6383,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                         None, normal_combined_steps, "🟧 รอคิวผลิต"
                                     ),
                                 }
-                                if insert_supabase_job(normal_payload):
+                                # ล้างเฉพาะข้อมูลคิวงาน ไม่ล้างแคชทั้งระบบ เพื่อให้บันทึกและโหลดหน้าถัดไปเร็วขึ้น
+                                if insert_supabase_job(normal_payload, clear_cache=False):
+                                    st.session_state[normal_last_machine_key] = normal_machine
+                                    st.session_state[normal_last_drawing_key] = normal_drawing
                                     st.session_state[normal_form_version_key] = normal_form_version + 1
+                                    fetch_jobs_from_supabase.clear()
                                     st.success(
                                         f"สร้างใบงาน {normal_plan.strip()} / {normal_drawing} และส่งเข้าคิว {normal_machine} เรียบร้อยแล้ว"
                                     )
