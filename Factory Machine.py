@@ -3682,85 +3682,44 @@ def render_people_work_center(department):
             }
         template_ids = [0] + list(template_rows.keys())
 
-        st.markdown("##### 🧩 Template ใบงาน")
-        template_choice_cols = st.columns([3, 1, 1, 1])
-        with template_choice_cols[0]:
-            selected_template_id = st.selectbox(
-                "เลือก Template",
-                template_ids,
-                format_func=lambda template_id: (
-                    "— ยังไม่เลือก Template —" if template_id == 0 else
-                    safe_str(
-                        template_rows[template_id].get("requester"),
-                        f"Template #{template_id}"
-                    )
-                ),
-                key=f"{department}_template_selector_{'_'.join(map(str, template_ids))}"
-            )
-        with template_choice_cols[1]:
-            st.write("")
-            load_template = st.button(
-                "📋 เรียกใช้ Template",
-                use_container_width=True,
-                disabled=(selected_template_id == 0),
-                key=f"{department}_load_template"
-            )
-        with template_choice_cols[2]:
-            st.write("")
-            edit_template = st.button(
-                "✏️ แก้ไข Template",
-                use_container_width=True,
-                disabled=(selected_template_id == 0),
-                key=f"{department}_edit_template"
-            )
-        with template_choice_cols[3]:
-            st.write("")
-            delete_template = st.button(
-                "🗑️ ลบ Template",
-                use_container_width=True,
-                disabled=(selected_template_id == 0),
-                key=f"{department}_delete_template"
-            )
-
-        if load_template and selected_template_id in template_rows:
-            selected_template = template_rows[selected_template_id]
+        st.markdown("##### 📝 สร้างใบงาน")
+        create_template_selector_key = f"{department}_create_template_selector_{'_'.join(map(str, template_ids))}"
+        selected_create_template_id = st.selectbox(
+            "เลือก Template เพื่อเติมข้อมูลอัตโนมัติ (ไม่เลือกก็กรอกเองได้)",
+            template_ids,
+            format_func=lambda template_id: (
+                "— ไม่ใช้ Template / กรอกข้อมูลใหม่ —" if template_id == 0 else
+                safe_str(template_rows[template_id].get("requester"), f"Template #{template_id}")
+            ),
+            key=create_template_selector_key,
+        )
+        last_create_template_key = f"{department}_last_create_template_id"
+        if last_create_template_key not in st.session_state:
+            st.session_state[last_create_template_key] = 0
+        last_create_template_id = safe_int(
+            st.session_state.get(last_create_template_key), 0
+        )
+        if selected_create_template_id != last_create_template_id:
+            st.session_state[last_create_template_key] = selected_create_template_id
             st.session_state.pop(f"{department}_editing_template_id", None)
-            st.session_state[template_defaults_key] = {
-                "work_type": safe_str(selected_template.get("work_type")),
-                "task_title": safe_str(selected_template.get("title")),
-                "assignee": safe_str(selected_template.get("assignee")),
-                "priority": safe_str(selected_template.get("priority")),
-                "relationship": safe_str(selected_template.get("relationship_type")),
-                "details": safe_str(selected_template.get("details")),
-                "template_name": safe_str(selected_template.get("requester")),
-            }
-            st.session_state[create_form_version_key] = create_form_version + 1
-            st.rerun()
-
-        if edit_template and selected_template_id in template_rows:
-            selected_template = template_rows[selected_template_id]
-            st.session_state[f"{department}_editing_template_id"] = selected_template_id
-            st.session_state[template_defaults_key] = {
-                "work_type": safe_str(selected_template.get("work_type")),
-                "task_title": safe_str(selected_template.get("title")),
-                "assignee": safe_str(selected_template.get("assignee")),
-                "priority": safe_str(selected_template.get("priority")),
-                "relationship": safe_str(selected_template.get("relationship_type")),
-                "details": safe_str(selected_template.get("details")),
-                "template_name": safe_str(selected_template.get("requester")),
-            }
-            st.session_state[create_form_version_key] = create_form_version + 1
-            st.rerun()
-
-        if delete_template and selected_template_id in template_rows:
-            ok, message = delete_waiting_department_work_order(selected_template_id)
-            if ok:
-                if safe_int(st.session_state.get(f"{department}_editing_template_id"), 0) == selected_template_id:
-                    st.session_state.pop(f"{department}_editing_template_id", None)
-                st.success("ลบ Template เรียบร้อย")
-                st.rerun()
+            if selected_create_template_id in template_rows:
+                selected_template = template_rows[selected_create_template_id]
+                st.session_state[template_defaults_key] = {
+                    "work_type": safe_str(selected_template.get("work_type")),
+                    "task_title": safe_str(selected_template.get("title")),
+                    "assignee": safe_str(selected_template.get("assignee")),
+                    "priority": safe_str(selected_template.get("priority")),
+                    "relationship": safe_str(selected_template.get("relationship_type")),
+                    "details": safe_str(selected_template.get("details")),
+                }
             else:
-                st.error(f"ลบ Template ไม่สำเร็จ: {message}")
+                st.session_state[template_defaults_key] = {}
+            st.session_state[create_form_version_key] = create_form_version + 1
+            st.rerun()
+        if selected_create_template_id > 0:
+            st.success(
+                f"✅ ใช้ Template: {safe_str(template_rows[selected_create_template_id].get('requester'), f'Template #{selected_create_template_id}')} — เติมข้อมูลให้แล้ว สามารถแก้ไขก่อนสร้างใบงานได้"
+            )
 
         def default_index(options, default_value, fallback=0):
             try:
@@ -3864,27 +3823,99 @@ def render_people_work_center(department):
                 st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
             elif estimated_hours <= 0:
                 st.warning("ช่วงเวลาที่เลือกไม่มีเวลาทำงานตามกะ กรุณาปรับวันหรือเวลา")
-            template_name = st.text_input(
-                "ชื่อ Template",
-                value=template_defaults.get("template_name", ""),
-                placeholder="เช่น ตรวจรับชิ้นงานลูกค้า A",
-                key=create_widget_key("template_name")
+            submitted = st.button(
+                "💾 สร้างใบงานและส่งเข้าคิวงาน",
+                type="primary",
+                use_container_width=True,
+                disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
+                key=create_widget_key("work_order_submit")
             )
-            action_cols = st.columns(2)
-            with action_cols[0]:
-                save_template = st.button(
-                    "💾 บันทึกการแก้ไข Template" if editing_template_id > 0 else "🧩 บันทึกเป็น Template",
-                    use_container_width=True,
-                    key=create_widget_key("save_template")
+            st.caption("ปุ่มนี้จะสร้างคิวงานจริง ส่วนการบันทึก/แก้ไข Template อยู่ในหัวข้อจัดการ Template ด้านล่าง")
+
+            save_template = False
+            with st.expander("🧩 จัดการ Template (บันทึก / แก้ไข / ลบ)", expanded=(editing_template_id > 0)):
+                manage_template_id = st.selectbox(
+                    "เลือก Template ที่ต้องการแก้ไขหรือลบ",
+                    template_ids,
+                    format_func=lambda template_id: (
+                        "— สร้าง Template ใหม่จากข้อมูลที่กรอกด้านบน —" if template_id == 0 else
+                        safe_str(template_rows[template_id].get("requester"), f"Template #{template_id}")
+                    ),
+                    key=f"{department}_manage_template_selector_{'_'.join(map(str, template_ids))}",
                 )
-            with action_cols[1]:
-                submitted = st.button(
-                    "💾 สร้างใบงาน",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
-                    key=create_widget_key("work_order_submit")
+                manage_action_cols = st.columns(2)
+                with manage_action_cols[0]:
+                    edit_template = st.button(
+                        "✏️ โหลดมาแก้ไข",
+                        use_container_width=True,
+                        disabled=(manage_template_id == 0),
+                        key=f"{department}_edit_template",
+                    )
+                with manage_action_cols[1]:
+                    delete_template = st.button(
+                        "🗑️ ลบ Template",
+                        use_container_width=True,
+                        disabled=(manage_template_id == 0),
+                        key=f"{department}_delete_template",
+                    )
+
+                if edit_template and manage_template_id in template_rows:
+                    selected_template = template_rows[manage_template_id]
+                    st.session_state[f"{department}_editing_template_id"] = manage_template_id
+                    st.session_state[template_defaults_key] = {
+                        "work_type": safe_str(selected_template.get("work_type")),
+                        "task_title": safe_str(selected_template.get("title")),
+                        "assignee": safe_str(selected_template.get("assignee")),
+                        "priority": safe_str(selected_template.get("priority")),
+                        "relationship": safe_str(selected_template.get("relationship_type")),
+                        "details": safe_str(selected_template.get("details")),
+                        "template_name": safe_str(selected_template.get("requester")),
+                    }
+                    st.session_state[create_form_version_key] = create_form_version + 1
+                    st.rerun()
+
+                if delete_template and manage_template_id in template_rows:
+                    ok, message = delete_waiting_department_work_order(manage_template_id)
+                    if ok:
+                        if editing_template_id == manage_template_id:
+                            st.session_state.pop(f"{department}_editing_template_id", None)
+                        st.success("ลบ Template เรียบร้อย")
+                        st.rerun()
+                    else:
+                        st.error(f"ลบ Template ไม่สำเร็จ: {message}")
+
+                template_name = st.text_input(
+                    "ชื่อ Template",
+                    value=template_defaults.get("template_name", ""),
+                    placeholder="เช่น ตรวจรับชิ้นงานลูกค้า A",
+                    key=create_widget_key("template_name"),
                 )
+                if editing_template_id > 0:
+                    st.info("แก้ข้อมูลในแบบฟอร์มด้านบน แล้วกดบันทึกการแก้ไข Template")
+                    edit_save_cols = st.columns([3, 1])
+                    with edit_save_cols[0]:
+                        save_template = st.button(
+                            "💾 บันทึกการแก้ไข Template",
+                            type="primary",
+                            use_container_width=True,
+                            key=create_widget_key("save_template"),
+                        )
+                    with edit_save_cols[1]:
+                        cancel_template_edit = st.button(
+                            "ยกเลิกแก้ไข",
+                            use_container_width=True,
+                            key=create_widget_key("cancel_template_edit"),
+                        )
+                    if cancel_template_edit:
+                        st.session_state.pop(f"{department}_editing_template_id", None)
+                        st.session_state[create_form_version_key] = create_form_version + 1
+                        st.rerun()
+                else:
+                    save_template = st.button(
+                        "🧩 บันทึกข้อมูลด้านบนเป็น Template ใหม่",
+                        use_container_width=True,
+                        key=create_widget_key("save_template"),
+                    )
 
         if save_template:
             existing_template_names = {
@@ -3953,6 +3984,9 @@ def render_people_work_center(department):
                 else:
                     ok, message = insert_department_work_order(create_payload)
                     if ok:
+                        st.session_state[create_template_selector_key] = 0
+                        st.session_state[last_create_template_key] = 0
+                        st.session_state.pop(f"{department}_editing_template_id", None)
                         st.session_state[create_form_version_key] = create_form_version + 1
                         st.success("สร้างใบงานเรียบร้อย")
                         st.rerun()
@@ -6055,20 +6089,84 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         (df_db["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(urgent_machine)) &
                         (df_db["สถานะงาน"].astype(str).str.contains("รอคิว"))
                     ].copy() if not df_db.empty else pd.DataFrame()
+                    machine_in_progress = df_db[
+                        (df_db["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(urgent_machine)) &
+                        (df_db["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True, na=False))
+                    ].copy() if not df_db.empty else pd.DataFrame()
+                    for active_frame in [machine_in_progress, machine_waiting]:
+                        if not active_frame.empty:
+                            active_frame["_ready"] = active_frame["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
+                            active_frame.sort_values(["_ready", "ID"], inplace=True)
                     target_map = {}
                     if not machine_waiting.empty:
-                        machine_waiting["_ready"] = machine_waiting["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-                        machine_waiting = machine_waiting.sort_values(["_ready", "ID"])
-                        target_map = {
-                            f"ก่อนคิว {safe_str(row.get('แผนงาน'))} | {safe_str(row.get('ชื่อ Drawing.'))}": safe_int(row.get("ID"))
-                            for _, row in machine_waiting.iterrows()
-                        }
-                    insert_choices = ["หลังงานที่กำลังรัน / เป็นคิวถัดไป"] + list(target_map.keys())
+                        first_waiting_queue_no = len(machine_in_progress) + 1
+                        for waiting_offset, (_, row) in enumerate(machine_waiting.iterrows()):
+                            waiting_ready = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+                            waiting_ready_text = waiting_ready.strftime("%d/%m/%Y %H:%M") if waiting_ready is not None and pd.notna(waiting_ready) else "ไม่ระบุเวลา"
+                            queue_no = first_waiting_queue_no + waiting_offset
+                            target_label = (
+                                f"ก่อนคิวที่ {queue_no} | แผน {safe_str(row.get('แผนงาน'), '-')} | "
+                                f"Drawing {safe_str(row.get('ชื่อ Drawing.'), '-')} | เริ่ม {waiting_ready_text}"
+                            )
+                            target_map[target_label] = safe_int(row.get("ID"))
+                    next_queue_label = "คิวถัดไป — หลังงานที่กำลังรัน/พักอยู่"
+                    insert_choices = [next_queue_label] + list(target_map.keys())
                     with u5:
                         urgent_position = st.selectbox("ตำแหน่งแทรก", insert_choices, key="urgent_insert_position")
                     urgent_reason = st.text_input("เหตุผล/หมายเหตุงานด่วน", placeholder="เช่น ลูกค้าเร่งส่ง, งานแก้ไขเร่งด่วน", key="urgent_reason")
 
                     target_id = target_map.get(urgent_position)
+                    # แสดงตัวอย่างลำดับจริงก่อนบันทึก เพื่อให้เห็นชัดว่างานด่วนอยู่ก่อน/หลังคิวใด
+                    preview_rows = []
+                    for _, preview_row in pd.concat(
+                        [machine_in_progress, machine_waiting], ignore_index=True
+                    ).iterrows():
+                        preview_rows.append({
+                            "id": safe_int(preview_row.get("ID")),
+                            "plan": safe_str(preview_row.get("แผนงาน"), "-"),
+                            "drawing": safe_str(preview_row.get("ชื่อ Drawing."), "-"),
+                            "status": safe_str(preview_row.get("สถานะงาน"), ""),
+                        })
+                    if target_id is not None:
+                        preview_insert_index = next((
+                            idx for idx, item in enumerate(preview_rows)
+                            if item["id"] == safe_int(target_id)
+                        ), len(preview_rows))
+                    else:
+                        preview_insert_index = len(machine_in_progress)
+                    urgent_preview_item = {
+                        "id": -1,
+                        "plan": urgent_plan.strip() or "ยังไม่ระบุแผน",
+                        "drawing": urgent_drawing,
+                        "status": "⚡ งานด่วนแทรก",
+                    }
+                    preview_after_insert = preview_rows.copy()
+                    preview_after_insert.insert(preview_insert_index, urgent_preview_item)
+                    before_item = preview_after_insert[preview_insert_index - 1] if preview_insert_index > 0 else None
+                    after_item = preview_after_insert[preview_insert_index + 1] if preview_insert_index + 1 < len(preview_after_insert) else None
+                    before_text = (
+                        f"แผน {before_item['plan']} / {before_item['drawing']}" if before_item else "ต้นคิว"
+                    )
+                    after_text = (
+                        f"แผน {after_item['plan']} / {after_item['drawing']}" if after_item else "ไม่มีคิวถัดไป"
+                    )
+                    st.info(
+                        f"🔎 **ตำแหน่งหลังแทรก:** {before_text} → "
+                        f"⚡ **งานด่วน {urgent_plan.strip() or '-'} / {urgent_drawing}** → {after_text}"
+                    )
+                    with st.expander("📋 ดูลำดับคิวทั้งหมดหลังแทรก", expanded=False):
+                        preview_lines = []
+                        for preview_no, item in enumerate(preview_after_insert, start=1):
+                            if item["id"] == -1:
+                                preview_lines.append(
+                                    f"**{preview_no}. ⚡ งานด่วนแทรก | แผน {item['plan']} | Drawing {item['drawing']}**"
+                                )
+                            else:
+                                preview_lines.append(
+                                    f"{preview_no}. แผน {item['plan']} | Drawing {item['drawing']} | {item['status']}"
+                                )
+                        st.markdown("  \n".join(preview_lines) if preview_lines else "1. ⚡ งานด่วนแทรก")
+
                     urgent_start = urgent_insert_ready_at(urgent_machine, urgent_position, target_id, df_db)
                     urgent_minutes = (
                         safe_float(urgent_tpl.get("setup_mins"), 10) +
