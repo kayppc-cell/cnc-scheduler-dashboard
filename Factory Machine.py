@@ -977,6 +977,21 @@ def save_drawing_template(payload: dict) -> tuple[bool, str]:
     except Exception as exc:
         return False, str(exc)
 
+def update_drawing_template(template_id: int, payload: dict) -> tuple[bool, str]:
+    """แก้ไข Template เดิมตาม ID เพื่อรองรับการเปลี่ยนชื่อ Drawing โดยไม่สร้างแถวเก่าค้างไว้."""
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_drawing_templates?id=eq.{int(template_id)}"
+        headers = get_supabase_headers().copy()
+        headers["Prefer"] = "return=representation"
+        res = requests.patch(endpoint, headers=headers, json=payload, timeout=8)
+        if res.status_code in [200, 204]:
+            fetch_drawing_templates.clear()
+            return True, ""
+        return False, safe_str(res.text, "แก้ไข Template ไม่สำเร็จ")
+    except Exception as exc:
+        return False, str(exc)
+
 def save_drawing_templates_bulk(payloads: list[dict]) -> tuple[bool, str, int]:
     """บันทึก Drawing Template หลายรายการในคำขอเดียว (Bulk Upsert)."""
     if not payloads:
@@ -5942,10 +5957,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         t1, t2, t3, t_qty = st.columns([2.0, 1.3, 1.3, 0.8])
                         with t1:
                             tpl_drawing = st.text_input(
-                                "Drawing",
+                                "ชื่อ Template / Drawing",
                                 value=safe_str(selected_template.get("drawing_name")),
                                 key=f"tpl_drawing_{template_form_suffix}",
-                                disabled=(selected_template_id > 0),
                             )
                         with t2:
                             tpl_material_selected = st.selectbox(
@@ -6004,24 +6018,37 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         )
                     if save_tpl:
                         step_names = [line.strip() for line in tpl_steps_text.splitlines() if line.strip()]
+                        normalized_tpl_name = normalize_filter_key(tpl_drawing)
+                        duplicate_template_name = any(
+                            safe_int(item.get("id"), 0) != selected_template_id and
+                            normalize_filter_key(item.get("drawing_name")) == normalized_tpl_name
+                            for item in templates
+                        )
                         tpl_material = safe_str(tpl_material_custom, "") or (
                             "" if tpl_material_selected == "อื่น ๆ (พิมพ์เอง)" else tpl_material_selected
                         )
                         if not tpl_drawing.strip():
                             st.error("กรุณาระบุ Drawing")
+                        elif duplicate_template_name:
+                            st.error("ชื่อ Template / Drawing นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น")
                         elif not tpl_material:
                             st.error("กรุณาระบุวัสดุอื่น หรือเลือกวัสดุจากรายการ")
                         elif not step_names:
                             st.error("กรุณาระบุอย่างน้อย 1 Step")
                         else:
-                            ok, error = save_drawing_template({
+                            template_payload = {
                                 "drawing_name": tpl_drawing.strip(), "material": tpl_material.strip(),
                                 "default_qty": int(tpl_qty), "machine_name": tpl_machine,
                                 "setup_mins": float(tpl_setup), "basic_mins": float(tpl_basic),
                                 "program_mins": float(tpl_prog),
                                 "steps": [{"name": name, "order": idx + 1} for idx, name in enumerate(step_names)],
                                 "updated_at": get_bangkok_str()
-                            })
+                            }
+                            ok, error = (
+                                update_drawing_template(selected_template_id, template_payload)
+                                if selected_template_id > 0 else
+                                save_drawing_template(template_payload)
+                            )
                             if ok:
                                 st.success(
                                     f"บันทึกการแก้ไข Template {tpl_drawing.strip()} แล้ว"
@@ -6208,14 +6235,43 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             key=f"normal_template_time_{normal_form_version}",
                         )
 
+                    nt1, nt2, nt3 = st.columns(3)
+                    with nt1:
+                        normal_setup_mins = st.number_input(
+                            "Setup (นาที)",
+                            min_value=0.0,
+                            max_value=720.0,
+                            value=max(0.0, safe_float(normal_tpl.get("setup_mins"), DEFAULT_SETUP_MINUTES)),
+                            step=5.0,
+                            key=f"normal_template_setup_{normal_form_version}_{normal_template_id}",
+                        )
+                    with nt2:
+                        normal_basic_mins = st.number_input(
+                            "Basic (นาที)",
+                            min_value=0.0,
+                            max_value=6000.0,
+                            value=max(0.0, safe_float(normal_tpl.get("basic_mins"), DEFAULT_BASIC_MINUTES)),
+                            step=5.0,
+                            key=f"normal_template_basic_{normal_form_version}_{normal_template_id}",
+                        )
+                    with nt3:
+                        normal_program_mins = st.number_input(
+                            "โปรแกรม (นาที)",
+                            min_value=0.0,
+                            max_value=12000.0,
+                            value=max(0.0, safe_float(normal_tpl.get("program_mins"), DEFAULT_PROGRAM_MINUTES)),
+                            step=10.0,
+                            key=f"normal_template_program_{normal_form_version}_{normal_template_id}",
+                        )
+                    st.caption(
+                        "เวลาเริ่มต้นดึงมาจาก Drawing Template — การแก้ไขตรงนี้มีผลเฉพาะใบงานที่กำลังสร้าง "
+                        "และไม่เปลี่ยนข้อมูล Template ต้นฉบับ"
+                    )
+
                     normal_requested_start = datetime.combine(normal_requested_date, normal_requested_time)
                     normal_existing_timeline = machine_active_queue_timeline(normal_machine, df_db)
                     normal_chain_start = normal_append_ready_at(normal_machine, normal_requested_start, df_db)
-                    normal_minutes = (
-                        safe_float(normal_tpl.get("setup_mins"), DEFAULT_SETUP_MINUTES) +
-                        safe_float(normal_tpl.get("basic_mins"), DEFAULT_BASIC_MINUTES) +
-                        safe_float(normal_tpl.get("program_mins"), DEFAULT_PROGRAM_MINUTES)
-                    )
+                    normal_minutes = normal_setup_mins + normal_basic_mins + normal_program_mins
                     _, normal_chain_finish = add_work_time_with_shift(normal_chain_start, normal_minutes / 60.0)
                     normal_steps = template_step_names(normal_tpl)
                     normal_combined_steps = " → ".join(normal_steps)
@@ -6248,6 +6304,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     np1.metric("เริ่มงานตามลูกโซ่", normal_chain_start.strftime("%d/%m/%Y %H:%M"))
                     np2.metric("จบงานตามแผน", normal_chain_finish.strftime("%d/%m/%Y %H:%M"))
                     np3.metric("เวลารวม", f"{normal_minutes / 60.0:.2f} ชม.")
+                    if normal_minutes <= 0:
+                        st.error("กรุณากำหนดเวลา Setup, Basic หรือโปรแกรม อย่างน้อยหนึ่งช่องให้มากกว่า 0 นาที")
                     if normal_chain_start > get_next_valid_work_time(normal_requested_start):
                         st.warning(
                             "คิวเดิมของเครื่องยังไม่จบ ระบบจึงเลื่อนเวลาเริ่มงานนี้ไปต่อท้ายลูกโซ่อัตโนมัติ"
@@ -6265,7 +6323,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "💾 สร้างใบงานและส่งเข้าคิวผลิต",
                         type="primary",
                         use_container_width=True,
-                        disabled=not normal_confirm,
+                        disabled=(not normal_confirm or normal_minutes <= 0),
                         key=f"normal_template_submit_{normal_form_version}_{normal_template_id}",
                     )
                     if create_normal_job:
@@ -6306,9 +6364,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     "ready_at": fresh_chain_start.strftime("%Y-%m-%d %H:%M:%S"),
                                     "baseline_ready_at": fresh_chain_start.strftime("%Y-%m-%d %H:%M:%S"),
                                     "baseline_finish_at": fresh_chain_finish.strftime("%Y-%m-%d %H:%M:%S"),
-                                    "setup_mins": safe_float(normal_tpl.get("setup_mins"), DEFAULT_SETUP_MINUTES),
-                                    "basic_hrs": safe_float(normal_tpl.get("basic_mins"), DEFAULT_BASIC_MINUTES),
-                                    "prog_hrs": safe_float(normal_tpl.get("program_mins"), DEFAULT_PROGRAM_MINUTES),
+                                    "setup_mins": float(normal_setup_mins),
+                                    "basic_hrs": float(normal_basic_mins),
+                                    "prog_hrs": float(normal_program_mins),
                                     "status": "🟧 รอคิวผลิต",
                                     "step_progress": normalize_step_progress(
                                         None, normal_combined_steps, "🟧 รอคิวผลิต"
