@@ -1047,21 +1047,21 @@ def urgent_insert_ready_at(machine_name: str, insert_mode: str, target_id, jobs_
         return max(get_next_valid_work_time(now_dt), planned_finish)
     return get_next_valid_work_time(now_dt)
 
-def normal_append_ready_at(machine_name: str, requested_start: datetime, jobs_df: pd.DataFrame):
-    """หาเวลาเริ่มงานปกติท้ายลูกโซ่ โดยไม่ดึงงานให้เริ่มก่อนเวลาที่ผู้ใช้กำหนด"""
-    requested_start = get_next_valid_work_time(requested_start)
+def machine_active_queue_timeline(machine_name: str, jobs_df: pd.DataFrame):
+    """คืนลำดับคิวที่ยังทำไม่เสร็จ พร้อมเวลาเริ่ม/จบตามลูกโซ่ชุดเดียวกับงานใหม่"""
     if not isinstance(jobs_df, pd.DataFrame) or jobs_df.empty:
-        return requested_start
+        return []
     machine_jobs = jobs_df[
         (jobs_df["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(machine_name)) &
         (jobs_df["สถานะงาน"].astype(str).str.contains("กำลังผลิต|รอคิว|พักงาน", regex=True, na=False))
     ].copy()
     if machine_jobs.empty:
-        return requested_start
+        return []
     machine_jobs["_ready"] = machine_jobs["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
     machine_jobs = machine_jobs.sort_values(["_ready", "ID"], na_position="last")
     cursor = None
     now_dt = get_bangkok_now().replace(tzinfo=None)
+    timeline = []
     for _, row in machine_jobs.iterrows():
         row_ready = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
         if row_ready is None or pd.isna(row_ready):
@@ -1076,7 +1076,23 @@ def normal_append_ready_at(machine_name: str, requested_start: datetime, jobs_df
                 row_finish = max(row_finish, stored_finish)
             row_finish = max(row_finish, now_dt)
         cursor = row_finish
-    return get_next_valid_work_time(max(requested_start, cursor)) if cursor is not None else requested_start
+        timeline.append({
+            "id": safe_int(row.get("ID")),
+            "plan": safe_str(row.get("แผนงาน"), "-"),
+            "drawing": safe_str(row.get("ชื่อ Drawing."), "-"),
+            "status": safe_str(row.get("สถานะงาน"), "-"),
+            "start": row_start,
+            "finish": row_finish,
+        })
+    return timeline
+
+def normal_append_ready_at(machine_name: str, requested_start: datetime, jobs_df: pd.DataFrame):
+    """หาเวลาเริ่มงานปกติท้ายลูกโซ่ โดยไม่ดึงงานให้เริ่มก่อนเวลาที่ผู้ใช้กำหนด"""
+    requested_start = get_next_valid_work_time(requested_start)
+    timeline = machine_active_queue_timeline(machine_name, jobs_df)
+    if not timeline:
+        return requested_start
+    return get_next_valid_work_time(max(requested_start, timeline[-1]["finish"]))
 
 def get_other_running_job(machine_name: str, exclude_job_id=None):
     """ตรวจฐานข้อมูลสดว่าเครื่องนี้มีคิวอื่นกำลังจับเวลาอยู่หรือไม่"""
@@ -5911,44 +5927,81 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         key="drawing_template_select"
                     )
                     selected_template = template_map.get(selected_template_name, {})
+                    selected_template_id = safe_int(selected_template.get("id"), 0)
+                    template_form_suffix = f"id_{selected_template_id}" if selected_template_id > 0 else "new"
                     selected_steps = template_step_names(selected_template) if selected_template else ["รอหน้าเครื่องระบุ"]
                     current_material = safe_str(selected_template.get("material"), "SS400")
                     material_presets = [item for item in MATERIAL_OPTIONS if item != "อื่น ๆ (พิมพ์เอง)"]
                     selected_material_option = current_material if current_material in material_presets else "อื่น ๆ (พิมพ์เอง)"
                     selected_custom_material = "" if current_material in material_presets else current_material
-                    with st.form("drawing_template_form", clear_on_submit=False):
+                    if selected_template_id > 0:
+                        st.info(f"✏️ กำลังแก้ไข Drawing Template: {selected_template_name}")
+                    else:
+                        st.caption("สร้าง Drawing Template ใหม่ — การบันทึกส่วนนี้ยังไม่สร้างคิวงานผลิต")
+                    with st.form(f"drawing_template_form_{template_form_suffix}", clear_on_submit=False):
                         t1, t2, t3, t_qty = st.columns([2.0, 1.3, 1.3, 0.8])
                         with t1:
-                            tpl_drawing = st.text_input("Drawing", value=safe_str(selected_template.get("drawing_name")))
+                            tpl_drawing = st.text_input(
+                                "Drawing",
+                                value=safe_str(selected_template.get("drawing_name")),
+                                key=f"tpl_drawing_{template_form_suffix}",
+                                disabled=(selected_template_id > 0),
+                            )
                         with t2:
                             tpl_material_selected = st.selectbox(
                                 "เลือกวัสดุมาตรฐาน", MATERIAL_OPTIONS,
-                                index=MATERIAL_OPTIONS.index(selected_material_option)
+                                index=MATERIAL_OPTIONS.index(selected_material_option),
+                                key=f"tpl_material_selected_{template_form_suffix}",
                             )
                         with t3:
                             tpl_material_custom = st.text_input(
                                 "วัสดุอื่น (พิมพ์เอง)", value=selected_custom_material,
-                                placeholder="กรอกเมื่อไม่มีในรายการ"
+                                placeholder="กรอกเมื่อไม่มีในรายการ",
+                                key=f"tpl_material_custom_{template_form_suffix}",
                             )
                         with t_qty:
-                            tpl_qty = st.number_input("จำนวนมาตรฐาน", 1, 10000, safe_int(selected_template.get("default_qty"), 1))
+                            tpl_qty = st.number_input(
+                                "จำนวนมาตรฐาน", 1, 10000,
+                                safe_int(selected_template.get("default_qty"), 1),
+                                key=f"tpl_qty_{template_form_suffix}",
+                            )
                         t4, t5, t6, t7 = st.columns([1.5, 1, 1, 1])
                         with t4:
                             default_machine = safe_str(selected_template.get("machine_name"), MACHINE_LIST[0])
-                            tpl_machine = st.selectbox("เครื่องจักรแนะนำ", MACHINE_LIST, index=MACHINE_LIST.index(default_machine) if default_machine in MACHINE_LIST else 0)
+                            tpl_machine = st.selectbox(
+                                "เครื่องจักรแนะนำ", MACHINE_LIST,
+                                index=MACHINE_LIST.index(default_machine) if default_machine in MACHINE_LIST else 0,
+                                key=f"tpl_machine_{template_form_suffix}",
+                            )
                         with t5:
-                            tpl_setup = st.number_input("Setup (นาที)", 0, 720, safe_int(selected_template.get("setup_mins"), 10), step=5)
+                            tpl_setup = st.number_input(
+                                "Setup (นาที)", 0, 720,
+                                safe_int(selected_template.get("setup_mins"), 10), step=5,
+                                key=f"tpl_setup_{template_form_suffix}",
+                            )
                         with t6:
-                            tpl_basic = st.number_input("Basic (นาที)", 0, 6000, safe_int(selected_template.get("basic_mins"), 0), step=5)
+                            tpl_basic = st.number_input(
+                                "Basic (นาที)", 0, 6000,
+                                safe_int(selected_template.get("basic_mins"), 0), step=5,
+                                key=f"tpl_basic_{template_form_suffix}",
+                            )
                         with t7:
-                            tpl_prog = st.number_input("โปรแกรม (นาที)", 0, 12000, safe_int(selected_template.get("program_mins"), 120), step=10)
+                            tpl_prog = st.number_input(
+                                "โปรแกรม (นาที)", 0, 12000,
+                                safe_int(selected_template.get("program_mins"), 120), step=10,
+                                key=f"tpl_program_{template_form_suffix}",
+                            )
                         tpl_steps_text = st.text_area(
                             "รายการ Step — หนึ่งบรรทัดต่อหนึ่ง Step เรียงตามลำดับทำงาน",
                             value="\n".join(selected_steps),
                             height=130,
-                            placeholder="Step 1: ตั้งงาน\nStep 2: กัดหยาบ\nStep 3: กัดละเอียด"
+                            placeholder="Step 1: ตั้งงาน\nStep 2: กัดหยาบ\nStep 3: กัดละเอียด",
+                            key=f"tpl_steps_{template_form_suffix}",
                         )
-                        save_tpl = st.form_submit_button("💾 บันทึก Drawing Template", type="primary", use_container_width=True)
+                        save_tpl = st.form_submit_button(
+                            "💾 บันทึกการแก้ไข Drawing Template" if selected_template_id > 0 else "💾 บันทึก Drawing Template ใหม่",
+                            type="primary", use_container_width=True,
+                        )
                     if save_tpl:
                         step_names = [line.strip() for line in tpl_steps_text.splitlines() if line.strip()]
                         tpl_material = safe_str(tpl_material_custom, "") or (
@@ -5970,7 +6023,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 "updated_at": get_bangkok_str()
                             })
                             if ok:
-                                st.success(f"บันทึก Template {tpl_drawing.strip()} แล้ว")
+                                st.success(
+                                    f"บันทึกการแก้ไข Template {tpl_drawing.strip()} แล้ว"
+                                    if selected_template_id > 0 else
+                                    f"บันทึก Template ใหม่ {tpl_drawing.strip()} แล้ว"
+                                )
                                 st.rerun()
                             else:
                                 st.error(f"บันทึก Template ไม่สำเร็จ: {error}")
@@ -6152,6 +6209,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         )
 
                     normal_requested_start = datetime.combine(normal_requested_date, normal_requested_time)
+                    normal_existing_timeline = machine_active_queue_timeline(normal_machine, df_db)
                     normal_chain_start = normal_append_ready_at(normal_machine, normal_requested_start, df_db)
                     normal_minutes = (
                         safe_float(normal_tpl.get("setup_mins"), DEFAULT_SETUP_MINUTES) +
@@ -6162,6 +6220,29 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     normal_steps = template_step_names(normal_tpl)
                     normal_combined_steps = " → ".join(normal_steps)
                     normal_material = safe_str(normal_tpl.get("material"), "SS400")
+
+                    if normal_existing_timeline:
+                        previous_job = normal_existing_timeline[-1]
+                        st.warning(
+                            f"🔗 **งานใหม่นี้จะต่อจากคิวที่ {len(normal_existing_timeline)}** — "
+                            f"แผน {previous_job['plan']} | Drawing {previous_job['drawing']} | "
+                            f"เริ่ม {previous_job['start'].strftime('%d/%m/%Y %H:%M')} | "
+                            f"จบประมาณ {previous_job['finish'].strftime('%d/%m/%Y %H:%M')}"
+                        )
+                        with st.expander(
+                            f"📋 ดูคิวเดิมของ {normal_machine} ก่อนสร้างงาน ({len(normal_existing_timeline)} คิว)",
+                            expanded=False,
+                        ):
+                            existing_queue_lines = []
+                            for queue_no, queue_item in enumerate(normal_existing_timeline, start=1):
+                                existing_queue_lines.append(
+                                    f"{queue_no}. แผน {queue_item['plan']} | Drawing {queue_item['drawing']} | "
+                                    f"{queue_item['status']} | เริ่ม {queue_item['start'].strftime('%d/%m/%Y %H:%M')} | "
+                                    f"จบ {queue_item['finish'].strftime('%d/%m/%Y %H:%M')}"
+                                )
+                            st.markdown("  \n".join(existing_queue_lines))
+                    else:
+                        st.success(f"✅ {normal_machine} ยังไม่มีคิวค้าง งานนี้จะเป็นคิวแรกของเครื่อง")
 
                     np1, np2, np3 = st.columns(3)
                     np1.metric("เริ่มงานตามลูกโซ่", normal_chain_start.strftime("%d/%m/%Y %H:%M"))
