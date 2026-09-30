@@ -370,6 +370,101 @@ def get_job_planned_finish(job_row):
     _, planned_finish = add_work_time_with_shift(get_next_valid_work_time(planned_start), duration_hours)
     return planned_finish
 
+def calculate_production_chain(source_df, active_only=True, preserve_input_order=False):
+    """คำนวณลูกโซ่ Production จากกฎกลางชุดเดียวของทั้งระบบ
+
+    กฎหลัก:
+    - งานกำลังผลิต/พักงานยึด ``เริ่มจริง``; ใช้ ready_at เป็น fallback เฉพาะข้อมูลเก่าที่เวลาเริ่มจริงหาย
+    - งานรอคิวต่อจากเวลาจบล่าสุดของเครื่อง และไม่ใช้ ready_at รอบเก่ามาขวาง
+    - Batch หลายงานที่เริ่มแล้วคงเวลาเริ่มจริงของแต่ละงาน; คิวรอต่อจากงานที่จบช้าที่สุด
+    - Baseline ไม่ถูกนำมาเปลี่ยนเวลาลูกโซ่สด
+    """
+    jobs = source_df.copy() if isinstance(source_df, pd.DataFrame) else pd.DataFrame()
+    if jobs.empty:
+        jobs["_chain_start"] = pd.Series(dtype="datetime64[ns]")
+        jobs["_chain_finish"] = pd.Series(dtype="datetime64[ns]")
+        return jobs
+
+    defaults = {
+        "ID": 0, "เลือกเครื่องจักร": "", "สถานะงาน": "🟧 รอคิวผลิต",
+        "วัน-เวลาขึ้นงาน": None, "เริ่มจริง": None,
+        "Setup (น.)": DEFAULT_SETUP_MINUTES,
+        "Basic (น.)": DEFAULT_BASIC_MINUTES,
+        "โปรแกรม (น.)": DEFAULT_PROGRAM_MINUTES,
+    }
+    for column_name, default_value in defaults.items():
+        if column_name not in jobs.columns:
+            jobs[column_name] = default_value
+
+    if active_only:
+        active_mask = jobs["สถานะงาน"].astype(str).str.contains(
+            "กำลังผลิต|รอคิว|พักงาน|รอวัสดุ", regex=True, na=False
+        )
+        jobs = jobs[active_mask].copy()
+    if jobs.empty:
+        jobs["_chain_start"] = pd.Series(dtype="datetime64[ns]")
+        jobs["_chain_finish"] = pd.Series(dtype="datetime64[ns]")
+        return jobs
+
+    jobs["_chain_input_order"] = range(len(jobs))
+
+    def chain_priority(row):
+        status_value = safe_str(row.get("สถานะงาน"), "")
+        priority = 0 if "กำลังผลิต" in status_value else (1 if ("พักงาน" in status_value or "รอวัสดุ" in status_value) else 2)
+        actual_start = parse_flexible_datetime(row.get("เริ่มจริง")) if priority < 2 else None
+        ready_start = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+        order_time = actual_start or ready_start
+        return priority, order_time if order_time is not None and not pd.isna(order_time) else pd.Timestamp.max
+
+    priorities = jobs.apply(chain_priority, axis=1)
+    jobs["_chain_priority"] = priorities.map(lambda value: value[0])
+    jobs["_chain_order_time"] = priorities.map(lambda value: value[1])
+    sort_columns = ["เลือกเครื่องจักร", "_chain_priority"]
+    if preserve_input_order:
+        sort_columns += ["_chain_input_order"]
+    else:
+        sort_columns += ["_chain_order_time", "ID"]
+    jobs = jobs.sort_values(sort_columns, kind="stable", na_position="last").reset_index(drop=True)
+
+    now_dt = get_bangkok_now().replace(tzinfo=None)
+    machine_available = {}
+    chain_starts, chain_finishes = [], []
+    for _, row in jobs.iterrows():
+        machine_name = safe_str(row.get("เลือกเครื่องจักร"), "")
+        status_value = safe_str(row.get("สถานะงาน"), "")
+        is_live = "กำลังผลิต" in status_value or "พักงาน" in status_value or "รอวัสดุ" in status_value
+        actual_start = parse_flexible_datetime(row.get("เริ่มจริง")) if is_live else None
+        ready_start = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+
+        if is_live and actual_start is not None and not pd.isna(actual_start):
+            start_dt = get_next_valid_work_time(actual_start)
+        elif is_live and ready_start is not None and not pd.isna(ready_start):
+            # fallback สำหรับข้อมูลเก่าที่สถานะเริ่มแล้วแต่ actual_start หายเท่านั้น
+            start_dt = get_next_valid_work_time(ready_start)
+        elif machine_name in machine_available and machine_available[machine_name] is not None:
+            start_dt = get_next_valid_work_time(machine_available[machine_name])
+        elif ready_start is not None and not pd.isna(ready_start) and ready_start.year >= 2020:
+            start_dt = get_next_valid_work_time(ready_start)
+        else:
+            chain_starts.append(None)
+            chain_finishes.append(None)
+            machine_available.setdefault(machine_name, None)
+            continue
+
+        _, finish_dt = add_work_time_with_shift(start_dt, get_planned_minutes(row) / 60.0)
+        if is_live:
+            finish_dt = max(finish_dt, now_dt)
+        previous_finish = machine_available.get(machine_name)
+        machine_available[machine_name] = (
+            max(previous_finish, finish_dt) if previous_finish is not None else finish_dt
+        )
+        chain_starts.append(start_dt)
+        chain_finishes.append(finish_dt)
+
+    jobs["_chain_start"] = chain_starts
+    jobs["_chain_finish"] = chain_finishes
+    return jobs.drop(columns=["_chain_priority", "_chain_order_time", "_chain_input_order"], errors="ignore")
+
 def build_operator_finish_feedback(finished_rows, actual_finish_dt):
     """สรุปผล Finish เทียบแผนสำหรับแสดงครั้งเดียวหลังบันทึกสำเร็จ"""
     on_time_count, late_count, no_plan_count = 0, 0, 0
@@ -1080,16 +1175,19 @@ def urgent_insert_ready_at(machine_name: str, insert_mode: str, target_id, jobs_
     machine_jobs["_ready"] = machine_jobs["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
     waiting = machine_jobs[machine_jobs["สถานะงาน"].astype(str).str.contains("รอคิว")].sort_values(["_ready", "ID"])
     if insert_mode.startswith("ก่อนคิว") and target_id is not None:
-        target = waiting[waiting["ID"].astype(int) == int(target_id)]
-        if not target.empty and pd.notna(target.iloc[0]["_ready"]):
-            return get_next_valid_work_time(target.iloc[0]["_ready"] - timedelta(seconds=1))
+        live_timeline = machine_active_queue_timeline(machine_name, machine_jobs)
+        target_item = next((item for item in live_timeline if safe_int(item.get("id")) == safe_int(target_id)), None)
+        if target_item and target_item.get("start") is not None:
+            return get_next_valid_work_time(target_item["start"] - timedelta(seconds=1))
     running = machine_jobs[machine_jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True)]
     if not running.empty:
-        row = running.sort_values(["_ready", "ID"]).iloc[0]
-        start_dt = row["_ready"] if pd.notna(row["_ready"]) else now_dt
-        hours = get_planned_minutes(row) / 60.0
-        _, planned_finish = add_work_time_with_shift(get_next_valid_work_time(start_dt), hours)
-        return max(get_next_valid_work_time(now_dt), planned_finish)
+        live_chain = calculate_production_chain(running, active_only=True)
+        live_finishes = [
+            value for value in live_chain.get("_chain_finish", pd.Series(dtype=object))
+            if value is not None and not pd.isna(value)
+        ]
+        if live_finishes:
+            return get_next_valid_work_time(max(max(live_finishes), now_dt))
     return get_next_valid_work_time(now_dt)
 
 def machine_active_queue_timeline(machine_name: str, jobs_df: pd.DataFrame):
@@ -1102,23 +1200,13 @@ def machine_active_queue_timeline(machine_name: str, jobs_df: pd.DataFrame):
     ].copy()
     if machine_jobs.empty:
         return []
-    machine_jobs["_ready"] = machine_jobs["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-    machine_jobs = machine_jobs.sort_values(["_ready", "ID"], na_position="last")
-    cursor = None
-    now_dt = get_bangkok_now().replace(tzinfo=None)
+    machine_jobs = calculate_production_chain(machine_jobs, active_only=True)
     timeline = []
     for _, row in machine_jobs.iterrows():
-        row_ready = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
-        if row_ready is None or pd.isna(row_ready):
-            row_ready = now_dt
-        # คิวแรกใช้เวลาที่กำหนด ส่วนคิวถัดไปต้องต่อจากเวลาจบคิวก่อนหน้าโดยตรง
-        # ห้ามนำ ready_at เก่าของแต่ละคิวมาขวาง เพราะค่านั้นเป็นผลลูกโซ่รอบก่อน
-        row_start = get_next_valid_work_time(cursor if cursor is not None else row_ready)
-        _, row_finish = add_work_time_with_shift(row_start, get_planned_minutes(row) / 60.0)
-        if "กำลังผลิต" in safe_str(row.get("สถานะงาน")) or "พักงาน" in safe_str(row.get("สถานะงาน")):
-            # Baseline ใช้เทียบผลเท่านั้น ห้ามนำมาเป็นเวลาจบลูกโซ่สด
-            row_finish = max(row_finish, now_dt)
-        cursor = row_finish
+        row_start = row.get("_chain_start")
+        row_finish = row.get("_chain_finish")
+        if row_start is None or row_finish is None or pd.isna(row_start) or pd.isna(row_finish):
+            continue
         timeline.append({
             "id": safe_int(row.get("ID")),
             "plan": safe_str(row.get("แผนงาน"), "-"),
@@ -1373,7 +1461,7 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs"
         params = {
-            "select": "id,plan_code,drawing_name,machine_name,status,ready_at,setup_mins,basic_hrs,prog_hrs",
+            "select": "id,plan_code,drawing_name,machine_name,status,ready_at,actual_start,setup_mins,basic_hrs,prog_hrs",
             "machine_name": f"eq.{machine_name}",
             "order": "ready_at.asc,id.asc"
         }
@@ -1393,55 +1481,42 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
         source_idx, target_idx = waiting_ids.index(source_job_id), waiting_ids.index(target_job_id)
         waiting_rows[source_idx], waiting_rows[target_idx] = waiting_rows[target_idx], waiting_rows[source_idx]
 
+        # การสลับตำแหน่งต้องคงจุดเริ่มต้นเดิมของกลุ่มคิวรอ ไม่ใช้เวลาเดิมของแถวที่ถูกย้ายขึ้นมา
+        waiting_anchor_candidates = [
+            parse_flexible_datetime(row.get("ready_at")) for row in waiting_rows
+            if parse_flexible_datetime(row.get("ready_at")) is not None
+        ]
+        if waiting_rows and waiting_anchor_candidates:
+            waiting_rows[0]["ready_at"] = min(waiting_anchor_candidates).strftime("%Y-%m-%d %H:%M:%S")
+
         original_ready = {
             safe_int(row.get("id")): parse_flexible_datetime(row.get("ready_at"))
             for row in live_rows if safe_int(row.get("id")) > 0
         }
-        valid_waiting_times = [
-            parse_flexible_datetime(row.get("ready_at")) for row in waiting_rows
-            if parse_flexible_datetime(row.get("ready_at")) is not None
-        ]
-        chain_start = min(valid_waiting_times) if valid_waiting_times else get_bangkok_now().replace(tzinfo=None)
-        chain_start = get_next_valid_work_time(chain_start)
-
-        # ถ้ามีงานกำลังผลิต/พักอยู่ ให้คิวรอเริ่มหลังเวลาจบตามแผนของงานนั้น
-        active_rows = [
-            row for row in live_rows
-            if "กำลังผลิต" in safe_str(row.get("status")) or "พักงาน" in safe_str(row.get("status"))
-        ]
-        for row in active_rows:
-            active_start = parse_flexible_datetime(row.get("ready_at"))
-            if active_start is None or pd.isna(active_start):
-                continue
-            duration_hours = (
-                safe_float(row.get("setup_mins"), DEFAULT_SETUP_MINUTES)
-                + safe_float(row.get("basic_hrs"), DEFAULT_BASIC_MINUTES)
-                + safe_float(row.get("prog_hrs"), DEFAULT_PROGRAM_MINUTES)
-            ) / 60.0
-            _, active_finish = add_work_time_with_shift(get_next_valid_work_time(active_start), duration_hours)
-            if active_finish is not None and pd.notna(active_finish):
-                # งานจริงที่ล่าช้าห้ามปล่อยให้คิวถัดไปเริ่มย้อนหลัง
-                chain_start = max(chain_start, active_finish, get_bangkok_now().replace(tzinfo=None))
+        active_rows = [row for row in live_rows if "กำลังผลิต" in safe_str(row.get("status")) or "พักงาน" in safe_str(row.get("status"))]
+        ordered_rows = active_rows + waiting_rows
+        ordered_df = pd.DataFrame(ordered_rows).rename(columns={
+            "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
+            "machine_name": "เลือกเครื่องจักร", "status": "สถานะงาน",
+            "ready_at": "วัน-เวลาขึ้นงาน", "actual_start": "เริ่มจริง",
+            "setup_mins": "Setup (น.)", "basic_hrs": "Basic (น.)", "prog_hrs": "โปรแกรม (น.)"
+        })
+        ordered_chain = calculate_production_chain(ordered_df, active_only=True, preserve_input_order=True)
+        waiting_chain = ordered_chain[ordered_chain["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)].copy()
 
         expected_by_id, changed_rows = {}, []
-        cursor = chain_start
-        for row in waiting_rows:
-            job_id = safe_int(row.get("id"))
-            # หลังจัดลำดับใหม่ ทุกคิวต้องต่อจากคิวก่อนหน้า ไม่รักษา ready_at ลูกโซ่เก่า
-            cursor = get_next_valid_work_time(cursor)
+        for _, row in waiting_chain.iterrows():
+            job_id = safe_int(row.get("ID"))
+            cursor = row.get("_chain_start")
+            if cursor is None or pd.isna(cursor):
+                return False, "คำนวณเวลาเริ่มคิวใหม่ไม่สำเร็จ", []
             expected_by_id[job_id] = cursor
             changed_rows.append({
                 "id": job_id,
-                "plan_code": safe_str(row.get("plan_code"), "-"),
-                "drawing_name": safe_str(row.get("drawing_name"), "-"),
+                "plan_code": safe_str(row.get("แผนงาน"), "-"),
+                "drawing_name": safe_str(row.get("ชื่อ Drawing."), "-"),
                 "ready_at": cursor
             })
-            duration_hours = (
-                safe_float(row.get("setup_mins"), DEFAULT_SETUP_MINUTES)
-                + safe_float(row.get("basic_hrs"), DEFAULT_BASIC_MINUTES)
-                + safe_float(row.get("prog_hrs"), DEFAULT_PROGRAM_MINUTES)
-            ) / 60.0
-            _, cursor = add_work_time_with_shift(cursor, duration_hours)
 
         updated_ids = []
         for job_id, ready_dt in expected_by_id.items():
@@ -1606,87 +1681,9 @@ def delete_plan_master(plan_code):
 
 def build_project_active_chain(calc_df):
     """สร้างเวลาลูกโซ่สำหรับ Project Master ด้วยกฎเดียวกับตารางสั่งผลิต."""
-    jobs = calc_df.copy()
-    active_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
-    if "สถานะงาน" in jobs.columns:
-        jobs = jobs[jobs["สถานะงาน"].isin(active_statuses)].copy()
-    if jobs.empty:
-        jobs["_start"] = pd.Series(dtype="datetime64[ns]")
-        jobs["_finish"] = pd.Series(dtype="datetime64[ns]")
-        return jobs
-
-    # ลำดับคิวต้องเหมือนตารางสั่งผลิต: แยกตามเครื่อง แล้วเรียงสถานะ/เวลาเดิม/ID
-    def project_queue_priority(row):
-        status_value = safe_str(row.get("สถานะงาน"))
-        priority = 0 if "กำลังผลิต" in status_value else (1 if "พักงาน" in status_value else 2)
-        # ใช้ลำดับเดียวกับตารางลูกโซ่หลัก: งานที่ Start แล้วต้องยึดเวลาเริ่มจริง
-        # ไม่ใช้ ready_at เก่าซึ่งอาจเป็นผลคำนวณจากรอบก่อนแก้แผน
-        ready_dt = (
-            parse_flexible_datetime(row.get("เริ่มจริง"))
-            if priority < 2 else None
-        ) or parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
-        return (
-            safe_str(row.get("เลือกเครื่องจักร")),
-            priority,
-            ready_dt if ready_dt is not None and not pd.isna(ready_dt) else pd.Timestamp.max,
-            safe_int(row.get("ID"))
-        )
-
-    jobs["_project_queue_key"] = jobs.apply(project_queue_priority, axis=1)
-    jobs = jobs.sort_values("_project_queue_key", kind="stable").drop(columns="_project_queue_key").reset_index(drop=True)
-
-    machine_available = {}
-    chained_starts, chained_finishes = [], []
-    for _, row in jobs.iterrows():
-        machine = safe_str(row.get("เลือกเครื่องจักร"))
-        duration_hours = (
-            safe_float(row.get("Setup (น.)"), DEFAULT_SETUP_MINUTES)
-            + safe_float(row.get("Basic (น.)"), DEFAULT_BASIC_MINUTES)
-            + safe_float(row.get("โปรแกรม (น.)"), DEFAULT_PROGRAM_MINUTES)
-        ) / 60.0
-
-        status_value = safe_str(row.get("สถานะงาน"))
-        is_live_job = "กำลังผลิต" in status_value or "พักงาน" in status_value
-        actual_live_start = (
-            parse_flexible_datetime(row.get("เริ่มจริง"))
-            if is_live_job else None
-        )
-
-        if actual_live_start is not None and pd.notna(actual_live_start):
-            start_dt = get_next_valid_work_time(actual_live_start)
-        elif machine not in machine_available:
-            ready_dt = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
-            if ready_dt is None or pd.isna(ready_dt) or ready_dt.year < 2020:
-                machine_available[machine] = None
-                chained_starts.append(None)
-                chained_finishes.append(None)
-                continue
-            start_dt = get_next_valid_work_time(ready_dt)
-        else:
-            previous_finish = machine_available[machine]
-            if previous_finish is None:
-                chained_starts.append(None)
-                chained_finishes.append(None)
-                continue
-            # คิวถัดไปใช้เวลาจบคิวก่อนหน้าเป็นจุดเริ่มโดยตรง
-            # Baseline ของแต่ละงานยังเก็บแยกไว้สำหรับสอบกลับ ไม่ใช้ขวางลูกโซ่สด
-            start_dt = get_next_valid_work_time(previous_finish)
-
-        _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
-        if is_live_job:
-            # กราฟผู้บริหารต้องสะท้อนความล่าช้าจริง ไม่จบย้อนหลังตามแผนเดิม
-            finish_dt = max(finish_dt, get_bangkok_now().replace(tzinfo=None))
-        # Batch อาจมีหลายงานกำลังรันพร้อมกัน คิวรอต้องต่อจากงานที่จบช้าที่สุด
-        previous_machine_finish = machine_available.get(machine)
-        machine_available[machine] = (
-            max(previous_machine_finish, finish_dt)
-            if previous_machine_finish is not None else finish_dt
-        )
-        chained_starts.append(start_dt)
-        chained_finishes.append(finish_dt)
-
-    jobs["_start"] = chained_starts
-    jobs["_finish"] = chained_finishes
+    jobs = calculate_production_chain(calc_df, active_only=True)
+    jobs["_start"] = jobs.get("_chain_start", pd.Series(index=jobs.index, dtype="datetime64[ns]"))
+    jobs["_finish"] = jobs.get("_chain_finish", pd.Series(index=jobs.index, dtype="datetime64[ns]"))
     return jobs
 
 def render_machine_activity_dashboard(calc_df):
@@ -2821,51 +2818,11 @@ def render_work_order_readonly(source_df):
     work_df["_baseline_dt"] = work_df["กำหนดพร้อมขึ้นงาน (Baseline)"].apply(parse_flexible_datetime)
     missing_baseline = work_df["_baseline_dt"].isna()
     work_df.loc[missing_baseline, "_baseline_dt"] = work_df.loc[missing_baseline, "วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-    work_df["_ready_original"] = work_df["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-    work_df["_priority"] = work_df["สถานะงาน"].astype(str).apply(
-        lambda value: 0 if "กำลังผลิต" in value else (1 if ("พักงาน" in value or "รอวัสดุ" in value) else 2)
-    )
-    work_df = work_df.sort_values(
-        ["เลือกเครื่องจักร", "_priority", "_ready_original", "ID"], na_position="last"
-    ).reset_index(drop=True)
-
-    machine_available = {}
-    chain_starts, chain_finishes = [], []
-    for _, queue_row in work_df.iterrows():
-        machine_name = safe_str(queue_row.get("เลือกเครื่องจักร"), "-")
-        duration_hours = (
-            safe_float(queue_row.get("Setup (น.)"), 10.0)
-            + safe_float(queue_row.get("Basic (น.)"), 0.0)
-            + safe_float(queue_row.get("โปรแกรม (น.)"), DEFAULT_PROGRAM_MINUTES)
-        ) / 60.0
-        row_ready = queue_row.get("_ready_original")
-        if machine_name not in machine_available:
-            if row_ready is None or pd.isna(row_ready) or row_ready.year < 2020:
-                machine_available[machine_name] = None
-                chain_starts.append(None)
-                chain_finishes.append(None)
-                continue
-            chain_start = get_next_valid_work_time(row_ready)
-        else:
-            previous_finish = machine_available[machine_name]
-            if previous_finish is None:
-                chain_starts.append(None)
-                chain_finishes.append(None)
-                continue
-            chain_start = get_next_valid_work_time(previous_finish)
-        _, chain_finish = add_work_time_with_shift(chain_start, duration_hours)
-        queue_status = safe_str(queue_row.get("สถานะงาน"), "")
-        if "กำลังผลิต" in queue_status or "พักงาน" in queue_status or "รอวัสดุ" in queue_status:
-            # คิวที่กำลังทำ/พักและเลยแผนแล้ว ต้องดันคิวถัดไปอย่างน้อยถึงเวลาปัจจุบัน
-            chain_finish = max(chain_finish, get_bangkok_now().replace(tzinfo=None))
-        machine_available[machine_name] = chain_finish
-        chain_starts.append(chain_start)
-        chain_finishes.append(chain_finish)
-
-    work_df["_dt_start"] = chain_starts
-    work_df["_dt_finish"] = chain_finishes
-    work_df["วัน-เวลาขึ้นงาน"] = chain_starts
-    work_df["วัน-เวลาจบงาน"] = chain_finishes
+    work_df = calculate_production_chain(work_df, active_only=True)
+    work_df["_dt_start"] = work_df["_chain_start"]
+    work_df["_dt_finish"] = work_df["_chain_finish"]
+    work_df["วัน-เวลาขึ้นงาน"] = work_df["_chain_start"]
+    work_df["วัน-เวลาจบงาน"] = work_df["_chain_finish"]
     work_df["ลำดับคิว"] = "คิวที่ " + (work_df.groupby("เลือกเครื่องจักร").cumcount() + 1).astype(str)
     work_df["เครื่องจักร / แผนก"] = work_df["เลือกเครื่องจักร"].map(lambda value: safe_str(value, "-"))
     work_df["สถานะ"] = work_df["สถานะงาน"].map(lambda value: safe_str(value, "-"))
@@ -6886,22 +6843,21 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         (df_db["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(urgent_machine)) &
                         (df_db["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True, na=False))
                     ].copy() if not df_db.empty else pd.DataFrame()
-                    for active_frame in [machine_in_progress, machine_waiting]:
-                        if not active_frame.empty:
-                            active_frame["_ready"] = active_frame["วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-                            active_frame.sort_values(["_ready", "ID"], inplace=True)
+                    urgent_machine_timeline = machine_active_queue_timeline(urgent_machine, df_db)
+                    timeline_waiting = [item for item in urgent_machine_timeline if "รอคิว" in safe_str(item.get("status"), "")]
+                    timeline_live = [item for item in urgent_machine_timeline if "กำลังผลิต" in safe_str(item.get("status"), "") or "พักงาน" in safe_str(item.get("status"), "")]
                     target_map = {}
-                    if not machine_waiting.empty:
-                        first_waiting_queue_no = len(machine_in_progress) + 1
-                        for waiting_offset, (_, row) in enumerate(machine_waiting.iterrows()):
-                            waiting_ready = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+                    if timeline_waiting:
+                        first_waiting_queue_no = len(timeline_live) + 1
+                        for waiting_offset, row in enumerate(timeline_waiting):
+                            waiting_ready = row.get("start")
                             waiting_ready_text = waiting_ready.strftime("%d/%m/%Y %H:%M") if waiting_ready is not None and pd.notna(waiting_ready) else "ไม่ระบุเวลา"
                             queue_no = first_waiting_queue_no + waiting_offset
                             target_label = (
-                                f"ก่อนคิวที่ {queue_no} | แผน {safe_str(row.get('แผนงาน'), '-')} | "
-                                f"Drawing {safe_str(row.get('ชื่อ Drawing.'), '-')} | เริ่ม {waiting_ready_text}"
+                                f"ก่อนคิวที่ {queue_no} | แผน {safe_str(row.get('plan'), '-')} | "
+                                f"Drawing {safe_str(row.get('drawing'), '-')} | เริ่ม {waiting_ready_text}"
                             )
-                            target_map[target_label] = safe_int(row.get("ID"))
+                            target_map[target_label] = safe_int(row.get("id"))
                     next_queue_label = "คิวถัดไป — หลังงานที่กำลังรัน/พักอยู่"
                     insert_choices = [next_queue_label] + list(target_map.keys())
                     with u5:
@@ -6910,23 +6866,22 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                     target_id = target_map.get(urgent_position)
                     # แสดงตัวอย่างลำดับจริงก่อนบันทึก เพื่อให้เห็นชัดว่างานด่วนอยู่ก่อน/หลังคิวใด
-                    preview_rows = []
-                    for _, preview_row in pd.concat(
-                        [machine_in_progress, machine_waiting], ignore_index=True
-                    ).iterrows():
-                        preview_rows.append({
-                            "id": safe_int(preview_row.get("ID")),
-                            "plan": safe_str(preview_row.get("แผนงาน"), "-"),
-                            "drawing": safe_str(preview_row.get("ชื่อ Drawing."), "-"),
-                            "status": safe_str(preview_row.get("สถานะงาน"), ""),
-                        })
+                    preview_rows = [
+                        {
+                            "id": safe_int(item.get("id")),
+                            "plan": safe_str(item.get("plan"), "-"),
+                            "drawing": safe_str(item.get("drawing"), "-"),
+                            "status": safe_str(item.get("status"), ""),
+                        }
+                        for item in urgent_machine_timeline
+                    ]
                     if target_id is not None:
                         preview_insert_index = next((
                             idx for idx, item in enumerate(preview_rows)
                             if item["id"] == safe_int(target_id)
                         ), len(preview_rows))
                     else:
-                        preview_insert_index = len(machine_in_progress)
+                        preview_insert_index = len(timeline_live)
                     urgent_preview_item = {
                         "id": -1,
                         "plan": urgent_plan.strip() or "ยังไม่ระบุแผน",
@@ -6968,8 +6923,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
                     _, urgent_finish = add_work_time_with_shift(urgent_start, urgent_minutes / 60.0)
                     affected_count = 0
-                    if not machine_waiting.empty:
-                        affected_count = int((machine_waiting["_ready"] >= urgent_start).sum())
+                    if timeline_waiting:
+                        affected_count = sum(
+                            1 for item in timeline_waiting
+                            if item.get("start") is not None and item["start"] >= urgent_start
+                        )
                     p1, p2, p3 = st.columns(3)
                     p1.metric("เริ่มงานด่วนโดยประมาณ", urgent_start.strftime("%d/%m/%Y %H:%M"))
                     p2.metric("จบงานด่วนโดยประมาณ", urgent_finish.strftime("%d/%m/%Y %H:%M"))
@@ -7321,67 +7279,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             if st.session_state.pop("reset_cnc_editor_after_manual_save", False):
                 st.session_state.pop("editor_cnc_jobs_grid_main", None)
 
-            # คำนวณระบบลูกโซ่ (Auto-Chain): คิวแรกตั้งต้น -> คิวถัดไปรับเวลาจบจากคิวก่อนหน้า
-            m_available_tracker = {}
-            chained_start_dates = []
-            chained_finish_dates = []
-
-            for _, r in active_jobs_editor_df.iterrows():
-                m_target = str(r["เลือกเครื่องจักร"])
-                s_m = safe_float(r.get("Setup (น.)"), 10.0)
-                b_m = safe_float(r.get("Basic (น.)"), 0.0)
-                p_m = safe_float(r.get("โปรแกรม (น.)"), 120.0)
-                tot_h = (s_m + b_m + p_m) / 60.0
-
-                live_status = safe_str(r.get("สถานะงาน"), "")
-                is_live_job = "กำลังผลิต" in live_status or "พักงาน" in live_status or "รอวัสดุ" in live_status
-
-                actual_live_start = (
-                    parse_flexible_datetime(r.get("เริ่มจริง"))
-                    if is_live_job else None
-                )
-
-                if actual_live_start is not None and pd.notna(actual_live_start):
-                    # รองรับทั้งงานเดี่ยวและ Batch: งานที่เริ่มจริงแล้วแต่ละรายการต้องคงเวลาเริ่มจริงของตนเอง
-                    start_work_dt = get_next_valid_work_time(actual_live_start)
-                elif m_target not in m_available_tracker:
-                    # งานที่กด Start แล้วต้องยึดเวลาเริ่มจริงเป็นหลักเสมอ
-                    # ready_at เป็นเพียงเวลาลูกโซ่/กำหนดเดิมและอาจเป็นค่าจากการคำนวณรอบก่อน
-                    r_parsed = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
-                    # ห้ามใช้เวลาปัจจุบันแทนค่า เพราะจะทำให้เวลาแผนเลื่อนเองทุกครั้งที่ rerun
-                    if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
-                        m_available_tracker[m_target] = None
-                        chained_start_dates.append("")
-                        chained_finish_dates.append("")
-                        continue
-                    start_work_dt = get_next_valid_work_time(r_parsed)
-                else:
-                    previous_finish = m_available_tracker[m_target]
-                    # ถ้าคิวแรกยังไม่มีเวลา คิวถัดไปต้องรอ ไม่สร้างเวลาใหม่เอง
-                    if previous_finish is None:
-                        chained_start_dates.append("")
-                        chained_finish_dates.append("")
-                        continue
-                    # คิวถัดไปต่อจากเวลาจบคิวก่อนหน้าโดยตรง ไม่ใช้วันเริ่มลูกโซ่เก่ามาขวาง
-                    start_work_dt = get_next_valid_work_time(previous_finish)
-
-                _, finish_work_dt = add_work_time_with_shift(start_work_dt, tot_h)
-                if is_live_job:
-                    # แสดงลูกโซ่สด: งานที่เกินแผนต้องดันคิวรอถัดไป ไม่ปล่อยเวลาเริ่มย้อนหลัง
-                    finish_work_dt = max(finish_work_dt, get_bangkok_now().replace(tzinfo=None))
-                # ถ้ามีหลายงานกำลังรันแบบ Batch คิวรอต้องต่อจากงานที่จบช้าที่สุด
-                previous_machine_finish = m_available_tracker.get(m_target)
-                m_available_tracker[m_target] = (
-                    max(previous_machine_finish, finish_work_dt)
-                    if previous_machine_finish is not None else finish_work_dt
-                )
-
-                chained_start_dates.append(start_work_dt.strftime("%d/%m/%Y %H:%M"))
-                chained_finish_dates.append(finish_work_dt.strftime("%d/%m/%Y %H:%M"))
-
-            # อัปเดตเวลาเข้าสู่ตาราง (วัน-เวลาขึ้นงาน/จบงาน จะเป็นเวลาลูกโซ่จริง)
-            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = chained_start_dates
-            active_jobs_editor_df["วัน-เวลาจบงาน"] = chained_finish_dates
+            # ทุกหน้าของ Production ต้องใช้เครื่องคำนวณลูกโซ่กลางชุดเดียวกัน
+            active_jobs_editor_df = calculate_production_chain(active_jobs_editor_df, active_only=True)
+            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["_chain_start"].apply(format_thai_datetime)
+            active_jobs_editor_df["วัน-เวลาจบงาน"] = active_jobs_editor_df["_chain_finish"].apply(format_thai_datetime)
+            active_jobs_editor_df = active_jobs_editor_df.drop(columns=["_chain_start", "_chain_finish"], errors="ignore")
             active_jobs_editor_df["รวม (ชม.)"] = ((active_jobs_editor_df["Setup (น.)"] + active_jobs_editor_df["Basic (น.)"] + active_jobs_editor_df["โปรแกรม (น.)"]) / 60.0).round(2)
 
             # ลำดับคำนวณด้านบนต้องแยกตามเครื่องเพื่อให้ลูกโซ่ของแต่ละเครื่องถูกต้อง
@@ -7727,67 +7629,16 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             save_source[numeric_col] = pd.to_numeric(save_source[numeric_col], errors="coerce").fillna(default_value).clip(lower=0)
                         save_source["จำนวน"] = pd.to_numeric(save_source["จำนวน"], errors="coerce").fillna(1).clip(lower=1).astype(int)
 
-                        # จัดคิวและคำนวณลูกโซ่ใหม่ รวมแถวล่างสุดที่เพิ่งเพิ่มเข้ามาด้วย
-                        save_source["_sort_key"] = save_source.apply(get_queue_priority, axis=1)
-                        save_source = save_source.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
-                        machine_available = {}
-                        calculated_starts, calculated_finishes = [], []
+                        # จัดคิวและคำนวณใหม่ด้วยเครื่องคำนวณกลาง รวมแถวที่เพิ่งเพิ่มด้วย
+                        save_source = calculate_production_chain(save_source, active_only=True)
                         save_errors = []
-
-                        for _, save_row in save_source.iterrows():
-                            machine_name = safe_str(save_row.get("เลือกเครื่องจักร"), "")
-                            duration_hours = get_planned_minutes(save_row) / 60.0
-                            save_status = safe_str(save_row.get("สถานะงาน"), "")
-                            is_live_job = "กำลังผลิต" in save_status or "พักงาน" in save_status
-                            actual_live_start = (
-                                parse_flexible_datetime(save_row.get("เริ่มจริง"))
-                                if is_live_job else None
-                            )
-                            if actual_live_start is not None and pd.notna(actual_live_start):
-                                start_dt = get_next_valid_work_time(actual_live_start)
-                            elif machine_name not in machine_available:
-                                start_dt = parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
-                                if start_dt is None or pd.isna(start_dt) or start_dt.year < 2020:
-                                    machine_available[machine_name] = None
-                                    calculated_starts.append("")
-                                    calculated_finishes.append("")
-                                    if machine_name in affected_machines:
-                                        save_errors.append(f"{machine_name}: กรุณากำหนดวันเวลาเริ่มของคิวแรก")
-                                    continue
-                                start_dt = get_next_valid_work_time(start_dt)
-                            else:
-                                previous_finish = machine_available[machine_name]
-                                if previous_finish is None:
-                                    calculated_starts.append("")
-                                    calculated_finishes.append("")
-                                    continue
-                                # เมื่อแก้คิวแรก ให้ทุกคิวถัดไปคำนวณต่อเนื่องใหม่ทั้งเครื่อง
-                                # ready_at เดิมของคิวถัดไปเป็นผลคำนวณเก่า จึงห้ามใช้เป็นค่าขั้นต่ำ
-                                start_dt = get_next_valid_work_time(previous_finish)
-                            _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
-                            # งานที่เริ่มจริงแล้วห้ามเลื่อน Baseline; หากเลยแผนให้คิวถัดไปรออย่างน้อยถึงเวลาปัจจุบัน
-                            if is_live_job:
-                                # หลัง Start ห้ามให้ ready_at เก่าดึงงานกลับไปวันเดิม
-                                original_start = (
-                                    parse_flexible_datetime(save_row.get("เริ่มจริง"))
-                                    or parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
-                                )
-                                if original_start is not None and pd.notna(original_start):
-                                    start_dt = original_start
-                                # เวลาจบลูกโซ่สดคำนวณจากเวลาเริ่ม + ระยะเวลางาน
-                                # Baseline เก็บไว้เทียบแผนเท่านั้น ห้ามลากคิวสดไปวันเดิม
-                                _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
-                                finish_dt = max(finish_dt, get_bangkok_now().replace(tzinfo=None))
-                            previous_machine_finish = machine_available.get(machine_name)
-                            machine_available[machine_name] = (
-                                max(previous_machine_finish, finish_dt)
-                                if previous_machine_finish is not None else finish_dt
-                            )
-                            calculated_starts.append(start_dt.strftime("%d/%m/%Y %H:%M"))
-                            calculated_finishes.append(finish_dt.strftime("%d/%m/%Y %H:%M"))
-
-                        save_source["วัน-เวลาขึ้นงาน"] = calculated_starts
-                        save_source["วัน-เวลาจบงาน"] = calculated_finishes
+                        missing_chain = save_source["_chain_start"].isna()
+                        for machine_name in sorted(affected_machines):
+                            if bool((missing_chain & (save_source["เลือกเครื่องจักร"].astype(str) == machine_name)).any()):
+                                save_errors.append(f"{machine_name}: กรุณากำหนดวันเวลาเริ่มของคิวแรก")
+                        save_source["วัน-เวลาขึ้นงาน"] = save_source["_chain_start"].apply(format_thai_datetime)
+                        save_source["วัน-เวลาจบงาน"] = save_source["_chain_finish"].apply(format_thai_datetime)
+                        save_source = save_source.drop(columns=["_chain_start", "_chain_finish"], errors="ignore")
                         save_source["รวม (ชม.)"] = (
                             (save_source["Setup (น.)"] + save_source["Basic (น.)"] + save_source["โปรแกรม (น.)"]) / 60.0
                         ).round(2)
