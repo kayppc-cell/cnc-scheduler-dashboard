@@ -8836,7 +8836,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     machine_section_parts.append(
                         "<section class='machine-section'>"
                         f"<h2>🏭 {html.escape(machine_name)}</h2>"
-                        f"<div class='machine-period'><b>ช่วงวันที่จบจริง:</b> {html.escape(finished_history_period_label)}</div>"
+                        f"<div class='machine-period'><b>ช่วงวันที่งานจบ:</b> {html.escape(finished_history_period_label)}</div>"
                         "<div class='machine-kpis'>"
                         f"<div>Dwg ทั้งหมด<b>{safe_int(performance_row.get('Dwg ทั้งหมด'), len(machine_rows_df))}</b></div>"
                         f"<div>จบเร็ว/ตรงแผน<b>{safe_float(performance_row.get('จบเร็ว/ตรงแผน (%)')):.1f}%</b></div>"
@@ -8917,7 +8917,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     th:nth-child(2),td:nth-child(2) {{ width:10%; }} th:nth-child(5),td:nth-child(5) {{ width:13%; }} th:nth-child(14),td:nth-child(14) {{ width:11%; }}
                     .foot {{ text-align:right; margin-top:7px; }}
                     </style></head><body>
-                    <div class="head"><div><h1>ตารางสรุปประวัติงานผลิตที่เสร็จแล้ว</h1><div class="sub">Finished History - เริ่มจริง / เสร็จจริง | Timing Process Control (TPC)</div><div class="period">ช่วงวันที่จบจริง: ${{d.period}}</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
+                    <div class="head"><div><h1>ตารางสรุปประวัติงานผลิตที่เสร็จแล้ว</h1><div class="sub">Finished History - เริ่มจริง / เสร็จจริง | Timing Process Control (TPC)</div><div class="period">ช่วงวันที่งานจบ: ${{d.period}}</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
                     <div class="filters"><b>ตัวกรอง:</b> ${{d.quick_filter}} | เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | จำนวน ${{d.rows_count}} รายการ</div>
                     <div class="kpis"><div class="kpi">Dwg ทั้งหมด<b>${{d.drawing_total}} Dwg</b></div><div class="kpi">จบเร็ว/ตรงแผน<b>${{d.drawing_ontime_pct}}% (${{d.drawing_ontime}} Dwg)</b></div><div class="kpi">จบช้า<b>${{d.drawing_late_pct}}% (${{d.drawing_late}} Dwg)</b></div><div class="kpi">Dwg ที่ยังสรุปผลไม่ได้<b>${{d.drawing_missing}} Dwg</b><small>ไม่มีเวลาจบตามแผนหรือเวลาจบจริง</small></div></div>
                     <h2 style="font-size:12px;margin:8px 0 4px;color:#065F46;">สรุปเปอร์เซ็นต์รายเครื่องจักร</h2>
