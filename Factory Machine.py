@@ -641,7 +641,7 @@ st.markdown("""
     .step-card-hold { border: 2px dashed #F59E0B !important; background:#FFFBEB; }
     .step-card-ready { border: 2px solid #6366F1 !important; background:#EEF2FF; }
     .step-card-finished { border: 2px solid #22C55E !important; background:#F0FDF4; }
-    .operator-status-banner { display:flex; align-items:center; justify-content:center; min-height:28px; text-align:center; font-size:14px; font-weight:900; line-height:1.45; }
+    .operator-status-banner { display:flex; align-items:center; justify-content:center; min-height:38px; padding:3px 10px; text-align:center; font-size:18px; font-weight:900; line-height:1.5; letter-spacing:.1px; }
     .operator-status-overdue { color:#B91C1C; }
     .operator-status-running { color:#047857; }
     .operator-status-hold { color:#B45309; }
