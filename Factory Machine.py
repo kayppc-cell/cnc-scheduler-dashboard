@@ -8522,6 +8522,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     start_7d = today_finished - timedelta(days=6)
                     fin_display_df = fin_display_df[finish_dates.apply(lambda x: x is not None and pd.notna(x) and start_7d <= x.date() <= today_finished)]
 
+                # ฐานคำนวณเปอร์เซ็นต์ยึดช่วงวันที่ที่เลือก แต่ไม่ถูกบิดเป็น 100%
+                # เมื่อผู้ใช้กดปุ่มดูเฉพาะ "จบช้า" หรือ "ตรง/เร็ว"
+                performance_scope_df = fin_display_df.copy()
+
                 # ตัวกรองผลลัพธ์ทำงานร่วมกับวันที่ที่เลือก
                 if quick_filter == "LATE":
                     fin_display_df = fin_display_df[pd.to_numeric(fin_display_df["จบคลาดเคลื่อน (น.)"], errors="coerce") > 0]
@@ -8535,14 +8539,101 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     fin_display_df = fin_display_df[
                         fin_display_df["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(selected_fin_machine)
                     ]
+                    performance_scope_df = performance_scope_df[
+                        performance_scope_df["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(selected_fin_machine)
+                    ]
                 if normalize_filter_key(selected_fin_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
                     fin_display_df = fin_display_df[
                         fin_display_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_fin_plan)
+                    ]
+                    performance_scope_df = performance_scope_df[
+                        performance_scope_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_fin_plan)
                     ]
                 if normalize_filter_key(selected_fin_drawing) != normalize_filter_key("🌐 ทุก Drawing"):
                     fin_display_df = fin_display_df[
                         fin_display_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_fin_drawing)
                     ]
+                    performance_scope_df = performance_scope_df[
+                        performance_scope_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_fin_drawing)
+                    ]
+
+                # สรุปประสิทธิภาพรายเครื่องแบบ Drawing ไม่ซ้ำ
+                # Drawing เดียวกันที่มีหลาย Step/หลายแถวบนเครื่องเดียวกันจะนับเพียง 1 Drawing
+                performance_source = performance_scope_df.copy()
+                performance_source["_machine_key"] = performance_source["เลือกเครื่องจักร"].apply(
+                    lambda value: safe_str(value, "ไม่ระบุเครื่อง") or "ไม่ระบุเครื่อง"
+                )
+                performance_source["_plan_key"] = performance_source["แผนงาน"].apply(
+                    lambda value: safe_str(value, "ไม่ระบุแผน") or "ไม่ระบุแผน"
+                )
+                performance_source["_drawing_key"] = performance_source.apply(
+                    lambda row: (
+                        safe_str(row.get("ชื่อ Drawing."), "").strip()
+                        or f"ไม่ระบุ Drawing #{safe_int(row.get('ID'), row.name)}"
+                    ),
+                    axis=1
+                )
+                performance_source["_finish_diff_num"] = pd.to_numeric(
+                    performance_source["จบคลาดเคลื่อน (น.)"], errors="coerce"
+                )
+                drawing_performance = (
+                    performance_source.groupby(
+                        ["_machine_key", "_plan_key", "_drawing_key"], dropna=False, as_index=False
+                    )["_finish_diff_num"].max()
+                    if not performance_source.empty else
+                    pd.DataFrame(columns=["_machine_key", "_plan_key", "_drawing_key", "_finish_diff_num"])
+                )
+                comparable_drawings = drawing_performance[drawing_performance["_finish_diff_num"].notna()].copy()
+                ontime_drawings = int((comparable_drawings["_finish_diff_num"] <= 0).sum())
+                late_drawings = int((comparable_drawings["_finish_diff_num"] > 0).sum())
+                comparable_total = len(comparable_drawings)
+                missing_time_drawings = max(0, len(drawing_performance) - comparable_total)
+                ontime_pct = (ontime_drawings / comparable_total * 100.0) if comparable_total else 0.0
+                late_pct = (late_drawings / comparable_total * 100.0) if comparable_total else 0.0
+
+                st.markdown("#### 📊 สรุปเปอร์เซ็นต์จบเร็ว/ตรงแผน และจบช้า")
+                perf_k1, perf_k2, perf_k3, perf_k4 = st.columns(4)
+                perf_k1.metric("Dwg ที่เทียบแผนได้", f"{comparable_total:,}")
+                perf_k2.metric("🟢 จบเร็ว/ตรงแผน", f"{ontime_pct:.1f}%", f"{ontime_drawings:,} Dwg")
+                perf_k3.metric("🔴 จบช้า", f"{late_pct:.1f}%", f"{late_drawings:,} Dwg")
+                perf_k4.metric("⚪ ข้อมูลเวลาไม่ครบ", f"{missing_time_drawings:,} Dwg")
+
+                machine_performance_df = pd.DataFrame()
+                if not drawing_performance.empty:
+                    machine_performance_rows = []
+                    for machine_name, machine_group in drawing_performance.groupby("_machine_key", dropna=False):
+                        machine_comparable = machine_group[machine_group["_finish_diff_num"].notna()]
+                        machine_total = len(machine_comparable)
+                        machine_ontime = int((machine_comparable["_finish_diff_num"] <= 0).sum())
+                        machine_late = int((machine_comparable["_finish_diff_num"] > 0).sum())
+                        machine_missing = max(0, len(machine_group) - machine_total)
+                        machine_performance_rows.append({
+                            "เครื่องจักร": machine_name,
+                            "Dwg ทั้งหมด": len(machine_group),
+                            "Dwg ที่เทียบได้": machine_total,
+                            "จบเร็ว/ตรงแผน": machine_ontime,
+                            "จบเร็ว/ตรงแผน (%)": round(machine_ontime / machine_total * 100.0, 1) if machine_total else 0.0,
+                            "จบช้า": machine_late,
+                            "จบช้า (%)": round(machine_late / machine_total * 100.0, 1) if machine_total else 0.0,
+                            "ข้อมูลเวลาไม่ครบ": machine_missing,
+                        })
+                    machine_performance_df = pd.DataFrame(machine_performance_rows).sort_values(
+                        by=["จบช้า (%)", "Dwg ที่เทียบได้"], ascending=[False, False]
+                    )
+                    st.dataframe(
+                        machine_performance_df,
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "เครื่องจักร": st.column_config.TextColumn("เครื่องจักร", width="medium"),
+                            "จบเร็ว/ตรงแผน (%)": st.column_config.ProgressColumn(
+                                "จบเร็ว/ตรงแผน (%)", min_value=0, max_value=100, format="%.1f%%"
+                            ),
+                            "จบช้า (%)": st.column_config.ProgressColumn(
+                                "จบช้า (%)", min_value=0, max_value=100, format="%.1f%%"
+                            ),
+                        }
+                    )
 
                 st.caption(f"แสดงผล {len(fin_display_df):,} จากทั้งหมด {total_finished_before_filter:,} รายการ")
                 # จองตำแหน่งปุ่มก่อนตาราง เพื่อให้มองเห็นแน่นอนทั้งโหมด Admin และ Viewer
@@ -8660,6 +8751,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "</tr>"
                     for _, row in fin_display_df.iterrows()
                 ])
+                finished_machine_performance_rows = "".join([
+                    "<tr>"
+                    f"<td>{html.escape(safe_str(row.get('เครื่องจักร'), '-'))}</td>"
+                    f"<td style='text-align:center'>{safe_int(row.get('Dwg ทั้งหมด'), 0)}</td>"
+                    f"<td style='text-align:center'>{safe_int(row.get('Dwg ที่เทียบได้'), 0)}</td>"
+                    f"<td style='text-align:center'>{safe_int(row.get('จบเร็ว/ตรงแผน'), 0)} ({safe_float(row.get('จบเร็ว/ตรงแผน (%)')):.1f}%)</td>"
+                    f"<td style='text-align:center'>{safe_int(row.get('จบช้า'), 0)} ({safe_float(row.get('จบช้า (%)')):.1f}%)</td>"
+                    f"<td style='text-align:center'>{safe_int(row.get('ข้อมูลเวลาไม่ครบ'), 0)}</td>"
+                    "</tr>"
+                    for _, row in machine_performance_df.iterrows()
+                ])
                 finished_late_count = int((pd.to_numeric(fin_display_df["จบคลาดเคลื่อน (น.)"], errors="coerce") > 0).sum())
                 finished_ontime_count = int((pd.to_numeric(fin_display_df["จบคลาดเคลื่อน (น.)"], errors="coerce") <= 0).sum())
                 quick_filter_labels = {
@@ -8675,8 +8777,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "rows_count": len(fin_display_df),
                     "late": finished_late_count,
                     "ontime": finished_ontime_count,
+                    "drawing_total": comparable_total,
+                    "drawing_ontime": ontime_drawings,
+                    "drawing_ontime_pct": f"{ontime_pct:.1f}",
+                    "drawing_late": late_drawings,
+                    "drawing_late_pct": f"{late_pct:.1f}",
+                    "drawing_missing": missing_time_drawings,
                     "net_hours": f"{pd.to_numeric(fin_display_df['เวลาจริงสุทธิ (ชม.)'], errors='coerce').fillna(0).sum():,.2f}",
                     "pause_hours": f"{pd.to_numeric(fin_display_df['พักสะสม (ชม.)'], errors='coerce').fillna(0).sum():,.2f}",
+                    "machine_performance_rows": finished_machine_performance_rows,
                     "rows": finished_pdf_rows
                 }, ensure_ascii=False).replace("<", "\\u003c")
 
@@ -8705,7 +8814,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     </style></head><body>
                     <div class="head"><div><h1>ตารางสรุปประวัติงานผลิตที่เสร็จแล้ว</h1><div class="sub">Finished History - เริ่มจริง / เสร็จจริง | Timing Process Control (TPC)</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
                     <div class="filters"><b>ตัวกรอง:</b> ${{d.quick_filter}} | เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | จำนวน ${{d.rows_count}} รายการ</div>
-                    <div class="kpis"><div class="kpi">จบตรง/เร็วกว่าแผน<b>${{d.ontime}} รายการ</b></div><div class="kpi">จบช้ากว่าแผน<b>${{d.late}} รายการ</b></div><div class="kpi">เวลาจริงสุทธิรวม<b>${{d.net_hours}} ชม.</b></div><div class="kpi">เวลาพักสะสมรวม<b>${{d.pause_hours}} ชม.</b></div></div>
+                    <div class="kpis"><div class="kpi">Dwg ที่เทียบแผนได้<b>${{d.drawing_total}} Dwg</b></div><div class="kpi">จบเร็ว/ตรงแผน<b>${{d.drawing_ontime_pct}}% (${{d.drawing_ontime}} Dwg)</b></div><div class="kpi">จบช้า<b>${{d.drawing_late_pct}}% (${{d.drawing_late}} Dwg)</b></div><div class="kpi">ข้อมูลเวลาไม่ครบ<b>${{d.drawing_missing}} Dwg</b></div></div>
+                    <h2 style="font-size:12px;margin:8px 0 4px;color:#065F46;">สรุปเปอร์เซ็นต์รายเครื่องจักร</h2>
+                    <table style="margin-bottom:9px;"><thead><tr><th>เครื่องจักร</th><th>Dwg ทั้งหมด</th><th>Dwg ที่เทียบได้</th><th>จบเร็ว/ตรงแผน</th><th>จบช้า</th><th>ข้อมูลไม่ครบ</th></tr></thead><tbody>${{d.machine_performance_rows}}</tbody></table>
+                    <div class="kpis"><div class="kpi">รายการที่กำลังแสดง<b>${{d.rows_count}} รายการ</b></div><div class="kpi">จบช้าตามตัวกรอง<b>${{d.late}} รายการ</b></div><div class="kpi">เวลาจริงสุทธิรวม<b>${{d.net_hours}} ชม.</b></div><div class="kpi">เวลาพักสะสมรวม<b>${{d.pause_hours}} ชม.</b></div></div>
                     <table><thead><tr><th>แผนงาน</th><th>Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>เครื่องจักร</th><th>เริ่มแผน</th><th>จบแผน</th><th>เริ่มจริง</th><th>จบจริง</th><th>พัก ชม.</th><th>แผน ชม.</th><th>จริงสุทธิ</th><th>ผลเทียบแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
                     <div class="foot">PES Production Monitoring System</div></body></html>`;
                     const printWin = window.open('', '_blank');
