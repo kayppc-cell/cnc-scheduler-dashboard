@@ -7265,6 +7265,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
                 "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
                 "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน",
+                # ต้องเก็บเวลาเริ่มจริงไว้เป็นจุดตั้งต้นของงานที่กด Start แล้ว
+                # มิฉะนั้นการรันลูกโซ่ใหม่จะย้อนกลับไปใช้ ready_at เก่าและลากทั้งเครื่องไปวันเดิม
+                "เริ่มจริง", "เสร็จจริง", "เริ่มพักจริง", "เวลาพักสะสม (วินาที)",
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
@@ -7286,7 +7289,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             def get_queue_priority(r):
                 st_val = str(r.get("สถานะงาน", ""))
                 prio = 0 if "กำลังผลิต" in st_val else (1 if "พักงาน" in st_val else 2)
-                dt_p = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
+                # งานที่เริ่มแล้วต้องเรียงจากเวลาเริ่มจริง ไม่ใช่ ready_at ลูกโซ่รอบเก่า
+                dt_p = (
+                    parse_flexible_datetime(r.get("เริ่มจริง"))
+                    if prio < 2 else None
+                ) or parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
                 return (str(r.get("เลือกเครื่องจักร")), prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
 
             active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
@@ -7308,7 +7315,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 p_m = safe_float(r.get("โปรแกรม (น.)"), 120.0)
                 tot_h = (s_m + b_m + p_m) / 60.0
 
-                if m_target not in m_available_tracker:
+                live_status = safe_str(r.get("สถานะงาน"), "")
+                is_live_job = "กำลังผลิต" in live_status or "พักงาน" in live_status or "รอวัสดุ" in live_status
+
+                actual_live_start = (
+                    parse_flexible_datetime(r.get("เริ่มจริง"))
+                    if is_live_job else None
+                )
+
+                if actual_live_start is not None and pd.notna(actual_live_start):
+                    # รองรับทั้งงานเดี่ยวและ Batch: งานที่เริ่มจริงแล้วแต่ละรายการต้องคงเวลาเริ่มจริงของตนเอง
+                    start_work_dt = get_next_valid_work_time(actual_live_start)
+                elif m_target not in m_available_tracker:
+                    # งานที่กด Start แล้วต้องยึดเวลาเริ่มจริงเป็นหลักเสมอ
+                    # ready_at เป็นเพียงเวลาลูกโซ่/กำหนดเดิมและอาจเป็นค่าจากการคำนวณรอบก่อน
                     r_parsed = parse_flexible_datetime(r["วัน-เวลาขึ้นงาน"])
                     # ห้ามใช้เวลาปัจจุบันแทนค่า เพราะจะทำให้เวลาแผนเลื่อนเองทุกครั้งที่ rerun
                     if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
@@ -7328,11 +7348,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     start_work_dt = get_next_valid_work_time(previous_finish)
 
                 _, finish_work_dt = add_work_time_with_shift(start_work_dt, tot_h)
-                live_status = safe_str(r.get("สถานะงาน"), "")
-                if "กำลังผลิต" in live_status or "พักงาน" in live_status or "รอวัสดุ" in live_status:
+                if is_live_job:
                     # แสดงลูกโซ่สด: งานที่เกินแผนต้องดันคิวรอถัดไป ไม่ปล่อยเวลาเริ่มย้อนหลัง
                     finish_work_dt = max(finish_work_dt, get_bangkok_now().replace(tzinfo=None))
-                m_available_tracker[m_target] = finish_work_dt
+                # ถ้ามีหลายงานกำลังรันแบบ Batch คิวรอต้องต่อจากงานที่จบช้าที่สุด
+                previous_machine_finish = m_available_tracker.get(m_target)
+                m_available_tracker[m_target] = (
+                    max(previous_machine_finish, finish_work_dt)
+                    if previous_machine_finish is not None else finish_work_dt
+                )
 
                 chained_start_dates.append(start_work_dt.strftime("%d/%m/%Y %H:%M"))
                 chained_finish_dates.append(finish_work_dt.strftime("%d/%m/%Y %H:%M"))
@@ -7524,8 +7548,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     edited_jobs = display_editor_df.copy()
                     save_table_clicked = False
                     delete_table_clicked = False
+                    readonly_visible_columns = [
+                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                        "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "วัน-เวลาจบงาน", "Setup (น.)",
+                        "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน"
+                    ]
                     st.dataframe(
-                        display_editor_df[[c for c in display_editor_df.columns if c not in ["ID", "ลบ", "กำหนดพร้อมขึ้นงาน (Baseline)"]]],
+                        display_editor_df[[c for c in readonly_visible_columns if c in display_editor_df.columns]],
                         column_config={
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=85),
                             "ชื่อ Drawing.": st.column_config.TextColumn("ชื่อ Drawing.", width=180),
@@ -7692,7 +7721,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             duration_hours = get_planned_minutes(save_row) / 60.0
                             save_status = safe_str(save_row.get("สถานะงาน"), "")
                             is_live_job = "กำลังผลิต" in save_status or "พักงาน" in save_status
-                            if machine_name not in machine_available:
+                            actual_live_start = (
+                                parse_flexible_datetime(save_row.get("เริ่มจริง"))
+                                if is_live_job else None
+                            )
+                            if actual_live_start is not None and pd.notna(actual_live_start):
+                                start_dt = get_next_valid_work_time(actual_live_start)
+                            elif machine_name not in machine_available:
                                 start_dt = parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
                                 if start_dt is None or pd.isna(start_dt) or start_dt.year < 2020:
                                     machine_available[machine_name] = None
@@ -7714,14 +7749,22 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
                             # งานที่เริ่มจริงแล้วห้ามเลื่อน Baseline; หากเลยแผนให้คิวถัดไปรออย่างน้อยถึงเวลาปัจจุบัน
                             if is_live_job:
-                                original_start = parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
+                                # หลัง Start ห้ามให้ ready_at เก่าดึงงานกลับไปวันเดิม
+                                original_start = (
+                                    parse_flexible_datetime(save_row.get("เริ่มจริง"))
+                                    or parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
+                                )
                                 if original_start is not None and pd.notna(original_start):
                                     start_dt = original_start
                                 # เวลาจบลูกโซ่สดคำนวณจากเวลาเริ่ม + ระยะเวลางาน
                                 # Baseline เก็บไว้เทียบแผนเท่านั้น ห้ามลากคิวสดไปวันเดิม
                                 _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
                                 finish_dt = max(finish_dt, get_bangkok_now().replace(tzinfo=None))
-                            machine_available[machine_name] = finish_dt
+                            previous_machine_finish = machine_available.get(machine_name)
+                            machine_available[machine_name] = (
+                                max(previous_machine_finish, finish_dt)
+                                if previous_machine_finish is not None else finish_dt
+                            )
                             calculated_starts.append(start_dt.strftime("%d/%m/%Y %H:%M"))
                             calculated_finishes.append(finish_dt.strftime("%d/%m/%Y %H:%M"))
 
