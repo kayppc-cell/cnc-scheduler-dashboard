@@ -8783,6 +8783,33 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "</tr>"
                     )
 
+                # ช่วงวันที่บนหัวรายงาน PDF ยึดวันที่จบจริงตามตัวกรองวันที่ที่ผู้ใช้เลือก
+                if custom_date_enabled and selected_history_day is not None:
+                    finished_period_start = selected_history_day
+                    finished_period_end = selected_history_day
+                elif custom_date_enabled and selected_history_range is not None:
+                    finished_period_start, finished_period_end = selected_history_range
+                elif quick_filter == "TODAY":
+                    finished_period_start = today_finished
+                    finished_period_end = today_finished
+                elif quick_filter == "7D":
+                    finished_period_start = today_finished - timedelta(days=6)
+                    finished_period_end = today_finished
+                elif valid_finish_days:
+                    finished_period_start = valid_finish_days[0]
+                    finished_period_end = valid_finish_days[-1]
+                else:
+                    finished_period_start = None
+                    finished_period_end = None
+
+                if finished_period_start is not None and finished_period_end is not None:
+                    finished_history_period_label = (
+                        f"{finished_period_start.strftime('%d/%m/%Y')} ถึง "
+                        f"{finished_period_end.strftime('%d/%m/%Y')}"
+                    )
+                else:
+                    finished_history_period_label = "ไม่พบช่วงวันที่"
+
                 present_machine_names = fin_display_df.get(
                     "เลือกเครื่องจักร", pd.Series(dtype=str)
                 ).dropna().astype(str).drop_duplicates().tolist()
@@ -8809,6 +8836,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     machine_section_parts.append(
                         "<section class='machine-section'>"
                         f"<h2>🏭 {html.escape(machine_name)}</h2>"
+                        f"<div class='machine-period'><b>ช่วงวันที่จบจริง:</b> {html.escape(finished_history_period_label)}</div>"
                         "<div class='machine-kpis'>"
                         f"<div>Dwg ทั้งหมด<b>{safe_int(performance_row.get('Dwg ทั้งหมด'), len(machine_rows_df))}</b></div>"
                         f"<div>จบเร็ว/ตรงแผน<b>{safe_float(performance_row.get('จบเร็ว/ตรงแผน (%)')):.1f}%</b></div>"
@@ -8839,6 +8867,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 }
                 finished_pdf_payload = json.dumps({
                     "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
+                    "period": finished_history_period_label,
                     "quick_filter": quick_filter_labels.get(quick_filter, safe_str(quick_filter)),
                     "machine": safe_str(selected_fin_machine),
                     "plan": safe_str(selected_fin_plan),
@@ -8869,24 +8898,26 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     const d = {finished_pdf_payload};
                     const reportHtml = `<!doctype html><html><head><meta charset="utf-8"><title>PES Finished History</title>
                     <style>
-                    @page {{ size:A3 landscape; margin:9mm; }}
-                    body {{ font-family:Tahoma,'Sarabun',Arial,sans-serif; color:#172033; margin:0; font-size:8.5px; line-height:1.3; }}
+                    @page {{ size:A3 landscape; margin:7mm; }}
+                    body {{ font-family:Tahoma,'Sarabun',Arial,sans-serif; color:#172033; margin:0; font-size:12px; line-height:1.42; }}
                     .head {{ display:flex; justify-content:space-between; align-items:flex-end; border-bottom:3px solid #047857; padding-bottom:7px; margin-bottom:8px; }}
-                    h1 {{ margin:0; font-size:18px; }} .sub,.foot {{ color:#64748B; }}
-                    .filters {{ border:1px solid #CBD5E1; background:#F8FAFC; border-radius:6px; padding:6px 8px; margin-bottom:8px; }}
-                    .kpis {{ display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-bottom:9px; }} .kpi {{ border:1px solid #CBD5E1; border-radius:6px; padding:7px; text-align:center; }}
-                    .kpi b {{ display:block; font-size:15px; margin-top:2px; }} table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+                    h1 {{ margin:0; font-size:23px; }} .sub,.foot {{ color:#64748B; font-size:11px; }}
+                    .filters {{ border:1px solid #CBD5E1; background:#F8FAFC; border-radius:6px; padding:8px 10px; margin-bottom:10px; font-size:11.5px; }}
+                    .kpis {{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:11px; }} .kpi {{ border:1px solid #CBD5E1; border-radius:6px; padding:9px; text-align:center; font-size:11.5px; }}
+                    .kpi b {{ display:block; font-size:18px; margin-top:3px; }} .kpi small {{ display:block; font-size:9.5px; margin-top:2px; }} table {{ width:100%; border-collapse:collapse; table-layout:fixed; font-size:10.5px; }}
                     .machine-section {{ page-break-before:always; break-before:page; }}
-                    .machine-section h2 {{ font-size:15px; color:#065F46; margin:8px 0 5px; border-bottom:2px solid #10B981; padding-bottom:3px; }}
+                    .machine-section h2 {{ font-size:19px; color:#065F46; margin:10px 0 7px; border-bottom:3px solid #10B981; padding-bottom:4px; }}
+                    .period {{ margin-top:5px; font-size:13px; font-weight:700; color:#065F46; }}
+                    .machine-period {{ margin:-2px 0 7px; font-size:12px; color:#334155; }}
                     .machine-kpis {{ display:grid; grid-template-columns:repeat(5,1fr); gap:5px; margin:5px 0 7px; }}
-                    .machine-kpis div {{ border:1px solid #A7F3D0; background:#F0FDF4; border-radius:5px; padding:5px; text-align:center; }}
-                    .machine-kpis b {{ display:block; font-size:12px; margin-top:2px; }} .empty {{ padding:20px; text-align:center; color:#64748B; }}
-                    th,td {{ border:1px solid #CBD5E1; padding:3px 4px; vertical-align:top; overflow-wrap:anywhere; }} th {{ background:#065F46; color:white; }}
+                    .machine-kpis div {{ border:1px solid #A7F3D0; background:#F0FDF4; border-radius:5px; padding:7px; text-align:center; font-size:11px; }}
+                    .machine-kpis b {{ display:block; font-size:15px; margin-top:2px; }} .empty {{ padding:20px; text-align:center; color:#64748B; }}
+                    th,td {{ border:1px solid #CBD5E1; padding:5px 5px; vertical-align:top; overflow-wrap:anywhere; }} th {{ background:#065F46; color:white; font-size:10.5px; }}
                     tr:nth-child(even) {{ background:#F0FDF4; }} thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }}
                     th:nth-child(2),td:nth-child(2) {{ width:10%; }} th:nth-child(5),td:nth-child(5) {{ width:13%; }} th:nth-child(14),td:nth-child(14) {{ width:11%; }}
                     .foot {{ text-align:right; margin-top:7px; }}
                     </style></head><body>
-                    <div class="head"><div><h1>ตารางสรุปประวัติงานผลิตที่เสร็จแล้ว</h1><div class="sub">Finished History - เริ่มจริง / เสร็จจริง | Timing Process Control (TPC)</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
+                    <div class="head"><div><h1>ตารางสรุปประวัติงานผลิตที่เสร็จแล้ว</h1><div class="sub">Finished History - เริ่มจริง / เสร็จจริง | Timing Process Control (TPC)</div><div class="period">ช่วงวันที่จบจริง: ${{d.period}}</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
                     <div class="filters"><b>ตัวกรอง:</b> ${{d.quick_filter}} | เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | จำนวน ${{d.rows_count}} รายการ</div>
                     <div class="kpis"><div class="kpi">Dwg ทั้งหมด<b>${{d.drawing_total}} Dwg</b></div><div class="kpi">จบเร็ว/ตรงแผน<b>${{d.drawing_ontime_pct}}% (${{d.drawing_ontime}} Dwg)</b></div><div class="kpi">จบช้า<b>${{d.drawing_late_pct}}% (${{d.drawing_late}} Dwg)</b></div><div class="kpi">Dwg ที่ยังสรุปผลไม่ได้<b>${{d.drawing_missing}} Dwg</b><small>ไม่มีเวลาจบตามแผนหรือเวลาจบจริง</small></div></div>
                     <h2 style="font-size:12px;margin:8px 0 4px;color:#065F46;">สรุปเปอร์เซ็นต์รายเครื่องจักร</h2>
