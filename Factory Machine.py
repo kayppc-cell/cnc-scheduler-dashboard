@@ -882,7 +882,7 @@ DEFAULT_RATES = {
 
 ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
 JOB_TYPES = ["🟢 งานปกติ", "🔴 งานด่วนแทรก"]
-JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "🟩 เสร็จสิ้นแล้ว"]
+JOB_STATUS = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)", "🟣 ส่งจ้างภายนอก", "🟩 เสร็จสิ้นแล้ว"]
 MATERIAL_OPTIONS = [
     "SS400", "SKD11", "S45C", "S50C", "SUS431", "SUS304", "SUJ2",
     "SCM4 - SCM440", "เหล็กกล่อง STD", "ทองเหลือง", "ทองแดง",
@@ -1461,7 +1461,9 @@ def delete_supabase_job(job_id: int) -> bool:
 
 def normalize_status(status_str: str) -> str:
     s = str(status_str)
-    if "พักงาน" in s or "รอวัสดุ" in s:
+    if "จ้างภายนอก" in s or "OUTSOURCE" in s.upper():
+        return "🟣 ส่งจ้างภายนอก"
+    elif "พักงาน" in s or "รอวัสดุ" in s:
         return "🟨 พักงาน (รอวัสดุ)"
     elif "กำลังผลิต" in s:
         return "🟦 กำลังผลิต"
@@ -1923,9 +1925,34 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             calc_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(code)
         ].copy() if "แผนงาน" in calc_df.columns else pd.DataFrame()
         drawing_progress = calculate_plan_drawing_progress(all_plan_jobs)
+        outsourced_plan_jobs = all_plan_jobs[
+            all_plan_jobs.get("สถานะงาน", pd.Series(index=all_plan_jobs.index, dtype=str))
+            .astype(str).str.contains("จ้างภายนอก", na=False)
+        ].copy() if not all_plan_jobs.empty else pd.DataFrame()
+        outsourced_due_dates, outsourced_sent_dates = [], []
+        outsourced_risk_drawings, outsourced_vendors = [], []
+        for _, outsourced_row in outsourced_plan_jobs.iterrows():
+            outsourced_progress = normalize_step_progress(
+                outsourced_row.get("ติดตาม Step"), outsourced_row.get("ขั้นตอน (Step)"),
+                outsourced_row.get("สถานะงาน"), outsourced_row.get("เริ่มจริง"), outsourced_row.get("เสร็จจริง")
+            )
+            outsourced_index = safe_int(outsourced_progress.get("current_index"), 0)
+            outsourced_steps = outsourced_progress.get("steps", [])
+            outsourced_step = outsourced_steps[outsourced_index] if outsourced_steps and outsourced_index < len(outsourced_steps) else {}
+            outsourced_due = parse_flexible_datetime(outsourced_step.get("outsource_due_at"))
+            outsourced_sent = parse_flexible_datetime(outsourced_step.get("outsource_sent_at"))
+            if outsourced_due is not None and not pd.isna(outsourced_due):
+                outsourced_due_dates.append(outsourced_due)
+            if outsourced_sent is not None and not pd.isna(outsourced_sent):
+                outsourced_sent_dates.append(outsourced_sent)
+            if outsourced_due is not None and customer_due is not None and outsourced_due > customer_due:
+                outsourced_risk_drawings.append(safe_str(outsourced_row.get("ชื่อ Drawing."), "-"))
+                outsourced_vendors.append(safe_str(outsourced_step.get("outsource_vendor"), "ไม่ระบุผู้รับจ้าง"))
         sub = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(code)].copy()
         valid_starts = [v for v in sub["_start"] if v is not None and not pd.isna(v)]
         valid_finishes = [v for v in sub["_finish"] if v is not None and not pd.isna(v)]
+        valid_starts.extend(outsourced_sent_dates)
+        valid_finishes.extend(outsourced_due_dates)
         production_start = min(valid_starts) if valid_starts else None
         production_finish = max(valid_finishes) if valid_finishes else None
         # ชั่วโมงเกินกรอบ Production ต้องใช้เวลาทำงานสุทธิชุดเดียวกับ Auto-Chain
@@ -1940,8 +1967,12 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             lambda v: v is not None and not pd.isna(v) and customer_due is not None and v > customer_due
         ).astype(bool)
         risky = sub.loc[risky_mask].copy()
-        risky_drawings = ", ".join(risky.get("ชื่อ Drawing.", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(4))
-        risky_machines = ", ".join(risky.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3))
+        risky_drawings_list = risky.get("ชื่อ Drawing.", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(4).tolist()
+        risky_drawings_list.extend(outsourced_risk_drawings)
+        risky_drawings = ", ".join(list(dict.fromkeys(risky_drawings_list))[:4])
+        risky_machines_list = risky.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3).tolist()
+        risky_machines_list.extend([f"จ้างภายนอก: {vendor}" for vendor in outsourced_vendors])
+        risky_machines = ", ".join(list(dict.fromkeys(risky_machines_list))[:3])
         # สถานะคิวหน้างานต้องส่งผลถึงระดับแผน แม้วันจบรวมที่วางไว้ยังไม่เกิน Production
         # เพื่อไม่ให้แผนเป็นสีเขียวทั้งที่มีงานกำลังผลิต/รอคิวซึ่งเลยเวลาจบของตัวเองแล้ว
         # คิวดีเลย์ต้องเทียบกับเวลาจบตามแผนเดิมของแต่ละคิว ไม่ใช้เวลาจบลูกโซ่
@@ -1986,7 +2017,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         planned_hours = ((setup_minutes + basic_minutes + program_minutes) / 60.0).sum()
         shown_risky_drawings = risky_drawings or delayed_drawings
         shown_risky_machines = risky_machines or delayed_machines
-        rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "คิวดีเลย์": delayed_count, "ดีเลย์สูงสุด (ชม.)": round(max_delay_hours, 1), "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": shown_risky_drawings or "-", "เครื่องเสี่ยง": shown_risky_machines or "-", "Drawing ทั้งหมด": drawing_progress["drawing_total"], "Drawing เสร็จแล้ว": drawing_progress["drawing_completed"], "Drawing คงเหลือ": drawing_progress["drawing_remaining"], "งานคงเหลือ (%)": drawing_progress["remaining_pct"], "งานเสร็จ (%)": drawing_progress["completed_pct"], "ชั่วโมงแผน": round(planned_hours, 2)})
+        rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "คิวดีเลย์": delayed_count, "ดีเลย์สูงสุด (ชม.)": round(max_delay_hours, 1), "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": shown_risky_drawings or "-", "เครื่องเสี่ยง": shown_risky_machines or "-", "ส่งจ้างภายนอก": len(outsourced_plan_jobs), "Drawing ทั้งหมด": drawing_progress["drawing_total"], "Drawing เสร็จแล้ว": drawing_progress["drawing_completed"], "Drawing คงเหลือ": drawing_progress["drawing_remaining"], "งานคงเหลือ (%)": drawing_progress["remaining_pct"], "งานเสร็จ (%)": drawing_progress["completed_pct"], "ชั่วโมงแผน": round(planned_hours, 2)})
         customer_text = f"Production: {project_short_date(customer_start)}–{project_short_date(customer_due)}"
         gantt_rows.append({"แผนงาน": f"{code} | Production", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลา Production", "สถานะ": status, "ข้อความ": customer_text})
         if production_start and production_finish:
@@ -2434,8 +2465,10 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         .exec-summary b {{ font-size:14px; color:#991B1B; }} .exec-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:6px; }}
         .exec-issue {{ border-radius:5px; padding:6px 8px; margin:4px 0; break-inside:avoid; }} .exec-issue.critical {{ background:#FEF2F2; border-left:5px solid #DC2626; }}
         .exec-issue.warning {{ background:#FFFBEB; border-left:5px solid #F59E0B; }} .exec-issue div {{ margin-top:2px; }} .exec-ok {{ padding:8px; background:#ECFDF5; }}
-        .panels {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }} .panel {{ border:1px solid #CBD5E1; border-radius:6px; padding:6px 9px; background:#FFFBEB; }}
-        ul {{ margin:4px 0; padding-left:18px; }} li {{ margin:2px 0; }} table {{ width:100%; border-collapse:collapse; table-layout:fixed; margin-top:5px; }}
+        .panels {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; break-inside:avoid; page-break-inside:avoid; page-break-before:always; }}
+        .panel {{ border:1px solid #CBD5E1; border-radius:6px; padding:6px 9px; background:#FFFBEB; break-inside:avoid; page-break-inside:avoid; }}
+        .panel h2 {{ break-after:avoid; page-break-after:avoid; }}
+        ul {{ margin:4px 0; padding-left:18px; }} li {{ margin:2px 0; break-inside:avoid; page-break-inside:avoid; }} table {{ width:100%; border-collapse:collapse; table-layout:fixed; margin-top:5px; }}
         th,td {{ border:1px solid #CBD5E1; padding:3px 4px; vertical-align:top; overflow-wrap:anywhere; }} th {{ background:#E2E8F0; }} tr:nth-child(even) {{ background:#F8FAFC; }}
         thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }} .drawing {{ width:22%; }} .empty {{ padding:30px; text-align:center; border:1px dashed #CBD5E1; }}
         .foot {{ margin-top:8px; text-align:right; }}
@@ -4929,8 +4962,83 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             (df_all["เลือกเครื่องจักร"] == selected_m) &
             (df_all["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
         ].copy()
+        outsourced_machine_jobs = df_all[
+            (df_all["เลือกเครื่องจักร"] == selected_m) &
+            (df_all["สถานะงาน"].astype(str).str.contains("จ้างภายนอก", na=False))
+        ].copy()
     else:
         m_all_jobs = pd.DataFrame()
+        outsourced_machine_jobs = pd.DataFrame()
+
+    if not outsourced_machine_jobs.empty:
+        with st.expander(f"🟣 งานส่งจ้างภายนอกของ {selected_m} ({len(outsourced_machine_jobs)} รายการ)", expanded=False):
+            st.caption("งานกลุ่มนี้ไม่ใช้กำลังการผลิตของเครื่องภายใน แต่ยังติดตามกำหนดรับกลับและ Drawing ไว้ในแผน Production")
+            for _, outsource_row in outsourced_machine_jobs.iterrows():
+                outsource_id = safe_int(outsource_row.get("ID"), 0)
+                outsource_progress = normalize_step_progress(
+                    outsource_row.get("ติดตาม Step"), outsource_row.get("ขั้นตอน (Step)"),
+                    outsource_row.get("สถานะงาน"), outsource_row.get("เริ่มจริง"), outsource_row.get("เสร็จจริง")
+                )
+                outsource_index = safe_int(outsource_progress.get("current_index"), 0)
+                outsource_steps = outsource_progress.get("steps", [])
+                outsource_step = outsource_steps[outsource_index] if outsource_steps and outsource_index < len(outsource_steps) else {}
+                outsource_due = parse_flexible_datetime(outsource_step.get("outsource_due_at"))
+                outsource_due_text = outsource_due.strftime("%d/%m/%Y %H:%M") if outsource_due is not None and pd.notna(outsource_due) else "-"
+                outsource_vendor = safe_str(outsource_step.get("outsource_vendor"), "ไม่ระบุผู้รับจ้าง")
+                st.info(
+                    f"แผน **{safe_str(outsource_row.get('แผนงาน'), '-')}** | "
+                    f"Drawing **{safe_str(outsource_row.get('ชื่อ Drawing.'), '-')}** | "
+                    f"ผู้รับจ้าง **{outsource_vendor}** | กำหนดรับกลับ **{outsource_due_text}**"
+                )
+                with st.form(f"outsource_receive_form_{outsource_id}"):
+                    receive_action = st.radio(
+                        "ผลการรับงานกลับ",
+                        ["รับกลับเข้าคิวผลิตภายใน", "รับกลับและยืนยันว่า Step ที่จ้างเสร็จแล้ว"],
+                        key=f"outsource_receive_action_{outsource_id}",
+                    )
+                    receive_note = st.text_input("หมายเหตุรับกลับ", key=f"outsource_receive_note_{outsource_id}")
+                    receive_confirm = st.checkbox("ยืนยันรับงานกลับ", key=f"outsource_receive_confirm_{outsource_id}")
+                    receive_submit = st.form_submit_button("📥 บันทึกรับงานกลับ", use_container_width=True)
+                if receive_submit:
+                    if not receive_confirm:
+                        st.warning("กรุณาติ๊กยืนยันรับงานกลับ")
+                    else:
+                        receive_now = get_bangkok_now().replace(tzinfo=None)
+                        receive_now_str = receive_now.strftime("%Y-%m-%d %H:%M:%S")
+                        outsource_step["outsource_received_at"] = receive_now_str
+                        outsource_step["outsource_receive_note"] = receive_note.strip() or None
+                        if receive_action.startswith("รับกลับเข้าคิว"):
+                            receive_payload = {
+                                "status": "🟧 รอคิวผลิต", "actual_finish": None,
+                                "hold_started_at": None, "step_progress": outsource_progress
+                            }
+                            receive_event = "Outsource Return to Queue"
+                        else:
+                            outsource_step["finished_at"] = receive_now_str
+                            if outsource_index < len(outsource_steps) - 1:
+                                outsource_progress["current_index"] = outsource_index + 1
+                                receive_payload = {
+                                    "status": "🟧 รอคิวผลิต", "actual_finish": None,
+                                    "hold_started_at": None, "step_progress": outsource_progress
+                                }
+                            else:
+                                receive_payload = {
+                                    "status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": receive_now_str,
+                                    "hold_started_at": None, "step_progress": outsource_progress
+                                }
+                            receive_event = "Outsource Finished"
+                        if update_supabase_job(outsource_id, receive_payload):
+                            log_job_event(
+                                outsource_id, safe_str(outsource_row.get("แผนงาน"), "-"),
+                                safe_str(outsource_row.get("ชื่อ Drawing."), "-"), selected_m,
+                                receive_event, outsource_index + 1,
+                                safe_str(outsource_step.get("name"), safe_str(outsource_row.get("ขั้นตอน (Step)"), "-")),
+                                "รับงานจ้างภายนอกกลับ", receive_note
+                            )
+                            st.toast("บันทึกรับงานจ้างภายนอกกลับแล้ว", icon="📥")
+                            st.rerun()
+                        else:
+                            st.error("บันทึกรับงานกลับไม่สำเร็จ")
 
     if not m_all_jobs.empty:
         running_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
@@ -5953,6 +6061,83 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                                 st.rerun()
                             else:
                                 st.error("ย้ายเครื่องไม่สำเร็จ")
+
+                with st.expander("🟣 ส่ง Step ปัจจุบันจ้างภายนอก", expanded=False):
+                    st.caption(
+                        "เมื่อตกลงส่งจ้าง งานจะออกจากภาระและลูกโซ่ของเครื่องภายในทันที "
+                        "แต่ Drawing และกำหนดรับกลับยังอยู่ในแผน Production"
+                    )
+                    outsource_default_sent = get_bangkok_now().replace(tzinfo=None, second=0, microsecond=0)
+                    outsource_default_due = datetime.combine(
+                        (outsource_default_sent + timedelta(days=7)).date(), dtime(17, 30)
+                    )
+                    with st.form(f"send_outsource_form_{target_id}"):
+                        outsource_vendor_input = st.text_input(
+                            "ผู้รับจ้าง / บริษัทภายนอก *", key=f"outsource_vendor_{target_id}"
+                        )
+                        os1, os2, os3, os4 = st.columns(4)
+                        outsource_sent_date = os1.date_input(
+                            "วันที่ส่งออก", outsource_default_sent.date(), format="DD/MM/YYYY",
+                            key=f"outsource_sent_date_{target_id}"
+                        )
+                        outsource_sent_time = os2.time_input(
+                            "เวลาส่งออก", outsource_default_sent.time(), key=f"outsource_sent_time_{target_id}"
+                        )
+                        outsource_due_date = os3.date_input(
+                            "กำหนดรับกลับ", outsource_default_due.date(), format="DD/MM/YYYY",
+                            key=f"outsource_due_date_{target_id}"
+                        )
+                        outsource_due_time = os4.time_input(
+                            "เวลารับกลับ", outsource_default_due.time(), key=f"outsource_due_time_{target_id}"
+                        )
+                        outsource_note_input = st.text_area(
+                            "หมายเหตุ / ขอบเขตงานที่ส่งจ้าง", key=f"outsource_note_{target_id}"
+                        )
+                        outsource_confirm = st.checkbox(
+                            "ยืนยันนำ Step นี้ออกจากกำลังการผลิตภายในและส่งจ้างภายนอก",
+                            key=f"outsource_confirm_{target_id}"
+                        )
+                        outsource_submit = st.form_submit_button(
+                            "🟣 ยืนยันส่งจ้างภายนอก", use_container_width=True
+                        )
+                    if outsource_submit:
+                        outsource_sent_at = datetime.combine(outsource_sent_date, outsource_sent_time)
+                        outsource_due_at = datetime.combine(outsource_due_date, outsource_due_time)
+                        if not outsource_vendor_input.strip():
+                            st.warning("กรุณาระบุผู้รับจ้างหรือบริษัทภายนอก")
+                        elif outsource_due_at <= outsource_sent_at:
+                            st.warning("กำหนดรับกลับต้องอยู่หลังวันที่และเวลาส่งออก")
+                        elif not outsource_confirm:
+                            st.warning("กรุณาติ๊กยืนยันส่งจ้างภายนอก")
+                        else:
+                            if current_step_item.get("started_at"):
+                                pause_from = parse_flexible_datetime(s_hold_started) if is_step_hold else outsource_sent_at
+                                if pause_from is None or pd.isna(pause_from):
+                                    pause_from = outsource_sent_at
+                                current_step_item["pending_pause_started_at"] = pause_from.strftime("%Y-%m-%d %H:%M:%S")
+                            current_step_item["outsource_vendor"] = outsource_vendor_input.strip()
+                            current_step_item["outsource_sent_at"] = outsource_sent_at.strftime("%Y-%m-%d %H:%M:%S")
+                            current_step_item["outsource_due_at"] = outsource_due_at.strftime("%Y-%m-%d %H:%M:%S")
+                            current_step_item["outsource_note"] = outsource_note_input.strip() or None
+                            current_step_item.pop("outsource_received_at", None)
+                            outsource_payload = {
+                                "status": "🟣 ส่งจ้างภายนอก", "actual_finish": None,
+                                "hold_started_at": None, "step_progress": step_progress
+                            }
+                            if update_supabase_job(target_id, outsource_payload):
+                                log_job_event(
+                                    target_id, plan_code, drawing_code, selected_m, "Send Outsource",
+                                    current_step_index + 1, current_step_name,
+                                    reason=f"ส่งจ้างภายนอก: {outsource_vendor_input.strip()}",
+                                    note=(
+                                        f"กำหนดรับกลับ {outsource_due_at.strftime('%d/%m/%Y %H:%M')}"
+                                        + (f" | {outsource_note_input.strip()}" if outsource_note_input.strip() else "")
+                                    )
+                                )
+                                st.toast("ส่ง Step จ้างภายนอกและคำนวณแผนใหม่แล้ว", icon="🟣")
+                                st.rerun()
+                            else:
+                                st.error("บันทึกส่งจ้างภายนอกไม่สำเร็จ")
 
             completed_step_seconds = sum(step_elapsed_seconds(item) for item in tracked_steps if item.get("finished_at"))
             if is_step_finished:
