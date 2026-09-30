@@ -2036,25 +2036,90 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
     summary = pd.DataFrame(rows)
     overlap_counts = {code: 0 for code in summary["แผนงาน"]}
     overlap_pairs = []
+
+    def merge_project_overlap_segments(segments):
+        """รวมช่วงคิวที่ชนกันเพื่อไม่ให้นับชั่วโมงซ้ำในเครื่องเดียวกัน"""
+        valid_segments = sorted(
+            [(start, finish) for start, finish in segments if start is not None and finish is not None and finish > start],
+            key=lambda value: value[0]
+        )
+        merged = []
+        for start, finish in valid_segments:
+            if not merged or start > merged[-1][1]:
+                merged.append([start, finish])
+            else:
+                merged[-1][1] = max(merged[-1][1], finish)
+        return merged
+
     for i in range(len(summary)):
         for j in range(i + 1, len(summary)):
             a, b = summary.iloc[i], summary.iloc[j]
             if a["เริ่ม Production"] < b["สิ้นสุด Production"] and b["เริ่ม Production"] < a["สิ้นสุด Production"]:
-                overlap_counts[a["แผนงาน"]] += 1; overlap_counts[b["แผนงาน"]] += 1
-                overlap_start = max(a["เริ่ม Production"], b["เริ่ม Production"])
-                overlap_finish = min(a["สิ้นสุด Production"], b["สิ้นสุด Production"])
-                overlap_hours = max(0.0, (overlap_finish - overlap_start).total_seconds() / 3600.0)
                 a_jobs = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(a["แผนงาน"])]
                 b_jobs = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(b["แผนงาน"])]
-                a_machines = set(a_jobs.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str))
-                b_machines = set(b_jobs.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str))
+                a_machines = {
+                    safe_str(value) for value in a_jobs.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna()
+                    if safe_str(value)
+                }
+                b_machines = {
+                    safe_str(value) for value in b_jobs.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna()
+                    if safe_str(value)
+                }
                 shared_machines = sorted(a_machines.intersection(b_machines))
-                overlap_pairs.append({
-                    "แผน A": safe_str(a["แผนงาน"]),
-                    "แผน B": safe_str(b["แผนงาน"]),
-                    "ซ้อน (ชม.)": overlap_hours,
-                    "เครื่องร่วม": ", ".join(shared_machines[:3]) or "ไม่พบเครื่องร่วม"
-                })
+                machine_overlap_hours = {}
+                collision_drawings = []
+                for machine_name in shared_machines:
+                    machine_a_jobs = a_jobs[
+                        a_jobs["เลือกเครื่องจักร"].map(safe_str) == machine_name
+                    ]
+                    machine_b_jobs = b_jobs[
+                        b_jobs["เลือกเครื่องจักร"].map(safe_str) == machine_name
+                    ]
+                    collision_segments = []
+                    for _, a_job in machine_a_jobs.iterrows():
+                        a_start, a_finish = a_job.get("_start"), a_job.get("_finish")
+                        if a_start is None or a_finish is None or pd.isna(a_start) or pd.isna(a_finish):
+                            continue
+                        for _, b_job in machine_b_jobs.iterrows():
+                            b_start, b_finish = b_job.get("_start"), b_job.get("_finish")
+                            if b_start is None or b_finish is None or pd.isna(b_start) or pd.isna(b_finish):
+                                continue
+                            collision_start = max(a_start, b_start)
+                            collision_finish = min(a_finish, b_finish)
+                            if collision_finish <= collision_start:
+                                continue
+                            collision_work_hours = get_work_capacity_between(collision_start, collision_finish)
+                            if collision_work_hours <= 0:
+                                continue
+                            collision_segments.append((collision_start, collision_finish))
+                            collision_drawings.append(
+                                f"{safe_str(a_job.get('ชื่อ Drawing.'), '-')} ↔ {safe_str(b_job.get('ชื่อ Drawing.'), '-')}"
+                            )
+                    merged_segments = merge_project_overlap_segments(collision_segments)
+                    merged_hours = sum(
+                        get_work_capacity_between(segment_start, segment_finish)
+                        for segment_start, segment_finish in merged_segments
+                    )
+                    if merged_hours > 0:
+                        machine_overlap_hours[machine_name] = merged_hours
+
+                # แจ้งเตือนเฉพาะเมื่อคิวของสองแผนชนกันจริงบนเครื่องเดียวกัน
+                # การที่กรอบ Production ทับกันแต่ทำคนละเครื่องไม่ถือเป็นปัญหา
+                if machine_overlap_hours:
+                    overlap_counts[a["แผนงาน"]] += 1
+                    overlap_counts[b["แผนงาน"]] += 1
+                    total_machine_hours = sum(machine_overlap_hours.values())
+                    machine_detail = ", ".join(
+                        f"{machine_name} {hours:,.1f} ชม."
+                        for machine_name, hours in sorted(machine_overlap_hours.items())
+                    )
+                    overlap_pairs.append({
+                        "แผน A": safe_str(a["แผนงาน"]),
+                        "แผน B": safe_str(b["แผนงาน"]),
+                        "ซ้อน (ชม.)": total_machine_hours,
+                        "เครื่องร่วม": machine_detail,
+                        "Drawing ชนกัน": ", ".join(list(dict.fromkeys(collision_drawings))[:3]) or "-"
+                    })
     summary["แผนซ้อนกัน"] = summary["แผนงาน"].map(overlap_counts)
 
     gantt_df = pd.DataFrame(gantt_rows).dropna(subset=["เริ่ม", "จบ"])
@@ -2342,15 +2407,15 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                     st.warning(f"⚪ {safe_str(item.get('แผนงาน'))} ยังวาง Drawing/Step ไม่ครบ จึงยังประเมินวันจบไม่ได้")
 
     with overlap_col:
-        st.markdown("#### 🔀 แผนที่เวลาซ้อนกัน")
+        st.markdown("#### 🔀 คิวงานที่ชนกันบนเครื่องเดียวกัน")
         if not visible_overlaps:
-            st.success("ไม่พบช่วงเวลา Production ที่ซ้อนกันในมุมมองนี้")
+            st.success("ไม่พบคิวต่างแผนที่ใช้เครื่องเดียวกันในเวลาเดียวกัน")
         else:
             for item in sorted(visible_overlaps, key=lambda v: v["ซ้อน (ชม.)"], reverse=True)[:8]:
-                overlap_days = item["ซ้อน (ชม.)"] / 24.0
                 st.warning(
                     f"🧱 {item['แผน A']} ↔ {item['แผน B']}\n\n"
-                    f"ซ้อนกัน {overlap_days:.1f} วัน ({item['ซ้อน (ชม.)']:.1f} ชม.) | เครื่องร่วม: {item['เครื่องร่วม']}"
+                    f"คิวชนกัน {item['ซ้อน (ชม.)']:.1f} ชม.ทำงาน | เครื่อง: {item['เครื่องร่วม']}\n\n"
+                    f"Drawing: {item['Drawing ชนกัน']}"
                 )
 
     late_df = summary_view[summary_view["เกินกำหนด (ชม.)"] > 0]
@@ -2403,7 +2468,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         else:
             project_decision_items.append(f"{safe_str(item.get('แผนงาน'))}: ยังวาง Drawing/Step ไม่ครบ")
     project_overlap_items = [
-        f"{item['แผน A']} ↔ {item['แผน B']}: ซ้อน {item['ซ้อน (ชม.)']:,.1f} ชม. | เครื่องร่วม {item['เครื่องร่วม']}"
+        f"{item['แผน A']} ↔ {item['แผน B']}: คิวชนกัน {item['ซ้อน (ชม.)']:,.1f} ชม.ทำงาน | เครื่อง {item['เครื่องร่วม']} | Drawing {item['Drawing ชนกัน']}"
         for item in sorted(visible_overlaps, key=lambda value: value["ซ้อน (ชม.)"], reverse=True)[:12]
     ]
     executive_pdf_issues = "".join(
@@ -2433,7 +2498,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         "executive_issues": executive_pdf_issues,
         "rows": project_pdf_rows,
         "decisions": "".join(f"<li>{html.escape(value)}</li>" for value in project_decision_items) or "<li>ไม่พบแผนที่ต้องเร่งตัดสินใจ</li>",
-        "overlaps": "".join(f"<li>{html.escape(value)}</li>" for value in project_overlap_items) or "<li>ไม่พบช่วงเวลา Production ที่ซ้อนกัน</li>"
+        "overlaps": "".join(f"<li>{html.escape(value)}</li>" for value in project_overlap_items) or "<li>ไม่พบคิวต่างแผนที่ชนกันบนเครื่องเดียวกัน</li>"
     }, ensure_ascii=False).replace("<", "\\u003c")
 
     if not read_only:
@@ -2477,7 +2542,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         <div class="exec-summary"><b>${{d.health_icon}} สถานการณ์รวม: ${{d.health}}</b><div>มี ${{d.total}} แผน | อยู่ในแผน ${{d.on_plan}} | ใกล้เกินแผน ${{d.near_risk}} | เกิน Production ${{d.late}} | ต้องตัดสินใจ ${{d.decision_count}} แผน</div><div>เหลือ ${{d.remaining_drawings}} Drawing | งานคงเหลือ ${{d.remaining_hours}} ชม. | กำลังการผลิตที่ขาด ${{d.capacity_shortfall}} ชม.</div></div>
         <h2>1. ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ</h2><div class="exec-grid">${{d.executive_issues}}</div>
         <h2>2. ช่วงเวลาแผนหลักเทียบแผนผลิต</h2>${{chartHtml}}
-        <div class="panels"><div class="panel"><h2>3. จุดที่ต้องตัดสินใจ</h2><ul>${{d.decisions}}</ul></div><div class="panel"><h2>4. แผนที่เวลาซ้อนกัน</h2><ul>${{d.overlaps}}</ul></div></div>
+        <div class="panels"><div class="panel"><h2>3. จุดที่ต้องตัดสินใจ</h2><ul>${{d.decisions}}</ul></div><div class="panel"><h2>4. คิวงานที่ชนกันบนเครื่องเดียวกัน</h2><ul>${{d.overlaps}}</ul></div></div>
         <h2>5. ตารางแผนงาน Production</h2><table><thead><tr><th>แผนงาน</th><th>เริ่ม Production</th><th>สิ้นสุด Production</th><th>เริ่มผลิต</th><th>จบผลิต</th><th>สถานะ</th><th>คิวดีเลย์</th><th>ดีเลย์สูงสุด (ชม.)</th><th>เกิน Production (ชม.)</th><th class="drawing">Drawing เสี่ยง</th><th>เครื่องเสี่ยง</th><th>Drawing ทั้งหมด</th><th>เสร็จแล้ว</th><th>คงเหลือ</th><th>งานคงเหลือ</th><th>ชั่วโมงแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
         <div class="foot">PES Production Monitoring System</div></body></html>`;
         const printWin = window.open('', '_blank');
