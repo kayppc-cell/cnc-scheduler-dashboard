@@ -1111,9 +1111,9 @@ def machine_active_queue_timeline(machine_name: str, jobs_df: pd.DataFrame):
         row_ready = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
         if row_ready is None or pd.isna(row_ready):
             row_ready = now_dt
-        row_start = get_next_valid_work_time(
-            max(cursor, row_ready) if cursor is not None else row_ready
-        )
+        # คิวแรกใช้เวลาที่กำหนด ส่วนคิวถัดไปต้องต่อจากเวลาจบคิวก่อนหน้าโดยตรง
+        # ห้ามนำ ready_at เก่าของแต่ละคิวมาขวาง เพราะค่านั้นเป็นผลลูกโซ่รอบก่อน
+        row_start = get_next_valid_work_time(cursor if cursor is not None else row_ready)
         _, row_finish = add_work_time_with_shift(row_start, get_planned_minutes(row) / 60.0)
         if "กำลังผลิต" in safe_str(row.get("สถานะงาน")) or "พักงาน" in safe_str(row.get("สถานะงาน")):
             stored_finish = parse_flexible_datetime(row.get("เวลาจบ Baseline"))
@@ -1429,10 +1429,7 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
         cursor = chain_start
         for row in waiting_rows:
             job_id = safe_int(row.get("id"))
-            # รักษาวันเริ่มขั้นต่ำของงานนั้น แม้สลับลำดับคิว
-            row_not_before = parse_flexible_datetime(row.get("ready_at"))
-            if row_not_before is not None and pd.notna(row_not_before):
-                cursor = max(cursor, row_not_before)
+            # หลังจัดลำดับใหม่ ทุกคิวต้องต่อจากคิวก่อนหน้า ไม่รักษา ready_at ลูกโซ่เก่า
             cursor = get_next_valid_work_time(cursor)
             expected_by_id[job_id] = cursor
             changed_rows.append({
@@ -1659,11 +1656,9 @@ def build_project_active_chain(calc_df):
                 chained_starts.append(None)
                 chained_finishes.append(None)
                 continue
-            row_ready = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
-            # คิวถัดไปเริ่มต่อจากคิวก่อนหน้า แต่ห้ามเริ่มก่อนวันที่ผู้วางแผนกำหนด
-            # จึงรองรับช่วงว่างของเครื่องและงานที่วางล่วงหน้าได้
-            start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
-            start_dt = get_next_valid_work_time(start_base)
+            # คิวถัดไปใช้เวลาจบคิวก่อนหน้าเป็นจุดเริ่มโดยตรง
+            # Baseline ของแต่ละงานยังเก็บแยกไว้สำหรับสอบกลับ ไม่ใช้ขวางลูกโซ่สด
+            start_dt = get_next_valid_work_time(previous_finish)
 
         _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
         status_value = safe_str(row.get("สถานะงาน"))
@@ -2841,8 +2836,7 @@ def render_work_order_readonly(source_df):
                 chain_starts.append(None)
                 chain_finishes.append(None)
                 continue
-            start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
-            chain_start = get_next_valid_work_time(start_base)
+            chain_start = get_next_valid_work_time(previous_finish)
         _, chain_finish = add_work_time_with_shift(chain_start, duration_hours)
         queue_status = safe_str(queue_row.get("สถานะงาน"), "")
         if "กำลังผลิต" in queue_status or "พักงาน" in queue_status or "รอวัสดุ" in queue_status:
@@ -7335,10 +7329,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         chained_start_dates.append("")
                         chained_finish_dates.append("")
                         continue
-                    row_ready = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
-                    # ใช้เวลาจบคิวก่อนหน้าเป็นหลัก แต่รักษาวันเริ่มล่วงหน้าที่ผู้วางแผนกำหนด
-                    start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
-                    start_work_dt = get_next_valid_work_time(start_base)
+                    # คิวถัดไปต่อจากเวลาจบคิวก่อนหน้าโดยตรง ไม่ใช้วันเริ่มลูกโซ่เก่ามาขวาง
+                    start_work_dt = get_next_valid_work_time(previous_finish)
 
                 _, finish_work_dt = add_work_time_with_shift(start_work_dt, tot_h)
                 live_status = safe_str(r.get("สถานะงาน"), "")
@@ -7724,10 +7716,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     calculated_starts.append("")
                                     calculated_finishes.append("")
                                     continue
-                                row_ready = parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
-                                # ไม่ดึงงานล่วงหน้าให้มาต่อทันที หากกำหนดเริ่มไว้หลังคิวก่อนหน้า
-                                start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
-                                start_dt = get_next_valid_work_time(start_base)
+                                # เมื่อแก้คิวแรก ให้ทุกคิวถัดไปคำนวณต่อเนื่องใหม่ทั้งเครื่อง
+                                # ready_at เดิมของคิวถัดไปเป็นผลคำนวณเก่า จึงห้ามใช้เป็นค่าขั้นต่ำ
+                                start_dt = get_next_valid_work_time(previous_finish)
                             _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
                             # งานที่เริ่มจริงแล้วห้ามเลื่อน Baseline; หากเลยแผนให้คิวถัดไปรออย่างน้อยถึงเวลาปัจจุบัน
                             if is_live_job:
