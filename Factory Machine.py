@@ -8557,6 +8557,27 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         performance_scope_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_fin_drawing)
                     ]
 
+                # เมื่อดูทุกเครื่อง ให้เรียงเป็นกลุ่มตามลำดับเครื่องมาตรฐานของโรงงาน
+                # และเรียงงานล่าสุดไว้บนสุดภายในเครื่องเดียวกัน
+                machine_order_map = {machine_name: index for index, machine_name in enumerate(MACHINE_LIST)}
+                unknown_machine_order = len(machine_order_map) + 100
+                def sort_finished_history_by_machine(source_df):
+                    if source_df.empty:
+                        return source_df.copy()
+                    sorted_df = source_df.copy()
+                    sorted_df["_machine_order"] = sorted_df["เลือกเครื่องจักร"].apply(
+                        lambda value: machine_order_map.get(safe_str(value), unknown_machine_order)
+                    )
+                    sorted_df["_machine_name_order"] = sorted_df["เลือกเครื่องจักร"].apply(safe_str)
+                    sorted_df["_finish_order"] = sorted_df["เสร็จจริง"].apply(parse_flexible_datetime)
+                    return sorted_df.sort_values(
+                        by=["_machine_order", "_machine_name_order", "_finish_order"],
+                        ascending=[True, True, False], na_position="last"
+                    ).drop(columns=["_machine_order", "_machine_name_order", "_finish_order"])
+
+                fin_display_df = sort_finished_history_by_machine(fin_display_df)
+                performance_scope_df = sort_finished_history_by_machine(performance_scope_df)
+
                 # สรุปประสิทธิภาพรายเครื่องแบบ Drawing ไม่ซ้ำ
                 # Drawing เดียวกันที่มีหลาย Step/หลายแถวบนเครื่องเดียวกันจะนับเพียง 1 Drawing
                 performance_source = performance_scope_df.copy()
@@ -8636,6 +8657,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
 
                 st.caption(f"แสดงผล {len(fin_display_df):,} จากทั้งหมด {total_finished_before_filter:,} รายการ")
+                if normalize_filter_key(selected_fin_machine) == normalize_filter_key("🌐 ทุกเครื่อง"):
+                    st.markdown("#### 🏭 ตารางประวัติเรียงแยกตามลำดับเครื่องจักร")
+                    st.caption("รายการของเครื่องเดียวกันถูกจัดให้อยู่ติดกัน และเรียงงานล่าสุดก่อนภายในแต่ละเครื่อง")
                 # จองตำแหน่งปุ่มก่อนตาราง เพื่อให้มองเห็นแน่นอนทั้งโหมด Admin และ Viewer
                 finished_pdf_slot = st.empty()
 
@@ -8732,25 +8756,63 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     parsed = parse_flexible_datetime(value)
                     return parsed.strftime("%d/%m/%Y %H:%M") if parsed is not None and not pd.isna(parsed) else "-"
 
-                finished_pdf_rows = "".join([
-                    "<tr>"
-                    f"<td>{html.escape(safe_str(row.get('แผนงาน'), '-'))}</td>"
-                    f"<td>{html.escape(safe_str(row.get('ชื่อ Drawing.'), '-'))}</td>"
-                    f"<td style='text-align:center'>{safe_int(row.get('จำนวน'), 1)}</td>"
-                    f"<td>{html.escape(safe_str(row.get('วัสดุ'), '-'))}</td>"
-                    f"<td>{html.escape(safe_str(row.get('ขั้นตอน (Step)'), '-'))}</td>"
-                    f"<td>{html.escape(safe_str(row.get('เลือกเครื่องจักร'), '-'))}</td>"
-                    f"<td>{finished_pdf_datetime(row.get('วัน-เวลาขึ้นงาน'))}</td>"
-                    f"<td>{finished_pdf_datetime(row.get('จบตามแผน'))}</td>"
-                    f"<td>{finished_pdf_datetime(row.get('เริ่มจริง'))}</td>"
-                    f"<td>{finished_pdf_datetime(row.get('เสร็จจริง'))}</td>"
-                    f"<td style='text-align:right'>{safe_float(row.get('พักสะสม (ชม.)')):,.2f}</td>"
-                    f"<td style='text-align:right'>{safe_float(row.get('รวม (ชม.)')):,.2f}</td>"
-                    f"<td style='text-align:right'>{safe_float(row.get('เวลาจริงสุทธิ (ชม.)')):,.2f}</td>"
-                    f"<td>{html.escape(safe_str(row.get('ผลเทียบแผน'), '-'))}</td>"
-                    "</tr>"
-                    for _, row in fin_display_df.iterrows()
-                ])
+                def finished_pdf_row_html(row):
+                    return (
+                        "<tr>"
+                        f"<td>{html.escape(safe_str(row.get('แผนงาน'), '-'))}</td>"
+                        f"<td>{html.escape(safe_str(row.get('ชื่อ Drawing.'), '-'))}</td>"
+                        f"<td style='text-align:center'>{safe_int(row.get('จำนวน'), 1)}</td>"
+                        f"<td>{html.escape(safe_str(row.get('วัสดุ'), '-'))}</td>"
+                        f"<td>{html.escape(safe_str(row.get('ขั้นตอน (Step)'), '-'))}</td>"
+                        f"<td>{finished_pdf_datetime(row.get('วัน-เวลาขึ้นงาน'))}</td>"
+                        f"<td>{finished_pdf_datetime(row.get('จบตามแผน'))}</td>"
+                        f"<td>{finished_pdf_datetime(row.get('เริ่มจริง'))}</td>"
+                        f"<td>{finished_pdf_datetime(row.get('เสร็จจริง'))}</td>"
+                        f"<td style='text-align:right'>{safe_float(row.get('พักสะสม (ชม.)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(row.get('รวม (ชม.)')):,.2f}</td>"
+                        f"<td style='text-align:right'>{safe_float(row.get('เวลาจริงสุทธิ (ชม.)')):,.2f}</td>"
+                        f"<td>{html.escape(safe_str(row.get('ผลเทียบแผน'), '-'))}</td>"
+                        "</tr>"
+                    )
+
+                present_machine_names = fin_display_df.get(
+                    "เลือกเครื่องจักร", pd.Series(dtype=str)
+                ).dropna().astype(str).drop_duplicates().tolist()
+                ordered_machine_names = [name for name in MACHINE_LIST if name in present_machine_names]
+                ordered_machine_names.extend(sorted(name for name in present_machine_names if name not in MACHINE_LIST))
+                machine_performance_lookup = {
+                    safe_str(row.get("เครื่องจักร")): row
+                    for _, row in machine_performance_df.iterrows()
+                }
+                machine_section_parts = []
+                for machine_index, machine_name in enumerate(ordered_machine_names):
+                    machine_rows_df = fin_display_df[
+                        fin_display_df["เลือกเครื่องจักร"].astype(str) == machine_name
+                    ]
+                    if machine_rows_df.empty:
+                        continue
+                    performance_row = machine_performance_lookup.get(machine_name, {})
+                    machine_net_hours = pd.to_numeric(
+                        machine_rows_df["เวลาจริงสุทธิ (ชม.)"], errors="coerce"
+                    ).fillna(0).sum()
+                    machine_pause_hours = pd.to_numeric(
+                        machine_rows_df["พักสะสม (ชม.)"], errors="coerce"
+                    ).fillna(0).sum()
+                    machine_section_parts.append(
+                        "<section class='machine-section'>"
+                        f"<h2>🏭 {html.escape(machine_name)}</h2>"
+                        "<div class='machine-kpis'>"
+                        f"<div>Dwg ทั้งหมด<b>{safe_int(performance_row.get('Dwg ทั้งหมด'), len(machine_rows_df))}</b></div>"
+                        f"<div>จบเร็ว/ตรงแผน<b>{safe_float(performance_row.get('จบเร็ว/ตรงแผน (%)')):.1f}%</b></div>"
+                        f"<div>จบช้า<b>{safe_float(performance_row.get('จบช้า (%)')):.1f}%</b></div>"
+                        f"<div>เวลาจริงสุทธิ<b>{machine_net_hours:,.2f} ชม.</b></div>"
+                        f"<div>เวลาพักรวม<b>{machine_pause_hours:,.2f} ชม.</b></div>"
+                        "</div>"
+                        "<table><thead><tr><th>แผนงาน</th><th>Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>เริ่มแผน</th><th>จบแผน</th><th>เริ่มจริง</th><th>จบจริง</th><th>พัก ชม.</th><th>แผน ชม.</th><th>จริงสุทธิ</th><th>ผลเทียบแผน</th></tr></thead><tbody>"
+                        + "".join(finished_pdf_row_html(row) for _, row in machine_rows_df.iterrows())
+                        + "</tbody></table></section>"
+                    )
+                finished_machine_sections = "".join(machine_section_parts) or "<div class='empty'>ไม่พบรายการตามตัวกรอง</div>"
                 finished_machine_performance_rows = "".join([
                     "<tr>"
                     f"<td>{html.escape(safe_str(row.get('เครื่องจักร'), '-'))}</td>"
@@ -8786,7 +8848,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "net_hours": f"{pd.to_numeric(fin_display_df['เวลาจริงสุทธิ (ชม.)'], errors='coerce').fillna(0).sum():,.2f}",
                     "pause_hours": f"{pd.to_numeric(fin_display_df['พักสะสม (ชม.)'], errors='coerce').fillna(0).sum():,.2f}",
                     "machine_performance_rows": finished_machine_performance_rows,
-                    "rows": finished_pdf_rows
+                    "machine_sections": finished_machine_sections
                 }, ensure_ascii=False).replace("<", "\\u003c")
 
                 with finished_pdf_slot.container():
@@ -8807,6 +8869,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     .filters {{ border:1px solid #CBD5E1; background:#F8FAFC; border-radius:6px; padding:6px 8px; margin-bottom:8px; }}
                     .kpis {{ display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-bottom:9px; }} .kpi {{ border:1px solid #CBD5E1; border-radius:6px; padding:7px; text-align:center; }}
                     .kpi b {{ display:block; font-size:15px; margin-top:2px; }} table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+                    .machine-section {{ page-break-before:always; break-before:page; }}
+                    .machine-section h2 {{ font-size:15px; color:#065F46; margin:8px 0 5px; border-bottom:2px solid #10B981; padding-bottom:3px; }}
+                    .machine-kpis {{ display:grid; grid-template-columns:repeat(5,1fr); gap:5px; margin:5px 0 7px; }}
+                    .machine-kpis div {{ border:1px solid #A7F3D0; background:#F0FDF4; border-radius:5px; padding:5px; text-align:center; }}
+                    .machine-kpis b {{ display:block; font-size:12px; margin-top:2px; }} .empty {{ padding:20px; text-align:center; color:#64748B; }}
                     th,td {{ border:1px solid #CBD5E1; padding:3px 4px; vertical-align:top; overflow-wrap:anywhere; }} th {{ background:#065F46; color:white; }}
                     tr:nth-child(even) {{ background:#F0FDF4; }} thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }}
                     th:nth-child(2),td:nth-child(2) {{ width:10%; }} th:nth-child(5),td:nth-child(5) {{ width:13%; }} th:nth-child(14),td:nth-child(14) {{ width:11%; }}
@@ -8818,7 +8885,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     <h2 style="font-size:12px;margin:8px 0 4px;color:#065F46;">สรุปเปอร์เซ็นต์รายเครื่องจักร</h2>
                     <table style="margin-bottom:9px;"><thead><tr><th>เครื่องจักร</th><th>Dwg ทั้งหมด</th><th>Dwg ที่เทียบได้</th><th>จบเร็ว/ตรงแผน</th><th>จบช้า</th><th>ข้อมูลไม่ครบ</th></tr></thead><tbody>${{d.machine_performance_rows}}</tbody></table>
                     <div class="kpis"><div class="kpi">รายการที่กำลังแสดง<b>${{d.rows_count}} รายการ</b></div><div class="kpi">จบช้าตามตัวกรอง<b>${{d.late}} รายการ</b></div><div class="kpi">เวลาจริงสุทธิรวม<b>${{d.net_hours}} ชม.</b></div><div class="kpi">เวลาพักสะสมรวม<b>${{d.pause_hours}} ชม.</b></div></div>
-                    <table><thead><tr><th>แผนงาน</th><th>Drawing</th><th>จำนวน</th><th>วัสดุ</th><th>ขั้นตอน</th><th>เครื่องจักร</th><th>เริ่มแผน</th><th>จบแผน</th><th>เริ่มจริง</th><th>จบจริง</th><th>พัก ชม.</th><th>แผน ชม.</th><th>จริงสุทธิ</th><th>ผลเทียบแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+                    ${{d.machine_sections}}
                     <div class="foot">PES Production Monitoring System</div></body></html>`;
                     const printWin = window.open('', '_blank');
                     if (!printWin) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
