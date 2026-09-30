@@ -2155,7 +2155,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
     metric_values = [
         ("แผนงานทั้งหมด", exec_total_plans, "จำนวนแผนงานในมุมมองที่เลือก"),
         ("อยู่ในแผน", exec_on_plan, None),
-        ("ใกล้เกินแผน", exec_near_risk, "มีคิวดีเลย์แต่วันจบรวมยังไม่เกิน Production"),
+        ("คิวดีเลย์/เสี่ยง (สีส้ม)", exec_near_risk, "มีคิวดีเลย์ แต่วันจบรวมยังไม่เกินกรอบ Production"),
         ("เกิน Production", exec_late, None),
         ("Dwg คงเหลือ", exec_remaining_drawings, None),
         ("ชั่วโมงงานคงเหลือ", f"{exec_remaining_hours:,.1f}", None),
@@ -2236,12 +2236,18 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         exec_health, exec_health_icon, exec_health_color, exec_health_bg = "ปกติ", "🟢", "#065F46", "#ECFDF5"
 
     st.markdown("### 📋 บทสรุปสถานการณ์แผนงานสำหรับผู้บริหาร")
+    executive_health_reason = (
+        f"มีแผนเกิน Production แล้ว {exec_late} แผน"
+        if exec_late > 0 else
+        (f"มีแผนที่ต้องตัดสินใจ {exec_decision_count} แผน" if exec_decision_count > 0 else "ทุกแผนยังอยู่ในกรอบ Production")
+    )
     st.markdown(
         f"<div style='border:2px solid {exec_health_color};border-left:9px solid {exec_health_color};"
         f"border-radius:12px;padding:14px 16px;background:{exec_health_bg};margin:5px 0 12px'>"
-        f"<div style='font-size:20px;font-weight:900;color:{exec_health_color}'>{exec_health_icon} สถานการณ์รวม: {exec_health}</div>"
-        f"<div style='margin-top:6px;font-size:15px'>มีแผนงาน {exec_total_plans} แผน — อยู่ในแผน {exec_on_plan} แผน, "
-        f"ใกล้เกินแผน {exec_near_risk} แผน, เกิน Production {exec_late} แผน"
+        f"<div style='font-size:20px;font-weight:900;color:{exec_health_color}'>{exec_health_icon} สถานการณ์รวม: {exec_health} — {executive_health_reason}</div>"
+        f"<div style='margin-top:6px;font-size:15px'>มีแผนงาน {exec_total_plans} แผน — "
+        f"🟢 อยู่ในแผน {exec_on_plan} แผน, 🟠 คิวดีเลย์/เสี่ยงแต่ยังไม่เกิน Production {exec_near_risk} แผน, "
+        f"🔴 เกิน Production แล้ว {exec_late} แผน"
         f"{f', และยังวางงานไม่ครบ {exec_unplanned} แผน' if exec_unplanned else ''}. "
         f"เหลืองาน {exec_remaining_drawings} Drawing รวมประมาณ {exec_remaining_hours:,.1f} ชั่วโมง "
         f"และมีกำลังการผลิตที่ขาดจากกรอบรวม {exec_capacity_shortfall:,.1f} ชั่วโมง</div></div>",
@@ -2489,6 +2495,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         "overlap": int((summary_view["แผนซ้อนกัน"] > 0).sum()),
         "health": exec_health,
         "health_icon": exec_health_icon,
+        "health_reason": executive_health_reason,
         "near_risk": exec_near_risk,
         "late": exec_late,
         "remaining_drawings": exec_remaining_drawings,
@@ -2539,7 +2546,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         .foot {{ margin-top:8px; text-align:right; }}
         </style></head><body>
         <div class="head"><div><h1>บทสรุปสถานการณ์แผนงานสำหรับผู้บริหาร</h1><div class="sub">Production Executive Summary & Project Master Gantt</div></div><div><b>มุมมอง:</b> ${{d.filter}}<br><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
-        <div class="exec-summary"><b>${{d.health_icon}} สถานการณ์รวม: ${{d.health}}</b><div>มี ${{d.total}} แผน | อยู่ในแผน ${{d.on_plan}} | ใกล้เกินแผน ${{d.near_risk}} | เกิน Production ${{d.late}} | ต้องตัดสินใจ ${{d.decision_count}} แผน</div><div>เหลือ ${{d.remaining_drawings}} Drawing | งานคงเหลือ ${{d.remaining_hours}} ชม. | กำลังการผลิตที่ขาด ${{d.capacity_shortfall}} ชม.</div></div>
+        <div class="exec-summary"><b>${{d.health_icon}} สถานการณ์รวม: ${{d.health}} — ${{d.health_reason}}</b><div>มี ${{d.total}} แผน | 🟢 อยู่ในแผน ${{d.on_plan}} | 🟠 คิวดีเลย์/เสี่ยงแต่ยังไม่เกิน Production ${{d.near_risk}} | 🔴 เกิน Production แล้ว ${{d.late}} | ต้องตัดสินใจ ${{d.decision_count}} แผน</div><div>เหลือ ${{d.remaining_drawings}} Drawing | งานคงเหลือ ${{d.remaining_hours}} ชม. | กำลังการผลิตที่ขาด ${{d.capacity_shortfall}} ชม.</div></div>
         <h2>1. ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ</h2><div class="exec-grid">${{d.executive_issues}}</div>
         <h2>2. ช่วงเวลาแผนหลักเทียบแผนผลิต</h2>${{chartHtml}}
         <div class="panels"><div class="panel"><h2>3. จุดที่ต้องตัดสินใจ</h2><ul>${{d.decisions}}</ul></div><div class="panel"><h2>4. คิวงานที่ชนกันบนเครื่องเดียวกัน</h2><ul>${{d.overlaps}}</ul></div></div>
