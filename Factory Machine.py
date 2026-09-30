@@ -4865,6 +4865,18 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             waiting_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("รอคิว")]
             running_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
             hold_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
+            batch_paused_job_ids = set()
+            if not operator_events.empty and {"job_id", "event_type", "reason"}.issubset(operator_events.columns):
+                batch_pause_events = operator_events[
+                    operator_events["event_type"].astype(str).eq("Pause Step") &
+                    operator_events["reason"].astype(str).eq("หยุดคิวทั้งหมดจาก Batch Processing")
+                ]
+                batch_paused_job_ids = {
+                    safe_int(value) for value in batch_pause_events["job_id"].tolist()
+                }
+            batch_stopped_hold_jobs = hold_jobs[
+                hold_jobs["ID"].apply(safe_int).isin(batch_paused_job_ids)
+            ].copy()
             batch_guard = st.session_state.get("batch_bulk_guard")
             guard_now = get_bangkok_now().replace(tzinfo=None)
             guard_expired = False
@@ -4959,6 +4971,21 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                                 "nonce": uuid.uuid4().hex
                             }
                             st.rerun()
+                    if st.button(
+                        f"↩️ คืนคิวที่หยุดจาก Batch เป็นรอคิวปกติ ({len(batch_stopped_hold_jobs)} คิว)",
+                        disabled=(len(batch_stopped_hold_jobs) == 0),
+                        type="secondary",
+                        use_container_width=True,
+                        key="prepare_batch_return_waiting"
+                    ):
+                        st.session_state.batch_bulk_guard = {
+                            "action": "return_waiting",
+                            "machine": selected_m,
+                            "ids": [safe_int(v) for v in batch_stopped_hold_jobs["ID"].tolist()],
+                            "armed_at": get_bangkok_str(),
+                            "nonce": uuid.uuid4().hex
+                        }
+                        st.rerun()
                 else:
                     guard_action = batch_guard.get("action")
                     guard_ids = {safe_int(v) for v in batch_guard.get("ids", [])}
@@ -4966,6 +4993,8 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                         review_source = waiting_jobs
                     elif guard_action == "resume":
                         review_source = hold_jobs
+                    elif guard_action == "return_waiting":
+                        review_source = batch_stopped_hold_jobs
                     else:
                         review_source = running_jobs
                     review_jobs = review_source[review_source["ID"].apply(safe_int).isin(guard_ids)].copy()
@@ -4973,6 +5002,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                         "start": ("Start", "🚀"),
                         "resume": ("Resume", "▶️"),
                         "pause": ("หยุดคิว", "⏸️"),
+                        "return_waiting": ("คืนเป็นรอคิวปกติ", "↩️"),
                         "finish": ("Finish", "🏁")
                     }
                     action_th, action_icon = action_labels.get(guard_action, ("ดำเนินการ", "⚙️"))
@@ -5020,7 +5050,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             fresh_jobs = fetch_jobs_from_supabase()
                             if guard_action == "start":
                                 expected_status_text = "รอคิว"
-                            elif guard_action == "resume":
+                            elif guard_action in {"resume", "return_waiting"}:
                                 expected_status_text = "พักงาน"
                             else:
                                 expected_status_text = "กำลังผลิต"
@@ -5074,9 +5104,21 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                                     if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
                                         payload["actual_start"] = now_str
                                 elif guard_action == "pause":
+                                    current = progress["steps"][idx]
+                                    current["pending_pause_started_at"] = now_str
                                     payload = {
-                                        "status": "🟨 พักงาน (รอวัสดุ)",
-                                        "hold_started_at": now_str,
+                                        "status": "🟧 รอคิวผลิต",
+                                        "hold_started_at": None,
+                                        "step_progress": progress
+                                    }
+                                elif guard_action == "return_waiting":
+                                    current = progress["steps"][idx]
+                                    original_hold_started = parse_flexible_datetime(r.get("เริ่มพักจริง"))
+                                    pause_from = original_hold_started if original_hold_started is not None and pd.notna(original_hold_started) else confirm_now
+                                    current["pending_pause_started_at"] = pause_from.strftime("%Y-%m-%d %H:%M:%S")
+                                    payload = {
+                                        "status": "🟧 รอคิวผลิต",
+                                        "hold_started_at": None,
                                         "step_progress": progress
                                     }
                                 else:
@@ -5088,30 +5130,37 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                                     else:
                                         payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str, "step_progress": progress}
                                         fully_finished_rows.append(r)
-                                update_ok = update_supabase_job(int(r["ID"]), payload)
+                                update_ok = update_supabase_job(int(r["ID"]), payload, clear_cache=False)
                                 update_results.append(update_ok)
-                                if update_ok and guard_action in {"pause", "resume"}:
+                                if update_ok and guard_action in {"pause", "resume", "return_waiting"}:
                                     current_step = progress["steps"][idx]
                                     log_job_event(
                                         safe_int(r["ID"]),
                                         safe_str(r.get("แผนงาน"), "-"),
                                         safe_str(r.get("ชื่อ Drawing."), "-"),
                                         selected_m,
-                                        "Pause Step" if guard_action == "pause" else "Resume Step",
+                                        "Resume Step" if guard_action == "resume" else "Return to Queue",
                                         idx + 1,
                                         safe_str(current_step.get("name"), safe_str(r.get("ขั้นตอน (Step)"), "-")),
-                                        "หยุดคิวทั้งหมดจาก Batch Processing" if guard_action == "pause" else "Resume คิวทั้งหมดจาก Batch Processing",
+                                        (
+                                            "หยุดคิวทั้งหมดจาก Batch Processing"
+                                            if guard_action == "pause" else
+                                            ("คืนคิวที่หยุดจาก Batch เป็นรอคิวปกติ" if guard_action == "return_waiting" else "Resume คิวทั้งหมดจาก Batch Processing")
+                                        ),
                                         "คำสั่งแบบกลุ่มโดยผู้ใช้งานหน้าเครื่อง"
                                     )
 
                             st.session_state.pop("batch_bulk_guard", None)
+                            fetch_jobs_from_supabase.clear()
                             if update_results and all(update_results):
                                 if guard_action == "start":
                                     st.toast("เริ่มจับเวลาจริงทุกคิวที่ยืนยันเรียบร้อย!", icon="🚀")
                                 elif guard_action == "resume":
                                     st.toast("Resume คิวทั้งหมดและคำนวณเวลาพักสะสมเรียบร้อย!", icon="▶️")
                                 elif guard_action == "pause":
-                                    st.toast("หยุดคิวทั้งหมดและเริ่มจับเวลาพักเรียบร้อย!", icon="⏸️")
+                                    st.toast("หยุดงานและคืนทุกคิวเป็นรอคิวปกติแล้ว!", icon="↩️")
+                                elif guard_action == "return_waiting":
+                                    st.toast("คืนคิวที่เคยหยุดจาก Batch เป็นรอคิวปกติแล้ว!", icon="↩️")
                                 elif fully_finished_rows:
                                     st.session_state.operator_finish_feedback = build_operator_finish_feedback(
                                         pd.DataFrame(fully_finished_rows), confirm_now
