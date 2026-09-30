@@ -2041,14 +2041,34 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         summary_view = summary[summary["แผนงาน"].astype(str) == project_filter].copy()
         gantt_view = gantt_df[gantt_df["แผนงาน"].astype(str).str.startswith(f"{project_filter} |")].copy()
 
+    exec_total_plans = len(summary_view)
+    exec_on_plan = int(summary_view["สถานะ"].str.contains("อยู่ในแผน", na=False).sum())
+    exec_late = int((summary_view["เกินกำหนด (ชม.)"] > 0).sum())
+    exec_near_risk = int(((summary_view["คิวดีเลย์"] > 0) & (summary_view["เกินกำหนด (ชม.)"] <= 0)).sum())
+    exec_unplanned = int(summary_view["สถานะ"].str.contains("ยังวางงานไม่ครบ", na=False).sum())
+    exec_decision_count = int(
+        summary_view["สถานะ"].str.contains(
+            "มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False
+        ).sum()
+    )
+    exec_remaining_drawings = int(summary_view["Drawing คงเหลือ"].fillna(0).sum())
+    exec_remaining_hours = float(summary_view["ชั่วโมงแผน"].fillna(0).sum())
+    exec_capacity_shortfall = float(summary_view["เกินกำหนด (ชม.)"].fillna(0).sum())
+    exec_overlap_count = int((summary_view["แผนซ้อนกัน"] > 0).sum())
+
     metric_values = [
-        ("แผนงานทั้งหมด", len(summary_view), "จำนวนแผนงานในมุมมองที่เลือก"),
-        ("อยู่ในแผน", int(summary_view["สถานะ"].str.contains("อยู่ในแผน").sum()), None),
-        ("เสี่ยง / เกินกำหนด", int(summary_view["สถานะ"].str.contains("มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True).sum()), None),
-        ("ช่วงเวลาซ้อนกัน", int((summary_view["แผนซ้อนกัน"] > 0).sum()), None)
+        ("แผนงานทั้งหมด", exec_total_plans, "จำนวนแผนงานในมุมมองที่เลือก"),
+        ("อยู่ในแผน", exec_on_plan, None),
+        ("ใกล้เกินแผน", exec_near_risk, "มีคิวดีเลย์แต่วันจบรวมยังไม่เกิน Production"),
+        ("เกิน Production", exec_late, None),
+        ("Dwg คงเหลือ", exec_remaining_drawings, None),
+        ("ชั่วโมงงานคงเหลือ", f"{exec_remaining_hours:,.1f}", None),
+        ("กำลังการผลิตที่ขาด", f"{exec_capacity_shortfall:,.1f} ชม.", "ชั่วโมงทำงานที่เกินกรอบ Production รวม"),
+        ("แผนที่ต้องตัดสินใจ", exec_decision_count, None),
     ]
     if mobile_view:
-        for metric_row in [metric_values[:2], metric_values[2:]]:
+        for row_start in range(0, len(metric_values), 2):
+            metric_row = metric_values[row_start:row_start + 2]
             metric_cols = st.columns(2)
             for metric_col, (label, value, help_text) in zip(metric_cols, metric_row):
                 metric_col.metric(label, value, help=help_text)
@@ -2066,9 +2086,84 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             unsafe_allow_html=True
         )
     else:
-        metric_cols = st.columns(4)
-        for metric_col, (label, value, help_text) in zip(metric_cols, metric_values):
-            metric_col.metric(label, value, help=help_text)
+        for row_start in range(0, len(metric_values), 4):
+            metric_cols = st.columns(4)
+            for metric_col, (label, value, help_text) in zip(metric_cols, metric_values[row_start:row_start + 4]):
+                metric_col.metric(label, value, help=help_text)
+
+    # บทสรุปสำหรับ MD ใช้กฎจากข้อมูลชุดเดียวกับกราฟและตาราง ไม่ใช้ข้อความคาดเดา
+    executive_issues = []
+    for _, item in summary_view.iterrows():
+        plan_code = safe_str(item.get("แผนงาน"), "-")
+        late_hours_item = safe_float(item.get("เกินกำหนด (ชม.)"), 0.0)
+        delayed_count_item = safe_int(item.get("คิวดีเลย์"), 0)
+        max_delay_item = safe_float(item.get("ดีเลย์สูงสุด (ชม.)"), 0.0)
+        remaining_item = safe_int(item.get("Drawing คงเหลือ"), 0)
+        remaining_pct_item = safe_float(item.get("งานคงเหลือ (%)"), 0.0)
+        risk_drawing_item = safe_str(item.get("Drawing เสี่ยง"), "-")
+        risk_machine_item = safe_str(item.get("เครื่องเสี่ยง"), "-")
+        status_item = safe_str(item.get("สถานะ"), "")
+        if late_hours_item > 0:
+            executive_issues.append({
+                "score": 300000 + late_hours_item * 100 + delayed_count_item,
+                "level": "critical",
+                "problem": f"แผน {plan_code} คาดว่าจะเกินกรอบ Production {late_hours_item:,.1f} ชั่วโมงทำงาน",
+                "cause": f"มี Dwg คงเหลือ {remaining_item} รายการ ({remaining_pct_item:,.1f}%) และคิว/เครื่องเสี่ยงอยู่ที่ {risk_machine_item}",
+                "impact": f"หากไม่ปรับแผน กำหนดส่งของแผน {plan_code} จะล่าช้าตามเวลาที่เกินอย่างน้อย {late_hours_item:,.1f} ชั่วโมงทำงาน",
+                "decision": f"เร่งตรวจ {risk_drawing_item}; พิจารณาย้ายเครื่อง ปรับลำดับคิว เพิ่ม OT หรือจ้างภายนอก",
+            })
+        elif delayed_count_item > 0:
+            executive_issues.append({
+                "score": 200000 + max_delay_item * 100 + delayed_count_item,
+                "level": "warning",
+                "problem": f"แผน {plan_code} มีคิวดีเลย์ {delayed_count_item} คิว สูงสุด {max_delay_item:,.1f} ชั่วโมง",
+                "cause": f"Drawing ที่ต้องติดตาม: {risk_drawing_item} | เครื่องที่เกี่ยวข้อง: {risk_machine_item}",
+                "impact": "วันจบรวมยังไม่เกิน Production แต่เวลาสำรองกำลังถูกใช้และมีโอกาสเปลี่ยนเป็นแผนสีแดง",
+                "decision": "จัดคิวดีเลย์ขึ้นก่อนและตรวจความพร้อมของเครื่อง วัสดุ Tool และคนก่อนเวลาสำรองหมด",
+            })
+        elif "ยังวางงานไม่ครบ" in status_item:
+            executive_issues.append({
+                "score": 100000 + remaining_item,
+                "level": "warning",
+                "problem": f"แผน {plan_code} ยังวาง Drawing/Step ไม่ครบ จึงประเมินวันจบจริงไม่ได้",
+                "cause": "ข้อมูลคิว เครื่องจักร หรือเวลาทำงานของ Drawing ยังไม่ครบถ้วน",
+                "impact": "ผู้บริหารยังไม่สามารถยืนยันกำลังการผลิตและความสามารถส่งมอบของแผนนี้ได้",
+                "decision": "ให้ผู้วางแผนเติม Drawing, Step, เครื่องจักร และเวลาให้ครบก่อนยืนยันกำหนดส่ง",
+            })
+    executive_issues = sorted(executive_issues, key=lambda value: value["score"], reverse=True)
+
+    if exec_late > 0 or (exec_total_plans > 0 and exec_decision_count / exec_total_plans >= 0.5):
+        exec_health, exec_health_icon, exec_health_color, exec_health_bg = "วิกฤต", "🔴", "#991B1B", "#FEF2F2"
+    elif exec_decision_count > 0 or exec_overlap_count > 0:
+        exec_health, exec_health_icon, exec_health_color, exec_health_bg = "ต้องเฝ้าระวัง", "🟡", "#92400E", "#FFFBEB"
+    else:
+        exec_health, exec_health_icon, exec_health_color, exec_health_bg = "ปกติ", "🟢", "#065F46", "#ECFDF5"
+
+    st.markdown("### 📋 บทสรุปสถานการณ์แผนงานสำหรับผู้บริหาร")
+    st.markdown(
+        f"<div style='border:2px solid {exec_health_color};border-left:9px solid {exec_health_color};"
+        f"border-radius:12px;padding:14px 16px;background:{exec_health_bg};margin:5px 0 12px'>"
+        f"<div style='font-size:20px;font-weight:900;color:{exec_health_color}'>{exec_health_icon} สถานการณ์รวม: {exec_health}</div>"
+        f"<div style='margin-top:6px;font-size:15px'>มีแผนงาน {exec_total_plans} แผน — อยู่ในแผน {exec_on_plan} แผน, "
+        f"ใกล้เกินแผน {exec_near_risk} แผน, เกิน Production {exec_late} แผน"
+        f"{f', และยังวางงานไม่ครบ {exec_unplanned} แผน' if exec_unplanned else ''}. "
+        f"เหลืองาน {exec_remaining_drawings} Drawing รวมประมาณ {exec_remaining_hours:,.1f} ชั่วโมง "
+        f"และมีกำลังการผลิตที่ขาดจากกรอบรวม {exec_capacity_shortfall:,.1f} ชั่วโมง</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    if executive_issues:
+        st.markdown("#### 🚨 ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ")
+        for issue_no, issue in enumerate(executive_issues[:5], start=1):
+            issue_box = st.error if issue["level"] == "critical" else st.warning
+            issue_box(
+                f"**{issue_no}. {issue['problem']}**  \n"
+                f"**สาเหตุที่ระบบตรวจพบ:** {issue['cause']}  \n"
+                f"**ผลกระทบหากไม่แก้ไข:** {issue['impact']}  \n"
+                f"**ข้อเสนอเพื่อการตัดสินใจ:** {issue['decision']}"
+            )
+    else:
+        st.success("✅ ยังไม่พบปัญหาที่ต้องเร่งตัดสินใจ แผนงานในมุมมองนี้อยู่ในกรอบ Production")
 
     if not gantt_view.empty:
         st.markdown("#### ช่วงเวลาแผนหลักเทียบแผนผลิต")
@@ -2280,6 +2375,15 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         f"{item['แผน A']} ↔ {item['แผน B']}: ซ้อน {item['ซ้อน (ชม.)']:,.1f} ชม. | เครื่องร่วม {item['เครื่องร่วม']}"
         for item in sorted(visible_overlaps, key=lambda value: value["ซ้อน (ชม.)"], reverse=True)[:12]
     ]
+    executive_pdf_issues = "".join(
+        "<div class='exec-issue " + ("critical" if issue["level"] == "critical" else "warning") + "'>"
+        f"<b>{issue_no}. {html.escape(issue['problem'])}</b>"
+        f"<div><strong>สาเหตุ:</strong> {html.escape(issue['cause'])}</div>"
+        f"<div><strong>ผลกระทบ:</strong> {html.escape(issue['impact'])}</div>"
+        f"<div><strong>ข้อเสนอ:</strong> {html.escape(issue['decision'])}</div>"
+        "</div>"
+        for issue_no, issue in enumerate(executive_issues[:5], start=1)
+    ) or "<div class='exec-ok'>ไม่พบปัญหาที่ต้องเร่งตัดสินใจ</div>"
     project_pdf_payload = json.dumps({
         "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
         "filter": safe_str(project_filter),
@@ -2287,6 +2391,15 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         "on_plan": int(summary_view["สถานะ"].str.contains("อยู่ในแผน", na=False).sum()),
         "risk": int(summary_view["สถานะ"].str.contains("มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False).sum()),
         "overlap": int((summary_view["แผนซ้อนกัน"] > 0).sum()),
+        "health": exec_health,
+        "health_icon": exec_health_icon,
+        "near_risk": exec_near_risk,
+        "late": exec_late,
+        "remaining_drawings": exec_remaining_drawings,
+        "remaining_hours": f"{exec_remaining_hours:,.1f}",
+        "capacity_shortfall": f"{exec_capacity_shortfall:,.1f}",
+        "decision_count": exec_decision_count,
+        "executive_issues": executive_pdf_issues,
         "rows": project_pdf_rows,
         "decisions": "".join(f"<li>{html.escape(value)}</li>" for value in project_decision_items) or "<li>ไม่พบแผนที่ต้องเร่งตัดสินใจ</li>",
         "overlaps": "".join(f"<li>{html.escape(value)}</li>" for value in project_overlap_items) or "<li>ไม่พบช่วงเวลา Production ที่ซ้อนกัน</li>"
@@ -2294,8 +2407,8 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
 
     if not read_only:
         components.html(f"""
-    <button onclick="printProjectMaster()" title="พิมพ์รายงาน Project Master หรือบันทึกเป็น PDF" style="display:block; width:250px; max-width:100%; margin:8px auto 12px auto; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:10px 16px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(185,28,28,.24);">
-        🖨️ พิมพ์ / บันทึก PDF
+    <button onclick="printProjectMaster()" title="พิมพ์รายงานสรุปสำหรับ MD หรือบันทึกเป็น PDF" style="display:block; width:300px; max-width:100%; margin:8px auto 12px auto; background:linear-gradient(135deg,#B91C1C,#EF4444); color:white; border:0; padding:10px 16px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 3px 8px rgba(185,28,28,.24);">
+        🖨️ พิมพ์รายงานสรุป MD / PDF
     </button>
     <script>
     async function printProjectMaster() {{
@@ -2317,17 +2430,22 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         h1 {{ font-size:18px; margin:0; }} h2 {{ font-size:12px; margin:10px 0 5px; color:#1E3E62; }}
         .sub,.foot {{ color:#64748B; }} .kpis {{ display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin:8px 0; }}
         .kpi {{ border:1px solid #CBD5E1; border-radius:6px; padding:7px; text-align:center; background:#F8FAFC; }} .kpi b {{ display:block; font-size:15px; }}
+        .exec-summary {{ border:2px solid #B91C1C; border-left:8px solid #B91C1C; border-radius:7px; padding:9px; background:#FEF2F2; margin:7px 0; font-size:10px; }}
+        .exec-summary b {{ font-size:14px; color:#991B1B; }} .exec-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:6px; }}
+        .exec-issue {{ border-radius:5px; padding:6px 8px; margin:4px 0; break-inside:avoid; }} .exec-issue.critical {{ background:#FEF2F2; border-left:5px solid #DC2626; }}
+        .exec-issue.warning {{ background:#FFFBEB; border-left:5px solid #F59E0B; }} .exec-issue div {{ margin-top:2px; }} .exec-ok {{ padding:8px; background:#ECFDF5; }}
         .panels {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }} .panel {{ border:1px solid #CBD5E1; border-radius:6px; padding:6px 9px; background:#FFFBEB; }}
         ul {{ margin:4px 0; padding-left:18px; }} li {{ margin:2px 0; }} table {{ width:100%; border-collapse:collapse; table-layout:fixed; margin-top:5px; }}
         th,td {{ border:1px solid #CBD5E1; padding:3px 4px; vertical-align:top; overflow-wrap:anywhere; }} th {{ background:#E2E8F0; }} tr:nth-child(even) {{ background:#F8FAFC; }}
         thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }} .drawing {{ width:22%; }} .empty {{ padding:30px; text-align:center; border:1px dashed #CBD5E1; }}
         .foot {{ margin-top:8px; text-align:right; }}
         </style></head><body>
-        <div class="head"><div><h1>แผนงาน Production และ Project Master Gantt</h1><div class="sub">กรอบเวลา Production เทียบตารางสั่งผลิตแบบลูกโซ่</div></div><div><b>มุมมอง:</b> ${{d.filter}}<br><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
-        <div class="kpis"><div class="kpi">แผนงานทั้งหมด<b>${{d.total}}</b></div><div class="kpi">อยู่ในแผน<b>${{d.on_plan}}</b></div><div class="kpi">เสี่ยง / เกินกำหนด<b>${{d.risk}}</b></div><div class="kpi">ช่วงเวลาซ้อนกัน<b>${{d.overlap}}</b></div></div>
-        <h2>1. ช่วงเวลาแผนหลักเทียบแผนผลิต</h2>${{chartHtml}}
-        <div class="panels"><div class="panel"><h2>2. จุดที่ต้องตัดสินใจ</h2><ul>${{d.decisions}}</ul></div><div class="panel"><h2>3. แผนที่เวลาซ้อนกัน</h2><ul>${{d.overlaps}}</ul></div></div>
-        <h2>4. ตารางแผนงาน Production</h2><table><thead><tr><th>แผนงาน</th><th>เริ่ม Production</th><th>สิ้นสุด Production</th><th>เริ่มผลิต</th><th>จบผลิต</th><th>สถานะ</th><th>คิวดีเลย์</th><th>ดีเลย์สูงสุด (ชม.)</th><th>เกิน Production (ชม.)</th><th class="drawing">Drawing เสี่ยง</th><th>เครื่องเสี่ยง</th><th>Drawing ทั้งหมด</th><th>เสร็จแล้ว</th><th>คงเหลือ</th><th>งานคงเหลือ</th><th>ชั่วโมงแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+        <div class="head"><div><h1>บทสรุปสถานการณ์แผนงานสำหรับผู้บริหาร</h1><div class="sub">Production Executive Summary & Project Master Gantt</div></div><div><b>มุมมอง:</b> ${{d.filter}}<br><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
+        <div class="exec-summary"><b>${{d.health_icon}} สถานการณ์รวม: ${{d.health}}</b><div>มี ${{d.total}} แผน | อยู่ในแผน ${{d.on_plan}} | ใกล้เกินแผน ${{d.near_risk}} | เกิน Production ${{d.late}} | ต้องตัดสินใจ ${{d.decision_count}} แผน</div><div>เหลือ ${{d.remaining_drawings}} Drawing | งานคงเหลือ ${{d.remaining_hours}} ชม. | กำลังการผลิตที่ขาด ${{d.capacity_shortfall}} ชม.</div></div>
+        <h2>1. ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ</h2><div class="exec-grid">${{d.executive_issues}}</div>
+        <h2>2. ช่วงเวลาแผนหลักเทียบแผนผลิต</h2>${{chartHtml}}
+        <div class="panels"><div class="panel"><h2>3. จุดที่ต้องตัดสินใจ</h2><ul>${{d.decisions}}</ul></div><div class="panel"><h2>4. แผนที่เวลาซ้อนกัน</h2><ul>${{d.overlaps}}</ul></div></div>
+        <h2>5. ตารางแผนงาน Production</h2><table><thead><tr><th>แผนงาน</th><th>เริ่ม Production</th><th>สิ้นสุด Production</th><th>เริ่มผลิต</th><th>จบผลิต</th><th>สถานะ</th><th>คิวดีเลย์</th><th>ดีเลย์สูงสุด (ชม.)</th><th>เกิน Production (ชม.)</th><th class="drawing">Drawing เสี่ยง</th><th>เครื่องเสี่ยง</th><th>Drawing ทั้งหมด</th><th>เสร็จแล้ว</th><th>คงเหลือ</th><th>งานคงเหลือ</th><th>ชั่วโมงแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
         <div class="foot">PES Production Monitoring System</div></body></html>`;
         const printWin = window.open('', '_blank');
         if (!printWin) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
