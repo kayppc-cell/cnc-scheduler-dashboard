@@ -92,7 +92,8 @@ def build_performance_metrics(source_df):
     for _, row in result.iterrows():
         actual_start = parse_flexible_datetime(row.get("เริ่มจริง"))
         actual_finish = parse_flexible_datetime(row.get("เสร็จจริง"))
-        plan_finish = parse_flexible_datetime(row.get("วัน-เวลาจบงาน"))
+        # ทุกหน้าต้องเทียบกับเวลาจบ Baseline ชุดเดียวกัน
+        plan_finish = get_job_planned_finish(row)
         actual_starts.append(actual_start)
         actual_finishes.append(actual_finish)
         plan_finishes.append(plan_finish)
@@ -205,6 +206,14 @@ def parse_flexible_datetime(dt_val):
         if dt_parsed.year > 2400:
             dt_parsed = dt_parsed.replace(year=dt_parsed.year - 543)
         return dt_parsed
+    return None
+
+def first_valid_datetime(*values):
+    """คืนวันเวลาแรกที่ใช้ได้จริง โดยไม่ให้ pd.NaT ขวางค่า fallback ของข้อมูลเก่า"""
+    for value in values:
+        parsed = parse_flexible_datetime(value)
+        if parsed is not None and not pd.isna(parsed):
+            return parsed
     return None
 
 def format_thai_datetime(dt_val):
@@ -322,6 +331,16 @@ def get_net_actual_work_seconds(range_start, range_end, paused_seconds=0.0) -> f
     """เวลาเดินจริงสุทธิ: เฉพาะในกะ ลบเวลาที่ Pause ซึ่งบันทึกเป็นเวลาในกะแล้ว"""
     return max(0.0, get_work_seconds_between(range_start, range_end) - max(0.0, safe_float(paused_seconds, 0.0)))
 
+def get_signed_work_seconds_between(reference_dt, actual_dt) -> float:
+    """ผลต่างเวลาแบบมีเครื่องหมาย โดยนับเฉพาะเวลาทำงานตามกะของโรงงาน"""
+    reference_dt = parse_flexible_datetime(reference_dt)
+    actual_dt = parse_flexible_datetime(actual_dt)
+    if reference_dt is None or actual_dt is None:
+        return 0.0
+    if actual_dt >= reference_dt:
+        return get_work_seconds_between(reference_dt, actual_dt)
+    return -get_work_seconds_between(actual_dt, reference_dt)
+
 def get_planned_busy_hours_in_range(start_dt: datetime, duration_hours: float, range_start: datetime, range_end: datetime) -> float:
     """ชั่วโมงแผนของงานที่ทับกับช่วงวิเคราะห์ โดยใช้กะเดียวกับ Auto-Chain"""
     if start_dt is None or duration_hours <= 0 or range_end <= range_start:
@@ -337,13 +356,13 @@ def get_planned_busy_hours_in_range(start_dt: datetime, duration_hours: float, r
 
 def get_job_planned_finish(job_row):
     """คืนเวลาจบตามแผนจากค่าที่บันทึกไว้ หรือคำนวณจากเวลาเริ่มและเวลามาตรฐานเมื่อไม่มีค่าเก็บไว้"""
-    stored_finish = parse_flexible_datetime(
-        job_row.get("เวลาจบ Baseline") or job_row.get("วัน-เวลาจบงาน")
+    stored_finish = first_valid_datetime(
+        job_row.get("เวลาจบ Baseline"), job_row.get("วัน-เวลาจบงาน")
     )
     if stored_finish is not None and not pd.isna(stored_finish):
         return stored_finish
-    planned_start = parse_flexible_datetime(
-        job_row.get("กำหนดพร้อมขึ้นงาน (Baseline)") or job_row.get("วัน-เวลาขึ้นงาน")
+    planned_start = first_valid_datetime(
+        job_row.get("กำหนดพร้อมขึ้นงาน (Baseline)"), job_row.get("วัน-เวลาขึ้นงาน")
     )
     if planned_start is None or pd.isna(planned_start) or planned_start.year < 2020:
         return None
@@ -363,7 +382,7 @@ def build_operator_finish_feedback(finished_rows, actual_finish_dt):
             on_time_count += 1
         else:
             late_count += 1
-            late_minutes_list.append(max(0, int((actual_finish_dt - planned_finish).total_seconds() // 60)))
+            late_minutes_list.append(max(0, int(get_signed_work_seconds_between(planned_finish, actual_finish_dt) // 60)))
 
     total_count = on_time_count + late_count + no_plan_count
     if total_count == 1 and on_time_count == 1:
@@ -396,7 +415,7 @@ def highlight_running_deadlines(row, planned_finish_map):
         finish_dt = planned_finish_map.get(job_id)
         if finish_dt is not None and pd.notna(finish_dt):
             now = get_bangkok_now().replace(tzinfo=None)
-            diff_mins = (finish_dt - now).total_seconds() / 60.0
+            diff_mins = get_signed_work_seconds_between(now, finish_dt) / 60.0
 
             if diff_mins < 0:
                 return ['background-color: #FECACA; color: #991B1B; font-weight: bold;'] * len(row)
@@ -2825,6 +2844,13 @@ def render_work_order_readonly(source_df):
             start_base = max(previous_finish, row_ready) if row_ready is not None and not pd.isna(row_ready) else previous_finish
             chain_start = get_next_valid_work_time(start_base)
         _, chain_finish = add_work_time_with_shift(chain_start, duration_hours)
+        queue_status = safe_str(queue_row.get("สถานะงาน"), "")
+        if "กำลังผลิต" in queue_status or "พักงาน" in queue_status or "รอวัสดุ" in queue_status:
+            # คิวที่กำลังทำ/พักและเลยแผนแล้ว ต้องดันคิวถัดไปอย่างน้อยถึงเวลาปัจจุบัน
+            baseline_finish = get_job_planned_finish(queue_row)
+            if baseline_finish is not None and not pd.isna(baseline_finish):
+                chain_finish = baseline_finish
+            chain_finish = max(chain_finish, get_bangkok_now().replace(tzinfo=None))
         machine_available[machine_name] = chain_finish
         chain_starts.append(chain_start)
         chain_finishes.append(chain_finish)
@@ -2849,7 +2875,8 @@ def render_work_order_readonly(source_df):
     finish_map = dict(zip(work_df["ID"].astype(str), work_df["_dt_finish"]))
     active_deadline_mask = work_df["สถานะ"].apply(is_deadline_active_status)
     finish_diff_seconds = work_df["_dt_finish"].apply(
-        lambda value: (value - now_check).total_seconds() if value is not None and pd.notna(value) else float("nan")
+        lambda value: get_signed_work_seconds_between(now_check, value)
+        if value is not None and pd.notna(value) else float("nan")
     )
     running_count = int(work_df["สถานะ"].str.contains("กำลังผลิต", na=False).sum())
     waiting_count = int(work_df["สถานะ"].str.contains("รอคิว", na=False).sum())
@@ -5626,13 +5653,15 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
 
             # หน้าช่างต้องแสดงเวลาแผนที่ล็อกและ Auto-save ไว้โดยตรง
             # ห้ามต่อลูกโซ่ใหม่หลังเรียงสถานะ เพราะจะทำให้เวลาแผนขยับจากหน้าวางแผน
-            r_parsed = parse_flexible_datetime(step_row.get("วัน-เวลาขึ้นงาน"))
+            r_parsed = first_valid_datetime(
+                step_row.get("กำหนดพร้อมขึ้นงาน (Baseline)"), step_row.get("วัน-เวลาขึ้นงาน")
+            )
             if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
                 start_w_dt = None
             else:
                 start_w_dt = get_next_valid_work_time(r_parsed)
 
-            stored_finish_w_dt = parse_flexible_datetime(step_row.get("วัน-เวลาจบงาน"))
+            stored_finish_w_dt = get_job_planned_finish(step_row)
             if start_w_dt is None:
                 finish_w_dt = None
                 ready_display_str = "-"
@@ -5650,7 +5679,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             is_running_overdue = bool(
                 is_step_running and finish_w_dt is not None and pd.notna(finish_w_dt) and operator_now > finish_w_dt
             )
-            overdue_minutes = int((operator_now - finish_w_dt).total_seconds() // 60) if is_running_overdue else 0
+            overdue_minutes = int(get_signed_work_seconds_between(finish_w_dt, operator_now) // 60) if is_running_overdue else 0
 
             if "Batch" in run_mode:
                 can_start = is_step_waiting and not machine_any_running
@@ -7312,6 +7341,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     start_work_dt = get_next_valid_work_time(start_base)
 
                 _, finish_work_dt = add_work_time_with_shift(start_work_dt, tot_h)
+                live_status = safe_str(r.get("สถานะงาน"), "")
+                if "กำลังผลิต" in live_status or "พักงาน" in live_status or "รอวัสดุ" in live_status:
+                    # แสดงลูกโซ่สด: งานที่เกินแผนต้องดันคิวรอถัดไป ไม่ปล่อยเวลาเริ่มย้อนหลัง
+                    baseline_finish = get_job_planned_finish(r)
+                    if baseline_finish is not None and not pd.isna(baseline_finish):
+                        finish_work_dt = baseline_finish
+                    finish_work_dt = max(finish_work_dt, get_bangkok_now().replace(tzinfo=None))
                 m_available_tracker[m_target] = finish_work_dt
 
                 chained_start_dates.append(start_work_dt.strftime("%d/%m/%Y %H:%M"))
@@ -8395,8 +8431,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                     pause_hrs_list.append(round(pause_seconds / 3600.0, 2))
                     plan_finish_list.append(plan_fn)
+                    # เวลาเริ่มก่อน/หลังแผนเป็นความคลาดเคลื่อนของเวลานาฬิกา ไม่ใช่เวลาเดินเครื่อง
                     start_diff = ((st_p - plan_st).total_seconds() / 60.0) if (st_p is not None and plan_st is not None) else None
-                    finish_diff = ((fn_p - plan_fn).total_seconds() / 60.0) if (fn_p is not None and plan_fn is not None) else None
+                    finish_diff = (get_signed_work_seconds_between(plan_fn, fn_p) / 60.0) if (fn_p is not None and plan_fn is not None) else None
                     start_variance_list.append(round(start_diff, 1) if start_diff is not None else None)
                     finish_variance_list.append(round(finish_diff, 1) if finish_diff is not None else None)
                     if finish_diff is None:
@@ -10783,7 +10820,9 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
 
     def get_tv_plan_window(job_row):
         """คืนเวลาเริ่ม/จบตามแผนของงานบนการ์ด และสถานะหลุดแผน"""
-        plan_start = parse_flexible_datetime(job_row.get("วัน-เวลาขึ้นงาน"))
+        plan_start = first_valid_datetime(
+            job_row.get("กำหนดพร้อมขึ้นงาน (Baseline)"), job_row.get("วัน-เวลาขึ้นงาน")
+        )
         if plan_start is None or pd.isna(plan_start):
             return None, None, "-", "-", False
         total_hours = (
@@ -10792,7 +10831,9 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             + safe_float(job_row.get("โปรแกรม (น.)"), 120.0)
         ) / 60.0
         plan_start = get_next_valid_work_time(plan_start)
-        _, plan_finish = add_work_time_with_shift(plan_start, total_hours)
+        plan_finish = get_job_planned_finish(job_row)
+        if plan_finish is None or pd.isna(plan_finish):
+            _, plan_finish = add_work_time_with_shift(plan_start, total_hours)
         start_txt = plan_start.strftime("%d/%m/%Y %H:%M")
         finish_txt = plan_finish.strftime("%d/%m/%Y %H:%M")
         is_overdue = now_bangkok.replace(tzinfo=None) > plan_finish
@@ -10823,6 +10864,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         if actual_start is None or pd.isna(actual_start) or planned_start is None or pd.isna(planned_start):
             return ""
 
+        # ป้ายเริ่มก่อน/หลังแผนต้องสะท้อนเวลานาฬิกาจริง แม้เริ่มก่อนเข้ากะ
         diff_seconds = (actual_start - planned_start).total_seconds()
         if abs(diff_seconds) < 60:
             label = "✅ เริ่มตรงตามแผน"
