@@ -1116,9 +1116,7 @@ def machine_active_queue_timeline(machine_name: str, jobs_df: pd.DataFrame):
         row_start = get_next_valid_work_time(cursor if cursor is not None else row_ready)
         _, row_finish = add_work_time_with_shift(row_start, get_planned_minutes(row) / 60.0)
         if "กำลังผลิต" in safe_str(row.get("สถานะงาน")) or "พักงาน" in safe_str(row.get("สถานะงาน")):
-            stored_finish = parse_flexible_datetime(row.get("เวลาจบ Baseline"))
-            if stored_finish is not None and pd.notna(stored_finish):
-                row_finish = max(row_finish, stored_finish)
+            # Baseline ใช้เทียบผลเท่านั้น ห้ามนำมาเป็นเวลาจบลูกโซ่สด
             row_finish = max(row_finish, now_dt)
         cursor = row_finish
         timeline.append({
@@ -2841,9 +2839,6 @@ def render_work_order_readonly(source_df):
         queue_status = safe_str(queue_row.get("สถานะงาน"), "")
         if "กำลังผลิต" in queue_status or "พักงาน" in queue_status or "รอวัสดุ" in queue_status:
             # คิวที่กำลังทำ/พักและเลยแผนแล้ว ต้องดันคิวถัดไปอย่างน้อยถึงเวลาปัจจุบัน
-            baseline_finish = get_job_planned_finish(queue_row)
-            if baseline_finish is not None and not pd.isna(baseline_finish):
-                chain_finish = baseline_finish
             chain_finish = max(chain_finish, get_bangkok_now().replace(tzinfo=None))
         machine_available[machine_name] = chain_finish
         chain_starts.append(chain_start)
@@ -7336,9 +7331,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 live_status = safe_str(r.get("สถานะงาน"), "")
                 if "กำลังผลิต" in live_status or "พักงาน" in live_status or "รอวัสดุ" in live_status:
                     # แสดงลูกโซ่สด: งานที่เกินแผนต้องดันคิวรอถัดไป ไม่ปล่อยเวลาเริ่มย้อนหลัง
-                    baseline_finish = get_job_planned_finish(r)
-                    if baseline_finish is not None and not pd.isna(baseline_finish):
-                        finish_work_dt = baseline_finish
                     finish_work_dt = max(finish_work_dt, get_bangkok_now().replace(tzinfo=None))
                 m_available_tracker[m_target] = finish_work_dt
 
@@ -7725,9 +7717,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 original_start = parse_flexible_datetime(save_row.get("วัน-เวลาขึ้นงาน"))
                                 if original_start is not None and pd.notna(original_start):
                                     start_dt = original_start
-                                stored_finish = parse_flexible_datetime(save_row.get("เวลาจบ Baseline"))
-                                if stored_finish is not None and pd.notna(stored_finish):
-                                    finish_dt = stored_finish
+                                # เวลาจบลูกโซ่สดคำนวณจากเวลาเริ่ม + ระยะเวลางาน
+                                # Baseline เก็บไว้เทียบแผนเท่านั้น ห้ามลากคิวสดไปวันเดิม
+                                _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
                                 finish_dt = max(finish_dt, get_bangkok_now().replace(tzinfo=None))
                             machine_available[machine_name] = finish_dt
                             calculated_starts.append(start_dt.strftime("%d/%m/%Y %H:%M"))
