@@ -1619,7 +1619,12 @@ def build_project_active_chain(calc_df):
     def project_queue_priority(row):
         status_value = safe_str(row.get("สถานะงาน"))
         priority = 0 if "กำลังผลิต" in status_value else (1 if "พักงาน" in status_value else 2)
-        ready_dt = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+        # ใช้ลำดับเดียวกับตารางลูกโซ่หลัก: งานที่ Start แล้วต้องยึดเวลาเริ่มจริง
+        # ไม่ใช้ ready_at เก่าซึ่งอาจเป็นผลคำนวณจากรอบก่อนแก้แผน
+        ready_dt = (
+            parse_flexible_datetime(row.get("เริ่มจริง"))
+            if priority < 2 else None
+        ) or parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
         return (
             safe_str(row.get("เลือกเครื่องจักร")),
             priority,
@@ -1640,7 +1645,16 @@ def build_project_active_chain(calc_df):
             + safe_float(row.get("โปรแกรม (น.)"), DEFAULT_PROGRAM_MINUTES)
         ) / 60.0
 
-        if machine not in machine_available:
+        status_value = safe_str(row.get("สถานะงาน"))
+        is_live_job = "กำลังผลิต" in status_value or "พักงาน" in status_value
+        actual_live_start = (
+            parse_flexible_datetime(row.get("เริ่มจริง"))
+            if is_live_job else None
+        )
+
+        if actual_live_start is not None and pd.notna(actual_live_start):
+            start_dt = get_next_valid_work_time(actual_live_start)
+        elif machine not in machine_available:
             ready_dt = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
             if ready_dt is None or pd.isna(ready_dt) or ready_dt.year < 2020:
                 machine_available[machine] = None
@@ -1659,11 +1673,15 @@ def build_project_active_chain(calc_df):
             start_dt = get_next_valid_work_time(previous_finish)
 
         _, finish_dt = add_work_time_with_shift(start_dt, duration_hours)
-        status_value = safe_str(row.get("สถานะงาน"))
-        if "กำลังผลิต" in status_value or "พักงาน" in status_value:
+        if is_live_job:
             # กราฟผู้บริหารต้องสะท้อนความล่าช้าจริง ไม่จบย้อนหลังตามแผนเดิม
             finish_dt = max(finish_dt, get_bangkok_now().replace(tzinfo=None))
-        machine_available[machine] = finish_dt
+        # Batch อาจมีหลายงานกำลังรันพร้อมกัน คิวรอต้องต่อจากงานที่จบช้าที่สุด
+        previous_machine_finish = machine_available.get(machine)
+        machine_available[machine] = (
+            max(previous_machine_finish, finish_dt)
+            if previous_machine_finish is not None else finish_dt
+        )
         chained_starts.append(start_dt)
         chained_finishes.append(finish_dt)
 
