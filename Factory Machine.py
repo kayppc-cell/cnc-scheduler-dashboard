@@ -637,6 +637,17 @@ st.markdown("""
         50% { box-shadow: 0 0 0 5px #EF4444, 0 0 24px rgba(239,68,68,0.80); background:#FEE2E2; }
     }
     .step-card-overdue { border: 2px solid #DC2626 !important; animation: operatorOverduePulse 1.15s ease-in-out infinite; }
+    .step-card-running { border: 2px solid #10B981 !important; background:#ECFDF5; }
+    .step-card-hold { border: 2px dashed #F59E0B !important; background:#FFFBEB; }
+    .step-card-ready { border: 2px solid #6366F1 !important; background:#EEF2FF; }
+    .step-card-finished { border: 2px solid #22C55E !important; background:#F0FDF4; }
+    .operator-status-banner { display:flex; align-items:center; justify-content:center; min-height:28px; text-align:center; font-size:14px; font-weight:900; line-height:1.45; }
+    .operator-status-overdue { color:#B91C1C; }
+    .operator-status-running { color:#047857; }
+    .operator-status-hold { color:#B45309; }
+    .operator-status-ready { color:#4338CA; }
+    .operator-status-waiting { color:#475569; }
+    .operator-status-finished { color:#15803D; }
     .op-job-header-overdue { border: 2px solid #DC2626 !important; background: linear-gradient(135deg, #FFF1F2 0%, #FEE2E2 100%) !important; }
     .badge-overdue {
         background:#FFFFFF !important;
@@ -5645,8 +5656,37 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             elif can_start: card_style_class += " step-card-ready"
             elif is_step_finished: card_style_class += " step-card-finished"
 
+            if is_running_overdue:
+                card_status_class = "operator-status-overdue"
+                card_status_text = (
+                    f"🚨 งานกำลังรันและเกินเวลาตามแผนแล้ว "
+                    f"{overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที กรุณาเร่งงานในมือ ด่วนๆๆ"
+                )
+            elif is_step_running:
+                card_status_class = "operator-status-running"
+                card_status_text = f"⚙️ กำลังดำเนินงาน — Step ปัจจุบัน: {current_step_name}"
+            elif is_step_hold:
+                card_status_class = "operator-status-hold"
+                card_status_text = f"🟨 {pause_status_text or 'พักงานชั่วคราว รอขึ้นงาน'}"
+            elif is_step_finished:
+                card_status_class = "operator-status-finished"
+                card_status_text = "✅ งานเสร็จสิ้นแล้ว"
+            elif is_urgent:
+                card_status_class = "operator-status-overdue"
+                card_status_text = "🔥 งานด่วนแทรก กรุณาดำเนินการตามลำดับเร่งด่วน"
+            elif can_start:
+                card_status_class = "operator-status-ready"
+                card_status_text = "🚀 พร้อมเริ่มงาน — สามารถกด Start ได้"
+            else:
+                card_status_class = "operator-status-waiting"
+                card_status_text = "🔒 รอคิวก่อนหน้าเสร็จ"
+
             with st.container():
-                st.markdown(f"<div class='{card_style_class}'>", unsafe_allow_html=True)
+                st.markdown(
+                    f"<div class='{card_style_class}'><div class='operator-status-banner {card_status_class}'>"
+                    f"{html.escape(card_status_text)}</div></div>",
+                    unsafe_allow_html=True
+                )
                 if is_step_finished:
                     fin_dt = parse_flexible_datetime(s_finish)
                     finish_txt = fin_dt.strftime('%d/%m %H:%M') if (fin_dt is not None and pd.notna(fin_dt)) else '-'
@@ -5907,8 +5947,6 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             st.button("🚀 Start — รอคิวก่อนหน้า", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
                             if is_step_waiting and blocking_running_text:
                                 st.caption(f"🔒 เครื่องกำลังรัน {blocking_running_text}")
-
-                st.markdown("</div>", unsafe_allow_html=True)
 
             current_step_names = [item.get("name", f"Step {idx + 1}") for idx, item in enumerate(tracked_steps)]
             st.markdown("**รายการ Step และเวลาทำงานจริงในคิวนี้**")
