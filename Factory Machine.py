@@ -7719,22 +7719,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             editor_delta.get("edited_rows") or editor_delta.get("added_rows")
                         ):
                             submitted_editor_df = display_editor_df.copy().reset_index(drop=True)
-                            for raw_index, changed_values in editor_delta.get("edited_rows", {}).items():
-                                try:
-                                    row_index = int(raw_index)
-                                except Exception:
-                                    continue
-                                if 0 <= row_index < len(submitted_editor_df) and isinstance(changed_values, dict):
-                                    for column_name, changed_value in changed_values.items():
-                                        if column_name in submitted_editor_df.columns:
-                                            submitted_editor_df.at[row_index, column_name] = changed_value
 
-                            added_records = []
-                            for added_values in editor_delta.get("added_rows", []):
-                                if not isinstance(added_values, dict):
-                                    continue
-                                added_record = {column_name: None for column_name in submitted_editor_df.columns}
-                                added_record.update({
+                            def blank_editor_job_record():
+                                record = {column_name: None for column_name in submitted_editor_df.columns}
+                                record.update({
                                     "ID": None,
                                     "จำนวน": 1,
                                     "วัสดุ": "SS400",
@@ -7746,10 +7734,55 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     "สถานะงาน": "🟧 รอคิวผลิต",
                                     "ลบ": False,
                                 })
+                                return record
+
+                            out_of_range_added = []
+                            for raw_index, changed_values in editor_delta.get("edited_rows", {}).items():
+                                try:
+                                    row_index = int(raw_index)
+                                except Exception:
+                                    continue
+                                if 0 <= row_index < len(submitted_editor_df) and isinstance(changed_values, dict):
+                                    for column_name, changed_value in changed_values.items():
+                                        if column_name in submitted_editor_df.columns:
+                                            submitted_editor_df.at[row_index, column_name] = changed_value
+                                elif row_index >= len(submitted_editor_df) and isinstance(changed_values, dict):
+                                    # Streamlit บางรุ่นส่งแถวใหม่เป็น edited_rows[index เกินตารางเดิม]
+                                    # แทน added_rows จึงต้องสร้างแถวใหม่จาก delta นี้โดยตรง
+                                    added_record = blank_editor_job_record()
+                                    for column_name, changed_value in changed_values.items():
+                                        if column_name in added_record:
+                                            added_record[column_name] = changed_value
+                                    out_of_range_added.append((row_index, added_record))
+
+                            added_records = []
+                            for added_values in editor_delta.get("added_rows", []):
+                                if not isinstance(added_values, dict):
+                                    continue
+                                added_record = blank_editor_job_record()
                                 for column_name, added_value in added_values.items():
                                     if column_name in added_record:
                                         added_record[column_name] = added_value
                                 added_records.append(added_record)
+                            if out_of_range_added:
+                                added_records.extend(
+                                    record for _, record in sorted(out_of_range_added, key=lambda item: item[0])
+                                )
+
+                            # สำรองสำหรับ Streamlit ที่คืนแถวใหม่มาใน DataFrame โดยตรง
+                            # แต่ไม่ได้ลงรายละเอียดไว้ใน added_rows
+                            returned_extra_count = max(0, len(edited_jobs) - len(display_editor_df))
+                            if returned_extra_count > len(added_records):
+                                for _, returned_row in edited_jobs.iloc[
+                                    len(display_editor_df) + len(added_records):
+                                ].iterrows():
+                                    added_record = blank_editor_job_record()
+                                    for column_name in added_record:
+                                        if column_name in returned_row.index:
+                                            returned_value = returned_row.get(column_name)
+                                            if not (pd.isna(returned_value) if not isinstance(returned_value, (list, dict)) else False):
+                                                added_record[column_name] = returned_value
+                                    added_records.append(added_record)
                             if added_records:
                                 submitted_editor_df = pd.concat(
                                     [submitted_editor_df, pd.DataFrame(added_records)], ignore_index=True
