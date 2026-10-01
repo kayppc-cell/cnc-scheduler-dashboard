@@ -1494,6 +1494,42 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
 
         machine_name = safe_str(target_row.get("machine_name"), "")
         old_actual_start = parse_flexible_datetime(target_row.get("actual_start"))
+        hold_started_at = parse_flexible_datetime(target_row.get("hold_started_at"))
+        if hold_started_at is not None and not pd.isna(hold_started_at) and new_start_dt > hold_started_at:
+            return False, "เวลาเริ่มจริงใหม่ต้องไม่อยู่หลังเวลาเริ่มพักงาน", 0
+
+        # เวลาเริ่มจริงระดับ Drawing และ started_at ของ Step แรกต้องตรงกัน
+        # แต่ห้ามแก้ started_at ของ Step 2–3 ซึ่งเป็นเหตุการณ์เริ่มงานคนละช่วงเวลา
+        old_step_progress = target_row.get("step_progress")
+        updated_step_progress = normalize_step_progress(
+            old_step_progress,
+            target_row.get("step_name"),
+            target_row.get("status"),
+            target_row.get("actual_start"),
+            target_row.get("actual_finish"),
+        )
+        current_step_index = max(
+            0,
+            min(
+                safe_int(updated_step_progress.get("current_index"), 0),
+                len(updated_step_progress.get("steps", [])) - 1,
+            ),
+        ) if updated_step_progress.get("steps") else 0
+        step_start_synced = False
+        if updated_step_progress.get("steps"):
+            current_step = updated_step_progress["steps"][current_step_index]
+            current_step_start = parse_flexible_datetime(current_step.get("started_at"))
+            step_matches_drawing_start = (
+                old_actual_start is not None and not pd.isna(old_actual_start)
+                and current_step_start is not None and not pd.isna(current_step_start)
+                and abs((current_step_start - old_actual_start).total_seconds()) <= 60
+            )
+            if current_step_index == 0 or step_matches_drawing_start:
+                pending_pause = parse_flexible_datetime(current_step.get("pending_pause_started_at"))
+                if pending_pause is not None and not pd.isna(pending_pause) and new_start_dt > pending_pause:
+                    return False, "เวลาเริ่มจริงใหม่ต้องไม่อยู่หลังเวลาเริ่มพักของ Step ปัจจุบัน", 0
+                current_step["started_at"] = new_start_dt.strftime("%Y-%m-%d %H:%M:%S")
+                step_start_synced = True
         machine_res = requests.get(
             endpoint,
             headers=get_supabase_headers(),
@@ -1547,11 +1583,10 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
                 return False, "คำนวณเวลาคิวรอใหม่ไม่สำเร็จ จึงยังไม่แก้เวลาเริ่มจริง", 0
             expected_by_id[waiting_id] = ready_dt
 
-        if not update_supabase_job(
-            job_id,
-            {"actual_start": new_start_dt.strftime("%Y-%m-%d %H:%M:%S")},
-            clear_cache=False,
-        ):
+        target_update_payload = {"actual_start": new_start_dt.strftime("%Y-%m-%d %H:%M:%S")}
+        if step_start_synced:
+            target_update_payload["step_progress"] = updated_step_progress
+        if not update_supabase_job(job_id, target_update_payload, clear_cache=False):
             return False, "ฐานข้อมูลไม่รับเวลาเริ่มจริงใหม่", 0
 
         updated_waiting_ids = []
@@ -1562,7 +1597,10 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
                 clear_cache=False,
             ):
                 rollback_start = old_actual_start.strftime("%Y-%m-%d %H:%M:%S") if old_actual_start is not None and not pd.isna(old_actual_start) else None
-                update_supabase_job(job_id, {"actual_start": rollback_start}, clear_cache=False)
+                rollback_payload = {"actual_start": rollback_start}
+                if step_start_synced:
+                    rollback_payload["step_progress"] = old_step_progress
+                update_supabase_job(job_id, rollback_payload, clear_cache=False)
                 for rollback_id in updated_waiting_ids:
                     old_ready = original_ready.get(rollback_id)
                     if old_ready is not None and not pd.isna(old_ready):
@@ -1577,7 +1615,10 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
 
         if expected_by_id and not verify_supabase_ready_times(expected_by_id):
             rollback_start = old_actual_start.strftime("%Y-%m-%d %H:%M:%S") if old_actual_start is not None and not pd.isna(old_actual_start) else None
-            update_supabase_job(job_id, {"actual_start": rollback_start}, clear_cache=False)
+            rollback_payload = {"actual_start": rollback_start}
+            if step_start_synced:
+                rollback_payload["step_progress"] = old_step_progress
+            update_supabase_job(job_id, rollback_payload, clear_cache=False)
             for rollback_id in updated_waiting_ids:
                 old_ready = original_ready.get(rollback_id)
                 if old_ready is not None and not pd.isna(old_ready):
@@ -1598,7 +1639,11 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
             machine_name,
             "Admin Edit Actual Start",
             reason=reason,
-            note=f"เวลาเดิม {old_text} → เวลาใหม่ {new_text}" + (f" | {safe_str(note)}" if safe_str(note) else ""),
+            note=(
+                f"เวลาเดิม {old_text} → เวลาใหม่ {new_text}"
+                + (" | ซิงก์เวลาเริ่ม Step แรกแล้ว" if step_start_synced else " | คงเวลาเริ่ม Step ปัจจุบันเดิม")
+                + (f" | {safe_str(note)}" if safe_str(note) else "")
+            ),
         )
         st.cache_data.clear()
         return True, "", len(expected_by_id)
@@ -2034,7 +2079,8 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
     with st.expander("🛠️ ผู้ดูแล: แก้ไขเวลาเริ่มจริงของงานที่กำลังรัน", expanded=False):
         st.warning(
             "ใช้เฉพาะกรณีกด Start ผิดเวลาเท่านั้น การแก้ไขจะคำนวณเวลาคิวรอของเครื่องนั้นใหม่ "
-            "และบันทึกเวลาเดิม เวลาใหม่ พร้อมเหตุผลไว้ในประวัติกิจกรรม"
+            "ซิงก์เวลาเริ่มของ Step แรก และบันทึกเวลาเดิม เวลาใหม่ พร้อมเหตุผลไว้ในประวัติกิจกรรม "
+            "โดยไม่เปลี่ยนเวลาเริ่มของ Step 2–3"
         )
         selected_label = st.selectbox(
             "เลือกงานที่ต้องการแก้เวลาเริ่มจริง",
