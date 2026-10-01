@@ -7081,7 +7081,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     with n2:
                         normal_drawing_options = list(normal_template_map.keys())
                         normal_last_drawing = safe_str(st.session_state.get(normal_last_drawing_key), "")
-                        normal_drawing = st.selectbox(
+                        normal_template_name = st.selectbox(
                             "Drawing Template",
                             normal_drawing_options,
                             index=(
@@ -7090,7 +7090,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             ),
                             key=f"normal_template_drawing_{normal_form_version}",
                         )
-                    normal_tpl = normal_template_map[normal_drawing]
+                    normal_tpl = normal_template_map[normal_template_name]
                     normal_template_id = safe_int(normal_tpl.get("id"), 0)
                     with n3:
                         normal_qty = st.number_input(
@@ -7100,6 +7100,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             value=max(1, safe_int(normal_tpl.get("default_qty"), 1)),
                             key=f"normal_template_qty_{normal_form_version}_{normal_template_id}",
                         )
+
+                    normal_drawing = st.text_input(
+                        "Drawing (แก้ไขชื่อหรือพิมพ์เพิ่มเติมได้)",
+                        value=normal_template_name,
+                        key=f"normal_drawing_edit_{normal_form_version}_{normal_template_id}_{normal_template_name}",
+                        help="แก้เฉพาะใบงาน Production ที่กำลังสร้าง ไม่เปลี่ยนชื่อ Drawing Template ต้นฉบับ",
+                    ).strip()
 
                     n4, n5, n6 = st.columns([1.5, 1, 1])
                     with n4:
@@ -7218,12 +7225,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "💾 สร้างใบงานและส่งเข้าคิวผลิต",
                         type="primary",
                         use_container_width=True,
-                        disabled=(not normal_confirm or normal_minutes <= 0),
+                        disabled=(not normal_confirm or normal_minutes <= 0 or not normal_drawing),
                         key=f"normal_template_submit_{normal_form_version}_{normal_template_id}",
                     )
                     if create_normal_job:
                         if not normal_plan.strip():
                             st.error("กรุณาระบุรหัสแผนงาน")
+                        elif not normal_drawing:
+                            st.error("กรุณาระบุชื่อ Drawing")
                         else:
                             # อ่านคิวล่าสุดอีกครั้งก่อนบันทึก ป้องกันเวลาซ้อนเมื่อมีผู้ใช้สร้างงานพร้อมกัน
                             fetch_jobs_from_supabase.clear()
@@ -7270,7 +7279,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 # ล้างเฉพาะข้อมูลคิวงาน ไม่ล้างแคชทั้งระบบ เพื่อให้บันทึกและโหลดหน้าถัดไปเร็วขึ้น
                                 if insert_supabase_job(normal_payload, clear_cache=False):
                                     st.session_state[normal_last_machine_key] = normal_machine
-                                    st.session_state[normal_last_drawing_key] = normal_drawing
+                                    st.session_state[normal_last_drawing_key] = normal_template_name
                                     st.session_state[normal_form_version_key] = normal_form_version + 1
                                     fetch_jobs_from_supabase.clear()
                                     st.success(
