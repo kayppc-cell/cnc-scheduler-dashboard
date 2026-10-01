@@ -9010,6 +9010,60 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             key="cost_table_search"
                         )
 
+                    # ตัวกรองช่วงวันและเวลา อ้างอิงเวลาเสร็จจริงของงาน
+                    cost_finish_values = cost_df["เสร็จจริง"].apply(parse_flexible_datetime).dropna()
+                    cost_range_default_start = (
+                        datetime.combine(cost_finish_values.min().date(), dtime(0, 0))
+                        if not cost_finish_values.empty else datetime.combine(get_bangkok_now().date(), dtime(0, 0))
+                    )
+                    cost_range_default_end = (
+                        datetime.combine(cost_finish_values.max().date(), dtime(23, 59))
+                        if not cost_finish_values.empty else datetime.combine(get_bangkok_now().date(), dtime(23, 59))
+                    )
+                    cost_use_datetime_range = st.checkbox(
+                        "📅 กรองตามช่วงวันที่และเวลาที่งานเสร็จจริง",
+                        value=False,
+                        key="cost_use_datetime_range"
+                    )
+                    cost_dt1, cost_dt2, cost_dt3, cost_dt4 = st.columns([1.15, 1, 1.15, 1])
+                    with cost_dt1:
+                        cost_from_date = st.date_input(
+                            "ตั้งแต่วันที่",
+                            value=cost_range_default_start.date(),
+                            format="DD/MM/YYYY",
+                            key="cost_from_date"
+                        )
+                    with cost_dt2:
+                        cost_from_time = st.time_input(
+                            "เวลาเริ่ม",
+                            value=cost_range_default_start.time(),
+                            step=60,
+                            key="cost_from_time"
+                        )
+                    with cost_dt3:
+                        cost_to_date = st.date_input(
+                            "ถึงวันที่",
+                            value=cost_range_default_end.date(),
+                            format="DD/MM/YYYY",
+                            key="cost_to_date"
+                        )
+                    with cost_dt4:
+                        cost_to_time = st.time_input(
+                            "เวลาสิ้นสุด",
+                            value=cost_range_default_end.time(),
+                            step=60,
+                            key="cost_to_time"
+                        )
+                    cost_range_start = datetime.combine(cost_from_date, cost_from_time)
+                    cost_range_end = datetime.combine(cost_to_date, cost_to_time)
+                    cost_range_valid = cost_range_end >= cost_range_start
+                    if cost_use_datetime_range and not cost_range_valid:
+                        st.error("เวลาสิ้นสุดต้องไม่น้อยกว่าเวลาเริ่มต้น")
+                    cost_period_label = (
+                        f"{cost_range_start.strftime('%d/%m/%Y %H:%M')} ถึง {cost_range_end.strftime('%d/%m/%Y %H:%M')}"
+                        if cost_use_datetime_range and cost_range_valid else "ทุกช่วงเวลา"
+                    )
+
                     # อ่านค่าจริงจาก widget state ทุกครั้ง ป้องกันค่าตัวแปรค้างหลังเปลี่ยนตัวเลือก
                     # ซึ่งอาจทำให้ช่องแสดง 26-107 แต่ตารางยังใช้ค่า "ทุกแผนงาน" จากรอบก่อน
                     cost_machine_filter = st.session_state.get("cost_machine_filter", "🌐 ทุกเครื่อง")
@@ -9053,6 +9107,16 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         for cost_search_col in ["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "วัสดุ", "แหล่งเวลา"]:
                             cost_search_mask |= cost_display_df[cost_search_col].astype(str).str.casefold().str.contains(cost_query, regex=False, na=False)
                         cost_display_df = cost_display_df[cost_search_mask]
+                    if cost_use_datetime_range:
+                        if cost_range_valid:
+                            cost_finish_dt = cost_display_df["เสร็จจริง"].apply(parse_flexible_datetime)
+                            cost_display_df = cost_display_df[
+                                cost_finish_dt.notna()
+                                & (cost_finish_dt >= cost_range_start)
+                                & (cost_finish_dt <= cost_range_end)
+                            ]
+                        else:
+                            cost_display_df = cost_display_df.iloc[0:0]
 
                     filtered_actual_cost = cost_display_df["ต้นทุนจริงสุทธิ (บาท)"].sum()
                     filtered_plan_cost = cost_display_df["ต้นทุนตามแผน (บาท)"].sum()
@@ -9092,6 +9156,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
                     st.caption(
                         f"แสดงผล {len(cost_display_df):,} จากทั้งหมด {len(cost_df):,} รายการ | "
+                        f"ช่วงงานจบ {cost_period_label} | "
                         f"ต้นทุนจริงที่แสดง {filtered_actual_cost:,.2f} บาท | แผน {filtered_plan_cost:,.2f} บาท"
                     )
                     st.dataframe(
@@ -9142,6 +9207,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "plan": safe_str(cost_plan_filter, "ทุกแผนงาน"),
                         "drawing": safe_str(cost_drawing_filter, "ทุก Drawing"),
                         "search": safe_str(cost_search, "-"),
+                        "period": cost_period_label,
                         "rows_count": len(cost_display_df),
                         "actual_cost": f"{filtered_actual_cost:,.2f}",
                         "plan_cost": f"{filtered_plan_cost:,.2f}",
@@ -9175,8 +9241,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }}
                         .foot {{ margin-top:8px; color:#64748B; text-align:right; }}
                         </style></head><body>
-                        <div class="head"><div><h1>ตารางคำนวณเวลาและต้นทุนเครื่องจักร</h1><div class="sub">Machining Cost Calculation - งานเสร็จสิ้น / ต้นทุนจริงสุทธิ</div></div><div>วันที่ออกรายงาน: ${{d.print_date}}</div></div>
-                        <div class="filters"><b>เงื่อนไข:</b> เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | ค้นหา ${{d.search}} | จำนวน ${{d.rows_count}} รายการ</div>
+                        <div class="head"><div><h1>ตารางคำนวณเวลาและต้นทุนเครื่องจักร</h1><div class="sub">Machining Cost Calculation - งานเสร็จสิ้น / ต้นทุนจริงสุทธิ<br><b>ช่วงวันที่และเวลาที่งานจบ: ${{d.period}}</b></div></div><div>วันที่ออกรายงาน: ${{d.print_date}}</div></div>
+                        <div class="filters"><b>เงื่อนไข:</b> ช่วงวันที่งานจบ ${{d.period}} | เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | ค้นหา ${{d.search}} | จำนวน ${{d.rows_count}} รายการ</div>
                         <div class="kpis">
                           <div class="kpi">ต้นทุนจริงสุทธิ<b>${{d.actual_cost}} บาท</b></div>
                           <div class="kpi">ต้นทุนตามแผน<b>${{d.plan_cost}} บาท</b></div>
