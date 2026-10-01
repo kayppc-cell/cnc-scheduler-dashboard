@@ -1550,7 +1550,7 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
         return False, "เกิดข้อผิดพลาดระหว่างสลับลำดับคิว", []
 
 def insert_urgent_job_into_waiting_queue(
-    machine_name: str, target_job_id, payload: dict
+    machine_name: str, target_job_id, payload: dict, requested_start=None
 ) -> tuple[bool, str, list]:
     """เพิ่มงานด่วนในตำแหน่งคิวที่เลือกและคำนวณเวลาใหม่เฉพาะคิวรอของเครื่องนั้น
 
@@ -1586,6 +1586,10 @@ def insert_urgent_job_into_waiting_queue(
 
         insert_index = waiting_ids.index(target_job_id) if target_job_id is not None else 0
         now_dt = get_next_valid_work_time(get_bangkok_now().replace(tzinfo=None))
+        requested_start_dt = parse_flexible_datetime(requested_start)
+        if requested_start_dt is not None and not pd.isna(requested_start_dt):
+            requested_start_dt = get_next_valid_work_time(requested_start_dt)
+        initial_start_dt = requested_start_dt or now_dt
         original_ready = {
             safe_int(row.get("id")): parse_flexible_datetime(row.get("ready_at"))
             for row in waiting_rows if safe_int(row.get("id")) > 0
@@ -1594,10 +1598,10 @@ def insert_urgent_job_into_waiting_queue(
         # POST ต้องขอ representation เพื่อรับ ID จริง แล้วจึงนำ ID นั้นเข้าเครื่องคำนวณคิว
         initial_payload = dict(payload)
         initial_payload["machine_name"] = machine_name
-        initial_payload["ready_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
-        initial_payload["baseline_ready_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        initial_payload["ready_at"] = initial_start_dt.strftime("%Y-%m-%d %H:%M:%S")
+        initial_payload["baseline_ready_at"] = initial_start_dt.strftime("%Y-%m-%d %H:%M:%S")
         _, initial_finish = add_work_time_with_shift(
-            now_dt,
+            initial_start_dt,
             (
                 safe_float(initial_payload.get("setup_mins"), DEFAULT_SETUP_MINUTES)
                 + safe_float(initial_payload.get("basic_hrs"), DEFAULT_BASIC_MINUTES)
@@ -1635,6 +1639,28 @@ def insert_urgent_job_into_waiting_queue(
         waiting_chain = ordered_chain[
             ordered_chain["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)
         ].copy()
+
+        # เวลากำหนดเองเป็นเวลาเริ่มเร็วที่สุดของงานด่วน หากคิวก่อนหน้ายังไม่จบ
+        # ระบบจะเริ่มหลังคิวก่อนหน้าและเลื่อนคิวรอถัดไปตามกะโรงงาน
+        if requested_start_dt is not None and not waiting_chain.empty:
+            urgent_positions = waiting_chain.index[waiting_chain["ID"].apply(safe_int) == inserted_id].tolist()
+            if urgent_positions:
+                urgent_pos = waiting_chain.index.get_loc(urgent_positions[0])
+                computed_urgent_start = waiting_chain.iloc[urgent_pos].get("_chain_start")
+                if (
+                    computed_urgent_start is None or pd.isna(computed_urgent_start)
+                    or computed_urgent_start < requested_start_dt
+                ):
+                    cursor = requested_start_dt
+                    for positional_index in range(urgent_pos, len(waiting_chain)):
+                        row_index = waiting_chain.index[positional_index]
+                        cursor = get_next_valid_work_time(cursor)
+                        waiting_chain.at[row_index, "_chain_start"] = cursor
+                        _, recalculated_finish = add_work_time_with_shift(
+                            cursor, get_planned_minutes(waiting_chain.loc[row_index]) / 60.0
+                        )
+                        waiting_chain.at[row_index, "_chain_finish"] = recalculated_finish
+                        cursor = recalculated_finish
 
         expected_by_id, changed_rows = {}, []
         urgent_start = urgent_finish = None
@@ -7020,6 +7046,43 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         urgent_position = st.selectbox("ตำแหน่งแทรก", insert_choices, key="urgent_insert_position")
                     urgent_reason = st.text_input("เหตุผล/หมายเหตุงานด่วน", placeholder="เช่น ลูกค้าเร่งส่ง, งานแก้ไขเร่งด่วน", key="urgent_reason")
 
+                    auto_urgent_start = urgent_insert_ready_at(
+                        urgent_machine, urgent_position, target_map.get(urgent_position), df_db
+                    )
+                    urgent_time_mode = st.radio(
+                        "การกำหนดเวลาเริ่มงานด่วน",
+                        ["ต่อเวลาตามตำแหน่งคิวอัตโนมัติ", "กำหนดวันและเวลาเริ่มเอง"],
+                        horizontal=True,
+                        key="urgent_time_mode"
+                    )
+                    urgent_requested_start = None
+                    if urgent_time_mode == "กำหนดวันและเวลาเริ่มเอง":
+                        ut1, ut2 = st.columns(2)
+                        with ut1:
+                            urgent_start_date = st.date_input(
+                                "วันที่เริ่มงานด่วน",
+                                value=auto_urgent_start.date(),
+                                format="DD/MM/YYYY",
+                                key="urgent_start_date"
+                            )
+                        with ut2:
+                            urgent_start_time = st.time_input(
+                                "เวลาเริ่มงานด่วน",
+                                value=auto_urgent_start.time().replace(second=0, microsecond=0),
+                                step=300,
+                                key="urgent_start_time"
+                            )
+                        urgent_requested_start = datetime.combine(urgent_start_date, urgent_start_time)
+                        normalized_requested_start = get_next_valid_work_time(urgent_requested_start)
+                        if normalized_requested_start != urgent_requested_start:
+                            st.info(
+                                "เวลาที่เลือกอยู่นอกช่วงทำงาน ระบบจะเริ่มที่ช่วงเวลาทำงานถัดไป: "
+                                f"{normalized_requested_start.strftime('%d/%m/%Y %H:%M')}"
+                            )
+                        urgent_start = max(auto_urgent_start, normalized_requested_start)
+                    else:
+                        urgent_start = auto_urgent_start
+
                     target_id = target_map.get(urgent_position)
                     # แสดงตัวอย่างลำดับจริงก่อนบันทึก เพื่อให้เห็นชัดว่างานด่วนอยู่ก่อน/หลังคิวใด
                     preview_rows = [
@@ -7071,7 +7134,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 )
                         st.markdown("  \n".join(preview_lines) if preview_lines else "1. ⚡ งานด่วนแทรก")
 
-                    urgent_start = urgent_insert_ready_at(urgent_machine, urgent_position, target_id, df_db)
                     urgent_minutes = (
                         safe_float(urgent_tpl.get("setup_mins"), 10) +
                         safe_float(urgent_tpl.get("basic_mins"), 0) +
@@ -7110,7 +7172,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.error("กรุณาระบุ Drawing")
                         else:
                             urgent_saved, urgent_error, urgent_changed_rows = insert_urgent_job_into_waiting_queue(
-                                urgent_machine, target_id, payload
+                                urgent_machine, target_id, payload, urgent_requested_start
                             )
                             if urgent_saved:
                                 shifted_count = max(0, len(urgent_changed_rows) - 1)
