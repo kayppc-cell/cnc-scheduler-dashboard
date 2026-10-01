@@ -7558,9 +7558,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 if is_admin:
                     st.markdown('<div id="tpc-production-editor-marker"></div>', unsafe_allow_html=True)
-                    # ไม่ครอบ data_editor ด้วย form: บาง Streamlit runtime ไม่ส่งแถว dynamic
-                    # ที่ยังไม่ระบุเวลาเมื่อกด submit ทำให้แถวใหม่หายก่อนระบบคำนวณลูกโซ่
-                    edited_jobs = st.data_editor(
+                    # เก็บ Data Editor ใน form เพื่อไม่ให้หน้าจอ rerun ทุกครั้งที่แก้แต่ละเซลล์
+                    with st.form("active_jobs_editor_form", clear_on_submit=False):
+                        edited_jobs = st.data_editor(
                         display_editor_df,
                         key="editor_cnc_jobs_grid_main",
                         num_rows="dynamic",
@@ -7604,22 +7604,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         width=1640,
                         row_height=30
                     )
-                    st.caption("✍️ แก้ไขหรือเพิ่มหลายช่องให้ครบก่อน แล้วกดบันทึกครั้งเดียว ระบบจึงจะคำนวณรวมชั่วโมงและเวลาลูกโซ่ใหม่")
-                    c_form_save, c_form_delete = st.columns(2)
-                    with c_form_save:
-                        save_table_clicked = st.button(
-                            "💾 คำนวณเวลาและบันทึกข้อมูล",
-                            type="primary",
-                            use_container_width=True,
-                            key="save_active_jobs_table"
-                        )
-                    with c_form_delete:
-                        delete_table_clicked = st.button(
-                            "🗑️ ยืนยันลบรายการที่เลือก",
-                            type="secondary",
-                            use_container_width=True,
-                            key="delete_active_jobs_table"
-                        )
+                        st.caption("✍️ แก้ไขหรือเพิ่มหลายช่องให้ครบก่อน แล้วกดบันทึกครั้งเดียว ระบบจึงจะคำนวณรวมชั่วโมงและเวลาลูกโซ่ใหม่")
+                        c_form_save, c_form_delete = st.columns(2)
+                        with c_form_save:
+                            save_table_clicked = st.form_submit_button(
+                                "💾 คำนวณเวลาและบันทึกข้อมูล",
+                                type="primary",
+                                use_container_width=True
+                            )
+                        with c_form_delete:
+                            delete_table_clicked = st.form_submit_button(
+                                "🗑️ ยืนยันลบรายการที่เลือก",
+                                type="secondary",
+                                use_container_width=True
+                            )
                 else:
                     edited_jobs = display_editor_df.copy()
                     save_table_clicked = False
