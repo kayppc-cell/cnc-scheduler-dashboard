@@ -7712,6 +7712,50 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     delete_count = len(active_to_delete)
 
                     if save_table_clicked:
+                        # ใน Streamlit บางรุ่น data_editor ภายใน form จะคืน DataFrame เดิม
+                        # ส่วนแถวที่แก้/เพิ่มใหม่อยู่ใน widget state จึงต้องประกอบข้อมูลก่อนบันทึก
+                        editor_delta = st.session_state.get("editor_cnc_jobs_grid_main", {})
+                        if isinstance(editor_delta, dict) and (
+                            editor_delta.get("edited_rows") or editor_delta.get("added_rows")
+                        ):
+                            submitted_editor_df = display_editor_df.copy().reset_index(drop=True)
+                            for raw_index, changed_values in editor_delta.get("edited_rows", {}).items():
+                                try:
+                                    row_index = int(raw_index)
+                                except Exception:
+                                    continue
+                                if 0 <= row_index < len(submitted_editor_df) and isinstance(changed_values, dict):
+                                    for column_name, changed_value in changed_values.items():
+                                        if column_name in submitted_editor_df.columns:
+                                            submitted_editor_df.at[row_index, column_name] = changed_value
+
+                            added_records = []
+                            for added_values in editor_delta.get("added_rows", []):
+                                if not isinstance(added_values, dict):
+                                    continue
+                                added_record = {column_name: None for column_name in submitted_editor_df.columns}
+                                added_record.update({
+                                    "ID": None,
+                                    "จำนวน": 1,
+                                    "วัสดุ": "SS400",
+                                    "ประเภทงาน": "🟢 งานปกติ",
+                                    "ขั้นตอน (Step)": "รอหน้าเครื่องระบุ",
+                                    "Setup (น.)": DEFAULT_SETUP_MINUTES,
+                                    "Basic (น.)": DEFAULT_BASIC_MINUTES,
+                                    "โปรแกรม (น.)": DEFAULT_PROGRAM_MINUTES,
+                                    "สถานะงาน": "🟧 รอคิวผลิต",
+                                    "ลบ": False,
+                                })
+                                for column_name, added_value in added_values.items():
+                                    if column_name in added_record:
+                                        added_record[column_name] = added_value
+                                added_records.append(added_record)
+                            if added_records:
+                                submitted_editor_df = pd.concat(
+                                    [submitted_editor_df, pd.DataFrame(added_records)], ignore_index=True
+                                )
+                            edited_jobs = submitted_editor_df
+
                         save_source = active_jobs_editor_df.copy()
                         original_source = active_jobs_editor_df.copy()
                         editable_columns = [
@@ -7772,6 +7816,23 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             else:
                                 new_row = {col_name: edited_row.get(col_name) for col_name in save_source.columns}
                                 new_row["ID"] = None
+                                new_row["จำนวน"] = max(1, safe_int(edited_row.get("จำนวน"), 1))
+                                new_row["วัสดุ"] = safe_str(edited_row.get("วัสดุ"), "SS400") or "SS400"
+                                new_row["ประเภทงาน"] = safe_str(edited_row.get("ประเภทงาน"), "🟢 งานปกติ") or "🟢 งานปกติ"
+                                new_row["ขั้นตอน (Step)"] = safe_str(
+                                    edited_row.get("ขั้นตอน (Step)"), "รอหน้าเครื่องระบุ"
+                                ) or "รอหน้าเครื่องระบุ"
+                                new_row["Setup (น.)"] = safe_float(
+                                    edited_row.get("Setup (น.)"), DEFAULT_SETUP_MINUTES
+                                )
+                                new_row["Basic (น.)"] = safe_float(
+                                    edited_row.get("Basic (น.)"), DEFAULT_BASIC_MINUTES
+                                )
+                                new_row["โปรแกรม (น.)"] = safe_float(
+                                    edited_row.get("โปรแกรม (น.)"), DEFAULT_PROGRAM_MINUTES
+                                )
+                                new_row["สถานะงาน"] = "🟧 รอคิวผลิต"
+                                new_row["ลบ"] = False
                                 new_row["กำหนดพร้อมขึ้นงาน (Baseline)"] = safe_str(edited_row.get("วัน-เวลาขึ้นงาน"), "")
                                 save_source = pd.concat([save_source, pd.DataFrame([new_row])], ignore_index=True)
                                 if edited_machine:
