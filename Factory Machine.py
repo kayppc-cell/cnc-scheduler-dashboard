@@ -6968,10 +6968,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     with u1:
                         urgent_plan = st.text_input("รหัสแผนงาน", key="urgent_plan_code")
                     with u2:
-                        urgent_drawing = st.selectbox("Drawing Template", list(urgent_template_map.keys()), key="urgent_template_name")
-                    urgent_tpl = urgent_template_map[urgent_drawing]
+                        urgent_template_name = st.selectbox(
+                            "Drawing Template (เลือกต้นแบบ)",
+                            list(urgent_template_map.keys()),
+                            key="urgent_template_name"
+                        )
+                    urgent_tpl = urgent_template_map[urgent_template_name]
                     with u3:
                         urgent_qty = st.number_input("จำนวน", 1, 10000, safe_int(urgent_tpl.get("default_qty"), 1), key="urgent_qty")
+                    urgent_drawing = st.text_input(
+                        "Drawing (แก้ไขชื่อหรือพิมพ์เพิ่มเติมได้)",
+                        value=urgent_template_name,
+                        key=f"urgent_drawing_edit_{safe_int(urgent_tpl.get('id'), 0)}_{urgent_template_name}",
+                        help="แก้เฉพาะใบงานด่วนที่กำลังสร้าง ไม่เปลี่ยนชื่อ Drawing Template ต้นฉบับ"
+                    ).strip()
                     u4, u5 = st.columns([1.5, 2.5])
                     with u4:
                         urgent_machine_default = safe_str(urgent_tpl.get("machine_name"), MACHINE_LIST[0])
@@ -7031,7 +7041,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     urgent_preview_item = {
                         "id": -1,
                         "plan": urgent_plan.strip() or "ยังไม่ระบุแผน",
-                        "drawing": urgent_drawing,
+                        "drawing": urgent_drawing or urgent_template_name,
                         "status": "⚡ งานด่วนแทรก",
                     }
                     preview_after_insert = preview_rows.copy()
@@ -7046,7 +7056,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     )
                     st.info(
                         f"🔎 **ตำแหน่งหลังแทรก:** {before_text} → "
-                        f"⚡ **งานด่วน {urgent_plan.strip() or '-'} / {urgent_drawing}** → {after_text}"
+                        f"⚡ **งานด่วน {urgent_plan.strip() or '-'} / {urgent_drawing or urgent_template_name}** → {after_text}"
                     )
                     with st.expander("📋 ดูลำดับคิวทั้งหมดหลังแทรก", expanded=False):
                         preview_lines = []
@@ -7084,7 +7094,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         urgent_steps = template_step_names(urgent_tpl)
                         combined_steps = " → ".join(urgent_steps)
                         payload = {
-                            "plan_code": urgent_plan.strip(), "drawing_name": urgent_drawing,
+                            "plan_code": urgent_plan.strip(), "drawing_name": urgent_drawing or urgent_template_name,
                             "qty": int(urgent_qty), "material": safe_str(urgent_tpl.get("material"), "SS400"),
                             "job_type": "🔴 งานด่วนแทรก", "step_name": combined_steps,
                             "machine_name": urgent_machine, "ready_at": urgent_start.strftime("%Y-%m-%d %H:%M:%S"),
@@ -7096,6 +7106,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         }
                         if not urgent_plan.strip():
                             st.error("กรุณาระบุรหัสแผนงาน")
+                        elif not (urgent_drawing or urgent_template_name):
+                            st.error("กรุณาระบุ Drawing")
                         else:
                             urgent_saved, urgent_error, urgent_changed_rows = insert_urgent_job_into_waiting_queue(
                                 urgent_machine, target_id, payload
@@ -7103,7 +7115,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             if urgent_saved:
                                 shifted_count = max(0, len(urgent_changed_rows) - 1)
                                 st.success(
-                                    f"เพิ่มงานด่วน {urgent_drawing} และจัดลำดับคิวใหม่เรียบร้อยแล้ว "
+                                    f"เพิ่มงานด่วน {urgent_drawing or urgent_template_name} และจัดลำดับคิวใหม่เรียบร้อยแล้ว "
                                     f"— ปรับเวลาคิวรอ {shifted_count} รายการ โดยไม่เปลี่ยนงานที่กำลังรัน"
                                 )
                                 st.rerun()
