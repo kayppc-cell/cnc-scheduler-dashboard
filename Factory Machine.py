@@ -354,6 +354,25 @@ def get_planned_busy_hours_in_range(start_dt: datetime, duration_hours: float, r
             busy_hours += (overlap_end - overlap_start).total_seconds() / 3600.0
     return busy_hours
 
+def format_project_overrun_duration(seconds, calendar=False):
+    """แสดงระยะเวลาบวกโดยไม่ปัดเศษจนข้อความเกินกำหนดกลายเป็นศูนย์"""
+    seconds = max(0.0, safe_float(seconds, 0.0))
+    if seconds == 0:
+        return "0 นาที"
+    if seconds < 60:
+        return "น้อยกว่า 1 นาที"
+    minutes = int(seconds // 60)
+    days, minutes = divmod(minutes, 1440) if calendar else (0, minutes)
+    hours, minutes = divmod(minutes, 60)
+    parts = []
+    if days:
+        parts.append(f"{days} วัน")
+    if hours:
+        parts.append(f"{hours} ชม.")
+    if minutes:
+        parts.append(f"{minutes} นาที")
+    return " ".join(parts)
+
 def get_job_planned_finish(job_row):
     """คืนเวลาจบตามแผนจากค่าที่บันทึกไว้ หรือคำนวณจากเวลาเริ่มและเวลามาตรฐานเมื่อไม่มีค่าเก็บไว้"""
     stored_finish = first_valid_datetime(
@@ -2454,6 +2473,21 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             if production_finish and customer_due and production_finish > customer_due
             else 0.0
         )
+        is_past_production_due = bool(
+            production_finish is not None and customer_due is not None
+            and production_finish > customer_due
+        )
+        calendar_late_seconds = (
+            (production_finish - customer_due).total_seconds() if is_past_production_due else 0.0
+        )
+        calendar_late_text = format_project_overrun_duration(calendar_late_seconds, calendar=True)
+        work_late_text = format_project_overrun_duration(late_hours * 3600.0)
+        project_due_details = (
+            f"กำหนดจบ Production: {format_thai_datetime(customer_due)}"
+            f"<br>คาดว่าจะจบผลิต: {format_thai_datetime(production_finish) or 'ยังวางงานไม่ครบ'}"
+            f"<br>เลยกำหนดตามปฏิทิน: {calendar_late_text}"
+            f"<br>เกินเฉพาะเวลาทำงาน: {work_late_text}"
+        )
         early_hours = max(0.0, (customer_start - production_start).total_seconds() / 3600.0) if production_start and customer_start else 0.0
         risky_mask = sub["_finish"].apply(
             lambda v: v is not None and not pd.isna(v) and customer_due is not None and v > customer_due
@@ -2485,7 +2519,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         delayed_machines = ", ".join(delayed.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3))
         if production_start is None or production_finish is None:
             status = "⚪ ยังวางงานไม่ครบ"
-        elif late_hours > 0:
+        elif is_past_production_due:
             status = "🔴 เกินแผน Production"
         elif delayed_count > 0:
             status = "🟠 มีคิวดีเลย์ / เสี่ยงกระทบ Production"
@@ -2509,19 +2543,19 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         shown_risky_machines = risky_machines or delayed_machines
         rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "คิวดีเลย์": delayed_count, "ดีเลย์สูงสุด (ชม.)": round(max_delay_hours, 1), "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": shown_risky_drawings or "-", "เครื่องเสี่ยง": shown_risky_machines or "-", "ส่งจ้างภายนอก": len(outsourced_plan_jobs), "Drawing ทั้งหมด": drawing_progress["drawing_total"], "Drawing เสร็จแล้ว": drawing_progress["drawing_completed"], "Drawing คงเหลือ": drawing_progress["drawing_remaining"], "งานคงเหลือ (%)": drawing_progress["remaining_pct"], "งานเสร็จ (%)": drawing_progress["completed_pct"], "ชั่วโมงแผน": round(planned_hours, 2)})
         customer_text = f"Production: {project_short_date(customer_start)}–{project_short_date(customer_due)}"
-        gantt_rows.append({"แผนงาน": f"{code} | Production", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลา Production", "สถานะ": status, "ข้อความ": customer_text})
+        gantt_rows.append({"แผนงาน": f"{code} | Production", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลา Production", "สถานะ": status, "ข้อความ": customer_text, "รายละเอียดกำหนดจบ": project_due_details})
         if production_start and production_finish:
             production_text = f"ผลิต: {project_short_date(production_start)}–{project_short_date(production_finish)}"
             production_text += (
                 f" • เหลือ {drawing_progress['remaining_pct']:.1f}% "
                 f"({drawing_progress['drawing_remaining']}/{drawing_progress['drawing_total']} Drawing)"
             )
-            if late_hours > 0:
-                production_text += f" • เกิน {late_hours:.1f} ชม.ทำงาน"
+            if is_past_production_due:
+                production_text += f" • เลย {calendar_late_text} (ปฏิทิน) • เกิน {work_late_text}ทำงาน"
             elif delayed_count > 0:
                 production_text += f" • ดีเลย์ {delayed_count} คิว"
-            production_type = "แผนผลิตเกินกำหนด" if late_hours > 0 else ("แผนผลิตมีคิวดีเลย์" if delayed_count > 0 else "แผนผลิต")
-            gantt_rows.append({"แผนงาน": f"{code} | แผนผลิต", "เริ่ม": production_start, "จบ": production_finish, "ประเภท": production_type, "สถานะ": status, "ข้อความ": production_text})
+            production_type = "แผนผลิตเกินกำหนด" if is_past_production_due else ("แผนผลิตมีคิวดีเลย์" if delayed_count > 0 else "แผนผลิต")
+            gantt_rows.append({"แผนงาน": f"{code} | แผนผลิต", "เริ่ม": production_start, "จบ": production_finish, "ประเภท": production_type, "สถานะ": status, "ข้อความ": production_text, "รายละเอียดกำหนดจบ": project_due_details})
 
     summary = pd.DataFrame(rows)
     overlap_counts = {code: 0 for code in summary["แผนงาน"]}
@@ -2781,7 +2815,8 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 [
                     safe_str(row.get("สถานะ"), "-"),
                     row["เริ่ม"].strftime("%d/%m/%Y %H:%M"),
-                    row["จบ"].strftime("%d/%m/%Y %H:%M")
+                    row["จบ"].strftime("%d/%m/%Y %H:%M"),
+                    safe_str(row.get("รายละเอียดกำหนดจบ"), "")
                 ]
                 for _, row in type_rows.iterrows()
             ]
@@ -2797,7 +2832,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
                 insidetextanchor="middle",
                 textfont=dict(color="white", size=(9 if mobile_view else (10 if tablet_view else 11))),
                 customdata=hover_values,
-                hovertemplate="%{y}<br>เริ่ม: %{customdata[1]}<br>จบ: %{customdata[2]}<br>สถานะ: %{customdata[0]}<extra></extra>"
+                hovertemplate="%{y}<br>เริ่ม: %{customdata[1]}<br>จบ: %{customdata[2]}<br>สถานะ: %{customdata[0]}<br>%{customdata[3]}<extra></extra>"
             ))
         fig_master.update_yaxes(autorange="reversed")
 
