@@ -1176,9 +1176,18 @@ def urgent_insert_ready_at(machine_name: str, insert_mode: str, target_id, jobs_
     waiting = machine_jobs[machine_jobs["สถานะงาน"].astype(str).str.contains("รอคิว")].sort_values(["_ready", "ID"])
     if insert_mode.startswith("ก่อนคิว") and target_id is not None:
         live_timeline = machine_active_queue_timeline(machine_name, machine_jobs)
-        target_item = next((item for item in live_timeline if safe_int(item.get("id")) == safe_int(target_id)), None)
-        if target_item and target_item.get("start") is not None:
-            return get_next_valid_work_time(target_item["start"] - timedelta(seconds=1))
+        target_index = next((
+            index for index, item in enumerate(live_timeline)
+            if safe_int(item.get("id")) == safe_int(target_id)
+        ), None)
+        if target_index is not None:
+            # งานด่วนที่แทรก "ก่อนคิวเป้าหมาย" ต้องเริ่มหลังงานก่อนหน้าเสร็จ
+            # ห้ามยึดเวลาเริ่มเดิมของคิวเป้าหมาย เพราะเวลานั้นจะถูกเลื่อนหลังแทรก
+            if target_index > 0:
+                predecessor_finish = live_timeline[target_index - 1].get("finish")
+                if predecessor_finish is not None and not pd.isna(predecessor_finish):
+                    return get_next_valid_work_time(max(predecessor_finish, now_dt))
+            return get_next_valid_work_time(now_dt)
     running = machine_jobs[machine_jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True)]
     if not running.empty:
         live_chain = calculate_production_chain(running, active_only=True)
