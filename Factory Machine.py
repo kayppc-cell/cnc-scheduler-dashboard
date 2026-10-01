@@ -377,6 +377,8 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
     - งานกำลังผลิต/พักงานยึด ``เริ่มจริง``; ใช้ ready_at เป็น fallback เฉพาะข้อมูลเก่าที่เวลาเริ่มจริงหาย
     - งานรอคิวต่อจากเวลาจบล่าสุดของเครื่อง และไม่ใช้ ready_at รอบเก่ามาขวาง
     - Batch หลายงานที่เริ่มแล้วคงเวลาเริ่มจริงของแต่ละงาน; คิวรอต่อจากงานที่จบช้าที่สุด
+    - เวลาจบที่แสดงของงานกำลังผลิตยังเป็นเวลาจบตามแผน; หากเลยแผนแล้ว ใช้เวลาปัจจุบัน
+      เฉพาะเป็นจุดว่างของเครื่องสำหรับคำนวณคิวถัดไป ห้ามเขียนทับเวลาจบตามแผน
     - Baseline ไม่ถูกนำมาเปลี่ยนเวลาลูกโซ่สด
     """
     jobs = source_df.copy() if isinstance(source_df, pd.DataFrame) else pd.DataFrame()
@@ -452,11 +454,12 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
             continue
 
         _, finish_dt = add_work_time_with_shift(start_dt, get_planned_minutes(row) / 60.0)
-        if is_live:
-            finish_dt = max(finish_dt, now_dt)
+        # แยก "เวลาจบตามแผนของแถว" ออกจาก "เวลาที่เครื่องพร้อมรับคิวถัดไป"
+        # งานที่ยังรันและเลยแผนแล้วต้องไม่แสดงเวลาปัจจุบันเป็นเวลาจบตามแผน
+        availability_finish = max(finish_dt, now_dt) if is_live else finish_dt
         previous_finish = machine_available.get(machine_name)
         machine_available[machine_name] = (
-            max(previous_finish, finish_dt) if previous_finish is not None else finish_dt
+            max(previous_finish, availability_finish) if previous_finish is not None else availability_finish
         )
         chain_starts.append(start_dt)
         chain_finishes.append(finish_dt)
@@ -1461,6 +1464,147 @@ def verify_supabase_ready_times(expected_by_id: dict) -> bool:
     except Exception:
         return False
 
+def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason: str, note: str = "") -> tuple[bool, str, int]:
+    """แก้เวลาเริ่มจริงของงานสดและคำนวณ ready_at ของคิวรอเครื่องนั้นใหม่แบบคืนค่าได้"""
+    job_id = safe_int(job_id)
+    new_start_dt = parse_flexible_datetime(new_actual_start)
+    if job_id <= 0 or new_start_dt is None or pd.isna(new_start_dt):
+        return False, "ข้อมูลรายการหรือเวลาเริ่มจริงไม่ถูกต้อง", 0
+    now_dt = get_bangkok_now().replace(tzinfo=None)
+    if new_start_dt > now_dt:
+        return False, "เวลาเริ่มจริงต้องไม่เป็นเวลาในอนาคต", 0
+    if not safe_str(reason, "").strip():
+        return False, "กรุณาระบุเหตุผลการแก้ไข", 0
+
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs"
+        target_res = requests.get(
+            endpoint,
+            headers=get_supabase_headers(),
+            params={"select": "*", "id": f"eq.{job_id}", "limit": "1"},
+            timeout=8,
+        )
+        if target_res.status_code != 200 or not target_res.json():
+            return False, "ไม่พบงานที่เลือกในฐานข้อมูล", 0
+        target_row = target_res.json()[0]
+        target_status = safe_str(target_row.get("status"), "")
+        if not any(word in target_status for word in ["กำลังผลิต", "พักงาน", "รอวัสดุ"]):
+            return False, "แก้เวลาเริ่มจริงได้เฉพาะงานที่กำลังผลิตหรือพักงานเท่านั้น", 0
+
+        machine_name = safe_str(target_row.get("machine_name"), "")
+        old_actual_start = parse_flexible_datetime(target_row.get("actual_start"))
+        machine_res = requests.get(
+            endpoint,
+            headers=get_supabase_headers(),
+            params={
+                "select": (
+                    "id,plan_code,drawing_name,machine_name,status,ready_at,actual_start,"
+                    "setup_mins,basic_hrs,prog_hrs"
+                ),
+                "machine_name": f"eq.{machine_name}",
+                "order": "ready_at.asc,id.asc",
+            },
+            timeout=8,
+        )
+        if machine_res.status_code != 200:
+            return False, "อ่านคิวล่าสุดของเครื่องไม่สำเร็จ", 0
+
+        machine_rows = machine_res.json() if isinstance(machine_res.json(), list) else []
+        live_rows = [
+            dict(row) for row in machine_rows
+            if any(word in safe_str(row.get("status"), "") for word in ["กำลังผลิต", "พักงาน", "รอวัสดุ"])
+        ]
+        waiting_rows = [dict(row) for row in machine_rows if "รอคิว" in safe_str(row.get("status"), "")]
+        target_found = False
+        for row in live_rows:
+            if safe_int(row.get("id")) == job_id:
+                row["actual_start"] = new_start_dt.strftime("%Y-%m-%d %H:%M:%S")
+                target_found = True
+                break
+        if not target_found:
+            return False, "สถานะงานเปลี่ยนระหว่างแก้ไข กรุณารีเฟรชแล้วลองใหม่", 0
+
+        original_ready = {
+            safe_int(row.get("id")): parse_flexible_datetime(row.get("ready_at"))
+            for row in waiting_rows if safe_int(row.get("id")) > 0
+        }
+        ordered_df = pd.DataFrame(live_rows + waiting_rows).rename(columns={
+            "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
+            "machine_name": "เลือกเครื่องจักร", "status": "สถานะงาน",
+            "ready_at": "วัน-เวลาขึ้นงาน", "actual_start": "เริ่มจริง",
+            "setup_mins": "Setup (น.)", "basic_hrs": "Basic (น.)", "prog_hrs": "โปรแกรม (น.)",
+        })
+        chain_df = calculate_production_chain(ordered_df, active_only=True, preserve_input_order=True)
+        waiting_chain = chain_df[
+            chain_df["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)
+        ].copy()
+        expected_by_id = {}
+        for _, row in waiting_chain.iterrows():
+            waiting_id = safe_int(row.get("ID"))
+            ready_dt = row.get("_chain_start")
+            if waiting_id <= 0 or ready_dt is None or pd.isna(ready_dt):
+                return False, "คำนวณเวลาคิวรอใหม่ไม่สำเร็จ จึงยังไม่แก้เวลาเริ่มจริง", 0
+            expected_by_id[waiting_id] = ready_dt
+
+        if not update_supabase_job(
+            job_id,
+            {"actual_start": new_start_dt.strftime("%Y-%m-%d %H:%M:%S")},
+            clear_cache=False,
+        ):
+            return False, "ฐานข้อมูลไม่รับเวลาเริ่มจริงใหม่", 0
+
+        updated_waiting_ids = []
+        for waiting_id, ready_dt in expected_by_id.items():
+            if not update_supabase_job(
+                waiting_id,
+                {"ready_at": ready_dt.strftime("%Y-%m-%d %H:%M:%S")},
+                clear_cache=False,
+            ):
+                rollback_start = old_actual_start.strftime("%Y-%m-%d %H:%M:%S") if old_actual_start is not None and not pd.isna(old_actual_start) else None
+                update_supabase_job(job_id, {"actual_start": rollback_start}, clear_cache=False)
+                for rollback_id in updated_waiting_ids:
+                    old_ready = original_ready.get(rollback_id)
+                    if old_ready is not None and not pd.isna(old_ready):
+                        update_supabase_job(
+                            rollback_id,
+                            {"ready_at": old_ready.strftime("%Y-%m-%d %H:%M:%S")},
+                            clear_cache=False,
+                        )
+                st.cache_data.clear()
+                return False, "อัปเดตลูกโซ่ไม่ครบ ระบบคืนเวลาเดิมแล้ว", 0
+            updated_waiting_ids.append(waiting_id)
+
+        if expected_by_id and not verify_supabase_ready_times(expected_by_id):
+            rollback_start = old_actual_start.strftime("%Y-%m-%d %H:%M:%S") if old_actual_start is not None and not pd.isna(old_actual_start) else None
+            update_supabase_job(job_id, {"actual_start": rollback_start}, clear_cache=False)
+            for rollback_id in updated_waiting_ids:
+                old_ready = original_ready.get(rollback_id)
+                if old_ready is not None and not pd.isna(old_ready):
+                    update_supabase_job(
+                        rollback_id,
+                        {"ready_at": old_ready.strftime("%Y-%m-%d %H:%M:%S")},
+                        clear_cache=False,
+                    )
+            st.cache_data.clear()
+            return False, "ตรวจสอบเวลาลูกโซ่หลังบันทึกไม่ผ่าน ระบบคืนเวลาเดิมแล้ว", 0
+
+        old_text = old_actual_start.strftime("%d/%m/%Y %H:%M") if old_actual_start is not None and not pd.isna(old_actual_start) else "ไม่พบเวลาเดิม"
+        new_text = new_start_dt.strftime("%d/%m/%Y %H:%M")
+        log_job_event(
+            job_id,
+            target_row.get("plan_code"),
+            target_row.get("drawing_name"),
+            machine_name,
+            "Admin Edit Actual Start",
+            reason=reason,
+            note=f"เวลาเดิม {old_text} → เวลาใหม่ {new_text}" + (f" | {safe_str(note)}" if safe_str(note) else ""),
+        )
+        st.cache_data.clear()
+        return True, "", len(expected_by_id)
+    except Exception as exc:
+        return False, f"เกิดข้อผิดพลาดระหว่างแก้เวลาเริ่มจริง: {safe_str(exc, 'ไม่ทราบสาเหตุ')}", 0
+
 def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: int) -> tuple[bool, str, list]:
     """สลับตำแหน่งคิวรอสองงานบนเครื่องเดียวกัน แล้วคำนวณลูกโซ่คิวรอใหม่ทั้งหมด"""
     source_job_id, target_job_id = safe_int(source_job_id), safe_int(target_job_id)
@@ -1866,6 +2010,94 @@ def build_project_active_chain(calc_df):
     jobs["_start"] = jobs.get("_chain_start", pd.Series(index=jobs.index, dtype="datetime64[ns]"))
     jobs["_finish"] = jobs.get("_chain_finish", pd.Series(index=jobs.index, dtype="datetime64[ns]"))
     return jobs
+
+def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
+    """เครื่องมือผู้ดูแลสำหรับแก้เวลาเริ่มจริง โดยไม่เปิดสิทธิ์ให้หน้าเครื่องแก้เอง"""
+    if not isinstance(jobs_df, pd.DataFrame) or jobs_df.empty:
+        return
+    live_jobs = jobs_df[
+        jobs_df["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน|รอวัสดุ", regex=True, na=False)
+    ].copy()
+    if live_jobs.empty:
+        return
+    live_jobs = live_jobs.sort_values(["เลือกเครื่องจักร", "เริ่มจริง", "ID"], na_position="last")
+    label_map = {}
+    for _, row in live_jobs.iterrows():
+        label = (
+            f"ID {safe_int(row.get('ID'))} | {safe_str(row.get('เลือกเครื่องจักร'), '-')} | "
+            f"แผน {safe_str(row.get('แผนงาน'), '-')} | "
+            f"Drawing {safe_str(row.get('ชื่อ Drawing.'), '-')} | "
+            f"{safe_str(row.get('สถานะงาน'), '-')}"
+        )
+        label_map[label] = row
+
+    with st.expander("🛠️ ผู้ดูแล: แก้ไขเวลาเริ่มจริงของงานที่กำลังรัน", expanded=False):
+        st.warning(
+            "ใช้เฉพาะกรณีกด Start ผิดเวลาเท่านั้น การแก้ไขจะคำนวณเวลาคิวรอของเครื่องนั้นใหม่ "
+            "และบันทึกเวลาเดิม เวลาใหม่ พร้อมเหตุผลไว้ในประวัติกิจกรรม"
+        )
+        selected_label = st.selectbox(
+            "เลือกงานที่ต้องการแก้เวลาเริ่มจริง",
+            list(label_map.keys()),
+            key="admin_actual_start_job",
+        )
+        selected_row = label_map[selected_label]
+        selected_id = safe_int(selected_row.get("ID"))
+        old_start = parse_flexible_datetime(selected_row.get("เริ่มจริง"))
+        default_start = old_start if old_start is not None and not pd.isna(old_start) else get_bangkok_now().replace(tzinfo=None)
+        old_start_text = old_start.strftime("%d/%m/%Y %H:%M") if old_start is not None and not pd.isna(old_start) else "ไม่พบเวลาเริ่มจริงเดิม"
+        st.info(f"เวลาเริ่มจริงปัจจุบัน: **{old_start_text}**")
+
+        with st.form(f"admin_actual_start_form_{selected_id}", clear_on_submit=False):
+            edit_col1, edit_col2 = st.columns(2)
+            with edit_col1:
+                edited_date = st.date_input(
+                    "วันที่เริ่มจริงใหม่",
+                    value=default_start.date(),
+                    format="DD/MM/YYYY",
+                )
+            with edit_col2:
+                edited_time = st.time_input(
+                    "เวลาเริ่มจริงใหม่",
+                    value=default_start.time().replace(second=0, microsecond=0),
+                    step=60,
+                )
+            edit_reason = st.selectbox(
+                "เหตุผลการแก้ไข",
+                ["เลือกเหตุผล", "กด Start ล่าช้า", "กด Start ผิดเวลา", "เวลาอุปกรณ์ไม่ถูกต้อง", "แก้ไขข้อมูลโดยผู้ดูแล", "อื่น ๆ"],
+            )
+            edit_note = st.text_input("หมายเหตุเพิ่มเติม", placeholder="ระบุรายละเอียดเพิ่มเติม (ถ้ามี)")
+            confirm_edit = st.checkbox(
+                "ยืนยันว่าได้ตรวจสอบเวลาใหม่แล้ว และยอมรับให้ระบบคำนวณคิวรอของเครื่องนี้ใหม่"
+            )
+            submitted = st.form_submit_button(
+                "💾 ยืนยันแก้ไขเวลาเริ่มจริง",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if submitted:
+            new_start = datetime.combine(edited_date, edited_time)
+            if edit_reason == "เลือกเหตุผล":
+                st.error("กรุณาเลือกเหตุผลการแก้ไข")
+            elif edit_reason == "อื่น ๆ" and not edit_note.strip():
+                st.error("กรุณาระบุหมายเหตุเมื่อเลือกเหตุผล ‘อื่น ๆ’")
+            elif not confirm_edit:
+                st.error("กรุณาติ๊กยืนยันก่อนแก้ไขเวลาเริ่มจริง")
+            elif new_start.replace(second=0, microsecond=0) == default_start.replace(second=0, microsecond=0):
+                st.info("เวลาใหม่ตรงกับเวลาเดิม จึงไม่มีข้อมูลที่ต้องแก้ไข")
+            else:
+                saved, error_message, shifted_count = update_running_actual_start_with_chain(
+                    selected_id, new_start, edit_reason, edit_note
+                )
+                if saved:
+                    st.success(
+                        f"แก้เวลาเริ่มจริงเป็น {new_start.strftime('%d/%m/%Y %H:%M')} เรียบร้อยแล้ว "
+                        f"และคำนวณคิวรอใหม่ {shifted_count} รายการ"
+                    )
+                    st.rerun()
+                else:
+                    st.error(error_message)
 
 def render_machine_activity_dashboard(calc_df):
     """มุมมองผู้บริหาร: สถานะสดและประวัติกิจกรรมจากหน้าเครื่อง"""
@@ -6524,6 +6756,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         df_db = fetch_jobs_from_supabase()
 
         if is_admin:
+            render_admin_actual_start_editor(df_db)
             render_outsource_management(df_db)
             templates = fetch_drawing_templates()
             with st.expander("📚 Drawing Template — ลดการพิมพ์ข้อมูลซ้ำ", expanded=False):
