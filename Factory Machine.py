@@ -9010,7 +9010,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             key="cost_table_search"
                         )
 
-                    # ตัวกรองช่วงวันและเวลา อ้างอิงเวลาเสร็จจริงของงาน
+                    # ตัวกรองช่วงวันที่ อ้างอิงวันที่เสร็จจริงของงานและนับเต็มวันอัตโนมัติ
                     cost_finish_values = cost_df["เสร็จจริง"].apply(parse_flexible_datetime).dropna()
                     cost_range_default_start = (
                         datetime.combine(cost_finish_values.min().date(), dtime(0, 0))
@@ -9020,12 +9020,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         datetime.combine(cost_finish_values.max().date(), dtime(23, 59))
                         if not cost_finish_values.empty else datetime.combine(get_bangkok_now().date(), dtime(23, 59))
                     )
-                    cost_use_datetime_range = st.checkbox(
-                        "📅 กรองตามช่วงวันที่และเวลาที่งานเสร็จจริง",
+                    cost_use_date_range = st.checkbox(
+                        "📅 กรองตามช่วงวันที่งานเสร็จจริง",
                         value=False,
-                        key="cost_use_datetime_range"
+                        key="cost_use_date_range"
                     )
-                    cost_dt1, cost_dt2, cost_dt3, cost_dt4 = st.columns([1.15, 1, 1.15, 1])
+                    cost_dt1, cost_dt2 = st.columns(2)
                     with cost_dt1:
                         cost_from_date = st.date_input(
                             "ตั้งแต่วันที่",
@@ -9034,34 +9034,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             key="cost_from_date"
                         )
                     with cost_dt2:
-                        cost_from_time = st.time_input(
-                            "เวลาเริ่ม",
-                            value=cost_range_default_start.time(),
-                            step=60,
-                            key="cost_from_time"
-                        )
-                    with cost_dt3:
                         cost_to_date = st.date_input(
                             "ถึงวันที่",
                             value=cost_range_default_end.date(),
                             format="DD/MM/YYYY",
                             key="cost_to_date"
                         )
-                    with cost_dt4:
-                        cost_to_time = st.time_input(
-                            "เวลาสิ้นสุด",
-                            value=cost_range_default_end.time(),
-                            step=60,
-                            key="cost_to_time"
-                        )
-                    cost_range_start = datetime.combine(cost_from_date, cost_from_time)
-                    cost_range_end = datetime.combine(cost_to_date, cost_to_time)
+                    cost_range_start = datetime.combine(cost_from_date, dtime(0, 0, 0))
+                    cost_range_end = datetime.combine(cost_to_date, dtime(23, 59, 59))
                     cost_range_valid = cost_range_end >= cost_range_start
-                    if cost_use_datetime_range and not cost_range_valid:
-                        st.error("เวลาสิ้นสุดต้องไม่น้อยกว่าเวลาเริ่มต้น")
+                    if cost_use_date_range and not cost_range_valid:
+                        st.error("วันที่สิ้นสุดต้องไม่น้อยกว่าวันที่เริ่มต้น")
                     cost_period_label = (
-                        f"{cost_range_start.strftime('%d/%m/%Y %H:%M')} ถึง {cost_range_end.strftime('%d/%m/%Y %H:%M')}"
-                        if cost_use_datetime_range and cost_range_valid else "ทุกช่วงเวลา"
+                        f"{cost_range_start.strftime('%d/%m/%Y')} ถึง {cost_range_end.strftime('%d/%m/%Y')}"
+                        if cost_use_date_range and cost_range_valid else "ทุกช่วงวันที่"
                     )
 
                     # อ่านค่าจริงจาก widget state ทุกครั้ง ป้องกันค่าตัวแปรค้างหลังเปลี่ยนตัวเลือก
@@ -9107,7 +9093,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         for cost_search_col in ["แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "เลือกเครื่องจักร", "วัสดุ", "แหล่งเวลา"]:
                             cost_search_mask |= cost_display_df[cost_search_col].astype(str).str.casefold().str.contains(cost_query, regex=False, na=False)
                         cost_display_df = cost_display_df[cost_search_mask]
-                    if cost_use_datetime_range:
+                    if cost_use_date_range:
                         if cost_range_valid:
                             cost_finish_dt = cost_display_df["เสร็จจริง"].apply(parse_flexible_datetime)
                             cost_display_df = cost_display_df[
@@ -9241,7 +9227,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         thead {{ display:table-header-group; }} tr {{ break-inside:avoid; }}
                         .foot {{ margin-top:8px; color:#64748B; text-align:right; }}
                         </style></head><body>
-                        <div class="head"><div><h1>ตารางคำนวณเวลาและต้นทุนเครื่องจักร</h1><div class="sub">Machining Cost Calculation - งานเสร็จสิ้น / ต้นทุนจริงสุทธิ<br><b>ช่วงวันที่และเวลาที่งานจบ: ${{d.period}}</b></div></div><div>วันที่ออกรายงาน: ${{d.print_date}}</div></div>
+                        <div class="head"><div><h1>ตารางคำนวณเวลาและต้นทุนเครื่องจักร</h1><div class="sub">Machining Cost Calculation - งานเสร็จสิ้น / ต้นทุนจริงสุทธิ<br><b>ช่วงวันที่งานจบ: ${{d.period}}</b></div></div><div>วันที่ออกรายงาน: ${{d.print_date}}</div></div>
                         <div class="filters"><b>เงื่อนไข:</b> ช่วงวันที่งานจบ ${{d.period}} | เครื่องจักร ${{d.machine}} | แผนงาน ${{d.plan}} | Drawing ${{d.drawing}} | ค้นหา ${{d.search}} | จำนวน ${{d.rows_count}} รายการ</div>
                         <div class="kpis">
                           <div class="kpi">ต้นทุนจริงสุทธิ<b>${{d.actual_cost}} บาท</b></div>
