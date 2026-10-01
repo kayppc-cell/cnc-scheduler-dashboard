@@ -7008,6 +7008,41 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         key=f"urgent_drawing_edit_{safe_int(urgent_tpl.get('id'), 0)}_{urgent_template_name}",
                         help="แก้เฉพาะใบงานด่วนที่กำลังสร้าง ไม่เปลี่ยนชื่อ Drawing Template ต้นฉบับ"
                     ).strip()
+                    urgent_template_key = f"{safe_int(urgent_tpl.get('id'), 0)}_{urgent_template_name}"
+                    ud1, ud2, ud3, ud4 = st.columns(4)
+                    with ud1:
+                        urgent_setup_mins = st.number_input(
+                            "Setup (นาที)",
+                            min_value=0.0,
+                            max_value=720.0,
+                            value=float(safe_float(urgent_tpl.get("setup_mins"), DEFAULT_SETUP_MINUTES)),
+                            step=5.0,
+                            key=f"urgent_setup_mins_{urgent_template_key}"
+                        )
+                    with ud2:
+                        urgent_basic_mins = st.number_input(
+                            "Basic (นาที)",
+                            min_value=0.0,
+                            max_value=6000.0,
+                            value=float(safe_float(urgent_tpl.get("basic_mins"), DEFAULT_BASIC_MINUTES)),
+                            step=5.0,
+                            key=f"urgent_basic_mins_{urgent_template_key}"
+                        )
+                    with ud3:
+                        urgent_program_mins = st.number_input(
+                            "โปรแกรม (นาที)",
+                            min_value=0.0,
+                            max_value=12000.0,
+                            value=float(safe_float(urgent_tpl.get("program_mins"), DEFAULT_PROGRAM_MINUTES)),
+                            step=10.0,
+                            key=f"urgent_program_mins_{urgent_template_key}"
+                        )
+                    urgent_minutes = urgent_setup_mins + urgent_basic_mins + urgent_program_mins
+                    with ud4:
+                        st.metric(
+                            "เวลารวมของงานด่วน",
+                            f"{urgent_minutes:.0f} นาที ({urgent_minutes / 60.0:.2f} ชม.)"
+                        )
                     u4, u5 = st.columns([1.5, 2.5])
                     with u4:
                         urgent_machine_default = safe_str(urgent_tpl.get("machine_name"), MACHINE_LIST[0])
@@ -7134,11 +7169,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 )
                         st.markdown("  \n".join(preview_lines) if preview_lines else "1. ⚡ งานด่วนแทรก")
 
-                    urgent_minutes = (
-                        safe_float(urgent_tpl.get("setup_mins"), 10) +
-                        safe_float(urgent_tpl.get("basic_mins"), 0) +
-                        safe_float(urgent_tpl.get("program_mins"), 120)
-                    )
                     _, urgent_finish = add_work_time_with_shift(urgent_start, urgent_minutes / 60.0)
                     affected_count = 0
                     if timeline_waiting:
@@ -7152,7 +7182,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     p3.metric("คิวถัดไปที่อาจเลื่อน", f"{affected_count} คิว")
                     st.caption("ระบบจะไม่หยุดงานที่กำลังผลิต งานด่วนจะเข้าในคิวเดียวพร้อม Step ทั้งหมด และลูกโซ่ของเครื่องนี้จะคำนวณใหม่บนหน้าตาราง")
                     confirm_urgent = st.checkbox("ยืนยันว่าได้ตรวจสอบผลกระทบของคิวแล้ว", key="confirm_urgent_insert")
-                    if st.button("⚡ บันทึกงานด่วนแทรก", type="primary", use_container_width=True, disabled=not confirm_urgent):
+                    if st.button(
+                        "⚡ บันทึกงานด่วนแทรก",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=(not confirm_urgent or urgent_minutes <= 0)
+                    ):
                         urgent_steps = template_step_names(urgent_tpl)
                         combined_steps = " → ".join(urgent_steps)
                         payload = {
@@ -7160,9 +7195,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "qty": int(urgent_qty), "material": safe_str(urgent_tpl.get("material"), "SS400"),
                             "job_type": "🔴 งานด่วนแทรก", "step_name": combined_steps,
                             "machine_name": urgent_machine, "ready_at": urgent_start.strftime("%Y-%m-%d %H:%M:%S"),
-                            "setup_mins": safe_float(urgent_tpl.get("setup_mins"), 10),
-                            "basic_hrs": safe_float(urgent_tpl.get("basic_mins"), 0),
-                            "prog_hrs": safe_float(urgent_tpl.get("program_mins"), 120),
+                            "setup_mins": float(urgent_setup_mins),
+                            "basic_hrs": float(urgent_basic_mins),
+                            "prog_hrs": float(urgent_program_mins),
                             "status": "🟧 รอคิวผลิต",
                             "step_progress": normalize_step_progress(None, combined_steps, "🟧 รอคิวผลิต")
                         }
@@ -7170,6 +7205,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.error("กรุณาระบุรหัสแผนงาน")
                         elif not (urgent_drawing or urgent_template_name):
                             st.error("กรุณาระบุ Drawing")
+                        elif urgent_minutes <= 0:
+                            st.error("กรุณากำหนดเวลางานด่วนอย่างน้อย 1 นาที")
                         else:
                             urgent_saved, urgent_error, urgent_changed_rows = insert_urgent_job_into_waiting_queue(
                                 urgent_machine, target_id, payload, urgent_requested_start
