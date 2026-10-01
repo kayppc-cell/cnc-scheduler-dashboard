@@ -1549,6 +1549,152 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
     except Exception:
         return False, "เกิดข้อผิดพลาดระหว่างสลับลำดับคิว", []
 
+def insert_urgent_job_into_waiting_queue(
+    machine_name: str, target_job_id, payload: dict
+) -> tuple[bool, str, list]:
+    """เพิ่มงานด่วนในตำแหน่งคิวที่เลือกและคำนวณเวลาใหม่เฉพาะคิวรอของเครื่องนั้น
+
+    ``target_job_id`` เป็น ID ของคิวรอที่งานด่วนต้องอยู่ก่อนหน้า; ค่า None หมายถึง
+    วางเป็นคิวถัดจากงานที่กำลังรัน/พัก โดยไม่เปลี่ยนสถานะหรือเวลาเริ่มจริงของงานสด
+    """
+    try:
+        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
+        endpoint = f"{base_url}/rest/v1/cnc_jobs"
+        params = {
+            "select": (
+                "id,plan_code,drawing_name,material,job_type,step_name,machine_name,"
+                "status,ready_at,baseline_ready_at,baseline_finish_at,actual_start,"
+                "setup_mins,basic_hrs,prog_hrs,step_progress"
+            ),
+            "machine_name": f"eq.{machine_name}",
+            "order": "ready_at.asc,id.asc",
+        }
+        res = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        if res.status_code != 200:
+            return False, f"อ่านคิวล่าสุดไม่สำเร็จ ({res.status_code})", []
+
+        machine_rows = res.json() if isinstance(res.json(), list) else []
+        active_rows = [
+            row for row in machine_rows
+            if any(word in safe_str(row.get("status"), "") for word in ["กำลังผลิต", "พักงาน", "รอวัสดุ"])
+        ]
+        waiting_rows = [row for row in machine_rows if "รอคิว" in safe_str(row.get("status"), "")]
+        waiting_ids = [safe_int(row.get("id")) for row in waiting_rows]
+        target_job_id = safe_int(target_job_id) if target_job_id is not None else None
+        if target_job_id is not None and target_job_id not in waiting_ids:
+            return False, "คิวเป้าหมายเปลี่ยนสถานะหรือถูกย้ายแล้ว กรุณารีเฟรชและเลือกตำแหน่งใหม่", []
+
+        insert_index = waiting_ids.index(target_job_id) if target_job_id is not None else 0
+        now_dt = get_next_valid_work_time(get_bangkok_now().replace(tzinfo=None))
+        original_ready = {
+            safe_int(row.get("id")): parse_flexible_datetime(row.get("ready_at"))
+            for row in waiting_rows if safe_int(row.get("id")) > 0
+        }
+
+        # POST ต้องขอ representation เพื่อรับ ID จริง แล้วจึงนำ ID นั้นเข้าเครื่องคำนวณคิว
+        initial_payload = dict(payload)
+        initial_payload["machine_name"] = machine_name
+        initial_payload["ready_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        initial_payload["baseline_ready_at"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        _, initial_finish = add_work_time_with_shift(
+            now_dt,
+            (
+                safe_float(initial_payload.get("setup_mins"), DEFAULT_SETUP_MINUTES)
+                + safe_float(initial_payload.get("basic_hrs"), DEFAULT_BASIC_MINUTES)
+                + safe_float(initial_payload.get("prog_hrs"), DEFAULT_PROGRAM_MINUTES)
+            ) / 60.0,
+        )
+        initial_payload["baseline_finish_at"] = initial_finish.strftime("%Y-%m-%d %H:%M:%S")
+        insert_res = requests.post(endpoint, headers=get_supabase_headers(), json=initial_payload, timeout=8)
+        # รองรับฐานข้อมูลรุ่นเก่าที่ยังไม่มีคอลัมน์ qty เช่นเดียวกับการสร้างใบงานปกติ
+        if insert_res.status_code not in [200, 201] and "qty" in initial_payload:
+            initial_payload.pop("qty", None)
+            insert_res = requests.post(endpoint, headers=get_supabase_headers(), json=initial_payload, timeout=8)
+        if insert_res.status_code not in [200, 201]:
+            detail = safe_str(insert_res.text, "ไม่ทราบรายละเอียด")[:500]
+            return False, f"ฐานข้อมูลไม่รับงานด่วน ({insert_res.status_code}): {detail}", []
+        inserted_rows = insert_res.json() if isinstance(insert_res.json(), list) else []
+        inserted_id = safe_int(inserted_rows[0].get("id")) if inserted_rows else 0
+        if inserted_id <= 0:
+            return False, "บันทึกงานด่วนแล้วแต่ไม่พบ ID จึงยังไม่จัดคิวเพื่อป้องกันข้อมูลผิดลำดับ", []
+
+        urgent_row = dict(initial_payload)
+        urgent_row["id"] = inserted_id
+        ordered_waiting = waiting_rows.copy()
+        ordered_waiting.insert(insert_index, urgent_row)
+        ordered_rows = active_rows + ordered_waiting
+        ordered_df = pd.DataFrame(ordered_rows).rename(columns={
+            "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
+            "machine_name": "เลือกเครื่องจักร", "status": "สถานะงาน",
+            "ready_at": "วัน-เวลาขึ้นงาน", "actual_start": "เริ่มจริง",
+            "setup_mins": "Setup (น.)", "basic_hrs": "Basic (น.)", "prog_hrs": "โปรแกรม (น.)",
+        })
+        ordered_chain = calculate_production_chain(
+            ordered_df, active_only=True, preserve_input_order=True
+        )
+        waiting_chain = ordered_chain[
+            ordered_chain["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)
+        ].copy()
+
+        expected_by_id, changed_rows = {}, []
+        urgent_start = urgent_finish = None
+        for _, row in waiting_chain.iterrows():
+            job_id = safe_int(row.get("ID"))
+            start_dt, finish_dt = row.get("_chain_start"), row.get("_chain_finish")
+            if job_id <= 0 or start_dt is None or finish_dt is None or pd.isna(start_dt) or pd.isna(finish_dt):
+                delete_supabase_job(inserted_id)
+                return False, "คำนวณเวลาหลังแทรกไม่สำเร็จ ระบบลบงานด่วนที่เพิ่งสร้างแล้ว", []
+            expected_by_id[job_id] = start_dt
+            if job_id == inserted_id:
+                urgent_start, urgent_finish = start_dt, finish_dt
+            changed_rows.append({
+                "id": job_id,
+                "plan_code": safe_str(row.get("แผนงาน"), "-"),
+                "drawing_name": safe_str(row.get("ชื่อ Drawing."), "-"),
+                "ready_at": start_dt,
+            })
+
+        updated_existing_ids = []
+        for job_id, ready_dt in expected_by_id.items():
+            update_payload = {"ready_at": ready_dt.strftime("%Y-%m-%d %H:%M:%S")}
+            if job_id == inserted_id and urgent_finish is not None:
+                update_payload.update({
+                    "baseline_ready_at": ready_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "baseline_finish_at": urgent_finish.strftime("%Y-%m-%d %H:%M:%S"),
+                })
+            if not update_supabase_job(job_id, update_payload, clear_cache=False):
+                for rollback_id in updated_existing_ids:
+                    old_dt = original_ready.get(rollback_id)
+                    if old_dt is not None and not pd.isna(old_dt):
+                        update_supabase_job(
+                            rollback_id,
+                            {"ready_at": old_dt.strftime("%Y-%m-%d %H:%M:%S")},
+                            clear_cache=False,
+                        )
+                delete_supabase_job(inserted_id)
+                st.cache_data.clear()
+                return False, "บันทึกเวลาคิวหลังแทรกไม่ครบ ระบบคืนคิวเดิมและลบงานด่วนแล้ว", []
+            if job_id != inserted_id:
+                updated_existing_ids.append(job_id)
+
+        if not verify_supabase_ready_times(expected_by_id):
+            for rollback_id in updated_existing_ids:
+                old_dt = original_ready.get(rollback_id)
+                if old_dt is not None and not pd.isna(old_dt):
+                    update_supabase_job(
+                        rollback_id,
+                        {"ready_at": old_dt.strftime("%Y-%m-%d %H:%M:%S")},
+                        clear_cache=False,
+                    )
+            delete_supabase_job(inserted_id)
+            st.cache_data.clear()
+            return False, "ตรวจสอบลำดับคิวหลังแทรกไม่ผ่าน ระบบคืนค่าเดิมแล้ว", []
+
+        st.cache_data.clear()
+        return True, "", changed_rows
+    except Exception as exc:
+        return False, f"เกิดข้อผิดพลาดระหว่างแทรกคิว: {safe_str(exc, 'ไม่ทราบสาเหตุ')}", []
+
 def delete_supabase_job(job_id: int) -> bool:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
@@ -6950,11 +7096,19 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         }
                         if not urgent_plan.strip():
                             st.error("กรุณาระบุรหัสแผนงาน")
-                        elif insert_supabase_job(payload):
-                            st.success(f"เพิ่มงานด่วน {urgent_drawing} แล้ว — ไม่กระทบสถานะงานที่กำลังรัน")
-                            st.rerun()
                         else:
-                            st.error("บันทึกงานด่วนไม่สำเร็จ กรุณาตรวจสอบคอลัมน์ step_progress ใน Supabase")
+                            urgent_saved, urgent_error, urgent_changed_rows = insert_urgent_job_into_waiting_queue(
+                                urgent_machine, target_id, payload
+                            )
+                            if urgent_saved:
+                                shifted_count = max(0, len(urgent_changed_rows) - 1)
+                                st.success(
+                                    f"เพิ่มงานด่วน {urgent_drawing} และจัดลำดับคิวใหม่เรียบร้อยแล้ว "
+                                    f"— ปรับเวลาคิวรอ {shifted_count} รายการ โดยไม่เปลี่ยนงานที่กำลังรัน"
+                                )
+                                st.rerun()
+                            else:
+                                st.error(f"บันทึกงานด่วนไม่สำเร็จ: {urgent_error}")
 
         if not df_db.empty:
             calc_df = df_db.copy()
