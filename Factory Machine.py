@@ -11446,40 +11446,6 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         step_start = parse_flexible_datetime(steps[current_index].get("started_at"))
         return step_start if step_start is not None and pd.notna(step_start) else None
 
-    def build_tv_start_variance(actual_start, planned_start):
-        """สร้างป้ายเปรียบเทียบเวลาเริ่มจริงกับแผน โดยไม่กระทบตัวจับเวลา"""
-        if actual_start is None or pd.isna(actual_start) or planned_start is None or pd.isna(planned_start):
-            return ""
-
-        # ป้ายเริ่มก่อน/หลังแผนต้องสะท้อนเวลานาฬิกาจริง แม้เริ่มก่อนเข้ากะ
-        diff_seconds = (actual_start - planned_start).total_seconds()
-        if abs(diff_seconds) < 60:
-            label = "✅ เริ่มตรง Baseline เดิม"
-            color = "#BFDBFE"
-        else:
-            total_minutes = max(1, int(round(abs(diff_seconds) / 60.0)))
-            days, remain_minutes = divmod(total_minutes, 24 * 60)
-            hours, minutes = divmod(remain_minutes, 60)
-            duration_parts = []
-            if days:
-                duration_parts.append(f"{days} วัน")
-            if hours:
-                duration_parts.append(f"{hours} ชม.")
-            if minutes:
-                duration_parts.append(f"{minutes} นาที")
-            duration_text = " ".join(duration_parts) or "1 นาที"
-            if diff_seconds < 0:
-                label = f"⏩ เริ่มก่อน Baseline เดิม {duration_text}"
-                color = "#A7F3D0"
-            else:
-                label = f"⏰ เริ่มช้ากว่า Baseline เดิม {duration_text}"
-                color = "#FDE68A"
-
-        return (
-            f'<div style="margin-top:3px; font-size:11.5px; font-weight:900; '
-            f'color:{color};">{label}</div>'
-        )
-
     for idx_m, m in enumerate(MACHINE_LIST):
         m_jobs = df_live[df_live["เลือกเครื่องจักร"] == m] if not df_live.empty else pd.DataFrame()
         
@@ -11535,7 +11501,6 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                 timer_display_html = '<span style="font-size:11.5px; font-weight:900; color:#FDE047;">⚠️ ไม่พบเวลาเริ่มจริง กรุณาตรวจสอบข้อมูล</span>'
                 actual_start_report = "-"
 
-            start_variance_html = build_tv_start_variance(r_start_parsed, first_valid_datetime(r_info.get("กำหนดพร้อมขึ้นงาน (Baseline)")))
 
             duplicate_running_html = ""
             if duplicate_running_count > 1:
@@ -11554,11 +11519,9 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                     <span>🚀 <b>เริ่ม:</b> <span style="color:#93C5FD;">{start_disp_txt}</span></span>
                     <span>⏱️ {timer_display_html}</span>
                 </div>
-                {start_variance_html}
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามคิวปัจจุบัน:</b> {ready_display_txt}</div>
                     <div>&#127937; <b>จบตามคิวปัจจุบัน:</b> {finish_display_txt}</div>
-                    <div style="font-size:10px;opacity:.8;">{html.escape(production_baseline_caption(r_info))}</div>
                 </div>
             </div>{duplicate_running_html}{hold_alert_html}
             '''
@@ -11594,16 +11557,13 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             if h_st_parsed is not None and pd.notna(h_st_parsed):
                 h_start_txt = f" (เริ่มไว้: {h_st_parsed.strftime('%H:%M น.')})"
             hold_actual_start_report = h_st_parsed.strftime("%d/%m/%Y %H:%M") if h_st_parsed is not None and pd.notna(h_st_parsed) else "-"
-            hold_start_variance_html = build_tv_start_variance(h_st_parsed, first_valid_datetime(h_info.get("กำหนดพร้อมขึ้นงาน (Baseline)")))
 
             time_info_combined = f'''
             <div style="font-size:13px; font-weight:700; color:#FEF3C7; line-height:1.5;">
                 <div>⚠️ <b>{'เครื่องจักรขัดข้อง' if is_breakdown else 'พักงาน'}:</b> {hold_reason or 'รอขึ้นงาน'}{h_start_txt}</div>
-                {hold_start_variance_html}
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามคิวปัจจุบัน:</b> {ready_display_txt}</div>
                     <div>&#127937; <b>จบตามคิวปัจจุบัน:</b> {finish_display_txt}</div>
-                    <div style="font-size:10px;opacity:.8;">{html.escape(production_baseline_caption(h_info))}</div>
                 </div>
             </div>
             '''
@@ -11656,7 +11616,6 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                 <div style="margin-top:4px; font-size:12.5px; color:#FFFFFF; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามคิวปัจจุบัน:</b> {ready_display_txt}</div>
                     <div>&#127937; <b>จบตามคิวปัจจุบัน:</b> {finish_display_txt}</div>
-                    <div style="font-size:10px;opacity:.8;">{html.escape(production_baseline_caption(w_first))}</div>
                 </div>
                 '''
 
