@@ -7338,7 +7338,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         start_column.metric("เริ่มตามแผนหลังปรับ", preview_start.strftime("%d/%m/%Y %H:%M") if preview_start else "—")
                         finish_column.metric("จบตามแผนหลังปรับ", preview_finish.strftime("%d/%m/%Y %H:%M") if preview_finish else "—")
                         st.caption("ตัวอย่างก่อนบันทึก: รวม Setup + Basic + โปรแกรม และข้ามเบรก/นอกกะแล้ว กดบันทึกเพื่อใช้กำหนดเวลาใหม่นี้")
-                    if st.button("💾 บันทึกกำหนดเวลาเริ่ม", key="waiting_start_submit"):
+                    save_signature = (preview_metadata["schedule_mode"], preview_metadata.get("planned_not_before"))
+                    saved_signature_key = f"waiting_start_saved_signature_{job_id}"
+                    already_saved = st.session_state.get(saved_signature_key) == save_signature
+                    if already_saved:
+                        st.success("✅ บันทึกกำหนดเวลาเริ่มสำเร็จแล้ว")
+                    if st.button("✅ บันทึกแล้ว" if already_saved else "💾 บันทึกกำหนดเวลาเริ่ม", key="waiting_start_submit", disabled=already_saved):
                         try:
                             endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
                             response = requests.get(endpoint, headers=get_supabase_headers(), params={"id": f"eq.{job_id}", "select": "status,step_progress"}, timeout=8)
@@ -7353,6 +7358,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             else:
                                 metadata["planned_not_before"] = requested.strftime("%Y-%m-%d %H:%M:%S")
                             if update_supabase_job(job_id, {"step_progress": metadata}):
+                                st.session_state[saved_signature_key] = save_signature
                                 st.session_state.pop("editor_cnc_jobs_grid_main", None)
                                 st.toast("บันทึกเวลาเริ่มและคำนวณคิวใหม่แล้ว", icon="✅")
                                 st.rerun()
