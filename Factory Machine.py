@@ -7198,6 +7198,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             @st.fragment
             def render_urgent_template_controls():
+                # ล้างก่อนสร้าง checkbox รอบใหม่ เพื่อไม่แก้ widget state หลังสร้างแล้ว
+                if st.session_state.pop("reset_urgent_confirmation_after_save", False):
+                    st.session_state.pop("confirm_urgent_insert", None)
                 with st.expander("⚡ งานด่วนแทรกจาก Drawing Template", expanded=False):
                     if templates is None:
                         st.warning("กรุณาสร้างตาราง Template ใน Supabase ก่อน")
@@ -7224,6 +7227,21 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             help="แก้เฉพาะใบงานด่วนที่กำลังสร้าง ไม่เปลี่ยนชื่อ Drawing Template ต้นฉบับ"
                         ).strip()
                         urgent_template_key = f"{safe_int(urgent_tpl.get('id'), 0)}_{urgent_template_name}"
+                        urgent_template_material = safe_str(urgent_tpl.get("material"), "SS400") or "SS400"
+                        urgent_material_presets = [item for item in MATERIAL_OPTIONS if item != "อื่น ๆ (พิมพ์เอง)"]
+                        urgent_material_default = urgent_template_material if urgent_template_material in urgent_material_presets else "อื่น ๆ (พิมพ์เอง)"
+                        um1, um2 = st.columns(2)
+                        with um1:
+                            urgent_material_selected = st.selectbox("วัสดุ", MATERIAL_OPTIONS,
+                                index=MATERIAL_OPTIONS.index(urgent_material_default),
+                                key=f"urgent_material_select_{urgent_template_key}")
+                        with um2:
+                            urgent_material_custom = st.text_input("วัสดุอื่น (พิมพ์เอง)",
+                                value="" if urgent_template_material in urgent_material_presets else urgent_template_material,
+                                placeholder="กรอกเมื่อเลือก อื่น ๆ (พิมพ์เอง)",
+                                key=f"urgent_material_custom_{urgent_template_key}")
+                        urgent_material = urgent_material_custom.strip() if urgent_material_selected == "อื่น ๆ (พิมพ์เอง)" else urgent_material_selected
+
                         ud1, ud2, ud3, ud4 = st.columns(4)
                         with ud1:
                             urgent_setup_mins = st.number_input(
@@ -7401,13 +7419,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "⚡ บันทึกงานด่วนแทรก",
                             type="primary",
                             use_container_width=True,
-                            disabled=(not confirm_urgent or urgent_minutes <= 0)
+                            disabled=(not confirm_urgent or urgent_minutes <= 0 or not urgent_material)
                         ):
                             urgent_steps = template_step_names(urgent_tpl)
                             combined_steps = " → ".join(urgent_steps)
                             payload = {
                                 "plan_code": urgent_plan.strip(), "drawing_name": urgent_drawing or urgent_template_name,
-                                "qty": int(urgent_qty), "material": safe_str(urgent_tpl.get("material"), "SS400"),
+                                "qty": int(urgent_qty), "material": urgent_material,
                                 "job_type": "🔴 งานด่วนแทรก", "step_name": combined_steps,
                                 "machine_name": urgent_machine, "ready_at": urgent_start.strftime("%Y-%m-%d %H:%M:%S"),
                                 "setup_mins": float(urgent_setup_mins),
@@ -7420,6 +7438,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 st.error("กรุณาระบุรหัสแผนงาน")
                             elif not (urgent_drawing or urgent_template_name):
                                 st.error("กรุณาระบุ Drawing")
+                            elif not urgent_material:
+                                st.error("กรุณาระบุวัสดุของงานด่วน")
                             elif urgent_minutes <= 0:
                                 st.error("กรุณากำหนดเวลางานด่วนอย่างน้อย 1 นาที")
                             else:
@@ -7427,6 +7447,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     urgent_machine, target_id, payload, urgent_requested_start
                                 )
                                 if urgent_saved:
+                                    st.session_state["reset_urgent_confirmation_after_save"] = True
                                     shifted_count = max(0, len(urgent_changed_rows) - 1)
                                     st.success(
                                         f"เพิ่มงานด่วน {urgent_drawing or urgent_template_name} และจัดลำดับคิวใหม่เรียบร้อยแล้ว "
