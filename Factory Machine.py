@@ -389,6 +389,15 @@ def get_job_planned_finish(job_row):
     _, planned_finish = add_work_time_with_shift(get_next_valid_work_time(planned_start), duration_hours)
     return planned_finish
 
+def get_production_queue_sort_key(row):
+    """ลำดับกลางทุกหน้า: งานสดก่อน แล้วคิวรอตาม ready_at และ ID"""
+    status = safe_str(row.get("สถานะงาน", row.get("สถานะ", "")), "")
+    priority = 0 if "กำลังผลิต" in status else (1 if ("พักงาน" in status or "รอวัสดุ" in status) else 2)
+    actual = parse_flexible_datetime(row.get("เริ่มจริง")) if priority < 2 else None
+    ready = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
+    order_time = actual if actual is not None and not pd.isna(actual) else ready
+    return (priority, order_time if order_time is not None and not pd.isna(order_time) else pd.Timestamp.max, safe_int(row.get("ID")))
+
 def calculate_production_chain(source_df, active_only=True, preserve_input_order=False):
     """คำนวณลูกโซ่ Production จากกฎกลางชุดเดียวของทั้งระบบ
 
@@ -430,12 +439,7 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
     jobs["_chain_input_order"] = range(len(jobs))
 
     def chain_priority(row):
-        status_value = safe_str(row.get("สถานะงาน"), "")
-        priority = 0 if "กำลังผลิต" in status_value else (1 if ("พักงาน" in status_value or "รอวัสดุ" in status_value) else 2)
-        actual_start = parse_flexible_datetime(row.get("เริ่มจริง")) if priority < 2 else None
-        ready_start = parse_flexible_datetime(row.get("วัน-เวลาขึ้นงาน"))
-        order_time = actual_start or ready_start
-        return priority, order_time if order_time is not None and not pd.isna(order_time) else pd.Timestamp.max
+        return get_production_queue_sort_key(row)[:2]
 
     priorities = jobs.apply(chain_priority, axis=1)
     jobs["_chain_priority"] = priorities.map(lambda value: value[0])
@@ -1694,6 +1698,11 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
         if len(waiting_rows) < 2:
             return False, "เครื่องนี้มีคิวรอไม่ถึง 2 รายการ", []
 
+        original_ready = {
+            safe_int(row.get("id")): parse_flexible_datetime(row.get("ready_at"))
+            for row in live_rows if safe_int(row.get("id")) > 0
+        }
+
         # สลับเฉพาะตำแหน่ง แต่ใช้เวลาของงานแต่ละรายการคำนวณลูกโซ่ใหม่
         source_idx, target_idx = waiting_ids.index(source_job_id), waiting_ids.index(target_job_id)
         waiting_rows[source_idx], waiting_rows[target_idx] = waiting_rows[target_idx], waiting_rows[source_idx]
@@ -1706,11 +1715,7 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
         if waiting_rows and waiting_anchor_candidates:
             waiting_rows[0]["ready_at"] = min(waiting_anchor_candidates).strftime("%Y-%m-%d %H:%M:%S")
 
-        original_ready = {
-            safe_int(row.get("id")): parse_flexible_datetime(row.get("ready_at"))
-            for row in live_rows if safe_int(row.get("id")) > 0
-        }
-        active_rows = [row for row in live_rows if "กำลังผลิต" in safe_str(row.get("status")) or "พักงาน" in safe_str(row.get("status"))]
+        active_rows = [row for row in live_rows if "กำลังผลิต" in safe_str(row.get("status")) or "พักงาน" in safe_str(row.get("status")) or "รอวัสดุ" in safe_str(row.get("status"))]
         ordered_rows = active_rows + waiting_rows
         ordered_df = pd.DataFrame(ordered_rows).rename(columns={
             "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
@@ -6002,57 +6007,8 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             else:
                                 st.error(f"{action_th} แบบกลุ่มไม่สำเร็จครบทุกรายการ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
 
-        # หาแผนงาน+Drawing ล่าสุดที่เพิ่ง Finish และยังมี Step ค้างบนเครื่องนี้
-        # เพื่อให้ Step 2, Step 3 อยู่ต่อกัน ไม่ถูกคิวอื่นดันลงไปท้ายหน้า
-        continuation_group = None
-        finished_on_machine = df_all[
-            (df_all["เลือกเครื่องจักร"] == selected_m)
-            & (df_all["สถานะงาน"].astype(str).str.contains("เสร็จสิ้น", na=False))
-        ].copy()
-        if not finished_on_machine.empty:
-            finished_on_machine["_finish_dt"] = finished_on_machine["เสร็จจริง"].apply(parse_flexible_datetime)
-            finished_on_machine = finished_on_machine[
-                finished_on_machine["_finish_dt"].notna()
-            ].sort_values(by=["_finish_dt", "ID"], ascending=[False, False])
-            for _, finished_row in finished_on_machine.iterrows():
-                candidate_group = (
-                    normalize_filter_key(finished_row.get("แผนงาน")),
-                    normalize_filter_key(finished_row.get("ชื่อ Drawing."))
-                )
-                has_remaining_steps = m_all_jobs.apply(
-                    lambda active_row: (
-                        normalize_filter_key(active_row.get("แผนงาน")),
-                        normalize_filter_key(active_row.get("ชื่อ Drawing."))
-                    ) == candidate_group,
-                    axis=1
-                ).any()
-                if has_remaining_steps:
-                    continuation_group = candidate_group
-                    break
-
-        def sort_op_jobs(x):
-            st_val = str(x.get("สถานะงาน", ""))
-            if "กำลังผลิต" in st_val:
-                prio = 0
-            elif "พักงาน" in st_val:
-                prio = 1
-            else:
-                prio = 2
-            row_group = (
-                normalize_filter_key(x.get("แผนงาน")),
-                normalize_filter_key(x.get("ชื่อ Drawing."))
-            )
-            continuation_prio = 0 if continuation_group is not None and row_group == continuation_group else 1
-            r_dt = parse_flexible_datetime(x.get("วัน-เวลาขึ้นงาน"))
-            return (
-                prio,
-                continuation_prio,
-                r_dt if r_dt is not None else pd.Timestamp.max,
-                safe_int(x.get("ID"))
-            )
-
         m_active = m_all_jobs.copy()
-        m_active["_sort_key"] = m_active.apply(sort_op_jobs, axis=1)
+        m_active["_sort_key"] = m_active.apply(get_production_queue_sort_key, axis=1)
         m_active = m_active.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
 
         machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
@@ -7760,14 +7716,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             # จัดลำดับความสำคัญ: กำลังผลิต (0) -> พักงาน (1) -> รอคิว (2) ตามเวลาขึ้นงานเดิม
             def get_queue_priority(r):
-                st_val = str(r.get("สถานะงาน", ""))
-                prio = 0 if "กำลังผลิต" in st_val else (1 if "พักงาน" in st_val else 2)
-                # งานที่เริ่มแล้วต้องเรียงจากเวลาเริ่มจริง ไม่ใช่ ready_at ลูกโซ่รอบเก่า
-                dt_p = (
-                    parse_flexible_datetime(r.get("เริ่มจริง"))
-                    if prio < 2 else None
-                ) or parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
-                return (str(r.get("เลือกเครื่องจักร")), prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
+                return (str(r.get("เลือกเครื่องจักร")),) + get_production_queue_sort_key(r)
 
             active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
             active_jobs_editor_df = active_jobs_editor_df.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
@@ -8407,10 +8356,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             df_wo_direct["_dt_finish"] = df_wo_direct["วัน-เวลาจบงาน"].apply(parse_flexible_datetime)
 
             def get_wo_queue_order(r):
-                st_val = str(r.get("สถานะงาน", r.get("สถานะ", "")))
-                prio = 0 if "กำลังผลิต" in st_val else (1 if "พักงาน" in st_val else 2)
-                dt_p = parse_flexible_datetime(r.get("วัน-เวลาขึ้นงาน"))
-                return (prio, dt_p if dt_p is not None else pd.Timestamp.max, safe_int(r.get("ID")))
+                return get_production_queue_sort_key(r)
 
             df_wo_direct["_wo_order"] = df_wo_direct.apply(get_wo_queue_order, axis=1)
             df_wo_direct = df_wo_direct.sort_values(by=["เลือกเครื่องจักร", "_wo_order"]).drop(columns=["_wo_order"]).reset_index(drop=True)
@@ -8427,6 +8373,37 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # ช่องนี้แสดงเวลาลูกโซ่ที่ต่อเนื่องกันจริง
             df_wo_direct["เริ่มขึ้นงานตามแผน"] = df_wo_direct["วัน-เวลาขึ้นงาน"]
             df_wo_direct["จบงานตามแผน"] = df_wo_direct["วัน-เวลาจบงาน"]
+
+            st.caption("ลำดับคิวใช้กฎเดียวกับหน้าเครื่อง • กำหนดพร้อมขึ้นงาน = Baseline เดิม • เริ่ม/จบงานตามแผน = ลูกโซ่คิวปัจจุบัน")
+            if is_admin:
+                with st.expander("🔀 สลับคิวรอจากใบจ่ายคิวงานหน้าเครื่อง", expanded=False):
+                    waiting_wo = df_wo_direct[df_wo_direct["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)].copy()
+                    swap_machines = sorted(waiting_wo.groupby("เลือกเครื่องจักร").size().loc[lambda counts: counts >= 2].index.tolist())
+                    if not swap_machines:
+                        st.caption("ยังไม่มีเครื่องที่มีคิวรออย่างน้อย 2 รายการ")
+                    else:
+                        swap_machine = st.selectbox("เครื่องที่จะสลับคิว", swap_machines, key="wo_swap_machine")
+                        swap_rows = waiting_wo[waiting_wo["เลือกเครื่องจักร"] == swap_machine]
+                        swap_map = {safe_int(row["ID"]): row for _, row in swap_rows.iterrows()}
+                        def wo_swap_label(job_id):
+                            row = swap_map[job_id]
+                            return f"{row['ลำดับคิว']} | {row['แผนงาน']} | {row['ชื่อ Drawing.']} | ID {job_id}"
+                        swap_source = st.selectbox("คิวต้นทาง", list(swap_map), format_func=wo_swap_label, key=f"wo_swap_source_{swap_machine}")
+                        swap_target = st.selectbox("สลับกับคิว", [job_id for job_id in swap_map if job_id != swap_source], format_func=wo_swap_label, key=f"wo_swap_target_{swap_machine}_{swap_source}")
+                        st.info(f"{wo_swap_label(swap_source)} ↔ {wo_swap_label(swap_target)}")
+                        st.caption("สลับเฉพาะคิวรอของเครื่องนี้ และคำนวณเวลาลูกโซ่ใหม่ กรุณาบันทึกการแก้ไขตารางสั่งผลิตก่อนสลับคิว")
+                        swap_confirm = st.checkbox("ยืนยันสลับคิวสองรายการนี้", key=f"wo_swap_confirm_{swap_machine}_{swap_source}_{swap_target}")
+                        if st.button("🔀 บันทึกการสลับคิว", key="wo_swap_submit", disabled=not swap_confirm):
+                            swapped, swap_error, changed_rows = reorder_waiting_queue(swap_machine, swap_source, swap_target)
+                            if swapped:
+                                for job_id in (swap_source, swap_target):
+                                    row = swap_map[job_id]
+                                    log_job_event(job_id, safe_str(row.get("แผนงาน")), safe_str(row.get("ชื่อ Drawing.")), swap_machine, "Swap Queue", reason="ปรับลำดับการผลิต", note=f"สลับคิว ID {swap_source} กับ {swap_target} จากใบจ่ายคิว")
+                                st.session_state.pop("editor_cnc_jobs_grid_main", None)
+                                st.toast(f"สลับคิวเรียบร้อย และคำนวณเวลาใหม่ {len(changed_rows)} คิว", icon="🔀")
+                                st.rerun()
+                            else:
+                                st.error(f"สลับคิวไม่สำเร็จ: {swap_error}")
 
             wo_finish_map = dict(zip(df_wo_direct["ID"].astype(str), df_wo_direct["_dt_finish"]))
 
