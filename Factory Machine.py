@@ -21,6 +21,30 @@ DEFAULT_SETUP_MINUTES = 10.0
 DEFAULT_BASIC_MINUTES = 0.0
 DEFAULT_PROGRAM_MINUTES = 120.0
 
+def render_touch_safe_chart(tpc_chart_key, figure, **kwargs):
+    """กราฟทุกหน้าปัดเลื่อนเว็บได้โดยไม่ลากแกนกราฟโดยไม่ตั้งใจ"""
+    interactive = st.checkbox(
+        "🔍 เปิดการลาก/ซูมกราฟนี้",
+        value=False,
+        key=f"{tpc_chart_key}_interactive",
+        help="เปิดเมื่อต้องการดูรายละเอียด ปิดเพื่อปัดเลื่อนหน้าเว็บได้สะดวกบนมือถือ",
+    )
+    chart = go.Figure(figure)
+    chart.update_layout(dragmode="pan" if interactive else False)
+    chart.update_xaxes(fixedrange=not interactive)
+    chart.update_yaxes(fixedrange=not interactive)
+    config = dict(kwargs.pop("config", {}) or {})
+    config.update({
+        "responsive": True,
+        "staticPlot": not interactive,
+        "displayModeBar": interactive,
+        "scrollZoom": False,
+        "doubleClick": "reset" if interactive else False,
+    })
+    if not interactive:
+        st.caption("ปัดเลื่อนหน้าได้ตามปกติ • เปิดการลาก/ซูมด้านบนเพื่อดูรายละเอียดกราฟ")
+    return st.plotly_chart(chart, config=config, **kwargs)
+
 def get_planned_minutes(row):
     """คืนเวลาแผนรวมเป็นนาทีด้วยค่าเริ่มต้นมาตรฐานชุดเดียวทั้งระบบ"""
     return max(0.0, (
@@ -2980,7 +3004,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             hovermode="closest",
             font=dict(size=(10 if mobile_view else (11 if tablet_view else 12)))
         )
-        st.plotly_chart(
+        render_touch_safe_chart("tpc_chart_1", 
             fig_master,
             use_container_width=True,
             config={"displayModeBar": device_mode == "desktop", "responsive": True, "scrollZoom": False}
@@ -4985,7 +5009,7 @@ def render_people_work_center(department):
                 margin=dict(l=10, r=15, t=65, b=20),
                 dragmode=False
             )
-            st.plotly_chart(
+            render_touch_safe_chart("tpc_chart_2", 
                 qc_status_fig,
                 use_container_width=True,
                 config={"displayModeBar": False, "scrollZoom": False, "doubleClick": False}
@@ -7685,7 +7709,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
                     plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF"
                 )
-                st.plotly_chart(fig_donut, use_container_width=True)
+                render_touch_safe_chart("tpc_chart_3", fig_donut, use_container_width=True)
 
             with ov_col2:
                 st.markdown("**⚠️ 3 อันดับสถานีคอขวดสูงสุด (ภาระงานค้างตามชั่วโมงแผน):**")
@@ -8871,7 +8895,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         margin=dict(l=40, r=40, t=30, b=30),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    render_touch_safe_chart("tpc_chart_4", fig, use_container_width=True)
                 else:
                     st.warning("⚠️ ไม่มีคิวงานในกลุ่มสถานีที่เลือกนี้")
 
@@ -8972,7 +8996,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 paper_bgcolor="#FFFFFF"
             )
             fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
-            st.plotly_chart(fig_bar, use_container_width=True)
+            render_touch_safe_chart("tpc_chart_5", fig_bar, use_container_width=True)
 
             st.divider()
 
@@ -10188,7 +10212,7 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
                         xaxis_title="เวลาในการผลิต (ชั่วโมง)",
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
-                    st.plotly_chart(fig_dw, use_container_width=True)
+                    render_touch_safe_chart("tpc_chart_6", fig_dw, use_container_width=True)
 
                     st.divider()
 
@@ -10978,9 +11002,9 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.markdown("#### 📈 กราฟวิเคราะห์ต้นทุนเวลาและชั่วโมงการผลิตแยกตามเครื่องจักร")
             chart_c1, chart_c2 = st.columns(2)
             with chart_c1:
-                st.plotly_chart(fig_m_val, use_container_width=True)
+                render_touch_safe_chart("tpc_chart_7", fig_m_val, use_container_width=True)
             with chart_c2:
-                st.plotly_chart(fig_compare, use_container_width=True)
+                render_touch_safe_chart("tpc_chart_8", fig_compare, use_container_width=True)
 
             st.divider()
 
