@@ -2173,6 +2173,7 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
     if live_jobs.empty:
         return
     live_jobs = live_jobs.sort_values(["เลือกเครื่องจักร", "เริ่มจริง", "ID"], na_position="last")
+    form_version = safe_int(st.session_state.get("admin_actual_start_form_version"), 0)
     label_map = {}
     for _, row in live_jobs.iterrows():
         label = (
@@ -2189,11 +2190,39 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
             "ซิงก์เวลาเริ่มของ Step แรก และบันทึกเวลาเดิม เวลาใหม่ พร้อมเหตุผลไว้ในประวัติกิจกรรม "
             "โดยไม่เปลี่ยนเวลาเริ่มของ Step 2–3"
         )
+        machine_column, plan_column, drawing_column = st.columns([1, 1, 2])
+        machine_options = ["ทั้งหมด"] + sorted(live_jobs["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
+        selected_machine = machine_column.selectbox("🔎 เครื่องจักร", machine_options, key=f"admin_actual_start_filter_machine_{form_version}")
+        if selected_machine != "ทั้งหมด":
+            live_jobs = live_jobs[live_jobs["เลือกเครื่องจักร"].astype(str).eq(selected_machine)]
+        plan_options = ["ทั้งหมด"] + sorted(live_jobs["แผนงาน"].dropna().astype(str).unique().tolist())
+        plan_key = f"admin_actual_start_filter_plan_{form_version}"
+        if st.session_state.get(plan_key, "ทั้งหมด") not in plan_options:
+            st.session_state[plan_key] = "ทั้งหมด"
+        selected_plan = plan_column.selectbox("🔎 แผนงาน", plan_options, key=plan_key)
+        if selected_plan != "ทั้งหมด":
+            live_jobs = live_jobs[live_jobs["แผนงาน"].astype(str).eq(selected_plan)]
+        drawing_query = drawing_column.text_input("🔎 ค้นหา Drawing", placeholder="พิมพ์รหัสหรือชื่อบางส่วน", key=f"admin_actual_start_filter_drawing_{form_version}").strip()
+        if drawing_query:
+            live_jobs = live_jobs[live_jobs["ชื่อ Drawing."].astype(str).str.contains(drawing_query, case=False, regex=False, na=False)]
+        visible_ids = set(live_jobs["ID"].map(safe_int))
+        label_map = {label: row for label, row in label_map.items() if safe_int(row.get("ID")) in visible_ids}
+        st.caption(f"พบงานที่กำลังผลิต/พักงาน/รอวัสดุ {len(label_map)} รายการ")
+        if not label_map:
+            st.info("ไม่พบงานตามตัวกรอง ลองเปลี่ยนตัวกรองหรือคำค้นหา")
+            return
+        job_selection_key = f"admin_actual_start_job_{form_version}"
+        if st.session_state.get(job_selection_key) not in label_map:
+            st.session_state[job_selection_key] = None
         selected_label = st.selectbox(
             "เลือกงานที่ต้องการแก้เวลาเริ่มจริง",
             list(label_map.keys()),
-            key="admin_actual_start_job",
+            key=f"admin_actual_start_job_{form_version}",
+            index=None,
+            placeholder="เลือกงานที่ต้องการแก้เวลาเริ่มจริง",
         )
+        if selected_label is None:
+            return
         selected_row = label_map[selected_label]
         selected_id = safe_int(selected_row.get("ID"))
         old_start = parse_flexible_datetime(selected_row.get("เริ่มจริง"))
@@ -2201,27 +2230,31 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
         old_start_text = old_start.strftime("%d/%m/%Y %H:%M") if old_start is not None and not pd.isna(old_start) else "ไม่พบเวลาเริ่มจริงเดิม"
         st.info(f"เวลาเริ่มจริงปัจจุบัน: **{old_start_text}**")
 
-        with st.form(f"admin_actual_start_form_{selected_id}", clear_on_submit=False):
+        with st.form(f"admin_actual_start_form_{form_version}_{selected_id}", clear_on_submit=False):
             edit_col1, edit_col2 = st.columns(2)
             with edit_col1:
                 edited_date = st.date_input(
                     "วันที่เริ่มจริงใหม่",
                     value=default_start.date(),
                     format="DD/MM/YYYY",
+                    key=f"admin_actual_start_date_{form_version}_{selected_id}",
                 )
             with edit_col2:
                 edited_time = st.time_input(
                     "เวลาเริ่มจริงใหม่",
                     value=default_start.time().replace(second=0, microsecond=0),
                     step=60,
+                    key=f"admin_actual_start_time_{form_version}_{selected_id}",
                 )
             edit_reason = st.selectbox(
                 "เหตุผลการแก้ไข",
                 ["เลือกเหตุผล", "กด Start ล่าช้า", "กด Start ผิดเวลา", "เวลาอุปกรณ์ไม่ถูกต้อง", "แก้ไขข้อมูลโดยผู้ดูแล", "อื่น ๆ"],
+                key=f"admin_actual_start_reason_{form_version}_{selected_id}",
             )
-            edit_note = st.text_input("หมายเหตุเพิ่มเติม", placeholder="ระบุรายละเอียดเพิ่มเติม (ถ้ามี)")
+            edit_note = st.text_input("หมายเหตุเพิ่มเติม", placeholder="ระบุรายละเอียดเพิ่มเติม (ถ้ามี)", key=f"admin_actual_start_note_{form_version}_{selected_id}")
             confirm_edit = st.checkbox(
-                "ยืนยันว่าได้ตรวจสอบเวลาใหม่แล้ว และยอมรับให้ระบบคำนวณคิวรอของเครื่องนี้ใหม่"
+                "ยืนยันว่าได้ตรวจสอบเวลาใหม่แล้ว และยอมรับให้ระบบคำนวณคิวรอของเครื่องนี้ใหม่",
+                key=f"admin_actual_start_confirm_{form_version}_{selected_id}"
             )
             submitted = st.form_submit_button(
                 "💾 ยืนยันแก้ไขเวลาเริ่มจริง",
@@ -2248,6 +2281,8 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
                         f"แก้เวลาเริ่มจริงเป็น {new_start.strftime('%d/%m/%Y %H:%M')} เรียบร้อยแล้ว "
                         f"และคำนวณคิวรอใหม่ {shifted_count} รายการ"
                     )
+                    st.session_state["admin_actual_start_form_version"] = form_version + 1
+                    st.toast("บันทึกสำเร็จ และรีเซ็ตช่องแก้ไขแล้ว", icon="✅")
                     st.rerun()
                 else:
                     st.error(error_message)
@@ -7247,7 +7282,27 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     if waiting.empty:
                         st.caption("ไม่มีใบงานรอคิว")
                         return
+                    filter_machine_column, filter_plan_column, filter_drawing_column = st.columns([1, 1, 2])
+                    machine_options = ["ทั้งหมด"] + sorted(waiting["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
+                    selected_machine = filter_machine_column.selectbox("🔎 เครื่องจักร", machine_options, key="waiting_start_filter_machine")
+                    if selected_machine != "ทั้งหมด":
+                        waiting = waiting[waiting["เลือกเครื่องจักร"].astype(str).eq(selected_machine)]
+                    plan_options = ["ทั้งหมด"] + sorted(waiting["แผนงาน"].dropna().astype(str).unique().tolist())
+                    if st.session_state.get("waiting_start_filter_plan", "ทั้งหมด") not in plan_options:
+                        st.session_state["waiting_start_filter_plan"] = "ทั้งหมด"
+                    selected_plan = filter_plan_column.selectbox("🔎 แผนงาน", plan_options, key="waiting_start_filter_plan")
+                    if selected_plan != "ทั้งหมด":
+                        waiting = waiting[waiting["แผนงาน"].astype(str).eq(selected_plan)]
+                    drawing_query = filter_drawing_column.text_input("🔎 ค้นหา Drawing", placeholder="พิมพ์รหัสหรือชื่อบางส่วน", key="waiting_start_filter_drawing").strip()
+                    if drawing_query:
+                        waiting = waiting[waiting["ชื่อ Drawing."].astype(str).str.contains(drawing_query, case=False, regex=False, na=False)]
+                    st.caption(f"พบใบงานรอคิว {len(waiting)} รายการ")
+                    if waiting.empty:
+                        st.info("ไม่พบใบงานตามตัวกรอง ลองเปลี่ยนเครื่องจักร แผนงาน หรือคำค้นหา")
+                        return
                     waiting_map = {safe_int(row["ID"]): row for _, row in waiting.iterrows()}
+                    if st.session_state.get("waiting_start_job") not in waiting_map:
+                        st.session_state["waiting_start_job"] = next(iter(waiting_map))
                     job_id = st.selectbox("เลือกใบงานรอคิว", list(waiting_map),
                         format_func=lambda value: f"{waiting_map[value]['เลือกเครื่องจักร']} | {waiting_map[value]['แผนงาน']} | {waiting_map[value]['ชื่อ Drawing.']}", key="waiting_start_job")
                     job = waiting_map[job_id]
@@ -7261,6 +7316,28 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         time = c2.time_input("เวลาขึ้นงาน", initial.time(), key=f"waiting_start_time_{job_id}")
                         requested = datetime.combine(date, time)
                     st.caption("คงลำดับคิวเดิม: เริ่มหลังคิวก่อนหน้าเสร็จ และไม่ก่อนเวลาที่กำหนด โดยใช้กะโรงงาน")
+                    preview_jobs = df_db.copy()
+                    preview_metadata = production_schedule_metadata(job).copy()
+                    preview_metadata["schedule_mode"] = "auto" if requested is None else "manual"
+                    if requested is None:
+                        preview_metadata.pop("planned_not_before", None)
+                    else:
+                        preview_metadata["planned_not_before"] = requested.strftime("%Y-%m-%d %H:%M:%S")
+                    if "ติดตาม Step" not in preview_jobs.columns:
+                        preview_jobs["ติดตาม Step"] = None
+                    selected_mask = preview_jobs["ID"].map(safe_int).eq(job_id)
+                    for selected_index in preview_jobs.index[selected_mask]:
+                        preview_jobs.at[selected_index, "ติดตาม Step"] = preview_metadata
+                    preview_chain = calculate_production_chain(preview_jobs)
+                    preview_selected = preview_chain[preview_chain["ID"].map(safe_int).eq(job_id)]
+                    if not preview_selected.empty:
+                        preview_row = preview_selected.iloc[0]
+                        preview_start = first_valid_datetime(preview_row.get("_chain_start"))
+                        preview_finish = first_valid_datetime(preview_row.get("_chain_finish"))
+                        start_column, finish_column = st.columns(2)
+                        start_column.metric("เริ่มตามแผนหลังปรับ", preview_start.strftime("%d/%m/%Y %H:%M") if preview_start else "—")
+                        finish_column.metric("จบตามแผนหลังปรับ", preview_finish.strftime("%d/%m/%Y %H:%M") if preview_finish else "—")
+                        st.caption("ตัวอย่างก่อนบันทึก: รวม Setup + Basic + โปรแกรม และข้ามเบรก/นอกกะแล้ว กดบันทึกเพื่อใช้กำหนดเวลาใหม่นี้")
                     if st.button("💾 บันทึกกำหนดเวลาเริ่ม", key="waiting_start_submit"):
                         try:
                             endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
