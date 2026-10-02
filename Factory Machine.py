@@ -2284,26 +2284,6 @@ def render_machine_activity_dashboard(calc_df):
                 )
             st.markdown("  \n".join(move_text))
 
-        event_options = ["ทุกเหตุการณ์"] + sorted(events.get("event_type", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
-        selected_event = st.selectbox("กรองเหตุการณ์", event_options, key="activity_event_filter")
-        shown = events.copy()
-        if selected_event != "ทุกเหตุการณ์":
-            shown = shown[shown["event_type"].astype(str) == selected_event]
-        shown = shown.head(150).copy()
-        shown["เวลา"] = shown["event_at"].apply(
-            lambda dt: dt.strftime("%d/%m/%Y %H:%M:%S") if dt is not None and pd.notna(dt) else "-"
-        )
-        rename_map = {
-            "machine_name": "เครื่องจักร", "plan_code": "แผนงาน", "drawing_name": "Drawing",
-            "event_type": "เหตุการณ์", "step_index": "Step", "step_name": "ชื่อ Step",
-            "reason": "เหตุผล", "note": "หมายเหตุ", "from_machine": "จากเครื่อง", "to_machine": "ไปเครื่อง"
-        }
-        report_cols = [
-            "เวลา", "machine_name", "plan_code", "drawing_name", "event_type", "step_index",
-            "step_name", "reason", "note", "from_machine", "to_machine"
-        ]
-        st.dataframe(shown[[col for col in report_cols if col in shown.columns]].rename(columns=rename_map), hide_index=True, use_container_width=True)
-
 
 def calculate_plan_drawing_progress(plan_jobs):
     """สรุปความคืบหน้าระดับ Drawing โดย Drawing จะเสร็จเมื่อทุก Step เสร็จสิ้นแล้ว"""
