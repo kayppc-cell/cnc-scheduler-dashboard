@@ -1693,6 +1693,14 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
     except Exception as exc:
         return False, f"เกิดข้อผิดพลาดระหว่างแก้เวลาเริ่มจริง: {safe_str(exc, 'ไม่ทราบสาเหตุ')}", 0
 
+def reset_work_order_queue_controls_if_requested():
+    """ล้างค่าจัดคิวก่อนสร้าง widget รอบใหม่ หลังบันทึกสำเร็จเท่านั้น"""
+    if not st.session_state.pop("reset_work_order_queue_controls", False):
+        return
+    for key in list(st.session_state):
+        if str(key).startswith(("wo_swap_", "wo_move_")):
+            del st.session_state[key]
+
 def build_work_order_queue_preview(machine_rows, waiting_order_ids):
     """เลขคิวเต็มเครื่องตรงกับใบจ่ายคิว พร้อมแยกก่อน/หลังการจัดคิว"""
     rows_by_id = {safe_int(row.get("ID")): row for _, row in machine_rows.iterrows()}
@@ -8409,6 +8417,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # แยกการเลือกคิวออกจากการรันแดชบอร์ดทั้งหน้า
             @st.fragment
             def render_work_order_queue_controls():
+                reset_work_order_queue_controls_if_requested()
                 with st.expander("🔀 สลับคิวรอจากใบจ่ายคิวงานหน้าเครื่อง", expanded=False):
                     waiting_wo = df_wo_direct[df_wo_direct["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)].copy()
                     swap_machines = sorted(waiting_wo.groupby("เลือกเครื่องจักร").size().loc[lambda counts: counts >= 2].index.tolist())
@@ -8465,6 +8474,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                         row = swap_map[job_id]
                                         log_job_event(job_id, safe_str(row.get("แผนงาน")), safe_str(row.get("ชื่อ Drawing.")), swap_machine, "Swap Queue", reason="ปรับลำดับการผลิต", note=f"{swap_mode}: ID {swap_sources} ปลายทาง {swap_target} จากใบจ่ายคิว")
                                     st.session_state.pop("editor_cnc_jobs_grid_main", None)
+                                    st.session_state["reset_work_order_queue_controls"] = True
                                     st.toast(f"จัดคิวเรียบร้อย และคำนวณเวลาใหม่ {len(changed_rows)} คิว", icon="🔀")
                                     st.rerun()
                                 else:
