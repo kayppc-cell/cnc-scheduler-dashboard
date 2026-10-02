@@ -7179,243 +7179,247 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 else:
                                     st.error("สร้างใบงานไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อฐานข้อมูล")
 
-            with st.expander("⚡ งานด่วนแทรกจาก Drawing Template", expanded=False):
-                if templates is None:
-                    st.warning("กรุณาสร้างตาราง Template ใน Supabase ก่อน")
-                elif not templates:
-                    st.info("ยังไม่มี Drawing Template กรุณาสร้าง Template อย่างน้อย 1 รายการก่อน")
-                else:
-                    urgent_template_map = {safe_str(item.get("drawing_name")): item for item in templates}
-                    u1, u2, u3 = st.columns([1.2, 2, 1])
-                    with u1:
-                        urgent_plan = st.text_input("รหัสแผนงาน", key="urgent_plan_code")
-                    with u2:
-                        urgent_template_name = st.selectbox(
-                            "Drawing Template (เลือกต้นแบบ)",
-                            list(urgent_template_map.keys()),
-                            key="urgent_template_name"
-                        )
-                    urgent_tpl = urgent_template_map[urgent_template_name]
-                    with u3:
-                        urgent_qty = st.number_input("จำนวน", 1, 10000, safe_int(urgent_tpl.get("default_qty"), 1), key="urgent_qty")
-                    urgent_drawing = st.text_input(
-                        "Drawing (แก้ไขชื่อหรือพิมพ์เพิ่มเติมได้)",
-                        value=urgent_template_name,
-                        key=f"urgent_drawing_edit_{safe_int(urgent_tpl.get('id'), 0)}_{urgent_template_name}",
-                        help="แก้เฉพาะใบงานด่วนที่กำลังสร้าง ไม่เปลี่ยนชื่อ Drawing Template ต้นฉบับ"
-                    ).strip()
-                    urgent_template_key = f"{safe_int(urgent_tpl.get('id'), 0)}_{urgent_template_name}"
-                    ud1, ud2, ud3, ud4 = st.columns(4)
-                    with ud1:
-                        urgent_setup_mins = st.number_input(
-                            "Setup (นาที)",
-                            min_value=0.0,
-                            max_value=720.0,
-                            value=float(safe_float(urgent_tpl.get("setup_mins"), DEFAULT_SETUP_MINUTES)),
-                            step=5.0,
-                            key=f"urgent_setup_mins_{urgent_template_key}"
-                        )
-                    with ud2:
-                        urgent_basic_mins = st.number_input(
-                            "Basic (นาที)",
-                            min_value=0.0,
-                            max_value=6000.0,
-                            value=float(safe_float(urgent_tpl.get("basic_mins"), DEFAULT_BASIC_MINUTES)),
-                            step=5.0,
-                            key=f"urgent_basic_mins_{urgent_template_key}"
-                        )
-                    with ud3:
-                        urgent_program_mins = st.number_input(
-                            "โปรแกรม (นาที)",
-                            min_value=0.0,
-                            max_value=12000.0,
-                            value=float(safe_float(urgent_tpl.get("program_mins"), DEFAULT_PROGRAM_MINUTES)),
-                            step=10.0,
-                            key=f"urgent_program_mins_{urgent_template_key}"
-                        )
-                    urgent_minutes = urgent_setup_mins + urgent_basic_mins + urgent_program_mins
-                    with ud4:
-                        st.metric(
-                            "เวลารวมของงานด่วน",
-                            f"{urgent_minutes:.0f} นาที ({urgent_minutes / 60.0:.2f} ชม.)"
-                        )
-                    u4, u5 = st.columns([1.5, 2.5])
-                    with u4:
-                        urgent_machine_default = safe_str(urgent_tpl.get("machine_name"), MACHINE_LIST[0])
-                        urgent_machine = st.selectbox(
-                            "เครื่องจักร",
-                            MACHINE_LIST,
-                            index=MACHINE_LIST.index(urgent_machine_default) if urgent_machine_default in MACHINE_LIST else 0,
-                            key="urgent_machine"
-                        )
-                    machine_waiting = df_db[
-                        (df_db["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(urgent_machine)) &
-                        (df_db["สถานะงาน"].astype(str).str.contains("รอคิว"))
-                    ].copy() if not df_db.empty else pd.DataFrame()
-                    machine_in_progress = df_db[
-                        (df_db["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(urgent_machine)) &
-                        (df_db["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True, na=False))
-                    ].copy() if not df_db.empty else pd.DataFrame()
-                    urgent_machine_timeline = machine_active_queue_timeline(urgent_machine, df_db)
-                    timeline_waiting = [item for item in urgent_machine_timeline if "รอคิว" in safe_str(item.get("status"), "")]
-                    timeline_live = [item for item in urgent_machine_timeline if "กำลังผลิต" in safe_str(item.get("status"), "") or "พักงาน" in safe_str(item.get("status"), "")]
-                    target_map = {}
-                    if timeline_waiting:
-                        first_waiting_queue_no = len(timeline_live) + 1
-                        for waiting_offset, row in enumerate(timeline_waiting):
-                            waiting_ready = row.get("start")
-                            waiting_ready_text = waiting_ready.strftime("%d/%m/%Y %H:%M") if waiting_ready is not None and pd.notna(waiting_ready) else "ไม่ระบุเวลา"
-                            queue_no = first_waiting_queue_no + waiting_offset
-                            target_label = (
-                                f"ก่อนคิวที่ {queue_no} | แผน {safe_str(row.get('plan'), '-')} | "
-                                f"Drawing {safe_str(row.get('drawing'), '-')} | เริ่ม {waiting_ready_text}"
-                            )
-                            target_map[target_label] = safe_int(row.get("id"))
-                    next_queue_label = "คิวถัดไป — หลังงานที่กำลังรัน/พักอยู่"
-                    insert_choices = [next_queue_label] + list(target_map.keys())
-                    with u5:
-                        urgent_position = st.selectbox("ตำแหน่งแทรก", insert_choices, key="urgent_insert_position")
-                    urgent_reason = st.text_input("เหตุผล/หมายเหตุงานด่วน", placeholder="เช่น ลูกค้าเร่งส่ง, งานแก้ไขเร่งด่วน", key="urgent_reason")
-
-                    auto_urgent_start = urgent_insert_ready_at(
-                        urgent_machine, urgent_position, target_map.get(urgent_position), df_db
-                    )
-                    urgent_time_mode = st.radio(
-                        "การกำหนดเวลาเริ่มงานด่วน",
-                        ["ต่อเวลาตามตำแหน่งคิวอัตโนมัติ", "กำหนดวันและเวลาเริ่มเอง"],
-                        horizontal=True,
-                        key="urgent_time_mode"
-                    )
-                    urgent_requested_start = None
-                    if urgent_time_mode == "กำหนดวันและเวลาเริ่มเอง":
-                        ut1, ut2 = st.columns(2)
-                        with ut1:
-                            urgent_start_date = st.date_input(
-                                "วันที่เริ่มงานด่วน",
-                                value=auto_urgent_start.date(),
-                                format="DD/MM/YYYY",
-                                key="urgent_start_date"
-                            )
-                        with ut2:
-                            urgent_start_time = st.time_input(
-                                "เวลาเริ่มงานด่วน",
-                                value=auto_urgent_start.time().replace(second=0, microsecond=0),
-                                step=300,
-                                key="urgent_start_time"
-                            )
-                        urgent_requested_start = datetime.combine(urgent_start_date, urgent_start_time)
-                        normalized_requested_start = get_next_valid_work_time(urgent_requested_start)
-                        if normalized_requested_start != urgent_requested_start:
-                            st.info(
-                                "เวลาที่เลือกอยู่นอกช่วงทำงาน ระบบจะเริ่มที่ช่วงเวลาทำงานถัดไป: "
-                                f"{normalized_requested_start.strftime('%d/%m/%Y %H:%M')}"
-                            )
-                        urgent_start = max(auto_urgent_start, normalized_requested_start)
+            @st.fragment
+            def render_urgent_template_controls():
+                with st.expander("⚡ งานด่วนแทรกจาก Drawing Template", expanded=False):
+                    if templates is None:
+                        st.warning("กรุณาสร้างตาราง Template ใน Supabase ก่อน")
+                    elif not templates:
+                        st.info("ยังไม่มี Drawing Template กรุณาสร้าง Template อย่างน้อย 1 รายการก่อน")
                     else:
-                        urgent_start = auto_urgent_start
-
-                    target_id = target_map.get(urgent_position)
-                    # แสดงตัวอย่างลำดับจริงก่อนบันทึก เพื่อให้เห็นชัดว่างานด่วนอยู่ก่อน/หลังคิวใด
-                    preview_rows = [
-                        {
-                            "id": safe_int(item.get("id")),
-                            "plan": safe_str(item.get("plan"), "-"),
-                            "drawing": safe_str(item.get("drawing"), "-"),
-                            "status": safe_str(item.get("status"), ""),
-                        }
-                        for item in urgent_machine_timeline
-                    ]
-                    if target_id is not None:
-                        preview_insert_index = next((
-                            idx for idx, item in enumerate(preview_rows)
-                            if item["id"] == safe_int(target_id)
-                        ), len(preview_rows))
-                    else:
-                        preview_insert_index = len(timeline_live)
-                    urgent_preview_item = {
-                        "id": -1,
-                        "plan": urgent_plan.strip() or "ยังไม่ระบุแผน",
-                        "drawing": urgent_drawing or urgent_template_name,
-                        "status": "⚡ งานด่วนแทรก",
-                    }
-                    preview_after_insert = preview_rows.copy()
-                    preview_after_insert.insert(preview_insert_index, urgent_preview_item)
-                    before_item = preview_after_insert[preview_insert_index - 1] if preview_insert_index > 0 else None
-                    after_item = preview_after_insert[preview_insert_index + 1] if preview_insert_index + 1 < len(preview_after_insert) else None
-                    before_text = (
-                        f"แผน {before_item['plan']} / {before_item['drawing']}" if before_item else "ต้นคิว"
-                    )
-                    after_text = (
-                        f"แผน {after_item['plan']} / {after_item['drawing']}" if after_item else "ไม่มีคิวถัดไป"
-                    )
-                    st.info(
-                        f"🔎 **ตำแหน่งหลังแทรก:** {before_text} → "
-                        f"⚡ **งานด่วน {urgent_plan.strip() or '-'} / {urgent_drawing or urgent_template_name}** → {after_text}"
-                    )
-                    with st.expander("📋 ดูลำดับคิวทั้งหมดหลังแทรก", expanded=False):
-                        preview_lines = []
-                        for preview_no, item in enumerate(preview_after_insert, start=1):
-                            if item["id"] == -1:
-                                preview_lines.append(
-                                    f"**{preview_no}. ⚡ งานด่วนแทรก | แผน {item['plan']} | Drawing {item['drawing']}**"
+                        urgent_template_map = {safe_str(item.get("drawing_name")): item for item in templates}
+                        u1, u2, u3 = st.columns([1.2, 2, 1])
+                        with u1:
+                            urgent_plan = st.text_input("รหัสแผนงาน", key="urgent_plan_code")
+                        with u2:
+                            urgent_template_name = st.selectbox(
+                                "Drawing Template (เลือกต้นแบบ)",
+                                list(urgent_template_map.keys()),
+                                key="urgent_template_name"
+                            )
+                        urgent_tpl = urgent_template_map[urgent_template_name]
+                        with u3:
+                            urgent_qty = st.number_input("จำนวน", 1, 10000, safe_int(urgent_tpl.get("default_qty"), 1), key="urgent_qty")
+                        urgent_drawing = st.text_input(
+                            "Drawing (แก้ไขชื่อหรือพิมพ์เพิ่มเติมได้)",
+                            value=urgent_template_name,
+                            key=f"urgent_drawing_edit_{safe_int(urgent_tpl.get('id'), 0)}_{urgent_template_name}",
+                            help="แก้เฉพาะใบงานด่วนที่กำลังสร้าง ไม่เปลี่ยนชื่อ Drawing Template ต้นฉบับ"
+                        ).strip()
+                        urgent_template_key = f"{safe_int(urgent_tpl.get('id'), 0)}_{urgent_template_name}"
+                        ud1, ud2, ud3, ud4 = st.columns(4)
+                        with ud1:
+                            urgent_setup_mins = st.number_input(
+                                "Setup (นาที)",
+                                min_value=0.0,
+                                max_value=720.0,
+                                value=float(safe_float(urgent_tpl.get("setup_mins"), DEFAULT_SETUP_MINUTES)),
+                                step=5.0,
+                                key=f"urgent_setup_mins_{urgent_template_key}"
+                            )
+                        with ud2:
+                            urgent_basic_mins = st.number_input(
+                                "Basic (นาที)",
+                                min_value=0.0,
+                                max_value=6000.0,
+                                value=float(safe_float(urgent_tpl.get("basic_mins"), DEFAULT_BASIC_MINUTES)),
+                                step=5.0,
+                                key=f"urgent_basic_mins_{urgent_template_key}"
+                            )
+                        with ud3:
+                            urgent_program_mins = st.number_input(
+                                "โปรแกรม (นาที)",
+                                min_value=0.0,
+                                max_value=12000.0,
+                                value=float(safe_float(urgent_tpl.get("program_mins"), DEFAULT_PROGRAM_MINUTES)),
+                                step=10.0,
+                                key=f"urgent_program_mins_{urgent_template_key}"
+                            )
+                        urgent_minutes = urgent_setup_mins + urgent_basic_mins + urgent_program_mins
+                        with ud4:
+                            st.metric(
+                                "เวลารวมของงานด่วน",
+                                f"{urgent_minutes:.0f} นาที ({urgent_minutes / 60.0:.2f} ชม.)"
+                            )
+                        u4, u5 = st.columns([1.5, 2.5])
+                        with u4:
+                            urgent_machine_default = safe_str(urgent_tpl.get("machine_name"), MACHINE_LIST[0])
+                            urgent_machine = st.selectbox(
+                                "เครื่องจักร",
+                                MACHINE_LIST,
+                                index=MACHINE_LIST.index(urgent_machine_default) if urgent_machine_default in MACHINE_LIST else 0,
+                                key="urgent_machine"
+                            )
+                        machine_waiting = df_db[
+                            (df_db["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(urgent_machine)) &
+                            (df_db["สถานะงาน"].astype(str).str.contains("รอคิว"))
+                        ].copy() if not df_db.empty else pd.DataFrame()
+                        machine_in_progress = df_db[
+                            (df_db["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(urgent_machine)) &
+                            (df_db["สถานะงาน"].astype(str).str.contains("กำลังผลิต|พักงาน", regex=True, na=False))
+                        ].copy() if not df_db.empty else pd.DataFrame()
+                        urgent_machine_timeline = machine_active_queue_timeline(urgent_machine, df_db)
+                        timeline_waiting = [item for item in urgent_machine_timeline if "รอคิว" in safe_str(item.get("status"), "")]
+                        timeline_live = [item for item in urgent_machine_timeline if "กำลังผลิต" in safe_str(item.get("status"), "") or "พักงาน" in safe_str(item.get("status"), "")]
+                        target_map = {}
+                        if timeline_waiting:
+                            first_waiting_queue_no = len(timeline_live) + 1
+                            for waiting_offset, row in enumerate(timeline_waiting):
+                                waiting_ready = row.get("start")
+                                waiting_ready_text = waiting_ready.strftime("%d/%m/%Y %H:%M") if waiting_ready is not None and pd.notna(waiting_ready) else "ไม่ระบุเวลา"
+                                queue_no = first_waiting_queue_no + waiting_offset
+                                target_label = (
+                                    f"ก่อนคิวที่ {queue_no} | แผน {safe_str(row.get('plan'), '-')} | "
+                                    f"Drawing {safe_str(row.get('drawing'), '-')} | เริ่ม {waiting_ready_text}"
                                 )
-                            else:
-                                preview_lines.append(
-                                    f"{preview_no}. แผน {item['plan']} | Drawing {item['drawing']} | {item['status']}"
-                                )
-                        st.markdown("  \n".join(preview_lines) if preview_lines else "1. ⚡ งานด่วนแทรก")
+                                target_map[target_label] = safe_int(row.get("id"))
+                        next_queue_label = "คิวถัดไป — หลังงานที่กำลังรัน/พักอยู่"
+                        insert_choices = [next_queue_label] + list(target_map.keys())
+                        with u5:
+                            urgent_position = st.selectbox("ตำแหน่งแทรก", insert_choices, key="urgent_insert_position")
+                        urgent_reason = st.text_input("เหตุผล/หมายเหตุงานด่วน", placeholder="เช่น ลูกค้าเร่งส่ง, งานแก้ไขเร่งด่วน", key="urgent_reason")
 
-                    _, urgent_finish = add_work_time_with_shift(urgent_start, urgent_minutes / 60.0)
-                    affected_count = 0
-                    if timeline_waiting:
-                        affected_count = sum(
-                            1 for item in timeline_waiting
-                            if item.get("start") is not None and item["start"] >= urgent_start
+                        auto_urgent_start = urgent_insert_ready_at(
+                            urgent_machine, urgent_position, target_map.get(urgent_position), df_db
                         )
-                    p1, p2, p3 = st.columns(3)
-                    p1.metric("เริ่มงานด่วนโดยประมาณ", urgent_start.strftime("%d/%m/%Y %H:%M"))
-                    p2.metric("จบงานด่วนโดยประมาณ", urgent_finish.strftime("%d/%m/%Y %H:%M"))
-                    p3.metric("คิวถัดไปที่อาจเลื่อน", f"{affected_count} คิว")
-                    st.caption("ระบบจะไม่หยุดงานที่กำลังผลิต งานด่วนจะเข้าในคิวเดียวพร้อม Step ทั้งหมด และลูกโซ่ของเครื่องนี้จะคำนวณใหม่บนหน้าตาราง")
-                    confirm_urgent = st.checkbox("ยืนยันว่าได้ตรวจสอบผลกระทบของคิวแล้ว", key="confirm_urgent_insert")
-                    if st.button(
-                        "⚡ บันทึกงานด่วนแทรก",
-                        type="primary",
-                        use_container_width=True,
-                        disabled=(not confirm_urgent or urgent_minutes <= 0)
-                    ):
-                        urgent_steps = template_step_names(urgent_tpl)
-                        combined_steps = " → ".join(urgent_steps)
-                        payload = {
-                            "plan_code": urgent_plan.strip(), "drawing_name": urgent_drawing or urgent_template_name,
-                            "qty": int(urgent_qty), "material": safe_str(urgent_tpl.get("material"), "SS400"),
-                            "job_type": "🔴 งานด่วนแทรก", "step_name": combined_steps,
-                            "machine_name": urgent_machine, "ready_at": urgent_start.strftime("%Y-%m-%d %H:%M:%S"),
-                            "setup_mins": float(urgent_setup_mins),
-                            "basic_hrs": float(urgent_basic_mins),
-                            "prog_hrs": float(urgent_program_mins),
-                            "status": "🟧 รอคิวผลิต",
-                            "step_progress": normalize_step_progress(None, combined_steps, "🟧 รอคิวผลิต")
-                        }
-                        if not urgent_plan.strip():
-                            st.error("กรุณาระบุรหัสแผนงาน")
-                        elif not (urgent_drawing or urgent_template_name):
-                            st.error("กรุณาระบุ Drawing")
-                        elif urgent_minutes <= 0:
-                            st.error("กรุณากำหนดเวลางานด่วนอย่างน้อย 1 นาที")
+                        urgent_time_mode = st.radio(
+                            "การกำหนดเวลาเริ่มงานด่วน",
+                            ["ต่อเวลาตามตำแหน่งคิวอัตโนมัติ", "กำหนดวันและเวลาเริ่มเอง"],
+                            horizontal=True,
+                            key="urgent_time_mode"
+                        )
+                        urgent_requested_start = None
+                        if urgent_time_mode == "กำหนดวันและเวลาเริ่มเอง":
+                            ut1, ut2 = st.columns(2)
+                            with ut1:
+                                urgent_start_date = st.date_input(
+                                    "วันที่เริ่มงานด่วน",
+                                    value=auto_urgent_start.date(),
+                                    format="DD/MM/YYYY",
+                                    key="urgent_start_date"
+                                )
+                            with ut2:
+                                urgent_start_time = st.time_input(
+                                    "เวลาเริ่มงานด่วน",
+                                    value=auto_urgent_start.time().replace(second=0, microsecond=0),
+                                    step=300,
+                                    key="urgent_start_time"
+                                )
+                            urgent_requested_start = datetime.combine(urgent_start_date, urgent_start_time)
+                            normalized_requested_start = get_next_valid_work_time(urgent_requested_start)
+                            if normalized_requested_start != urgent_requested_start:
+                                st.info(
+                                    "เวลาที่เลือกอยู่นอกช่วงทำงาน ระบบจะเริ่มที่ช่วงเวลาทำงานถัดไป: "
+                                    f"{normalized_requested_start.strftime('%d/%m/%Y %H:%M')}"
+                                )
+                            urgent_start = max(auto_urgent_start, normalized_requested_start)
                         else:
-                            urgent_saved, urgent_error, urgent_changed_rows = insert_urgent_job_into_waiting_queue(
-                                urgent_machine, target_id, payload, urgent_requested_start
+                            urgent_start = auto_urgent_start
+
+                        target_id = target_map.get(urgent_position)
+                        # แสดงตัวอย่างลำดับจริงก่อนบันทึก เพื่อให้เห็นชัดว่างานด่วนอยู่ก่อน/หลังคิวใด
+                        preview_rows = [
+                            {
+                                "id": safe_int(item.get("id")),
+                                "plan": safe_str(item.get("plan"), "-"),
+                                "drawing": safe_str(item.get("drawing"), "-"),
+                                "status": safe_str(item.get("status"), ""),
+                            }
+                            for item in urgent_machine_timeline
+                        ]
+                        if target_id is not None:
+                            preview_insert_index = next((
+                                idx for idx, item in enumerate(preview_rows)
+                                if item["id"] == safe_int(target_id)
+                            ), len(preview_rows))
+                        else:
+                            preview_insert_index = len(timeline_live)
+                        urgent_preview_item = {
+                            "id": -1,
+                            "plan": urgent_plan.strip() or "ยังไม่ระบุแผน",
+                            "drawing": urgent_drawing or urgent_template_name,
+                            "status": "⚡ งานด่วนแทรก",
+                        }
+                        preview_after_insert = preview_rows.copy()
+                        preview_after_insert.insert(preview_insert_index, urgent_preview_item)
+                        before_item = preview_after_insert[preview_insert_index - 1] if preview_insert_index > 0 else None
+                        after_item = preview_after_insert[preview_insert_index + 1] if preview_insert_index + 1 < len(preview_after_insert) else None
+                        before_text = (
+                            f"แผน {before_item['plan']} / {before_item['drawing']}" if before_item else "ต้นคิว"
+                        )
+                        after_text = (
+                            f"แผน {after_item['plan']} / {after_item['drawing']}" if after_item else "ไม่มีคิวถัดไป"
+                        )
+                        st.info(
+                            f"🔎 **ตำแหน่งหลังแทรก:** {before_text} → "
+                            f"⚡ **งานด่วน {urgent_plan.strip() or '-'} / {urgent_drawing or urgent_template_name}** → {after_text}"
+                        )
+                        with st.expander("📋 ดูลำดับคิวทั้งหมดหลังแทรก", expanded=False):
+                            preview_lines = []
+                            for preview_no, item in enumerate(preview_after_insert, start=1):
+                                if item["id"] == -1:
+                                    preview_lines.append(
+                                        f"**{preview_no}. ⚡ งานด่วนแทรก | แผน {item['plan']} | Drawing {item['drawing']}**"
+                                    )
+                                else:
+                                    preview_lines.append(
+                                        f"{preview_no}. แผน {item['plan']} | Drawing {item['drawing']} | {item['status']}"
+                                    )
+                            st.markdown("  \n".join(preview_lines) if preview_lines else "1. ⚡ งานด่วนแทรก")
+
+                        _, urgent_finish = add_work_time_with_shift(urgent_start, urgent_minutes / 60.0)
+                        affected_count = 0
+                        if timeline_waiting:
+                            affected_count = sum(
+                                1 for item in timeline_waiting
+                                if item.get("start") is not None and item["start"] >= urgent_start
                             )
-                            if urgent_saved:
-                                shifted_count = max(0, len(urgent_changed_rows) - 1)
-                                st.success(
-                                    f"เพิ่มงานด่วน {urgent_drawing or urgent_template_name} และจัดลำดับคิวใหม่เรียบร้อยแล้ว "
-                                    f"— ปรับเวลาคิวรอ {shifted_count} รายการ โดยไม่เปลี่ยนงานที่กำลังรัน"
-                                )
-                                st.rerun()
+                        p1, p2, p3 = st.columns(3)
+                        p1.metric("เริ่มงานด่วนโดยประมาณ", urgent_start.strftime("%d/%m/%Y %H:%M"))
+                        p2.metric("จบงานด่วนโดยประมาณ", urgent_finish.strftime("%d/%m/%Y %H:%M"))
+                        p3.metric("คิวถัดไปที่อาจเลื่อน", f"{affected_count} คิว")
+                        st.caption("ระบบจะไม่หยุดงานที่กำลังผลิต งานด่วนจะเข้าในคิวเดียวพร้อม Step ทั้งหมด และลูกโซ่ของเครื่องนี้จะคำนวณใหม่บนหน้าตาราง")
+                        confirm_urgent = st.checkbox("ยืนยันว่าได้ตรวจสอบผลกระทบของคิวแล้ว", key="confirm_urgent_insert")
+                        if st.button(
+                            "⚡ บันทึกงานด่วนแทรก",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=(not confirm_urgent or urgent_minutes <= 0)
+                        ):
+                            urgent_steps = template_step_names(urgent_tpl)
+                            combined_steps = " → ".join(urgent_steps)
+                            payload = {
+                                "plan_code": urgent_plan.strip(), "drawing_name": urgent_drawing or urgent_template_name,
+                                "qty": int(urgent_qty), "material": safe_str(urgent_tpl.get("material"), "SS400"),
+                                "job_type": "🔴 งานด่วนแทรก", "step_name": combined_steps,
+                                "machine_name": urgent_machine, "ready_at": urgent_start.strftime("%Y-%m-%d %H:%M:%S"),
+                                "setup_mins": float(urgent_setup_mins),
+                                "basic_hrs": float(urgent_basic_mins),
+                                "prog_hrs": float(urgent_program_mins),
+                                "status": "🟧 รอคิวผลิต",
+                                "step_progress": normalize_step_progress(None, combined_steps, "🟧 รอคิวผลิต")
+                            }
+                            if not urgent_plan.strip():
+                                st.error("กรุณาระบุรหัสแผนงาน")
+                            elif not (urgent_drawing or urgent_template_name):
+                                st.error("กรุณาระบุ Drawing")
+                            elif urgent_minutes <= 0:
+                                st.error("กรุณากำหนดเวลางานด่วนอย่างน้อย 1 นาที")
                             else:
-                                st.error(f"บันทึกงานด่วนไม่สำเร็จ: {urgent_error}")
+                                urgent_saved, urgent_error, urgent_changed_rows = insert_urgent_job_into_waiting_queue(
+                                    urgent_machine, target_id, payload, urgent_requested_start
+                                )
+                                if urgent_saved:
+                                    shifted_count = max(0, len(urgent_changed_rows) - 1)
+                                    st.success(
+                                        f"เพิ่มงานด่วน {urgent_drawing or urgent_template_name} และจัดลำดับคิวใหม่เรียบร้อยแล้ว "
+                                        f"— ปรับเวลาคิวรอ {shifted_count} รายการ โดยไม่เปลี่ยนงานที่กำลังรัน"
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.error(f"บันทึกงานด่วนไม่สำเร็จ: {urgent_error}")
+
+            render_urgent_template_controls()
 
         if not df_db.empty:
             calc_df = df_db.copy()
