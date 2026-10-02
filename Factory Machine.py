@@ -1693,6 +1693,20 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
     except Exception as exc:
         return False, f"เกิดข้อผิดพลาดระหว่างแก้เวลาเริ่มจริง: {safe_str(exc, 'ไม่ทราบสาเหตุ')}", 0
 
+def build_work_order_queue_preview(machine_rows, waiting_order_ids):
+    """เลขคิวเต็มเครื่องตรงกับใบจ่ายคิว พร้อมแยกก่อน/หลังการจัดคิว"""
+    rows_by_id = {safe_int(row.get("ID")): row for _, row in machine_rows.iterrows()}
+    fixed_ids = [job_id for job_id, row in rows_by_id.items() if "รอคิว" not in safe_str(row.get("สถานะงาน"))]
+    full_order = fixed_ids + list(waiting_order_ids)
+    return pd.DataFrame([
+        {"คิวปัจจุบัน": safe_str(rows_by_id[job_id].get("ลำดับคิว")),
+         "คิวหลังบันทึก": f"คิวที่ {index + 1}",
+         "สถานะ": safe_str(rows_by_id[job_id].get("สถานะงาน")),
+         "แผนงาน": safe_str(rows_by_id[job_id].get("แผนงาน")),
+         "Drawing": safe_str(rows_by_id[job_id].get("ชื่อ Drawing."))}
+        for index, job_id in enumerate(full_order)
+    ])
+
 def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: int, move_job_ids=None) -> tuple[bool, str, list]:
     """สลับตำแหน่งคิวรอสองงานบนเครื่องเดียวกัน แล้วคำนวณลูกโซ่คิวรอใหม่ทั้งหมด"""
     source_job_id, target_job_id = safe_int(source_job_id), safe_int(target_job_id)
@@ -8392,7 +8406,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             df_wo_direct["จบงานตามแผน"] = df_wo_direct["วัน-เวลาจบงาน"]
 
             st.caption("ลำดับคิวใช้กฎเดียวกับหน้าเครื่อง • กำหนดพร้อมขึ้นงาน = Baseline เดิม • เริ่ม/จบงานตามแผน = ลูกโซ่คิวปัจจุบัน")
-            if is_admin:
+            # แยกการเลือกคิวออกจากการรันแดชบอร์ดทั้งหน้า
+            @st.fragment
+            def render_work_order_queue_controls():
                 with st.expander("🔀 สลับคิวรอจากใบจ่ายคิวงานหน้าเครื่อง", expanded=False):
                     waiting_wo = df_wo_direct[df_wo_direct["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)].copy()
                     swap_machines = sorted(waiting_wo.groupby("เลือกเครื่องจักร").size().loc[lambda counts: counts >= 2].index.tolist())
@@ -8404,7 +8420,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         swap_map = {safe_int(row["ID"]): row for _, row in swap_rows.iterrows()}
                         def wo_swap_label(job_id):
                             row = swap_map[job_id]
-                            return f"{row['ลำดับคิว']} | {row['แผนงาน']} | {row['ชื่อ Drawing.']} | ID {job_id}"
+                            return f"{row['ลำดับคิว']} | {row['แผนงาน']} | {row['ชื่อ Drawing.']}"
                         swap_mode = st.radio("วิธีจัดคิว", ["สลับสองคิว", "ย้ายหลายคิวเป็นกลุ่ม"], horizontal=True, key="wo_swap_mode")
                         if swap_mode == "สลับสองคิว":
                             swap_sources = [st.selectbox("คิวต้นทาง", list(swap_map), format_func=wo_swap_label, key=f"wo_swap_source_{swap_machine}")]
@@ -8428,8 +8444,18 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 preview_ids = [job_id for job_id in preview_ids if job_id not in swap_sources]
                                 target_index = preview_ids.index(swap_target)
                                 preview_ids[target_index:target_index] = moving_ids
-                            st.markdown("**ลำดับคิวรอหลังบันทึก**")
-                            st.dataframe(pd.DataFrame([{"ลำดับคิวรอใหม่": index + 1, "ID": job_id, "แผนงาน": swap_map[job_id]["แผนงาน"], "Drawing": swap_map[job_id]["ชื่อ Drawing."]} for index, job_id in enumerate(preview_ids)]), hide_index=True, use_container_width=True)
+                            st.markdown("**ตัวอย่างลำดับคิวทั้งเครื่องหลังบันทึก**")
+                            st.caption("ตารางนี้เป็นตัวอย่างก่อนกดบันทึก • คิวปัจจุบันตรงกับใบจ่ายคิว • งานกำลังผลิต/พักคงตำแหน่งเดิม")
+                            machine_preview_rows = df_wo_direct[df_wo_direct["เลือกเครื่องจักร"] == swap_machine]
+                            preview_df = build_work_order_queue_preview(machine_preview_rows, preview_ids)
+                            st.dataframe(preview_df, hide_index=True, use_container_width=False, width=850,
+                                         column_config={
+                                             "คิวปัจจุบัน": st.column_config.TextColumn(width=100),
+                                             "คิวหลังบันทึก": st.column_config.TextColumn(width=110),
+                                             "สถานะ": st.column_config.TextColumn(width=150),
+                                             "แผนงาน": st.column_config.TextColumn(width=100),
+                                             "Drawing": st.column_config.TextColumn(width=300),
+                                         })
                             st.caption("คำนวณลูกโซ่ใหม่ทั้งกลุ่มคิวรอ โดยคงเวลาเริ่มกลุ่มเดิม กรุณาบันทึกตารางสั่งผลิตก่อนจัดคิว")
                             swap_confirm = st.checkbox("ยืนยันลำดับคิวตามตัวอย่างนี้", key=f"wo_swap_confirm_{swap_machine}_{swap_mode}_{selection_key}_{swap_target}")
                             if st.button("🔀 บันทึกการจัดคิว", key="wo_swap_submit", disabled=not swap_confirm):
@@ -8443,6 +8469,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     st.rerun()
                                 else:
                                     st.error(f"จัดคิวไม่สำเร็จ: {swap_error}")
+
+            if is_admin:
+                render_work_order_queue_controls()
 
             wo_finish_map = dict(zip(df_wo_direct["ID"].astype(str), df_wo_direct["_dt_finish"]))
 
