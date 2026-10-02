@@ -398,6 +398,28 @@ def get_production_queue_sort_key(row):
     order_time = actual if actual is not None and not pd.isna(actual) else ready
     return (priority, order_time if order_time is not None and not pd.isna(order_time) else pd.Timestamp.max, safe_int(row.get("ID")))
 
+def production_schedule_metadata(row):
+    raw = row.get("ติดตาม Step", row.get("step_progress"))
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            value = json.loads(raw)
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+def production_not_before(row):
+    """ข้อกำหนดเริ่มใบงาน แยกจากเวลาคิวที่คำนวณใหม่"""
+    metadata = production_schedule_metadata(row)
+    if metadata.get("schedule_mode") == "auto":
+        return None
+    requested = first_valid_datetime(metadata.get("planned_not_before"))
+    if requested is not None:
+        return requested
+    return None
+
 def calculate_production_chain(source_df, active_only=True, preserve_input_order=False):
     """คำนวณลูกโซ่ Production จากกฎกลางชุดเดียวของทั้งระบบ
 
@@ -476,6 +498,10 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
             machine_available.setdefault(machine_name, None)
             continue
 
+        if not is_live:
+            not_before = production_not_before(row)
+            if not_before is not None:
+                start_dt = get_next_valid_work_time(max(start_dt, not_before))
         _, finish_dt = add_work_time_with_shift(start_dt, get_planned_minutes(row) / 60.0)
         # แยก "เวลาจบตามแผนของแถว" ออกจาก "เวลาที่เครื่องพร้อมรับคิวถัดไป"
         # งานที่ยังรันและเลยแผนแล้วต้องไม่แสดงเวลาปัจจุบันเป็นเวลาจบตามแผน
@@ -1401,7 +1427,11 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
         if finish_dt is not None and pd.notna(finish_dt):
             steps[-1]["finished_at"] = finish_dt.strftime("%Y-%m-%d %H:%M:%S")
         current_index = len(steps) - 1
-    return {"steps": steps, "current_index": current_index}
+    result = {"steps": steps, "current_index": current_index}
+    for key in ("schedule_mode", "planned_not_before"):
+        if key in progress:
+            result[key] = progress[key]
+    return result
 
 def step_elapsed_seconds(step_item, now_dt=None):
     start_dt = parse_flexible_datetime(step_item.get("started_at"))
@@ -1612,6 +1642,7 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
             "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
             "machine_name": "เลือกเครื่องจักร", "status": "สถานะงาน",
             "ready_at": "วัน-เวลาขึ้นงาน", "actual_start": "เริ่มจริง",
+            "step_progress": "ติดตาม Step", "job_type": "ประเภทงาน", "baseline_ready_at": "กำหนดพร้อมขึ้นงาน (Baseline)",
             "setup_mins": "Setup (น.)", "basic_hrs": "Basic (น.)", "prog_hrs": "โปรแกรม (น.)",
         })
         chain_df = calculate_production_chain(ordered_df, active_only=True, preserve_input_order=True)
@@ -1724,7 +1755,7 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs"
         params = {
-            "select": "id,plan_code,drawing_name,machine_name,status,ready_at,actual_start,setup_mins,basic_hrs,prog_hrs",
+            "select": "id,plan_code,drawing_name,machine_name,status,ready_at,actual_start,setup_mins,basic_hrs,prog_hrs,step_progress,job_type,baseline_ready_at",
             "machine_name": f"eq.{machine_name}",
             "order": "ready_at.asc,id.asc"
         }
@@ -6950,251 +6981,310 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.error(error)
 
 
-            with st.expander("📝 สร้างใบงาน Production จาก Drawing Template", expanded=False):
-                if templates is None:
-                    st.warning("กรุณาสร้างตาราง Template ใน Supabase ก่อน")
-                elif not templates:
-                    st.info("ยังไม่มี Drawing Template กรุณาสร้าง Template อย่างน้อย 1 รายการก่อน")
-                else:
-                    normal_template_map = {safe_str(item.get("drawing_name")): item for item in templates}
-                    normal_form_version_key = "normal_template_job_form_version"
-                    normal_last_machine_key = "normal_template_last_machine"
-                    normal_last_drawing_key = "normal_template_last_drawing"
-                    normal_form_version = safe_int(st.session_state.get(normal_form_version_key), 0)
-                    n1, n2, n3 = st.columns([1.2, 2, 1])
-                    with n1:
-                        normal_plan = st.text_input(
-                            "รหัสแผนงาน *",
-                            key=f"normal_template_plan_{normal_form_version}",
-                            placeholder="เช่น 26-146",
-                        )
-                    with n2:
-                        normal_drawing_options = list(normal_template_map.keys())
-                        normal_last_drawing = safe_str(st.session_state.get(normal_last_drawing_key), "")
-                        normal_template_name = st.selectbox(
-                            "Drawing Template",
-                            normal_drawing_options,
-                            index=(
-                                normal_drawing_options.index(normal_last_drawing)
-                                if normal_last_drawing in normal_drawing_options else 0
-                            ),
-                            key=f"normal_template_drawing_{normal_form_version}",
-                        )
-                    normal_tpl = normal_template_map[normal_template_name]
-                    normal_template_id = safe_int(normal_tpl.get("id"), 0)
-                    with n3:
-                        normal_qty = st.number_input(
-                            "จำนวน",
-                            min_value=1,
-                            max_value=10000,
-                            value=max(1, safe_int(normal_tpl.get("default_qty"), 1)),
-                            key=f"normal_template_qty_{normal_form_version}_{normal_template_id}",
-                        )
-
-                    normal_drawing = st.text_input(
-                        "Drawing (แก้ไขชื่อหรือพิมพ์เพิ่มเติมได้)",
-                        value=normal_template_name,
-                        key=f"normal_drawing_edit_{normal_form_version}_{normal_template_id}_{normal_template_name}",
-                        help="แก้เฉพาะใบงาน Production ที่กำลังสร้าง ไม่เปลี่ยนชื่อ Drawing Template ต้นฉบับ",
-                    ).strip()
-
-                    n4, n5, n6 = st.columns([1.5, 1, 1])
-                    with n4:
-                        normal_machine_default = safe_str(normal_tpl.get("machine_name"), MACHINE_LIST[0])
-                        normal_last_machine = safe_str(st.session_state.get(normal_last_machine_key), "")
-                        if normal_last_machine in MACHINE_LIST:
-                            normal_machine_default = normal_last_machine
-                        normal_machine = st.selectbox(
-                            "เครื่องจักร",
-                            MACHINE_LIST,
-                            index=MACHINE_LIST.index(normal_machine_default) if normal_machine_default in MACHINE_LIST else 0,
-                            key=f"normal_template_machine_{normal_form_version}_{normal_template_id}",
-                        )
-                    normal_default_start = get_next_valid_work_time(
-                        get_bangkok_now().replace(tzinfo=None)
-                    ).replace(second=0, microsecond=0)
-                    with n5:
-                        normal_requested_date = st.date_input(
-                            "วันเริ่มขึ้นงาน",
-                            value=normal_default_start.date(),
-                            format="DD/MM/YYYY",
-                            key=f"normal_template_date_{normal_form_version}",
-                        )
-                    with n6:
-                        normal_requested_time = st.time_input(
-                            "เวลาขึ้นงาน",
-                            value=normal_default_start.time(),
-                            key=f"normal_template_time_{normal_form_version}",
-                        )
-
-                    nt1, nt2, nt3 = st.columns(3)
-                    with nt1:
-                        normal_setup_mins = st.number_input(
-                            "Setup (นาที)",
-                            min_value=0.0,
-                            max_value=720.0,
-                            value=max(0.0, safe_float(normal_tpl.get("setup_mins"), DEFAULT_SETUP_MINUTES)),
-                            step=5.0,
-                            key=f"normal_template_setup_{normal_form_version}_{normal_template_id}",
-                        )
-                    with nt2:
-                        normal_basic_mins = st.number_input(
-                            "Basic (นาที)",
-                            min_value=0.0,
-                            max_value=6000.0,
-                            value=max(0.0, safe_float(normal_tpl.get("basic_mins"), DEFAULT_BASIC_MINUTES)),
-                            step=5.0,
-                            key=f"normal_template_basic_{normal_form_version}_{normal_template_id}",
-                        )
-                    with nt3:
-                        normal_program_mins = st.number_input(
-                            "โปรแกรม (นาที)",
-                            min_value=0.0,
-                            max_value=12000.0,
-                            value=max(0.0, safe_float(normal_tpl.get("program_mins"), DEFAULT_PROGRAM_MINUTES)),
-                            step=10.0,
-                            key=f"normal_template_program_{normal_form_version}_{normal_template_id}",
-                        )
-                    st.caption(
-                        "เวลาเริ่มต้นดึงมาจาก Drawing Template — การแก้ไขตรงนี้มีผลเฉพาะใบงานที่กำลังสร้าง "
-                        "และไม่เปลี่ยนข้อมูล Template ต้นฉบับ"
-                    )
-
-                    normal_requested_start = datetime.combine(normal_requested_date, normal_requested_time)
-                    normal_existing_timeline = machine_active_queue_timeline(normal_machine, df_db)
-                    normal_chain_start = normal_append_ready_at(normal_machine, normal_requested_start, df_db)
-                    normal_minutes = normal_setup_mins + normal_basic_mins + normal_program_mins
-                    _, normal_chain_finish = add_work_time_with_shift(normal_chain_start, normal_minutes / 60.0)
-                    normal_steps = template_step_names(normal_tpl)
-                    normal_combined_steps = " → ".join(normal_steps)
-                    normal_template_material = safe_str(normal_tpl.get("material"), "SS400") or "SS400"
-                    normal_material_presets = [item for item in MATERIAL_OPTIONS if item != "อื่น ๆ (พิมพ์เอง)"]
-                    normal_material_default = normal_template_material if normal_template_material in normal_material_presets else "อื่น ๆ (พิมพ์เอง)"
-                    normal_material_key = f"{normal_form_version}_{normal_template_id}_{normal_template_name}"
-                    material_col, custom_material_col = st.columns(2)
-                    with material_col:
-                        normal_material_selected = st.selectbox("วัสดุ", MATERIAL_OPTIONS,
-                            index=MATERIAL_OPTIONS.index(normal_material_default),
-                            key=f"normal_material_select_{normal_material_key}")
-                    with custom_material_col:
-                        normal_material_custom = st.text_input("วัสดุอื่น (พิมพ์เอง)",
-                            value="" if normal_template_material in normal_material_presets else normal_template_material,
-                            placeholder="กรอกเมื่อเลือก อื่น ๆ (พิมพ์เอง)",
-                            key=f"normal_material_custom_{normal_material_key}")
-                    normal_material = normal_material_custom.strip() if normal_material_selected == "อื่น ๆ (พิมพ์เอง)" else normal_material_selected
-
-
-                    if normal_existing_timeline:
-                        previous_job = normal_existing_timeline[-1]
-                        st.warning(
-                            f"🔗 **งานใหม่นี้จะต่อจากคิวที่ {len(normal_existing_timeline)}** — "
-                            f"แผน {previous_job['plan']} | Drawing {previous_job['drawing']} | "
-                            f"เริ่ม {previous_job['start'].strftime('%d/%m/%Y %H:%M')} | "
-                            f"จบประมาณ {previous_job['finish'].strftime('%d/%m/%Y %H:%M')}"
-                        )
-                        with st.expander(
-                            f"📋 ดูคิวเดิมของ {normal_machine} ก่อนสร้างงาน ({len(normal_existing_timeline)} คิว)",
-                            expanded=False,
-                        ):
-                            existing_queue_lines = []
-                            for queue_no, queue_item in enumerate(normal_existing_timeline, start=1):
-                                existing_queue_lines.append(
-                                    f"{queue_no}. แผน {queue_item['plan']} | Drawing {queue_item['drawing']} | "
-                                    f"{queue_item['status']} | เริ่ม {queue_item['start'].strftime('%d/%m/%Y %H:%M')} | "
-                                    f"จบ {queue_item['finish'].strftime('%d/%m/%Y %H:%M')}"
-                                )
-                            st.markdown("  \n".join(existing_queue_lines))
+            @st.fragment
+            def render_normal_template_controls():
+                with st.expander("📝 สร้างใบงาน Production จาก Drawing Template", expanded=False):
+                    if templates is None:
+                        st.warning("กรุณาสร้างตาราง Template ใน Supabase ก่อน")
+                    elif not templates:
+                        st.info("ยังไม่มี Drawing Template กรุณาสร้าง Template อย่างน้อย 1 รายการก่อน")
                     else:
-                        st.success(f"✅ {normal_machine} ยังไม่มีคิวค้าง งานนี้จะเป็นคิวแรกของเครื่อง")
+                        normal_template_map = {safe_str(item.get("drawing_name")): item for item in templates}
+                        normal_form_version_key = "normal_template_job_form_version"
+                        normal_last_machine_key = "normal_template_last_machine"
+                        normal_last_drawing_key = "normal_template_last_drawing"
+                        normal_form_version = safe_int(st.session_state.get(normal_form_version_key), 0)
+                        n1, n2, n3 = st.columns([1.2, 2, 1])
+                        with n1:
+                            normal_plan = st.text_input(
+                                "รหัสแผนงาน *",
+                                key=f"normal_template_plan_{normal_form_version}",
+                                placeholder="เช่น 26-146",
+                            )
+                        with n2:
+                            normal_drawing_options = list(normal_template_map.keys())
+                            normal_last_drawing = safe_str(st.session_state.get(normal_last_drawing_key), "")
+                            normal_template_name = st.selectbox(
+                                "Drawing Template",
+                                normal_drawing_options,
+                                index=(
+                                    normal_drawing_options.index(normal_last_drawing)
+                                    if normal_last_drawing in normal_drawing_options else 0
+                                ),
+                                key=f"normal_template_drawing_{normal_form_version}",
+                            )
+                        normal_tpl = normal_template_map[normal_template_name]
+                        normal_template_id = safe_int(normal_tpl.get("id"), 0)
+                        with n3:
+                            normal_qty = st.number_input(
+                                "จำนวน",
+                                min_value=1,
+                                max_value=10000,
+                                value=max(1, safe_int(normal_tpl.get("default_qty"), 1)),
+                                key=f"normal_template_qty_{normal_form_version}_{normal_template_id}",
+                            )
 
-                    np1, np2, np3 = st.columns(3)
-                    np1.metric("เริ่มงานตามลูกโซ่", normal_chain_start.strftime("%d/%m/%Y %H:%M"))
-                    np2.metric("จบงานตามแผน", normal_chain_finish.strftime("%d/%m/%Y %H:%M"))
-                    np3.metric("เวลารวม", f"{normal_minutes / 60.0:.2f} ชม.")
-                    if normal_minutes <= 0:
-                        st.error("กรุณากำหนดเวลา Setup, Basic หรือโปรแกรม อย่างน้อยหนึ่งช่องให้มากกว่า 0 นาที")
-                    if normal_chain_start > get_next_valid_work_time(normal_requested_start):
-                        st.warning(
-                            "คิวเดิมของเครื่องยังไม่จบ ระบบจึงเลื่อนเวลาเริ่มงานนี้ไปต่อท้ายลูกโซ่อัตโนมัติ"
+                        normal_drawing = st.text_input(
+                            "Drawing (แก้ไขชื่อหรือพิมพ์เพิ่มเติมได้)",
+                            value=normal_template_name,
+                            key=f"normal_drawing_edit_{normal_form_version}_{normal_template_id}_{normal_template_name}",
+                            help="แก้เฉพาะใบงาน Production ที่กำลังสร้าง ไม่เปลี่ยนชื่อ Drawing Template ต้นฉบับ",
+                        ).strip()
+
+                        normal_start_mode = st.radio("การกำหนดเวลาเริ่มใบงาน",
+                            ["ต่อท้ายคิวของเครื่องอัตโนมัติ", "กำหนดวันเวลาเริ่มเอง"], horizontal=True,
+                            key=f"normal_start_mode_{normal_form_version}")
+                        normal_auto_start = normal_start_mode == "ต่อท้ายคิวของเครื่องอัตโนมัติ"
+                        n4, n5, n6 = st.columns([1.5, 1, 1])
+                        with n4:
+                            normal_machine_default = safe_str(normal_tpl.get("machine_name"), MACHINE_LIST[0])
+                            normal_last_machine = safe_str(st.session_state.get(normal_last_machine_key), "")
+                            if normal_last_machine in MACHINE_LIST:
+                                normal_machine_default = normal_last_machine
+                            normal_machine = st.selectbox(
+                                "เครื่องจักร",
+                                MACHINE_LIST,
+                                index=MACHINE_LIST.index(normal_machine_default) if normal_machine_default in MACHINE_LIST else 0,
+                                key=f"normal_template_machine_{normal_form_version}_{normal_template_id}",
+                            )
+                        normal_default_start = get_next_valid_work_time(
+                            get_bangkok_now().replace(tzinfo=None)
+                        ).replace(second=0, microsecond=0)
+                        if not normal_auto_start:
+                            with n5:
+                                normal_requested_date = st.date_input(
+                                    "วันเริ่มขึ้นงาน",
+                                    value=normal_default_start.date(),
+                                    format="DD/MM/YYYY",
+                                    key=f"normal_template_date_{normal_form_version}",
+                                )
+                            with n6:
+                                normal_requested_time = st.time_input(
+                                    "เวลาขึ้นงาน",
+                                    value=normal_default_start.time(),
+                                    key=f"normal_template_time_{normal_form_version}",
+                                )
+
+                        nt1, nt2, nt3 = st.columns(3)
+                        with nt1:
+                            normal_setup_mins = st.number_input(
+                                "Setup (นาที)",
+                                min_value=0.0,
+                                max_value=720.0,
+                                value=max(0.0, safe_float(normal_tpl.get("setup_mins"), DEFAULT_SETUP_MINUTES)),
+                                step=5.0,
+                                key=f"normal_template_setup_{normal_form_version}_{normal_template_id}",
+                            )
+                        with nt2:
+                            normal_basic_mins = st.number_input(
+                                "Basic (นาที)",
+                                min_value=0.0,
+                                max_value=6000.0,
+                                value=max(0.0, safe_float(normal_tpl.get("basic_mins"), DEFAULT_BASIC_MINUTES)),
+                                step=5.0,
+                                key=f"normal_template_basic_{normal_form_version}_{normal_template_id}",
+                            )
+                        with nt3:
+                            normal_program_mins = st.number_input(
+                                "โปรแกรม (นาที)",
+                                min_value=0.0,
+                                max_value=12000.0,
+                                value=max(0.0, safe_float(normal_tpl.get("program_mins"), DEFAULT_PROGRAM_MINUTES)),
+                                step=10.0,
+                                key=f"normal_template_program_{normal_form_version}_{normal_template_id}",
+                            )
+                        st.caption(
+                            "เวลาเริ่มต้นดึงมาจาก Drawing Template — การแก้ไขตรงนี้มีผลเฉพาะใบงานที่กำลังสร้าง "
+                            "และไม่เปลี่ยนข้อมูล Template ต้นฉบับ"
                         )
-                    st.info(
-                        f"📄 Drawing: **{normal_drawing}** | 🔩 วัสดุ: **{normal_material}** | "
-                        f"🏭 เครื่อง: **{normal_machine}**  \n"
-                        f"รายการ Step: **{normal_combined_steps}**"
-                    )
-                    normal_confirm = st.checkbox(
-                        "ตรวจสอบข้อมูลแล้ว ยืนยันสร้างเป็นงานปกติและต่อท้ายคิวของเครื่องนี้",
-                        key=f"normal_template_confirm_{normal_form_version}_{normal_template_id}",
-                    )
-                    create_normal_job = st.button(
-                        "💾 สร้างใบงานและส่งเข้าคิวผลิต",
-                        type="primary",
-                        use_container_width=True,
-                        disabled=(not normal_confirm or normal_minutes <= 0 or not normal_drawing or not normal_material),
-                        key=f"normal_template_submit_{normal_form_version}_{normal_template_id}",
-                    )
-                    if create_normal_job:
-                        if not normal_plan.strip():
-                            st.error("กรุณาระบุรหัสแผนงาน")
-                        elif not normal_drawing:
-                            st.error("กรุณาระบุชื่อ Drawing")
-                        elif not normal_material:
-                            st.error("กรุณาระบุวัสดุของใบงาน")
-                        else:
-                            # อ่านคิวล่าสุดอีกครั้งก่อนบันทึก ป้องกันเวลาซ้อนเมื่อมีผู้ใช้สร้างงานพร้อมกัน
-                            fetch_jobs_from_supabase.clear()
-                            fresh_normal_jobs = fetch_jobs_from_supabase()
-                            fresh_status = fresh_normal_jobs.get(
-                                "สถานะงาน", pd.Series(index=fresh_normal_jobs.index, dtype=str)
-                            ).fillna("").astype(str) if isinstance(fresh_normal_jobs, pd.DataFrame) else pd.Series(dtype=str)
-                            duplicate_normal_job = False
-                            if isinstance(fresh_normal_jobs, pd.DataFrame) and not fresh_normal_jobs.empty:
-                                duplicate_normal_job = bool((
-                                    fresh_normal_jobs["แผนงาน"].map(normalize_filter_key).eq(normalize_filter_key(normal_plan)) &
-                                    fresh_normal_jobs["ชื่อ Drawing."].map(normalize_filter_key).eq(normalize_filter_key(normal_drawing)) &
-                                    fresh_normal_jobs["เลือกเครื่องจักร"].map(normalize_filter_key).eq(normalize_filter_key(normal_machine)) &
-                                    ~fresh_status.str.contains("เสร็จสิ้น|ยกเลิก", regex=True, na=False)
-                                ).any())
-                            if duplicate_normal_job:
-                                st.error("พบคิวงานแผนและ Drawing เดียวกันบนเครื่องนี้แล้ว ระบบยังไม่สร้างรายการซ้ำ")
-                            else:
-                                fresh_chain_start = normal_append_ready_at(
-                                    normal_machine, normal_requested_start, fresh_normal_jobs
-                                )
-                                _, fresh_chain_finish = add_work_time_with_shift(
-                                    fresh_chain_start, normal_minutes / 60.0
-                                )
-                                normal_payload = {
-                                    "plan_code": normal_plan.strip(),
-                                    "drawing_name": normal_drawing,
-                                    "qty": int(normal_qty),
-                                    "material": normal_material,
-                                    "job_type": "🟢 งานปกติ",
-                                    "step_name": normal_combined_steps,
-                                    "machine_name": normal_machine,
-                                    "ready_at": fresh_chain_start.strftime("%Y-%m-%d %H:%M:%S"),
-                                    "baseline_ready_at": fresh_chain_start.strftime("%Y-%m-%d %H:%M:%S"),
-                                    "baseline_finish_at": fresh_chain_finish.strftime("%Y-%m-%d %H:%M:%S"),
-                                    "setup_mins": float(normal_setup_mins),
-                                    "basic_hrs": float(normal_basic_mins),
-                                    "prog_hrs": float(normal_program_mins),
-                                    "status": "🟧 รอคิวผลิต",
-                                    "step_progress": normalize_step_progress(
-                                        None, normal_combined_steps, "🟧 รอคิวผลิต"
-                                    ),
-                                }
-                                # ล้างเฉพาะข้อมูลคิวงาน ไม่ล้างแคชทั้งระบบ เพื่อให้บันทึกและโหลดหน้าถัดไปเร็วขึ้น
-                                if insert_supabase_job(normal_payload, clear_cache=False):
-                                    st.session_state[normal_last_machine_key] = normal_machine
-                                    st.session_state[normal_last_drawing_key] = normal_template_name
-                                    st.session_state[normal_form_version_key] = normal_form_version + 1
-                                    fetch_jobs_from_supabase.clear()
-                                    st.success(
-                                        f"สร้างใบงาน {normal_plan.strip()} / {normal_drawing} และส่งเข้าคิว {normal_machine} เรียบร้อยแล้ว"
+
+                        normal_requested_start = (get_bangkok_now().replace(tzinfo=None)
+                            if normal_auto_start else datetime.combine(normal_requested_date, normal_requested_time))
+                        normal_existing_timeline = machine_active_queue_timeline(normal_machine, df_db)
+                        normal_chain_start = normal_append_ready_at(normal_machine, normal_requested_start, df_db)
+                        normal_minutes = normal_setup_mins + normal_basic_mins + normal_program_mins
+                        _, normal_chain_finish = add_work_time_with_shift(normal_chain_start, normal_minutes / 60.0)
+                        normal_steps = template_step_names(normal_tpl)
+                        normal_combined_steps = " → ".join(normal_steps)
+                        normal_template_material = safe_str(normal_tpl.get("material"), "SS400") or "SS400"
+                        normal_material_presets = [item for item in MATERIAL_OPTIONS if item != "อื่น ๆ (พิมพ์เอง)"]
+                        normal_material_default = normal_template_material if normal_template_material in normal_material_presets else "อื่น ๆ (พิมพ์เอง)"
+                        normal_material_key = f"{normal_form_version}_{normal_template_id}_{normal_template_name}"
+                        material_col, custom_material_col = st.columns(2)
+                        with material_col:
+                            normal_material_selected = st.selectbox("วัสดุ", MATERIAL_OPTIONS,
+                                index=MATERIAL_OPTIONS.index(normal_material_default),
+                                key=f"normal_material_select_{normal_material_key}")
+                        with custom_material_col:
+                            normal_material_custom = st.text_input("วัสดุอื่น (พิมพ์เอง)",
+                                value="" if normal_template_material in normal_material_presets else normal_template_material,
+                                placeholder="กรอกเมื่อเลือก อื่น ๆ (พิมพ์เอง)",
+                                key=f"normal_material_custom_{normal_material_key}")
+                        normal_material = normal_material_custom.strip() if normal_material_selected == "อื่น ๆ (พิมพ์เอง)" else normal_material_selected
+
+
+                        if normal_existing_timeline:
+                            previous_job = normal_existing_timeline[-1]
+                            st.warning(
+                                f"🔗 **งานใหม่นี้จะต่อจากคิวที่ {len(normal_existing_timeline)}** — "
+                                f"แผน {previous_job['plan']} | Drawing {previous_job['drawing']} | "
+                                f"เริ่ม {previous_job['start'].strftime('%d/%m/%Y %H:%M')} | "
+                                f"จบประมาณ {previous_job['finish'].strftime('%d/%m/%Y %H:%M')}"
+                            )
+                            with st.expander(
+                                f"📋 ดูคิวเดิมของ {normal_machine} ก่อนสร้างงาน ({len(normal_existing_timeline)} คิว)",
+                                expanded=False,
+                            ):
+                                existing_queue_lines = []
+                                for queue_no, queue_item in enumerate(normal_existing_timeline, start=1):
+                                    existing_queue_lines.append(
+                                        f"{queue_no}. แผน {queue_item['plan']} | Drawing {queue_item['drawing']} | "
+                                        f"{queue_item['status']} | เริ่ม {queue_item['start'].strftime('%d/%m/%Y %H:%M')} | "
+                                        f"จบ {queue_item['finish'].strftime('%d/%m/%Y %H:%M')}"
                                     )
-                                    st.rerun()
+                                st.markdown("  \n".join(existing_queue_lines))
+                        else:
+                            st.success(f"✅ {normal_machine} ยังไม่มีคิวค้าง งานนี้จะเป็นคิวแรกของเครื่อง")
+
+                        np1, np2, np3 = st.columns(3)
+                        np1.metric("เริ่มงานตามลูกโซ่", normal_chain_start.strftime("%d/%m/%Y %H:%M"))
+                        np2.metric("จบงานตามแผน", normal_chain_finish.strftime("%d/%m/%Y %H:%M"))
+                        np3.metric("เวลารวม", f"{normal_minutes / 60.0:.2f} ชม.")
+                        if normal_minutes <= 0:
+                            st.error("กรุณากำหนดเวลา Setup, Basic หรือโปรแกรม อย่างน้อยหนึ่งช่องให้มากกว่า 0 นาที")
+                        if normal_chain_start > get_next_valid_work_time(normal_requested_start):
+                            st.warning(
+                                "คิวเดิมของเครื่องยังไม่จบ ระบบจึงเลื่อนเวลาเริ่มงานนี้ไปต่อท้ายลูกโซ่อัตโนมัติ"
+                            )
+                        st.info(
+                            f"📄 Drawing: **{normal_drawing}** | 🔩 วัสดุ: **{normal_material}** | "
+                            f"🏭 เครื่อง: **{normal_machine}**  \n"
+                            f"รายการ Step: **{normal_combined_steps}**"
+                        )
+                        normal_confirm = st.checkbox(
+                            "ตรวจสอบข้อมูลแล้ว ยืนยันสร้างเป็นงานปกติและต่อท้ายคิวของเครื่องนี้",
+                            key=f"normal_template_confirm_{normal_form_version}_{normal_template_id}",
+                        )
+                        create_normal_job = st.button(
+                            "💾 สร้างใบงานและส่งเข้าคิวผลิต",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=(not normal_confirm or normal_minutes <= 0 or not normal_drawing or not normal_material),
+                            key=f"normal_template_submit_{normal_form_version}_{normal_template_id}",
+                        )
+                        if create_normal_job:
+                            if not normal_plan.strip():
+                                st.error("กรุณาระบุรหัสแผนงาน")
+                            elif not normal_drawing:
+                                st.error("กรุณาระบุชื่อ Drawing")
+                            elif not normal_material:
+                                st.error("กรุณาระบุวัสดุของใบงาน")
+                            else:
+                                # อ่านคิวล่าสุดอีกครั้งก่อนบันทึก ป้องกันเวลาซ้อนเมื่อมีผู้ใช้สร้างงานพร้อมกัน
+                                fetch_jobs_from_supabase.clear()
+                                fresh_normal_jobs = fetch_jobs_from_supabase()
+                                fresh_status = fresh_normal_jobs.get(
+                                    "สถานะงาน", pd.Series(index=fresh_normal_jobs.index, dtype=str)
+                                ).fillna("").astype(str) if isinstance(fresh_normal_jobs, pd.DataFrame) else pd.Series(dtype=str)
+                                duplicate_normal_job = False
+                                if isinstance(fresh_normal_jobs, pd.DataFrame) and not fresh_normal_jobs.empty:
+                                    duplicate_normal_job = bool((
+                                        fresh_normal_jobs["แผนงาน"].map(normalize_filter_key).eq(normalize_filter_key(normal_plan)) &
+                                        fresh_normal_jobs["ชื่อ Drawing."].map(normalize_filter_key).eq(normalize_filter_key(normal_drawing)) &
+                                        fresh_normal_jobs["เลือกเครื่องจักร"].map(normalize_filter_key).eq(normalize_filter_key(normal_machine)) &
+                                        ~fresh_status.str.contains("เสร็จสิ้น|ยกเลิก", regex=True, na=False)
+                                    ).any())
+                                if duplicate_normal_job:
+                                    st.error("พบคิวงานแผนและ Drawing เดียวกันบนเครื่องนี้แล้ว ระบบยังไม่สร้างรายการซ้ำ")
                                 else:
-                                    st.error("สร้างใบงานไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อฐานข้อมูล")
+                                    fresh_chain_start = normal_append_ready_at(
+                                        normal_machine, normal_requested_start, fresh_normal_jobs
+                                    )
+                                    _, fresh_chain_finish = add_work_time_with_shift(
+                                        fresh_chain_start, normal_minutes / 60.0
+                                    )
+                                    normal_payload = {
+                                        "plan_code": normal_plan.strip(),
+                                        "drawing_name": normal_drawing,
+                                        "qty": int(normal_qty),
+                                        "material": normal_material,
+                                        "job_type": "🟢 งานปกติ",
+                                        "step_name": normal_combined_steps,
+                                        "machine_name": normal_machine,
+                                        "ready_at": fresh_chain_start.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "baseline_ready_at": fresh_chain_start.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "baseline_finish_at": fresh_chain_finish.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "setup_mins": float(normal_setup_mins),
+                                        "basic_hrs": float(normal_basic_mins),
+                                        "prog_hrs": float(normal_program_mins),
+                                        "status": "🟧 รอคิวผลิต",
+                                        "step_progress": normalize_step_progress(
+                                            None, normal_combined_steps, "🟧 รอคิวผลิต"
+                                        ),
+                                    }
+                                    # ล้างเฉพาะข้อมูลคิวงาน ไม่ล้างแคชทั้งระบบ เพื่อให้บันทึกและโหลดหน้าถัดไปเร็วขึ้น
+                                    normal_payload["step_progress"]["schedule_mode"] = "auto" if normal_auto_start else "manual"
+                                    if not normal_auto_start:
+                                        normal_payload["step_progress"]["planned_not_before"] = normal_requested_start.strftime("%Y-%m-%d %H:%M:%S")
+                                    if insert_supabase_job(normal_payload, clear_cache=False):
+                                        st.session_state[normal_last_machine_key] = normal_machine
+                                        st.session_state[normal_last_drawing_key] = normal_template_name
+                                        st.session_state[normal_form_version_key] = normal_form_version + 1
+                                        fetch_jobs_from_supabase.clear()
+                                        st.success(
+                                            f"สร้างใบงาน {normal_plan.strip()} / {normal_drawing} และส่งเข้าคิว {normal_machine} เรียบร้อยแล้ว"
+                                        )
+                                        st.rerun()
+                                    else:
+                                        st.error("สร้างใบงานไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อฐานข้อมูล")
+
+            render_normal_template_controls()
+
+            @st.fragment
+            def render_waiting_start_requirement():
+                with st.expander("🗓️ แก้กำหนดเวลาเริ่มของใบงานที่รอคิว", expanded=False):
+                    waiting = df_db[df_db["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)] if not df_db.empty else pd.DataFrame()
+                    if waiting.empty:
+                        st.caption("ไม่มีใบงานรอคิว")
+                        return
+                    waiting_map = {safe_int(row["ID"]): row for _, row in waiting.iterrows()}
+                    job_id = st.selectbox("เลือกใบงานรอคิว", list(waiting_map),
+                        format_func=lambda value: f"{waiting_map[value]['เลือกเครื่องจักร']} | {waiting_map[value]['แผนงาน']} | {waiting_map[value]['ชื่อ Drawing.']}", key="waiting_start_job")
+                    job = waiting_map[job_id]
+                    initial = first_valid_datetime(production_not_before(job), job.get("กำหนดพร้อมขึ้นงาน (Baseline)"), job.get("วัน-เวลาขึ้นงาน")) or get_bangkok_now().replace(tzinfo=None)
+                    manual_default = production_not_before(job) is not None
+                    mode = st.radio("วิธีเริ่มใบงาน", ["ต่อคิวอัตโนมัติ", "เริ่มไม่ก่อนวันเวลาที่กำหนด"], index=1 if manual_default else 0, key=f"waiting_start_mode_{job_id}")
+                    requested = None
+                    if mode != "ต่อคิวอัตโนมัติ":
+                        c1, c2 = st.columns(2)
+                        date = c1.date_input("วันเริ่มขึ้นงาน", initial.date(), format="DD/MM/YYYY", key=f"waiting_start_date_{job_id}")
+                        time = c2.time_input("เวลาขึ้นงาน", initial.time(), key=f"waiting_start_time_{job_id}")
+                        requested = datetime.combine(date, time)
+                    st.caption("คงลำดับคิวเดิม: เริ่มหลังคิวก่อนหน้าเสร็จ และไม่ก่อนเวลาที่กำหนด โดยใช้กะโรงงาน")
+                    if st.button("💾 บันทึกกำหนดเวลาเริ่ม", key="waiting_start_submit"):
+                        try:
+                            endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
+                            response = requests.get(endpoint, headers=get_supabase_headers(), params={"id": f"eq.{job_id}", "select": "status,step_progress"}, timeout=8)
+                            live_rows = response.json() if response.status_code == 200 else []
+                            if not live_rows or "รอคิว" not in safe_str(live_rows[0].get("status")):
+                                st.error("ใบงานเปลี่ยนสถานะหรืออ่านข้อมูลไม่สำเร็จ กรุณารีเฟรช")
+                                return
+                            metadata = production_schedule_metadata(live_rows[0]).copy()
+                            metadata["schedule_mode"] = "auto" if requested is None else "manual"
+                            if requested is None:
+                                metadata.pop("planned_not_before", None)
+                            else:
+                                metadata["planned_not_before"] = requested.strftime("%Y-%m-%d %H:%M:%S")
+                            if update_supabase_job(job_id, {"step_progress": metadata}):
+                                st.session_state.pop("editor_cnc_jobs_grid_main", None)
+                                st.toast("บันทึกเวลาเริ่มและคำนวณคิวใหม่แล้ว", icon="✅")
+                                st.rerun()
+                            else:
+                                st.error("บันทึกไม่สำเร็จ กรุณาลองใหม่")
+                        except Exception:
+                            st.error("เชื่อมต่อฐานข้อมูลไม่สำเร็จ กรุณาลองใหม่")
+
+            render_waiting_start_requirement()
 
             @st.fragment
             def render_urgent_template_controls():
@@ -7600,7 +7690,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน",
                 # ต้องเก็บเวลาเริ่มจริงไว้เป็นจุดตั้งต้นของงานที่กด Start แล้ว
                 # มิฉะนั้นการรันลูกโซ่ใหม่จะย้อนกลับไปใช้ ready_at เก่าและลากทั้งเครื่องไปวันเดิม
-                "เริ่มจริง", "เสร็จจริง", "เริ่มพักจริง", "เวลาพักสะสม (วินาที)",
+                "เริ่มจริง", "เสร็จจริง", "เริ่มพักจริง", "เวลาพักสะสม (วินาที)", "ติดตาม Step",
             ]
             calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
             active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
