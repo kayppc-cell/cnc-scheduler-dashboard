@@ -491,6 +491,26 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
     jobs["_chain_finish"] = chain_finishes
     return jobs.drop(columns=["_chain_priority", "_chain_order_time", "_chain_input_order"], errors="ignore")
 
+def get_current_production_window(row):
+    """เวลาแสดงคิวปัจจุบันทุกเครื่อง/สถานะจากลูกโซ่กลาง ไม่มี Baseline เป็น fallback"""
+    start = first_valid_datetime(row.get("_chain_start"))
+    finish = first_valid_datetime(row.get("_chain_finish"))
+    if start is None:
+        status = safe_str(row.get("สถานะงาน"))
+        start = first_valid_datetime(row.get("เริ่มจริง")) if any(value in status for value in ("กำลังผลิต", "พักงาน", "รอวัสดุ")) else None
+        start = start if start is not None else first_valid_datetime(row.get("วัน-เวลาขึ้นงาน"))
+        if start is not None:
+            start = get_next_valid_work_time(start)
+    if start is not None and finish is None:
+        _, finish = add_work_time_with_shift(start, get_planned_minutes(row) / 60.0)
+    return start, finish
+
+def production_baseline_caption(row):
+    """ข้อความแผนอ้างอิงเดิม แสดงแยกจากคิวปัจจุบันโดยไม่เขียนข้อมูล"""
+    start = first_valid_datetime(row.get("กำหนดพร้อมขึ้นงาน (Baseline)"))
+    finish = first_valid_datetime(row.get("เวลาจบ Baseline"))
+    return f"Baseline เดิม: เริ่ม {format_thai_datetime(start) or '-'} • จบ {format_thai_datetime(finish) or '-'}"
+
 def build_operator_finish_feedback(finished_rows, actual_finish_dt):
     """สรุปผล Finish เทียบแผนสำหรับแสดงครั้งเดียวหลังบันทึกสำเร็จ"""
     on_time_count, late_count, no_plan_count = 0, 0, 0
@@ -1673,7 +1693,7 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
     except Exception as exc:
         return False, f"เกิดข้อผิดพลาดระหว่างแก้เวลาเริ่มจริง: {safe_str(exc, 'ไม่ทราบสาเหตุ')}", 0
 
-def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: int) -> tuple[bool, str, list]:
+def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: int, move_job_ids=None) -> tuple[bool, str, list]:
     """สลับตำแหน่งคิวรอสองงานบนเครื่องเดียวกัน แล้วคำนวณลูกโซ่คิวรอใหม่ทั้งหมด"""
     source_job_id, target_job_id = safe_int(source_job_id), safe_int(target_job_id)
     if source_job_id <= 0 or target_job_id <= 0 or source_job_id == target_job_id:
@@ -1703,9 +1723,19 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
             for row in live_rows if safe_int(row.get("id")) > 0
         }
 
-        # สลับเฉพาะตำแหน่ง แต่ใช้เวลาของงานแต่ละรายการคำนวณลูกโซ่ใหม่
-        source_idx, target_idx = waiting_ids.index(source_job_id), waiting_ids.index(target_job_id)
-        waiting_rows[source_idx], waiting_rows[target_idx] = waiting_rows[target_idx], waiting_rows[source_idx]
+        if move_job_ids is not None:
+            selected_ids = {safe_int(job_id) for job_id in move_job_ids}
+            if not selected_ids or target_job_id in selected_ids or not selected_ids.issubset(set(waiting_ids)):
+                return False, "คิวที่เลือกเปลี่ยนสถานะ หรือคิวปลายทางอยู่ในกลุ่ม กรุณารีเฟรชและเลือกใหม่", []
+            # คงลำดับคิวล่าสุดของงานที่เลือก ไม่ใช้ลำดับการคลิก
+            moving_rows = [row for row in waiting_rows if safe_int(row.get("id")) in selected_ids]
+            remaining_rows = [row for row in waiting_rows if safe_int(row.get("id")) not in selected_ids]
+            insert_at = next(index for index, row in enumerate(remaining_rows) if safe_int(row.get("id")) == target_job_id)
+            waiting_rows = remaining_rows[:insert_at] + moving_rows + remaining_rows[insert_at:]
+        else:
+            # สลับตำแหน่งสองงานตามโหมดเดิม
+            source_idx, target_idx = waiting_ids.index(source_job_id), waiting_ids.index(target_job_id)
+            waiting_rows[source_idx], waiting_rows[target_idx] = waiting_rows[target_idx], waiting_rows[source_idx]
 
         # การสลับตำแหน่งต้องคงจุดเริ่มต้นเดิมของกลุ่มคิวรอ ไม่ใช้เวลาเดิมของแถวที่ถูกย้ายขึ้นมา
         waiting_anchor_candidates = [
@@ -6071,34 +6101,13 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             p_m = safe_float(step_row.get("โปรแกรม (น.)"), 120.0)
             tot_h = (s_m + b_m + p_m) / 60.0
 
-            # คิวรอต้องแสดงลูกโซ่ปัจจุบัน; งานที่เริ่มแล้วเทียบ Baseline เดิม
-            if is_step_waiting:
-                r_parsed = first_valid_datetime(step_row.get("_chain_start"), step_row.get("วัน-เวลาขึ้นงาน"))
-                stored_finish_w_dt = first_valid_datetime(step_row.get("_chain_finish"))
-                queue_start_label = "เริ่มตามคิวปัจจุบัน"
-                queue_finish_label = "จบตามคิวปัจจุบัน"
-            else:
-                r_parsed = first_valid_datetime(step_row.get("กำหนดพร้อมขึ้นงาน (Baseline)"), step_row.get("วัน-เวลาขึ้นงาน"))
-                stored_finish_w_dt = get_job_planned_finish(step_row)
-                queue_start_label = "กำหนดขึ้นงาน (Baseline)"
-                queue_finish_label = "กำหนดจบ (Baseline)"
-            if r_parsed is None or pd.isna(r_parsed) or r_parsed.year < 2020:
-                start_w_dt = None
-            else:
-                start_w_dt = get_next_valid_work_time(r_parsed)
-
-            if start_w_dt is None:
-                finish_w_dt = None
-                ready_display_str = "-"
-                finish_plan_display_str = "-"
-            else:
-                # ใช้เวลาจบแผนที่บันทึกไว้เป็นหลัก เพื่อให้ทุกหน้าตรวจหลุดแผนจากค่าเดียวกัน
-                if stored_finish_w_dt is not None and pd.notna(stored_finish_w_dt):
-                    finish_w_dt = stored_finish_w_dt
-                else:
-                    _, finish_w_dt = add_work_time_with_shift(start_w_dt, tot_h)
-                ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.")
-                finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.")
+            # เวลาแสดงหลักตรงกับใบจ่ายคิวและทีวีทุกสถานะ/ทุกเครื่อง
+            start_w_dt, finish_w_dt = get_current_production_window(step_row)
+            queue_start_label = "เริ่มตามคิวปัจจุบัน"
+            queue_finish_label = "จบตามคิวปัจจุบัน"
+            ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.") if start_w_dt is not None else "-"
+            finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.") if finish_w_dt is not None else "-"
+            baseline_caption_html = html.escape(production_baseline_caption(step_row))
 
             operator_now = get_bangkok_now().replace(tzinfo=None)
             is_running_overdue = bool(
@@ -6136,7 +6145,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 badge_gradient = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
                 status_badge_html = ''
 
-            card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>{queue_start_label}:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>{queue_finish_label}:</b> {finish_plan_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
+            card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>{queue_start_label}:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>{queue_finish_label}:</b> {finish_plan_display_str}</span><span class="badge-chip badge-date">{baseline_caption_html}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
             st.markdown(card_header_html, unsafe_allow_html=True)
 
             card_style_class = "step-card"
@@ -8396,22 +8405,44 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         def wo_swap_label(job_id):
                             row = swap_map[job_id]
                             return f"{row['ลำดับคิว']} | {row['แผนงาน']} | {row['ชื่อ Drawing.']} | ID {job_id}"
-                        swap_source = st.selectbox("คิวต้นทาง", list(swap_map), format_func=wo_swap_label, key=f"wo_swap_source_{swap_machine}")
-                        swap_target = st.selectbox("สลับกับคิว", [job_id for job_id in swap_map if job_id != swap_source], format_func=wo_swap_label, key=f"wo_swap_target_{swap_machine}_{swap_source}")
-                        st.info(f"{wo_swap_label(swap_source)} ↔ {wo_swap_label(swap_target)}")
-                        st.caption("สลับเฉพาะคิวรอของเครื่องนี้ โดยคงจุดเริ่มของกลุ่มคิวเดิมและคำนวณเวลาตามความยาวงานใหม่ (ไม่ใช่เวลาเริ่มจริง) กรุณาบันทึกการแก้ไขตารางสั่งผลิตก่อนสลับคิว")
-                        swap_confirm = st.checkbox("ยืนยันสลับคิวสองรายการนี้", key=f"wo_swap_confirm_{swap_machine}_{swap_source}_{swap_target}")
-                        if st.button("🔀 บันทึกการสลับคิว", key="wo_swap_submit", disabled=not swap_confirm):
-                            swapped, swap_error, changed_rows = reorder_waiting_queue(swap_machine, swap_source, swap_target)
-                            if swapped:
-                                for job_id in (swap_source, swap_target):
-                                    row = swap_map[job_id]
-                                    log_job_event(job_id, safe_str(row.get("แผนงาน")), safe_str(row.get("ชื่อ Drawing.")), swap_machine, "Swap Queue", reason="ปรับลำดับการผลิต", note=f"สลับคิว ID {swap_source} กับ {swap_target} จากใบจ่ายคิว")
-                                st.session_state.pop("editor_cnc_jobs_grid_main", None)
-                                st.toast(f"สลับคิวเรียบร้อย และคำนวณเวลาใหม่ {len(changed_rows)} คิว", icon="🔀")
-                                st.rerun()
+                        swap_mode = st.radio("วิธีจัดคิว", ["สลับสองคิว", "ย้ายหลายคิวเป็นกลุ่ม"], horizontal=True, key="wo_swap_mode")
+                        if swap_mode == "สลับสองคิว":
+                            swap_sources = [st.selectbox("คิวต้นทาง", list(swap_map), format_func=wo_swap_label, key=f"wo_swap_source_{swap_machine}")]
+                        else:
+                            swap_sources = st.multiselect("คิวต้นทาง (เลือกได้หลายคิว)", list(swap_map), format_func=wo_swap_label, key=f"wo_move_sources_{swap_machine}")
+                            st.caption("งานที่เลือกจะย้ายมาเรียงต่อกันก่อนคิวปลายทาง โดยคงลำดับเดิมในคิว ไม่ใช้ลำดับการคลิก")
+                        target_options = [job_id for job_id in swap_map if job_id not in swap_sources]
+                        if not swap_sources:
+                            st.caption("เลือกคิวต้นทางอย่างน้อย 1 รายการ")
+                        elif not target_options:
+                            st.warning("เหลือคิวที่ไม่ได้เลือกอย่างน้อย 1 รายการเพื่อใช้เป็นคิวปลายทาง")
+                        else:
+                            selection_key = "_".join(str(job_id) for job_id in sorted(swap_sources))
+                            swap_target = st.selectbox("สลับกับคิว" if swap_mode == "สลับสองคิว" else "ย้ายกลุ่มไปก่อนคิว", target_options, format_func=wo_swap_label, key=f"wo_swap_target_{swap_machine}_{swap_mode}_{selection_key}")
+                            preview_ids = list(swap_map)
+                            if swap_mode == "สลับสองคิว":
+                                source_index, target_index = preview_ids.index(swap_sources[0]), preview_ids.index(swap_target)
+                                preview_ids[source_index], preview_ids[target_index] = preview_ids[target_index], preview_ids[source_index]
                             else:
-                                st.error(f"สลับคิวไม่สำเร็จ: {swap_error}")
+                                moving_ids = [job_id for job_id in preview_ids if job_id in swap_sources]
+                                preview_ids = [job_id for job_id in preview_ids if job_id not in swap_sources]
+                                target_index = preview_ids.index(swap_target)
+                                preview_ids[target_index:target_index] = moving_ids
+                            st.markdown("**ลำดับคิวรอหลังบันทึก**")
+                            st.dataframe(pd.DataFrame([{"ลำดับคิวรอใหม่": index + 1, "ID": job_id, "แผนงาน": swap_map[job_id]["แผนงาน"], "Drawing": swap_map[job_id]["ชื่อ Drawing."]} for index, job_id in enumerate(preview_ids)]), hide_index=True, use_container_width=True)
+                            st.caption("คำนวณลูกโซ่ใหม่ทั้งกลุ่มคิวรอ โดยคงเวลาเริ่มกลุ่มเดิม กรุณาบันทึกตารางสั่งผลิตก่อนจัดคิว")
+                            swap_confirm = st.checkbox("ยืนยันลำดับคิวตามตัวอย่างนี้", key=f"wo_swap_confirm_{swap_machine}_{swap_mode}_{selection_key}_{swap_target}")
+                            if st.button("🔀 บันทึกการจัดคิว", key="wo_swap_submit", disabled=not swap_confirm):
+                                swapped, swap_error, changed_rows = reorder_waiting_queue(swap_machine, swap_sources[0], swap_target, move_job_ids=swap_sources if swap_mode != "สลับสองคิว" else None)
+                                if swapped:
+                                    for job_id in swap_sources:
+                                        row = swap_map[job_id]
+                                        log_job_event(job_id, safe_str(row.get("แผนงาน")), safe_str(row.get("ชื่อ Drawing.")), swap_machine, "Swap Queue", reason="ปรับลำดับการผลิต", note=f"{swap_mode}: ID {swap_sources} ปลายทาง {swap_target} จากใบจ่ายคิว")
+                                    st.session_state.pop("editor_cnc_jobs_grid_main", None)
+                                    st.toast(f"จัดคิวเรียบร้อย และคำนวณเวลาใหม่ {len(changed_rows)} คิว", icon="🔀")
+                                    st.rerun()
+                                else:
+                                    st.error(f"จัดคิวไม่สำเร็จ: {swap_error}")
 
             wo_finish_map = dict(zip(df_wo_direct["ID"].astype(str), df_wo_direct["_dt_finish"]))
 
@@ -11316,7 +11347,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
 elif st.session_state.current_view == "📺 จอทีวีแสดงงานแผนกผลิต":
     st.cache_data.clear()
     df_live = fetch_jobs_from_supabase()
-    # คิวรอแสดงเวลาลูกโซ่ปัจจุบัน; งานสดยังเทียบกับ Baseline เดิม
+    # ทุกสถานะแสดงเวลาลูกโซ่ปัจจุบัน และเก็บ Baseline เป็นข้อมูลอ้างอิงแยก
     if not df_live.empty:
         tv_chain = calculate_production_chain(df_live, active_only=True)
         if not tv_chain.empty:
@@ -11349,30 +11380,11 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         return safe_str(matched.iloc[0].get("reason"), "")
 
     def get_tv_plan_window(job_row):
-        """คืนเวลาเริ่ม/จบตามแผนของงานบนการ์ด และสถานะหลุดแผน"""
-        if "รอคิว" in safe_str(job_row.get("สถานะงาน")):
-            plan_start = first_valid_datetime(job_row.get("_chain_start"), job_row.get("วัน-เวลาขึ้นงาน"))
-            plan_finish = first_valid_datetime(job_row.get("_chain_finish"))
-            if plan_start is not None and pd.notna(plan_start) and plan_finish is not None and pd.notna(plan_finish):
-                return (plan_start, plan_finish, plan_start.strftime("%d/%m/%Y %H:%M"),
-                        plan_finish.strftime("%d/%m/%Y %H:%M"), now_bangkok.replace(tzinfo=None) > plan_finish)
-        plan_start = first_valid_datetime(
-            job_row.get("กำหนดพร้อมขึ้นงาน (Baseline)"), job_row.get("วัน-เวลาขึ้นงาน")
-        )
-        if plan_start is None or pd.isna(plan_start):
-            return None, None, "-", "-", False
-        total_hours = (
-            safe_float(job_row.get("Setup (น.)"), 10.0)
-            + safe_float(job_row.get("Basic (น.)"), 0.0)
-            + safe_float(job_row.get("โปรแกรม (น.)"), 120.0)
-        ) / 60.0
-        plan_start = get_next_valid_work_time(plan_start)
-        plan_finish = get_job_planned_finish(job_row)
-        if plan_finish is None or pd.isna(plan_finish):
-            _, plan_finish = add_work_time_with_shift(plan_start, total_hours)
-        start_txt = plan_start.strftime("%d/%m/%Y %H:%M")
-        finish_txt = plan_finish.strftime("%d/%m/%Y %H:%M")
-        is_overdue = now_bangkok.replace(tzinfo=None) > plan_finish
+        """เวลาและธงเกินกำหนดจากลูกโซ่เดียวกับใบจ่ายคิวทุกเครื่อง"""
+        plan_start, plan_finish = get_current_production_window(job_row)
+        start_txt = format_thai_datetime(plan_start) or "-"
+        finish_txt = format_thai_datetime(plan_finish) or "-"
+        is_overdue = bool(plan_finish is not None and now_bangkok.replace(tzinfo=None) > plan_finish)
         return plan_start, plan_finish, start_txt, finish_txt, is_overdue
 
     def get_tv_actual_start(job_row):
@@ -11403,7 +11415,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         # ป้ายเริ่มก่อน/หลังแผนต้องสะท้อนเวลานาฬิกาจริง แม้เริ่มก่อนเข้ากะ
         diff_seconds = (actual_start - planned_start).total_seconds()
         if abs(diff_seconds) < 60:
-            label = "✅ เริ่มตรงตามแผน"
+            label = "✅ เริ่มตรง Baseline เดิม"
             color = "#BFDBFE"
         else:
             total_minutes = max(1, int(round(abs(diff_seconds) / 60.0)))
@@ -11418,10 +11430,10 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                 duration_parts.append(f"{minutes} นาที")
             duration_text = " ".join(duration_parts) or "1 นาที"
             if diff_seconds < 0:
-                label = f"⏩ เริ่มก่อนแผน {duration_text}"
+                label = f"⏩ เริ่มก่อน Baseline เดิม {duration_text}"
                 color = "#A7F3D0"
             else:
-                label = f"⏰ เริ่มช้ากว่าแผน {duration_text}"
+                label = f"⏰ เริ่มช้ากว่า Baseline เดิม {duration_text}"
                 color = "#FDE68A"
 
         return (
@@ -11484,11 +11496,11 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                 timer_display_html = '<span style="font-size:11.5px; font-weight:900; color:#FDE047;">⚠️ ไม่พบเวลาเริ่มจริง กรุณาตรวจสอบข้อมูล</span>'
                 actual_start_report = "-"
 
-            start_variance_html = build_tv_start_variance(r_start_parsed, r_ready_dt)
+            start_variance_html = build_tv_start_variance(r_start_parsed, first_valid_datetime(r_info.get("กำหนดพร้อมขึ้นงาน (Baseline)")))
 
             duplicate_running_html = ""
             if duplicate_running_count > 1:
-                duplicate_running_html = f'<div style="margin-top:4px; padding:3px 6px; background:rgba(127,29,29,.72); border:1px dashed #FCA5A5; border-radius:6px; font-size:10.5px; color:#FEE2E2;">⚠️ พบสถานะกำลังผลิตซ้ำ {duplicate_running_count} งาน — แสดงงานที่มีเวลาเริ่มจริงล่าสุด</div>'
+                duplicate_running_html = f'<div style="margin-top:4px; padding:3px 6px; background:rgba(127,29,29,.72); border:1px dashed #FCA5A5; border-radius:6px; font-size:10.5px; color:#FEE2E2;">⚠️ พบสถานะกำลังผลิตซ้ำ {duplicate_running_count} งาน — แสดงตามลำดับเดียวกับหน้าเครื่อง</div>'
             
             tv_card_cls = "tv-card tv-card-running"
             badge_html = '<span class="tv-pulse-dot" style="margin-right:6px;"></span> <b style="color:#A7F3D0;">กำลังรันงาน</b>'
@@ -11505,8 +11517,9 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                 </div>
                 {start_variance_html}
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
-                    <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
-                    <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
+                    <div>📅 <b>เริ่มตามคิวปัจจุบัน:</b> {ready_display_txt}</div>
+                    <div>&#127937; <b>จบตามคิวปัจจุบัน:</b> {finish_display_txt}</div>
+                    <div style="font-size:10px;opacity:.8;">{html.escape(production_baseline_caption(r_info))}</div>
                 </div>
             </div>{duplicate_running_html}{hold_alert_html}
             '''
@@ -11542,15 +11555,16 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             if h_st_parsed is not None and pd.notna(h_st_parsed):
                 h_start_txt = f" (เริ่มไว้: {h_st_parsed.strftime('%H:%M น.')})"
             hold_actual_start_report = h_st_parsed.strftime("%d/%m/%Y %H:%M") if h_st_parsed is not None and pd.notna(h_st_parsed) else "-"
-            hold_start_variance_html = build_tv_start_variance(h_st_parsed, h_ready_dt)
+            hold_start_variance_html = build_tv_start_variance(h_st_parsed, first_valid_datetime(h_info.get("กำหนดพร้อมขึ้นงาน (Baseline)")))
 
             time_info_combined = f'''
             <div style="font-size:13px; font-weight:700; color:#FEF3C7; line-height:1.5;">
                 <div>⚠️ <b>{'เครื่องจักรขัดข้อง' if is_breakdown else 'พักงาน'}:</b> {hold_reason or 'รอขึ้นงาน'}{h_start_txt}</div>
                 {hold_start_variance_html}
                 <div style="margin-top:4px; font-size:12.5px; opacity:0.98; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
-                    <div>📅 <b>เริ่มตามแผน:</b> {ready_display_txt}</div>
-                    <div>🏁 <b>จบตามแผน:</b> {finish_display_txt}</div>
+                    <div>📅 <b>เริ่มตามคิวปัจจุบัน:</b> {ready_display_txt}</div>
+                    <div>&#127937; <b>จบตามคิวปัจจุบัน:</b> {finish_display_txt}</div>
+                    <div style="font-size:10px;opacity:.8;">{html.escape(production_baseline_caption(h_info))}</div>
                 </div>
             </div>
             '''
@@ -11586,8 +11600,8 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             is_overdue = False
             next_dates_html = '''
             <div style="margin-top:4px; font-size:12.5px; color:#CBD5E1; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
-                <div>📅 <b>เริ่มตามแผน:</b> -</div>
-                <div>🏁 <b>จบตามแผน:</b> -</div>
+                <div>📅 <b>เริ่มตามคิวปัจจุบัน:</b> -</div>
+                <div>🏁 <b>จบตามคิวปัจจุบัน:</b> -</div>
             </div>
             '''
             if not waiting_jobs.empty:
@@ -11602,7 +11616,8 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                 next_dates_html = f'''
                 <div style="margin-top:4px; font-size:12.5px; color:#FFFFFF; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; line-height:1.5;">
                     <div>📅 <b>เริ่มตามคิวปัจจุบัน:</b> {ready_display_txt}</div>
-                    <div>🏁 <b>จบตามคิวปัจจุบัน:</b> {finish_display_txt}</div>
+                    <div>&#127937; <b>จบตามคิวปัจจุบัน:</b> {finish_display_txt}</div>
+                    <div style="font-size:10px;opacity:.8;">{html.escape(production_baseline_caption(w_first))}</div>
                 </div>
                 '''
 
@@ -11762,7 +11777,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         </style></head><body>
         <div class="head"><div><h1>Timing Process Control (TPC)</h1><div class="sub">รายงานสถานะจอทีวีแสดงงานแผนกผลิต - Shop Floor Live Monitor</div></div><div><b>วันที่ออกรายงาน:</b> ${{d.print_date}}</div></div>
         <div class="kpis"><div class="kpi">สถานีทั้งหมด<b>${{d.stations}}</b></div><div class="kpi">กำลังรัน<b>${{d.running}}</b></div><div class="kpi">พักงาน<b>${{d.hold}}</b></div><div class="kpi">เครื่องว่าง<b>${{d.idle}}</b></div><div class="kpi">หลุดแผน<b>${{d.overdue}}</b></div></div>
-        <table><thead><tr><th>เครื่องจักร</th><th>สถานะ</th><th>แผนงาน</th><th>Drawing / คิวถัดไป</th><th>ขั้นตอน</th><th>เริ่มจริง</th><th>เริ่มตามแผน</th><th>จบตามแผน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
+        <table><thead><tr><th>เครื่องจักร</th><th>สถานะ</th><th>แผนงาน</th><th>Drawing / คิวถัดไป</th><th>ขั้นตอน</th><th>เริ่มจริง</th><th>เริ่มตามคิวปัจจุบัน</th><th>จบตามคิวปัจจุบัน</th></tr></thead><tbody>${{d.rows}}</tbody></table>
         <div class="foot">PES Production Monitoring System</div></body></html>`;
         const printWin = window.open('', '_blank');
         if (!printWin) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน PDF'); return; }}
