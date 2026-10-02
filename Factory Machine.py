@@ -7015,14 +7015,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     ).replace(second=0, microsecond=0)
                     with n5:
                         normal_requested_date = st.date_input(
-                            "วันที่ต้องการเริ่มเร็วที่สุด",
+                            "วันเริ่มขึ้นงาน",
                             value=normal_default_start.date(),
                             format="DD/MM/YYYY",
                             key=f"normal_template_date_{normal_form_version}",
                         )
                     with n6:
                         normal_requested_time = st.time_input(
-                            "เวลาที่ต้องการเริ่มเร็วที่สุด",
+                            "เวลาขึ้นงาน",
                             value=normal_default_start.time(),
                             key=f"normal_template_time_{normal_form_version}",
                         )
