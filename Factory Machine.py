@@ -7067,7 +7067,22 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     _, normal_chain_finish = add_work_time_with_shift(normal_chain_start, normal_minutes / 60.0)
                     normal_steps = template_step_names(normal_tpl)
                     normal_combined_steps = " → ".join(normal_steps)
-                    normal_material = safe_str(normal_tpl.get("material"), "SS400")
+                    normal_template_material = safe_str(normal_tpl.get("material"), "SS400") or "SS400"
+                    normal_material_presets = [item for item in MATERIAL_OPTIONS if item != "อื่น ๆ (พิมพ์เอง)"]
+                    normal_material_default = normal_template_material if normal_template_material in normal_material_presets else "อื่น ๆ (พิมพ์เอง)"
+                    normal_material_key = f"{normal_form_version}_{normal_template_id}_{normal_template_name}"
+                    material_col, custom_material_col = st.columns(2)
+                    with material_col:
+                        normal_material_selected = st.selectbox("วัสดุ", MATERIAL_OPTIONS,
+                            index=MATERIAL_OPTIONS.index(normal_material_default),
+                            key=f"normal_material_select_{normal_material_key}")
+                    with custom_material_col:
+                        normal_material_custom = st.text_input("วัสดุอื่น (พิมพ์เอง)",
+                            value="" if normal_template_material in normal_material_presets else normal_template_material,
+                            placeholder="กรอกเมื่อเลือก อื่น ๆ (พิมพ์เอง)",
+                            key=f"normal_material_custom_{normal_material_key}")
+                    normal_material = normal_material_custom.strip() if normal_material_selected == "อื่น ๆ (พิมพ์เอง)" else normal_material_selected
+
 
                     if normal_existing_timeline:
                         previous_job = normal_existing_timeline[-1]
@@ -7115,7 +7130,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         "💾 สร้างใบงานและส่งเข้าคิวผลิต",
                         type="primary",
                         use_container_width=True,
-                        disabled=(not normal_confirm or normal_minutes <= 0 or not normal_drawing),
+                        disabled=(not normal_confirm or normal_minutes <= 0 or not normal_drawing or not normal_material),
                         key=f"normal_template_submit_{normal_form_version}_{normal_template_id}",
                     )
                     if create_normal_job:
@@ -7123,6 +7138,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.error("กรุณาระบุรหัสแผนงาน")
                         elif not normal_drawing:
                             st.error("กรุณาระบุชื่อ Drawing")
+                        elif not normal_material:
+                            st.error("กรุณาระบุวัสดุของใบงาน")
                         else:
                             # อ่านคิวล่าสุดอีกครั้งก่อนบันทึก ป้องกันเวลาซ้อนเมื่อมีผู้ใช้สร้างงานพร้อมกัน
                             fetch_jobs_from_supabase.clear()
