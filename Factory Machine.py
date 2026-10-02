@@ -2284,14 +2284,9 @@ def render_machine_activity_dashboard(calc_df):
                 )
             st.markdown("  \n".join(move_text))
 
-        machine_options = ["ทุกเครื่อง"] + sorted(events.get("machine_name", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
         event_options = ["ทุกเหตุการณ์"] + sorted(events.get("event_type", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
-        f1, f2 = st.columns(2)
-        selected_machine = f1.selectbox("กรองเครื่องจักร", machine_options, key="activity_machine_filter")
-        selected_event = f2.selectbox("กรองเหตุการณ์", event_options, key="activity_event_filter")
+        selected_event = st.selectbox("กรองเหตุการณ์", event_options, key="activity_event_filter")
         shown = events.copy()
-        if selected_machine != "ทุกเครื่อง":
-            shown = shown[shown["machine_name"].astype(str) == selected_machine]
         if selected_event != "ทุกเหตุการณ์":
             shown = shown[shown["event_type"].astype(str) == selected_event]
         shown = shown.head(150).copy()
@@ -2309,12 +2304,6 @@ def render_machine_activity_dashboard(calc_df):
         ]
         st.dataframe(shown[[col for col in report_cols if col in shown.columns]].rename(columns=rename_map), hide_index=True, use_container_width=True)
 
-        pauses = shown[shown.get("event_type", pd.Series(index=shown.index, dtype=str)).eq("Pause Step")]
-        if not pauses.empty and "reason" in pauses.columns:
-            reason_counts = pauses["reason"].fillna("ไม่ระบุ").value_counts().rename_axis("เหตุผล").reset_index(name="จำนวนครั้ง")
-            fig_reason = px.bar(reason_counts, x="จำนวนครั้ง", y="เหตุผล", orientation="h", title="สาเหตุการพัก Step")
-            fig_reason.update_layout(height=max(260, 42 * len(reason_counts)), margin=dict(l=10, r=10, t=45, b=10))
-            st.plotly_chart(fig_reason, use_container_width=True)
 
 def calculate_plan_drawing_progress(plan_jobs):
     """สรุปความคืบหน้าระดับ Drawing โดย Drawing จะเสร็จเมื่อทุก Step เสร็จสิ้นแล้ว"""
@@ -7577,152 +7566,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 </div>
                 """, unsafe_allow_html=True)
 
-            with st.expander("📈 ตารางติดตามความคืบหน้าราย Drawing (Drawing Multi-Step Progress Tracker)", expanded=False):
-                drawing_progress_list = []
-                tracker_source = calc_df.copy()
-                # ไม่ปล่อยให้ groupby ตัดรายการที่รหัสแผนงานหรือ Drawing ว่างทิ้งไปเงียบ ๆ
-                tracker_source["แผนงาน"] = tracker_source["แผนงาน"].map(lambda v: safe_str(v, "ไม่ระบุแผนงาน"))
-                tracker_source["ชื่อ Drawing."] = tracker_source["ชื่อ Drawing."].map(lambda v: safe_str(v, "ไม่ระบุ Drawing"))
-                tracker_source["สถานะงาน"] = tracker_source["สถานะงาน"].map(safe_str)
-
-                for (p_c, d_c), g_data in tracker_source.groupby(["แผนงาน", "ชื่อ Drawing."], dropna=False):
-                    total_steps = len(g_data)
-                    fin_steps = len(g_data[g_data["สถานะงาน"] == "🟩 เสร็จสิ้นแล้ว"])
-                    pct = round(fin_steps / total_steps * 100) if total_steps > 0 else 0
-                    
-                    cur_run = g_data[g_data["สถานะงาน"] == "🟦 กำลังผลิต"]
-                    cur_hold = g_data[g_data["สถานะงาน"] == "🟨 พักงาน (รอวัสดุ)"]
-                    if not cur_run.empty:
-                        stage = f"🟦 กำลังรันที่ {cur_run.iloc[0]['เลือกเครื่องจักร']} ({cur_run.iloc[0]['ขั้นตอน (Step)']})"
-                        cat_status = "RUNNING"
-                    elif not cur_hold.empty:
-                        stage = f"🛑 พักงานที่ {cur_hold.iloc[0]['เลือกเครื่องจักร']} (รอวัสดุ)"
-                        cat_status = "HOLD"
-                    elif fin_steps == total_steps:
-                        stage = "🟩 ผลิตเสร็จครบทุก Step แล้ว"
-                        cat_status = "DONE"
-                    else:
-                        waiting_rows = g_data[g_data["สถานะงาน"] == "🟧 รอคิวผลิต"]
-                        if not waiting_rows.empty:
-                            first_wait = waiting_rows.iloc[0]
-                            stage = f"🟧 รอคิวที่ {safe_str(first_wait.get('เลือกเครื่องจักร'), 'ยังไม่ระบุเครื่อง')}"
-                            cat_status = "WAITING"
-                        else:
-                            # ป้องกันระบบล่มเมื่อฐานข้อมูลมีสถานะว่างหรือสถานะเก่าที่ไม่อยู่ในมาตรฐาน
-                            stage = "⚠️ กรุณาตรวจสอบสถานะงาน"
-                            cat_status = "UNKNOWN"
-
-                    qty_values = pd.to_numeric(g_data["จำนวน"], errors="coerce").dropna()
-                    drawing_qty = safe_int(qty_values.max(), 1) if not qty_values.empty else 1
-
-                    drawing_progress_list.append({
-                        "แผนงาน": p_c,
-                        "ชื่อ Drawing.": d_c,
-                        "จำนวน (ชิ้น)": drawing_qty,
-                        "ความคืบหน้า (%)": pct,
-                        "ขั้นตอน (เสร็จ/ทั้งหมด)": f"{fin_steps}/{total_steps} Step",
-                        "สถานะและสถานีปัจจุบัน": stage,
-                        "status_category": cat_status
-                    })
-                
-                tracker_columns = [
-                    "แผนงาน", "ชื่อ Drawing.", "จำนวน (ชิ้น)", "ความคืบหน้า (%)",
-                    "ขั้นตอน (เสร็จ/ทั้งหมด)", "สถานะและสถานีปัจจุบัน", "status_category"
-                ]
-                df_dp_all = pd.DataFrame(drawing_progress_list, columns=tracker_columns)
-                if not df_dp_all.empty:
-                    status_order = {"RUNNING": 0, "HOLD": 1, "WAITING": 2, "UNKNOWN": 3, "DONE": 4}
-                    df_dp_all["_status_order"] = df_dp_all["status_category"].map(status_order).fillna(3)
-                    df_dp_all = df_dp_all.sort_values(
-                        by=["_status_order", "ความคืบหน้า (%)", "แผนงาน", "ชื่อ Drawing."],
-                        ascending=[True, False, True, True]
-                    ).drop(columns=["_status_order"])
-                
-                cnt_all = len(df_dp_all)
-                cnt_done = len(df_dp_all[df_dp_all["status_category"] == "DONE"])
-                cnt_run = len(df_dp_all[df_dp_all["status_category"] == "RUNNING"])
-                cnt_wait = len(df_dp_all[df_dp_all["status_category"] == "WAITING"])
-                cnt_hold = len(df_dp_all[df_dp_all["status_category"] == "HOLD"])
-                cnt_unknown = len(df_dp_all[df_dp_all["status_category"] == "UNKNOWN"])
-
-                tk_btn_col, tk_search_col = st.columns([5.5, 4.5])
-                with tk_btn_col:
-                    st.caption("**🎯 ตัวกรองด่วนสถานะ Drawing:**")
-                    t_b1, t_b2, t_b3, t_b4, t_b5 = st.columns(5)
-                    cur_tracker_filter = st.session_state.get("drawing_tracker_filter", "ALL")
-                    with t_b1:
-                        b_type_all = "primary" if cur_tracker_filter == "ALL" else "secondary"
-                        if st.button(f"🌐 ทั้งหมด ({cnt_all})", type=b_type_all, use_container_width=True, key="btn_tk_all"):
-                            st.session_state.drawing_tracker_filter = "ALL"
-                            cur_tracker_filter = "ALL"
-                    with t_b2:
-                        b_type_done = "primary" if cur_tracker_filter == "DONE" else "secondary"
-                        if st.button(f"🟢 ผลิตเสร็จ ({cnt_done})", type=b_type_done, use_container_width=True, key="btn_tk_done"):
-                            st.session_state.drawing_tracker_filter = "DONE"
-                            cur_tracker_filter = "DONE"
-                    with t_b3:
-                        b_type_run = "primary" if cur_tracker_filter == "RUNNING" else "secondary"
-                        if st.button(f"🟦 กำลังรัน ({cnt_run})", type=b_type_run, use_container_width=True, key="btn_tk_run"):
-                            st.session_state.drawing_tracker_filter = "RUNNING"
-                            cur_tracker_filter = "RUNNING"
-                    with t_b4:
-                        b_type_wait = "primary" if cur_tracker_filter == "WAITING" else "secondary"
-                        if st.button(f"🟧 รอคิว ({cnt_wait})", type=b_type_wait, use_container_width=True, key="btn_tk_wait"):
-                            st.session_state.drawing_tracker_filter = "WAITING"
-                            cur_tracker_filter = "WAITING"
-                    with t_b5:
-                        b_type_hold = "primary" if cur_tracker_filter == "HOLD" else "secondary"
-                        if st.button(f"🟨 พักงาน ({cnt_hold})", type=b_type_hold, use_container_width=True, key="btn_tk_hold"):
-                            st.session_state.drawing_tracker_filter = "HOLD"
-                            cur_tracker_filter = "HOLD"
-
-                with tk_search_col:
-                    search_query_tracker = st.text_input(
-                        "🔍 ค้นหาในตารางความคืบหน้า (แผนงาน, Drawing):",
-                        placeholder="พิมพ์เพื่อค้นหา เช่น 26-108, AS256...",
-                        key="search_drawing_tracker_input"
-                    )
-
-                df_dp = df_dp_all.copy()
-                selected_filter = cur_tracker_filter
-                if selected_filter == "DONE":
-                    df_dp = df_dp[df_dp["status_category"] == "DONE"]
-                elif selected_filter == "RUNNING":
-                    df_dp = df_dp[df_dp["status_category"] == "RUNNING"]
-                elif selected_filter == "WAITING":
-                    df_dp = df_dp[df_dp["status_category"] == "WAITING"]
-                elif selected_filter == "HOLD":
-                    df_dp = df_dp[df_dp["status_category"] == "HOLD"]
-
-                if search_query_tracker.strip() != "":
-                    q_tk = search_query_tracker.strip().lower()
-                    df_dp = df_dp[
-                        df_dp["แผนงาน"].astype(str).str.lower().str.contains(q_tk, regex=False, na=False) |
-                        df_dp["ชื่อ Drawing."].astype(str).str.lower().str.contains(q_tk, regex=False, na=False)
-                    ]
-
-                if cnt_unknown > 0:
-                    st.warning(f"⚠️ พบ Drawing ที่มีสถานะงานไม่ถูกต้องหรือว่าง {cnt_unknown} รายการ กรุณาตรวจสอบสถานะในตารางสั่งผลิต")
-
-                tracker_view = df_dp[[c for c in df_dp.columns if c != "status_category"]]
-                tracker_styled = tracker_view.style.bar(
-                    subset=["ความคืบหน้า (%)"], color="#86EFAC", vmin=0, vmax=100
-                )
-
-                st.dataframe(
-                    tracker_styled,
-                    column_config={
-                        "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75),
-                        "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=155),
-                        "จำนวน (ชิ้น)": st.column_config.NumberColumn("จำนวน", width=55),
-                        "ความคืบหน้า (%)": st.column_config.NumberColumn("ความคืบหน้า", width=125, min_value=0, max_value=100, format="%d%%"),
-                        "ขั้นตอน (เสร็จ/ทั้งหมด)": st.column_config.TextColumn("สเต็ปงาน", width=95),
-                        "สถานะและสถานีปัจจุบัน": st.column_config.TextColumn("สถานะ/สถานีปัจจุบัน", width=190),
-                    },
-                    hide_index=True,
-                    width=980,
-                    row_height=30
-                )
 
             st.divider()
 
