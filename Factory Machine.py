@@ -122,7 +122,11 @@ def build_performance_metrics(source_df):
         actual_finishes.append(actual_finish)
         plan_finishes.append(plan_finish)
 
-        if actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
+        if job_has_unverified_actual_time(row):
+            actual_hours.append(float("nan"))
+            variances.append(float("nan"))
+            time_sources.append("⚠️ เวลาพักรอตรวจสอบ")
+        elif actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
             paused_seconds = max(0.0, safe_float(row.get("เวลาพักสะสม (วินาที)"), 0.0))
             net_seconds = get_net_actual_work_seconds(actual_start, actual_finish, paused_seconds)
             actual_value = round(net_seconds / 3600.0, 2)
@@ -1439,7 +1443,8 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
             "started_at": old.get("started_at"),
             "finished_at": old.get("finished_at"),
             "paused_seconds": max(0.0, safe_float(old.get("paused_seconds"), 0.0)),
-            "pending_pause_started_at": old.get("pending_pause_started_at")
+            "pending_pause_started_at": old.get("pending_pause_started_at"),
+            "pause_review_pending": bool(old.get("pause_review_pending", False))
         })
     current_index = max(0, min(safe_int(progress.get("current_index"), 0), len(steps) - 1))
     if "กำลังผลิต" in str(status) and not steps[current_index].get("started_at"):
@@ -1452,7 +1457,7 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
             steps[-1]["finished_at"] = finish_dt.strftime("%Y-%m-%d %H:%M:%S")
         current_index = len(steps) - 1
     result = {"steps": steps, "current_index": current_index}
-    for key in ("schedule_mode", "planned_not_before"):
+    for key in ("schedule_mode", "planned_not_before", "time_corrections"):
         if key in progress:
             result[key] = progress[key]
     return result
@@ -1560,6 +1565,110 @@ def verify_supabase_ready_times(expected_by_id: dict) -> bool:
         return True
     except Exception:
         return False
+
+def job_has_unverified_actual_time(row):
+    return any(bool(step.get("pause_review_pending")) for step in production_schedule_metadata(row).get("steps", []) if isinstance(step, dict))
+
+
+def current_step_pause_unverified(row):
+    progress = production_schedule_metadata(row)
+    steps = progress.get("steps", [])
+    index = safe_int(progress.get("current_index"), 0)
+    return bool(steps and 0 <= index < len(steps) and steps[index].get("pause_review_pending"))
+
+
+def prepare_current_step_correction(job, expected_progress, new_start, reason, confirmed_pause_seconds=None):
+    """ตรวจข้อมูลสดและสร้าง payload; ประวัติเดิมอยู่ใน JSON เดียวกับการแก้ไข"""
+    progress = production_schedule_metadata(job)
+    if progress != expected_progress:
+        raise ValueError("ข้อมูล Step เปลี่ยนแล้ว กรุณารีเฟรชและเลือกงานใหม่")
+    progress = json.loads(json.dumps(progress))
+    steps = progress.get("steps", [])
+    index = safe_int(progress.get("current_index"), 0)
+    if not steps or not 0 <= index < len(steps):
+        raise ValueError("ไม่พบ Step ปัจจุบัน")
+    step = steps[index]
+    if "กำลังผลิต" not in str(job.get("status", job.get("สถานะงาน", ""))) or step.get("finished_at"):
+        raise ValueError("แก้ไขได้เฉพาะ Step ที่กำลังผลิต กรุณา Resume งานที่พักก่อน")
+    start = parse_flexible_datetime(new_start)
+    now = get_bangkok_now().replace(tzinfo=None)
+    if start is None or pd.isna(start) or start > now or not str(reason).strip():
+        raise ValueError("กรุณาระบุเวลาเริ่มที่ไม่ใช่อนาคตและเหตุผล")
+    previous_end = first_valid_datetime(steps[index-1].get("finished_at")) if index else first_valid_datetime(job.get("actual_start", job.get("เริ่มจริง")))
+    if previous_end is not None and start < previous_end:
+        raise ValueError("เวลาเริ่ม Step ต้องไม่อยู่ก่อนเวลาจบ Step ก่อนหน้า/เริ่ม Drawing")
+    old_pause = max(0.0, safe_float(step.get("paused_seconds"), 0.0))
+    pause = old_pause if confirmed_pause_seconds is None else float(confirmed_pause_seconds)
+    if confirmed_pause_seconds is not None and (not 0 <= pause <= get_work_seconds_between(start, now)):
+        raise ValueError("เวลาพักที่ยืนยันต้องไม่เกินเวลาในกะของ Step นี้")
+    archive = {"changed_at": now.strftime("%Y-%m-%d %H:%M:%S"), "step_id": step.get("step_id"), "step_index": index,
+               "old_step": dict(step), "old_job_paused_seconds": job.get("paused_seconds", job.get("เวลาพักสะสม (วินาที)")),
+               "new_started_at": start.strftime("%Y-%m-%d %H:%M:%S"), "reason": str(reason).strip(),
+               "pause_review_pending": confirmed_pause_seconds is None}
+    progress.setdefault("time_corrections", []).append(archive)
+    step["started_at"] = archive["new_started_at"]
+    step["paused_seconds"] = pause
+    step["pause_review_pending"] = confirmed_pause_seconds is None
+    payload = {"step_progress": progress}
+    if confirmed_pause_seconds is not None:
+        total_pause = safe_float(job.get("paused_seconds", job.get("เวลาพักสะสม (วินาที)")), 0.0)
+        if total_pause + 0.001 < old_pause:
+            raise ValueError("เวลาพักระดับ Drawing น้อยกว่า Step กรุณาตรวจสอบยอดพักก่อนยืนยัน")
+        payload["paused_seconds"] = max(0.0, total_pause - old_pause + pause)
+    return payload
+
+
+def render_admin_current_step_start_editor(jobs_df):
+    live = jobs_df[jobs_df["สถานะงาน"].astype(str).str.contains("กำลังผลิต", na=False)]
+    if live.empty:
+        return
+    version = safe_int(st.session_state.get("admin_step_start_version"), 0)
+    with st.expander("🛠️ ผู้ดูแล: แก้เวลาเริ่ม Step ปัจจุบัน", expanded=False):
+        st.caption("แยกจากเวลาเริ่ม Drawing เก็บข้อมูลเดิมไว้สอบกลับ หากจำเวลาพักไม่ได้ ให้คงเครื่องหมายรอตรวจสอบไว้")
+        rows = {f"{r.get('เลือกเครื่องจักร')} | แผน {r.get('แผนงาน')} | {r.get('ชื่อ Drawing.')} | ID {r.get('ID')}": r for _, r in live.iterrows()}
+        chosen = st.selectbox("เลือกงานที่จะแก้ Step", list(rows), index=None, placeholder="เลือกเครื่องและ Drawing", key=f"step_start_job_{version}")
+        if chosen is None:
+            return
+        row = rows[chosen]
+        progress = production_schedule_metadata(row)
+        steps = progress.get("steps", [])
+        index = safe_int(progress.get("current_index"), 0)
+        if not steps or not 0 <= index < len(steps):
+            st.warning("งานนี้ไม่มีประวัติ Step กรุณาตรวจสอบก่อน")
+            return
+        step = steps[index]
+        start = first_valid_datetime(step.get("started_at")) or get_bangkok_now().replace(tzinfo=None)
+        st.info(f"Step {index + 1}: {step.get('name')} | เริ่มเดิม {start:%d/%m/%Y %H:%M:%S}")
+        with st.form(f"step_start_form_{version}_{safe_int(row.get('ID'))}"):
+            day = st.date_input("วันที่เริ่ม Step จริง", value=start.date())
+            clock = st.time_input("เวลาเริ่ม Step จริง", value=start.time(), step=60)
+            unknown = st.checkbox("เวลาพักยังไม่ยืนยัน / จำช่วงพักไม่ได้", value=True)
+            minutes = st.number_input("เวลาพักสะสมในกะที่ยืนยันได้ (นาที) — ใช้เมื่อเอาเครื่องหมายด้านบนออก", min_value=0.0, value=0.0)
+            reason = st.text_input("เหตุผลการแก้ไข Step")
+            submitted = st.form_submit_button("บันทึกเวลา Step", type="primary")
+        if submitted:
+            try:
+                endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
+                response = requests.get(endpoint, headers=get_supabase_headers(), params={"select": "*", "id": f"eq.{safe_int(row.get('ID'))}", "limit": "1"}, timeout=8)
+                if response.status_code != 200 or not response.json():
+                    raise ValueError("อ่านข้อมูลล่าสุดไม่สำเร็จ ยังไม่ได้บันทึก")
+                fresh = response.json()[0]
+                payload = prepare_current_step_correction(fresh, progress, datetime.combine(day, clock), reason, None if unknown else minutes * 60)
+                headers = dict(get_supabase_headers())
+                headers["Prefer"] = "return=representation"
+                result = requests.patch(endpoint, headers=headers, params={"id": f"eq.{safe_int(row.get('ID'))}", "status": f"eq.{fresh.get('status')}", "step_progress": "eq." + json.dumps(progress, ensure_ascii=False)}, json=payload, timeout=8)
+                if result.status_code not in (200, 201) or not result.json():
+                    raise ValueError("บันทึกไม่สำเร็จหรือข้อมูลถูกแก้พร้อมกัน กรุณารีเฟรชตรวจสอบ")
+                st.cache_data.clear()
+                logged = log_job_event(row.get("ID"), row.get("แผนงาน"), row.get("ชื่อ Drawing."), row.get("เลือกเครื่องจักร"), "แก้เวลาเริ่ม Step", step_index=index, step_name=step.get("name"), reason=reason, note=json.dumps(payload["step_progress"]["time_corrections"][-1], ensure_ascii=False))
+                st.session_state["admin_step_start_version"] = version + 1
+                st.success("บันทึกเวลา Step แล้ว ข้อมูลเดิมอยู่ในประวัติ" + (" — เวลาพักรอตรวจสอบ" if unknown else ""))
+                if not logged:
+                    st.warning("บันทึกงานสำเร็จ แต่บันทึกเหตุการณ์ไม่สำเร็จ ข้อมูลก่อนแก้ยังอยู่ในประวัติ Step")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+
 
 def get_current_step_timer_context(job_row):
     """เวลาเดินหน้าเครื่อง/ทีวีใช้เริ่มและพักจาก Step เดียวกัน"""
@@ -3943,6 +4052,8 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
         finished_costs = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
         if not finished_costs.empty:
             finished_costs = build_performance_metrics(finished_costs)
+            if finished_costs["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
+                st.warning("รายงานยังไม่ครบ: เวลาสุทธิและต้นทุนของงานที่เวลาพักรอตรวจสอบยังไม่รวมในยอดสรุป")
             finished_costs["_cost_date"] = pd.to_datetime(finished_costs["_actual_finish_dt"], errors="coerce")
             finished_costs["แผนงาน"] = finished_costs["แผนงาน"].map(lambda value: safe_str(value, "ไม่ระบุแผนงาน"))
             finished_costs["_machine_rate"] = finished_costs["เลือกเครื่องจักร"].map(rate_map).fillna(500.0)
@@ -5837,7 +5948,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             <div class="shop-live-banner shop-live-running">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span class="tv-pulse-dot"></span>
-                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ Step ปัจจุบัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
+                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ Step ปัจจุบัน: <span class="pes-live-timer" data-time-unverified="{int(current_step_pause_unverified(r_cur))}" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">{"เวลาพักรอตรวจสอบ" if current_step_pause_unverified(r_cur) else "00:00:00"}</span>)</span>
                 </div>
                 <div style="font-size:12.5px; opacity:0.9;">
                     📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
@@ -6337,7 +6448,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                     step_render_now = get_bangkok_now().replace(tzinfo=None)
                     step_base_work_seconds = int(get_net_actual_work_seconds(st_parsed, step_render_now, current_step_paused)) if st_parsed is not None else 0
                     step_render_epoch = to_bangkok_epoch_ms(step_render_now)
-                    st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' data-base-work-seconds='{step_base_work_seconds}' data-render-epoch='{step_render_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
+                    st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-time-unverified='{int(bool(current_step_item.get("pause_review_pending")))}' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' data-base-work-seconds='{step_base_work_seconds}' data-render-epoch='{step_render_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                     if is_running_overdue:
                         st.error(f"🚨 งานนี้กำลังผลิตและเกินเวลาจบตามแผนแล้ว {overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที")
                 elif is_step_hold:
@@ -6607,6 +6718,8 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 else:
                     icon = "⚪"
                     state_text = "รอทำ"
+                if item.get("pause_review_pending"):
+                    state_text = "เวลาพักรอตรวจสอบ — ยังไม่ยืนยันเวลาสุทธิ"
                 step_status_lines.append(f"{icon} **Step {idx + 1}:** {item.get('name', '-')} · {state_text}")
             st.markdown("  \n".join(step_status_lines))
 
@@ -6815,7 +6928,9 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                                 st.error("ย้ายเครื่องไม่สำเร็จ")
 
             completed_step_seconds = sum(step_elapsed_seconds(item) for item in tracked_steps if item.get("finished_at"))
-            if is_step_finished:
+            if is_step_finished and any(item.get("pause_review_pending") for item in tracked_steps):
+                st.warning("งานเสร็จแล้ว แต่เวลาพักยังรอตรวจสอบ จึงยังไม่สรุปเวลาสุทธิและประสิทธิภาพ")
+            elif is_step_finished:
                 planned_seconds = max(0.0, tot_h * 3600.0)
                 variance_seconds = completed_step_seconds - planned_seconds
                 result_text = (
@@ -6906,6 +7021,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 const nowTs = new Date().getTime();
                 const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
                 timerEls.forEach(el => {
+                    if (el.getAttribute('data-time-unverified') === '1') { el.innerText = 'เวลาพักรอตรวจสอบ'; return; }
                     const startAttr = el.getAttribute('data-start-epoch');
                     const startTs = parseInt(startAttr, 10);
                     if (startTs && startTs > 0) {
@@ -6966,6 +7082,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         if is_admin:
             render_admin_actual_start_editor(df_db)
+            render_admin_current_step_start_editor(df_db)
             render_outsource_management(df_db)
             templates = fetch_drawing_templates()
             with st.expander("📚 Drawing Template — ลดการพิมพ์ข้อมูลซ้ำ", expanded=False):
@@ -9090,7 +9207,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     # ใช้ Baseline/เวลาจบที่บันทึกไว้เป็นแหล่งเดียวกับหน้าอื่น
                     plan_fn = get_job_planned_finish(r)
 
-                    if st_p and fn_p:
+                    if st_p and fn_p and not job_has_unverified_actual_time(r):
                         net_seconds = get_net_actual_work_seconds(st_p, fn_p, pause_seconds)
                         act_hrs_list.append(round(net_seconds / 3600.0, 2))
                     else:
@@ -9713,7 +9830,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         actual_start = parse_flexible_datetime(cost_row.get("เริ่มจริง"))
                         actual_finish = parse_flexible_datetime(cost_row.get("เสร็จจริง"))
                         paused_seconds = max(0.0, safe_float(cost_row.get("เวลาพักสะสม (วินาที)"), 0.0))
-                        if actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
+                        if job_has_unverified_actual_time(cost_row):
+                            actual_net_hours.append(float("nan"))
+                            time_sources.append("⚠️ เวลาพักรอตรวจสอบ")
+                        elif actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
                             net_seconds = get_net_actual_work_seconds(actual_start, actual_finish, paused_seconds)
                             actual_net_hours.append(round(net_seconds / 3600.0, 2))
                             time_sources.append("✅ เวลาจริง")
@@ -9729,6 +9849,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cost_df["ต้นทุนจริงสุทธิ (บาท)"] = (cost_df["เวลาจริงสุทธิ (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]).round(2)
                     cost_df["ผลต่างต้นทุน (บาท)"] = (cost_df["ต้นทุนจริงสุทธิ (บาท)"] - cost_df["ต้นทุนตามแผน (บาท)"]).round(2)
 
+                    if cost_df["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
+                        st.warning("ยอดต้นทุนจริงยังไม่ครบ: ไม่นับงานที่เวลาพักรอตรวจสอบ กรุณายืนยันเวลาพักก่อนใช้ยอดสรุป")
                     total_plan_cost = cost_df["ต้นทุนตามแผน (บาท)"].sum()
                     total_actual_cost = cost_df["ต้นทุนจริงสุทธิ (บาท)"].sum()
                     total_actual_hrs = cost_df["เวลาจริงสุทธิ (ชม.)"].sum()
@@ -10104,6 +10226,8 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
 
             if not monthly_dw_jobs.empty:
                 monthly_dw_jobs = build_performance_metrics(monthly_dw_jobs)
+                if monthly_dw_jobs["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
+                    st.warning("รายงานยังไม่ครบ: เวลาสุทธิและต้นทุนของงานที่เวลาพักรอตรวจสอบยังไม่รวมในยอดสรุป")
                 monthly_dw_jobs["แผนงาน"] = monthly_dw_jobs["แผนงาน"].map(lambda v: safe_str(v, "ไม่ระบุแผนงาน"))
                 monthly_dw_jobs["ชื่อ Drawing."] = monthly_dw_jobs["ชื่อ Drawing."].map(lambda v: safe_str(v, "ไม่ระบุ Drawing"))
 
@@ -10431,7 +10555,10 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
                                 s_st, s_fn = sr.get("เริ่มจริง"), sr.get("เสร็จจริง")
                                 act_st = parse_flexible_datetime(s_st)
                                 act_fn = parse_flexible_datetime(s_fn)
-                                if act_st is not None and act_fn is not None:
+                                if job_has_unverified_actual_time(sr):
+                                    step_diffs.append(float("nan"))
+                                    step_evals.append("⚠️ เวลาพักรอตรวจสอบ")
+                                elif act_st is not None and act_fn is not None:
                                     d_sec = get_net_actual_work_seconds(
                                         act_st, act_fn, safe_float(sr.get("เวลาพักสะสม (วินาที)"), 0.0)
                                     )
@@ -10556,6 +10683,8 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
         if not monthly_jobs.empty:
             monthly_jobs = build_performance_metrics(monthly_jobs)
+            if monthly_jobs["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
+                st.warning("รายงานยังไม่ครบ: เวลาสุทธิและต้นทุนของงานที่เวลาพักรอตรวจสอบยังไม่รวมในยอดสรุป")
             monthly_jobs["แผนงาน"] = monthly_jobs["แผนงาน"].map(lambda v: safe_str(v, "ไม่ระบุแผนงาน"))
             monthly_jobs["ชื่อ Drawing."] = monthly_jobs["ชื่อ Drawing."].map(lambda v: safe_str(v, "ไม่ระบุ Drawing"))
             monthly_jobs["เลือกเครื่องจักร"] = monthly_jobs["เลือกเครื่องจักร"].map(lambda v: safe_str(v, "ไม่ระบุเครื่อง"))
@@ -10638,6 +10767,8 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             if not prev_monthly_jobs.empty:
                 prev_monthly_jobs = build_performance_metrics(prev_monthly_jobs)
+                if prev_monthly_jobs["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
+                    st.warning("รายงานยังไม่ครบ: เวลาสุทธิและต้นทุนของงานที่เวลาพักรอตรวจสอบยังไม่รวมในยอดสรุป")
                 prev_qty = unique_drawing_quantity(prev_monthly_jobs)
                 prev_rates = prev_monthly_jobs["เลือกเครื่องจักร"].map(rate_map).fillna(500)
                 prev_val = (prev_monthly_jobs["เวลาจริง (ชม.)"] * prev_rates).sum()
@@ -11457,6 +11588,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           const isWorkingNow = windows.some(w => minuteOfDay >= w[0] && minuteOfDay < w[1]);
           const timerEls = window.parent.document.querySelectorAll('.dept-tv-live-timer');
           timerEls.forEach(el => {
+                    if (el.getAttribute('data-time-unverified') === '1') { el.innerText = 'เวลาพักรอตรวจสอบ'; return; }
             let totalSecs = Number(el.dataset.liveSeconds);
             if (!Number.isFinite(totalSecs)) {
               totalSecs = Number(el.getAttribute('data-base-work-seconds') || '0') || 0;
@@ -11605,7 +11737,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                 tv_render_now = get_bangkok_now().replace(tzinfo=None)
                 tv_base_work_seconds = int(get_net_actual_work_seconds(r_start_parsed, tv_render_now, r_paused_seconds))
                 tv_render_epoch = to_bangkok_epoch_ms(tv_render_now)
-                timer_display_html = f'<span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" data-base-work-seconds="{tv_base_work_seconds}" data-render-epoch="{tv_render_epoch}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span>'
+                timer_display_html = f'<span class="pes-live-timer" data-time-unverified="{int(current_step_pause_unverified(r_info))}" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" data-base-work-seconds="{tv_base_work_seconds}" data-render-epoch="{tv_render_epoch}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span>'
                 actual_start_report = r_start_parsed.strftime("%d/%m/%Y %H:%M")
             else:
                 # ห้ามใช้เวลาแผนแทนเวลาเริ่มจริง เพราะจะทำให้ตัวจับเวลาเริ่มเองเมื่อถึงเวลาแผน
@@ -11941,6 +12073,7 @@ components.html("""
 
             const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
             timerEls.forEach(el => {
+                    if (el.getAttribute('data-time-unverified') === '1') { el.innerText = 'เวลาพักรอตรวจสอบ'; return; }
                 const startAttr = el.getAttribute('data-start-epoch');
                 const startTs = parseInt(startAttr, 10);
                 if (startTs && startTs > 0) {
