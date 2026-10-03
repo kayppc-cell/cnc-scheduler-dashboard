@@ -2253,6 +2253,14 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
         default_start = old_start if old_start is not None and not pd.isna(old_start) else get_bangkok_now().replace(tzinfo=None)
         old_start_text = old_start.strftime("%d/%m/%Y %H:%M") if old_start is not None and not pd.isna(old_start) else "ไม่พบเวลาเริ่มจริงเดิม"
         st.info(f"เวลาเริ่มจริงปัจจุบัน: **{old_start_text}**")
+        if old_start is not None and pd.notna(old_start):
+            elapsed_gross = get_work_seconds_between(old_start, get_bangkok_now().replace(tzinfo=None))
+            saved_pause = max(0.0, safe_float(selected_row.get("เวลาพักสะสม (วินาที)"), 0.0))
+            elapsed_net = max(0.0, elapsed_gross - saved_pause)
+            st.caption(f"ตรวจสอบตัวจับเวลา: เวลาในกะ {elapsed_gross / 3600:,.2f} ชม. − พักสะสม {saved_pause / 3600:,.2f} ชม. = เดินสุทธิ {elapsed_net / 3600:,.2f} ชม.")
+            if saved_pause > elapsed_gross:
+                st.warning("เวลาพักสะสมมากกว่าช่วงในกะนับจากเวลาเริ่มจริงปัจจุบัน จึงแสดงเดินสุทธิเป็นศูนย์ ต้องตรวจประวัติการพักก่อนแก้ข้อมูล")
+
 
         with st.form(f"admin_actual_start_form_{form_version}_{selected_id}", clear_on_submit=False):
             edit_col1, edit_col2 = st.columns(2)
@@ -6820,6 +6828,31 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
 
     components.html("""
     <script>
+    function tpcNetTimerSeconds(el, startTs) {
+        const renderTs = Number(el.getAttribute('data-render-epoch'));
+        if (!Number.isFinite(renderTs) || renderTs <= 0) return null;
+        const paused = Math.max(0, Number(el.getAttribute('data-paused-seconds') || 0));
+        const fingerprint = startTs + ':' + renderTs + ':' + paused;
+        if (!el._tpcClock || el._tpcClock.fingerprint !== fingerprint) {
+            el._tpcClock = {fingerprint: fingerprint, anchor: performance.now()};
+        }
+        const endTs = renderTs + Math.max(0, performance.now() - el._tpcClock.anchor);
+        const offset = 7 * 3600000;
+        const dayMs = 86400000;
+        let dayStart = Math.floor((startTs + offset) / dayMs) * dayMs - offset;
+        let workMs = 0;
+        for (; dayStart < endTs; dayStart += dayMs) {
+            const day = new Date(dayStart + offset).getUTCDay();
+            const windows = day === 0 ? [] : (day === 6
+                ? [[510,600],[610,720],[780,900],[910,1020]]
+                : [[510,600],[610,720],[780,900],[910,1020],[1050,1200]]);
+            windows.forEach(w => {
+                workMs += Math.max(0, Math.min(endTs, dayStart + w[1]*60000)
+                    - Math.max(startTs, dayStart + w[0]*60000));
+            });
+        }
+        return Math.floor(Math.max(0, workMs / 1000 - paused));
+    }
         function runLiveStopwatches() {
             try {
                 const nowTs = new Date().getTime();
@@ -6828,24 +6861,8 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                     const startAttr = el.getAttribute('data-start-epoch');
                     const startTs = parseInt(startAttr, 10);
                     if (startTs && startTs > 0) {
-                        const baseWorkAttr = el.getAttribute('data-base-work-seconds');
-                        let totalSecs;
-                        if (baseWorkAttr !== null) {
-                            const baseWorkSecs = parseFloat(baseWorkAttr || '0') || 0;
-                            const renderTs = parseInt(el.getAttribute('data-render-epoch') || String(nowTs), 10);
-                            const bkkNow = new Date(nowTs + (7 * 60 * 60 * 1000));
-                            const day = bkkNow.getUTCDay();
-                            const minuteOfDay = bkkNow.getUTCHours() * 60 + bkkNow.getUTCMinutes();
-                            const weekdayWindows = [[510,600],[610,720],[780,900],[910,1020],[1050,1200]];
-                            const saturdayWindows = [[510,600],[610,720],[780,900],[910,1020]];
-                            const windows = day === 0 ? [] : (day === 6 ? saturdayWindows : weekdayWindows);
-                            const isWorkingNow = windows.some(w => minuteOfDay >= w[0] && minuteOfDay < w[1]);
-                            const liveIncrement = isWorkingNow ? Math.max(0, Math.floor((nowTs - renderTs) / 1000)) : 0;
-                            totalSecs = Math.max(0, Math.floor(baseWorkSecs + liveIncrement));
-                        } else {
-                            const pausedSecs = parseFloat(el.getAttribute('data-paused-seconds') || '0') || 0;
-                            totalSecs = Math.floor(Math.max(0, nowTs - startTs - (pausedSecs * 1000)) / 1000);
-                        }
+                        const totalSecs = tpcNetTimerSeconds(el, startTs);
+                        if (totalSecs === null) { el.innerText = '—'; return; }
                         const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
                         const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
                         const secs = String(totalSecs % 60).padStart(2, '0');
@@ -11852,6 +11869,31 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
 # =========================================================
 components.html("""
 <script>
+    function tpcNetTimerSeconds(el, startTs) {
+        const renderTs = Number(el.getAttribute('data-render-epoch'));
+        if (!Number.isFinite(renderTs) || renderTs <= 0) return null;
+        const paused = Math.max(0, Number(el.getAttribute('data-paused-seconds') || 0));
+        const fingerprint = startTs + ':' + renderTs + ':' + paused;
+        if (!el._tpcClock || el._tpcClock.fingerprint !== fingerprint) {
+            el._tpcClock = {fingerprint: fingerprint, anchor: performance.now()};
+        }
+        const endTs = renderTs + Math.max(0, performance.now() - el._tpcClock.anchor);
+        const offset = 7 * 3600000;
+        const dayMs = 86400000;
+        let dayStart = Math.floor((startTs + offset) / dayMs) * dayMs - offset;
+        let workMs = 0;
+        for (; dayStart < endTs; dayStart += dayMs) {
+            const day = new Date(dayStart + offset).getUTCDay();
+            const windows = day === 0 ? [] : (day === 6
+                ? [[510,600],[610,720],[780,900],[910,1020]]
+                : [[510,600],[610,720],[780,900],[910,1020],[1050,1200]]);
+            windows.forEach(w => {
+                workMs += Math.max(0, Math.min(endTs, dayStart + w[1]*60000)
+                    - Math.max(startTs, dayStart + w[0]*60000));
+            });
+        }
+        return Math.floor(Math.max(0, workMs / 1000 - paused));
+    }
     function updateTvDashboard() {
         try {
             const now = new Date();
@@ -11870,25 +11912,9 @@ components.html("""
                 const startAttr = el.getAttribute('data-start-epoch');
                 const startTs = parseInt(startAttr, 10);
                 if (startTs && startTs > 0) {
-                    const baseWorkAttr = el.getAttribute('data-base-work-seconds');
-                    let totalSecs;
-                    if (baseWorkAttr !== null) {
-                        const baseWorkSecs = parseFloat(baseWorkAttr || '0') || 0;
-                        const renderTs = parseInt(el.getAttribute('data-render-epoch') || String(nowTs), 10);
-                        const bkkNow = new Date(nowTs + (7 * 60 * 60 * 1000));
-                        const day = bkkNow.getUTCDay();
-                        const minuteOfDay = bkkNow.getUTCHours() * 60 + bkkNow.getUTCMinutes();
-                        const weekdayWindows = [[510,600],[610,720],[780,900],[910,1020],[1050,1200]];
-                        const saturdayWindows = [[510,600],[610,720],[780,900],[910,1020]];
-                        const windows = day === 0 ? [] : (day === 6 ? saturdayWindows : weekdayWindows);
-                        const isWorkingNow = windows.some(w => minuteOfDay >= w[0] && minuteOfDay < w[1]);
-                        const liveIncrement = isWorkingNow ? Math.max(0, Math.floor((nowTs - renderTs) / 1000)) : 0;
-                        totalSecs = Math.max(0, Math.floor(baseWorkSecs + liveIncrement));
-                    } else {
-                        const pausedSecs = parseFloat(el.getAttribute('data-paused-seconds') || '0') || 0;
-                        totalSecs = Math.floor(Math.max(0, nowTs - startTs - (pausedSecs * 1000)) / 1000);
-                    }
-                    const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                    const totalSecs = tpcNetTimerSeconds(el, startTs);
+                        if (totalSecs === null) { el.innerText = '—'; return; }
+                        const tHrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
                     const tMins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
                     const tSecs = String(totalSecs % 60).padStart(2, '0');
                     el.innerText = tHrs + ":" + tMins + ":" + tSecs;
