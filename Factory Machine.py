@@ -1635,20 +1635,76 @@ def prepare_work_order_time_restart(job, new_actual_start, reason, note=""):
             "step_progress": progress}
 
 
-def patch_job_timing_if_unchanged(endpoint, job_id, expected, payload):
-    """บันทึกเฉพาะเมื่อข้อมูลยังตรงกับที่อ่าน ป้องกันทับ Start/Pause/Finish ของหน้าเครื่อง"""
+def timing_value_matches(key, actual, expected):
+    """ตรวจข้อมูลจาก REST โดยไม่ติดรูปแบบ timestamp/JSON ที่ต่างกัน"""
+    if key.endswith("_at") or key in ("actual_start", "actual_finish", "ready_at"):
+        return first_valid_datetime(actual) == first_valid_datetime(expected)
+    if key == "step_progress":
+        return production_schedule_metadata({"step_progress": actual}) == production_schedule_metadata({"step_progress": expected})
+    return actual == expected
+
+
+def build_job_timing_guard_params(job_id, expected):
+    """ใช้ scalar JSON paths แทนการเทียบ JSON ทั้งก้อนใน URL"""
     params = {"id": f"eq.{safe_int(job_id)}"}
-    for key, value in expected.items():
+
+    def add_filter(path, value):
         if value is None:
-            params[key] = "is.null"
-        elif isinstance(value, (dict, list)):
-            params[key] = "eq." + json.dumps(value, ensure_ascii=False)
+            params[path] = "is.null"
+        elif isinstance(value, bool):
+            params[path] = "eq." + json.dumps("true" if value else "false")
+        elif isinstance(value, (int, float)):
+            params[path] = "eq." + str(value)
         else:
-            params[key] = "eq." + str(value)
+            # PostgREST reserved characters เช่น comma/วงเล็บ/colon ต้อง quote ค่า
+            escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+            params[path] = 'eq."' + escaped + '"'
+
+    for key, value in expected.items():
+        if key == "step_progress":
+            progress = production_schedule_metadata({"step_progress": value})
+            for field in ("current_index", "schedule_mode", "planned_not_before", "timing_restarted_at"):
+                scalar = progress.get(field)
+                add_filter(f"step_progress->>{field}", str(scalar) if scalar is not None else None)
+            for index, step in enumerate(progress.get("steps", [])):
+                for field in ("step_id", "name", "started_at", "finished_at", "pending_pause_started_at"):
+                    add_filter(f"step_progress->steps->{index}->>{field}", step.get(field))
+            # ตรวจ JSON เต็มชุดจาก read ก่อน PATCH; ไม่ส่งประวัติยาวทั้งหมดเป็นเงื่อนไข URL
+        else:
+            add_filter(key, value)
+    return params
+
+
+def patch_job_timing_if_unchanged(endpoint, job_id, expected, payload):
+    """ตรวจชุดข้อมูลเดิมก่อนเขียน พร้อม guards ฝั่งฐานข้อมูลและข้อความผิดพลาดจริง"""
+    before = requests.get(endpoint, headers=get_supabase_headers(), params={"id": f"eq.{safe_int(job_id)}", "select": "*", "limit": "1"}, timeout=8)
+    if before.status_code != 200:
+        raise ValueError(f"อ่านข้อมูลก่อนบันทึก ID {safe_int(job_id)} ไม่สำเร็จ (HTTP {before.status_code})")
+    rows = before.json()
+    if not isinstance(rows, list) or len(rows) != 1:
+        return False
+    if any(not timing_value_matches(key, rows[0].get(key), value) for key, value in expected.items()):
+        return False
+    params = build_job_timing_guard_params(job_id, expected)
     headers = dict(get_supabase_headers())
     headers["Prefer"] = "return=representation"
     response = requests.patch(endpoint, headers=headers, params=params, json=payload, timeout=8)
-    return response.status_code == 200 and isinstance(response.json(), list) and len(response.json()) == 1
+    if response.status_code not in (200, 204):
+        try:
+            error = response.json()
+            message = safe_str(error.get("message"), "ไม่ระบุสาเหตุ") if isinstance(error, dict) else "ไม่ระบุสาเหตุ"
+            code = safe_str(error.get("code"), "") if isinstance(error, dict) else ""
+        except Exception:
+            message, code = "ฐานข้อมูลไม่ส่งรายละเอียดกลับมา", ""
+        raise ValueError(f"ฐานข้อมูลปฏิเสธการบันทึก ID {safe_int(job_id)} (HTTP {response.status_code} {code}): {message[:350]}")
+    if response.status_code == 204:
+        after = requests.get(endpoint, headers=get_supabase_headers(), params={"id": f"eq.{safe_int(job_id)}", "select": "*", "limit": "1"}, timeout=8)
+        if after.status_code != 200:
+            raise ValueError(f"ตรวจสอบหลังบันทึก ID {safe_int(job_id)} ไม่สำเร็จ")
+        saved = after.json()
+        return isinstance(saved, list) and len(saved) == 1 and all(timing_value_matches(key, saved[0].get(key), value) for key, value in payload.items())
+    saved = response.json()
+    return isinstance(saved, list) and len(saved) == 1
 
 
 def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason: str, note: str = "") -> tuple[bool, str, int]:
