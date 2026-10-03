@@ -1561,6 +1561,26 @@ def verify_supabase_ready_times(expected_by_id: dict) -> bool:
     except Exception:
         return False
 
+def get_current_step_timer_context(job_row):
+    """เวลาเดินหน้าเครื่อง/ทีวีใช้เริ่มและพักจาก Step เดียวกัน"""
+    progress = normalize_step_progress(
+        job_row.get("ติดตาม Step", job_row.get("step_progress")),
+        job_row.get("ขั้นตอน (Step)", job_row.get("step_name")),
+        job_row.get("สถานะงาน", job_row.get("status")),
+        job_row.get("เริ่มจริง", job_row.get("actual_start")),
+        job_row.get("เสร็จจริง", job_row.get("actual_finish")),
+    )
+    steps = progress.get("steps", [])
+    if steps:
+        index = max(0, min(safe_int(progress.get("current_index"), 0), len(steps) - 1))
+        step = steps[index]
+        start = first_valid_datetime(step.get("started_at"))
+        if start is not None:
+            return start, max(0.0, safe_float(step.get("paused_seconds"), 0.0)), safe_str(step.get("name"), "")
+    return (first_valid_datetime(job_row.get("เริ่มจริง", job_row.get("actual_start"))),
+            max(0.0, safe_float(job_row.get("เวลาพักสะสม (วินาที)", job_row.get("paused_seconds")), 0.0)),
+            safe_str(job_row.get("ขั้นตอน (Step)", job_row.get("step_name")), ""))
+
 def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason: str, note: str = "") -> tuple[bool, str, int]:
     """แก้เวลาเริ่มจริงของงานสดและคำนวณ ready_at ของคิวรอเครื่องนั้นใหม่แบบคืนค่าได้"""
     job_id = safe_int(job_id)
@@ -1612,6 +1632,17 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
                 len(updated_step_progress.get("steps", [])) - 1,
             ),
         ) if updated_step_progress.get("steps") else 0
+        recorded_steps = updated_step_progress.get("steps", [])
+        protected_starts = [first_valid_datetime(step.get("started_at")) for step in recorded_steps
+                            if first_valid_datetime(step.get("finished_at")) is not None]
+        if current_step_index > 0 and recorded_steps:
+            protected_starts.append(first_valid_datetime(recorded_steps[0].get("started_at")))
+        protected_starts = [value for value in protected_starts if value is not None]
+        if protected_starts and new_start_dt > min(protected_starts):
+            return False, "เวลาเริ่มทั้ง Drawing ต้องไม่อยู่หลังเวลาเริ่ม Step ที่ทำไปแล้ว กรุณาคงประวัติ Step เดิมไว้", 0
+        if (old_actual_start is not None and new_start_dt > old_actual_start
+                and safe_float(target_row.get("paused_seconds"), 0.0) > 0):
+            return False, "งานมีเวลาพักสะสมแล้ว การเลื่อนเวลาเริ่มไปข้างหน้าต้องตรวจช่วงพักก่อน เพื่อไม่ให้หักพักจากช่วงเดิม", 0
         step_start_synced = False
         if updated_step_progress.get("steps"):
             current_step = updated_step_progress["steps"][current_step_index]
@@ -1633,7 +1664,7 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
             params={
                 "select": (
                     "id,plan_code,drawing_name,machine_name,status,ready_at,actual_start,"
-                    "setup_mins,basic_hrs,prog_hrs"
+                    "setup_mins,basic_hrs,prog_hrs,step_progress"
                 ),
                 "machine_name": f"eq.{machine_name}",
                 "order": "ready_at.asc,id.asc",
@@ -2262,6 +2293,23 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
                 st.warning("เวลาพักสะสมมากกว่าช่วงในกะนับจากเวลาเริ่มจริงปัจจุบัน จึงแสดงเดินสุทธิเป็นศูนย์ ต้องตรวจประวัติการพักก่อนแก้ข้อมูล")
 
 
+        stored_progress = production_schedule_metadata(selected_row)
+        stored_steps = stored_progress.get("steps", []) if isinstance(stored_progress, dict) else []
+        first_step_start = first_valid_datetime(stored_steps[0].get("started_at")) if stored_steps else None
+        if first_step_start is not None and old_start is not None and old_start > first_step_start:
+            st.info(f"ประวัติ Step แรกเริ่ม {first_step_start.strftime('%d/%m/%Y %H:%M:%S')} แต่เวลาเริ่ม Drawing อยู่หลังเวลานี้")
+            if st.button("↩️ คืนเวลาเริ่ม Drawing ตามประวัติ Step แรก", key=f"restore_drawing_start_{form_version}_{selected_id}"):
+                restored, restore_error, shifted_count = update_running_actual_start_with_chain(
+                    selected_id, first_step_start, "แก้ไขข้อมูลโดยผู้ดูแล",
+                    "คืนเวลาเริ่ม Drawing ตามประวัติ Step แรก โดยคงเวลาพักและประวัติ Step เดิม",
+                )
+                if restored:
+                    st.session_state["admin_actual_start_form_version"] = form_version + 1
+                    st.toast("คืนเวลาเริ่ม Drawing สำเร็จ และคำนวณคิวใหม่แล้ว", icon="✅")
+                    st.rerun()
+                else:
+                    st.error(restore_error)
+        st.caption("ช่องนี้แก้เวลาเริ่มทั้ง Drawing • ตัวจับเวลาหน้าเครื่องและทีวีใช้เวลา Step ปัจจุบัน")
         with st.form(f"admin_actual_start_form_{form_version}_{selected_id}", clear_on_submit=False):
             edit_col1, edit_col2 = st.columns(2)
             with edit_col1:
@@ -5774,8 +5822,8 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
         
         if not running_now.empty:
             r_cur = running_now.iloc[0]
-            st_t = r_cur.get("เริ่มจริง")
-            banner_paused_seconds = int(safe_float(r_cur.get("เวลาพักสะสม (วินาที)"), 0.0))
+            st_t, banner_step_pause, banner_step_name = get_current_step_timer_context(r_cur)
+            banner_paused_seconds = int(banner_step_pause)
             st_txt = "-"
             start_epoch = to_bangkok_epoch_ms(st_t)
             act_dt = parse_flexible_datetime(st_t)
@@ -5789,7 +5837,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             <div class="shop-live-banner shop-live-running">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span class="tv-pulse-dot"></span>
-                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
+                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ Step ปัจจุบัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
                 </div>
                 <div style="font-size:12.5px; opacity:0.9;">
                     📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
@@ -11506,24 +11554,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         return plan_start, plan_finish, start_txt, finish_txt, is_overdue
 
     def get_tv_actual_start(job_row):
-        """คืนเวลาเริ่มจริงสำหรับหน้าทีวี โดยไม่ใช้เวลาแผนเป็นตัวจับเวลา"""
-        drawing_start = parse_flexible_datetime(job_row.get("เริ่มจริง"))
-        if drawing_start is not None and pd.notna(drawing_start):
-            return drawing_start
-
-        # ข้อมูล Multi-Step บางรายการมีเวลาเริ่มจริงอยู่ใน Step ปัจจุบัน
-        # แม้ actual_start ระดับ Drawing จะยังว่าง จึงใช้เป็น fallback ที่ถูกต้องได้
-        progress = normalize_step_progress(
-            job_row.get("ติดตาม Step"), job_row.get("ขั้นตอน (Step)"),
-            job_row.get("สถานะงาน"), job_row.get("เริ่มจริง"), job_row.get("เสร็จจริง")
-        )
-        steps = progress.get("steps", []) if isinstance(progress, dict) else []
-        if not steps:
-            return None
-        current_index = int(safe_float(progress.get("current_index"), 0))
-        current_index = max(0, min(current_index, len(steps) - 1))
-        step_start = parse_flexible_datetime(steps[current_index].get("started_at"))
-        return step_start if step_start is not None and pd.notna(step_start) else None
+        return get_current_step_timer_context(job_row)[0]
 
     for idx_m, m in enumerate(MACHINE_LIST):
         m_jobs = df_live[df_live["เลือกเครื่องจักร"] == m] if not df_live.empty else pd.DataFrame()
@@ -11553,10 +11584,11 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         if not running_job.empty:
             running_machines_count += 1
             r_info = running_job.iloc[0]
-            r_paused_seconds = int(safe_float(r_info.get("เวลาพักสะสม (วินาที)"), 0.0))
+            _, r_step_pause, r_step_name = get_current_step_timer_context(r_info)
+            r_paused_seconds = int(r_step_pause)
             p_code = str(r_info.get("แผนงาน", "-"))
             d_code = str(r_info.get("ชื่อ Drawing.", "-"))
-            step_name = str(r_info.get("ขั้นตอน (Step)", "-"))
+            step_name = r_step_name or str(r_info.get("ขั้นตอน (Step)", "-"))
             
             r_ready_dt, r_finish_dt, ready_display_txt, finish_display_txt, is_overdue = get_tv_plan_window(r_info)
 
