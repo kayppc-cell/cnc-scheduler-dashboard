@@ -122,11 +122,7 @@ def build_performance_metrics(source_df):
         actual_finishes.append(actual_finish)
         plan_finishes.append(plan_finish)
 
-        if job_has_unverified_actual_time(row):
-            actual_hours.append(float("nan"))
-            variances.append(float("nan"))
-            time_sources.append("⚠️ เวลาพักรอตรวจสอบ")
-        elif actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
+        if actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
             paused_seconds = max(0.0, safe_float(row.get("เวลาพักสะสม (วินาที)"), 0.0))
             net_seconds = get_net_actual_work_seconds(actual_start, actual_finish, paused_seconds)
             actual_value = round(net_seconds / 3600.0, 2)
@@ -1444,7 +1440,7 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
             "finished_at": old.get("finished_at"),
             "paused_seconds": max(0.0, safe_float(old.get("paused_seconds"), 0.0)),
             "pending_pause_started_at": old.get("pending_pause_started_at"),
-            "pause_review_pending": bool(old.get("pause_review_pending", False))
+            "timing_cancelled": bool(old.get("timing_cancelled", False))
         })
     current_index = max(0, min(safe_int(progress.get("current_index"), 0), len(steps) - 1))
     if "กำลังผลิต" in str(status) and not steps[current_index].get("started_at"):
@@ -1457,12 +1453,14 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
             steps[-1]["finished_at"] = finish_dt.strftime("%Y-%m-%d %H:%M:%S")
         current_index = len(steps) - 1
     result = {"steps": steps, "current_index": current_index}
-    for key in ("schedule_mode", "planned_not_before", "time_corrections"):
+    for key in ("schedule_mode", "planned_not_before", "restart_history", "timing_restarted_at"):
         if key in progress:
             result[key] = progress[key]
     return result
 
 def step_elapsed_seconds(step_item, now_dt=None):
+    if step_item.get("timing_cancelled"):
+        return 0.0
     start_dt = parse_flexible_datetime(step_item.get("started_at"))
     if start_dt is None or pd.isna(start_dt):
         return 0.0
@@ -1566,110 +1564,6 @@ def verify_supabase_ready_times(expected_by_id: dict) -> bool:
     except Exception:
         return False
 
-def job_has_unverified_actual_time(row):
-    return any(bool(step.get("pause_review_pending")) for step in production_schedule_metadata(row).get("steps", []) if isinstance(step, dict))
-
-
-def current_step_pause_unverified(row):
-    progress = production_schedule_metadata(row)
-    steps = progress.get("steps", [])
-    index = safe_int(progress.get("current_index"), 0)
-    return bool(steps and 0 <= index < len(steps) and steps[index].get("pause_review_pending"))
-
-
-def prepare_current_step_correction(job, expected_progress, new_start, reason, confirmed_pause_seconds=None):
-    """ตรวจข้อมูลสดและสร้าง payload; ประวัติเดิมอยู่ใน JSON เดียวกับการแก้ไข"""
-    progress = production_schedule_metadata(job)
-    if progress != expected_progress:
-        raise ValueError("ข้อมูล Step เปลี่ยนแล้ว กรุณารีเฟรชและเลือกงานใหม่")
-    progress = json.loads(json.dumps(progress))
-    steps = progress.get("steps", [])
-    index = safe_int(progress.get("current_index"), 0)
-    if not steps or not 0 <= index < len(steps):
-        raise ValueError("ไม่พบ Step ปัจจุบัน")
-    step = steps[index]
-    if "กำลังผลิต" not in str(job.get("status", job.get("สถานะงาน", ""))) or step.get("finished_at"):
-        raise ValueError("แก้ไขได้เฉพาะ Step ที่กำลังผลิต กรุณา Resume งานที่พักก่อน")
-    start = parse_flexible_datetime(new_start)
-    now = get_bangkok_now().replace(tzinfo=None)
-    if start is None or pd.isna(start) or start > now or not str(reason).strip():
-        raise ValueError("กรุณาระบุเวลาเริ่มที่ไม่ใช่อนาคตและเหตุผล")
-    previous_end = first_valid_datetime(steps[index-1].get("finished_at")) if index else first_valid_datetime(job.get("actual_start", job.get("เริ่มจริง")))
-    if previous_end is not None and start < previous_end:
-        raise ValueError("เวลาเริ่ม Step ต้องไม่อยู่ก่อนเวลาจบ Step ก่อนหน้า/เริ่ม Drawing")
-    old_pause = max(0.0, safe_float(step.get("paused_seconds"), 0.0))
-    pause = old_pause if confirmed_pause_seconds is None else float(confirmed_pause_seconds)
-    if confirmed_pause_seconds is not None and (not 0 <= pause <= get_work_seconds_between(start, now)):
-        raise ValueError("เวลาพักที่ยืนยันต้องไม่เกินเวลาในกะของ Step นี้")
-    archive = {"changed_at": now.strftime("%Y-%m-%d %H:%M:%S"), "step_id": step.get("step_id"), "step_index": index,
-               "old_step": dict(step), "old_job_paused_seconds": job.get("paused_seconds", job.get("เวลาพักสะสม (วินาที)")),
-               "new_started_at": start.strftime("%Y-%m-%d %H:%M:%S"), "reason": str(reason).strip(),
-               "pause_review_pending": confirmed_pause_seconds is None}
-    progress.setdefault("time_corrections", []).append(archive)
-    step["started_at"] = archive["new_started_at"]
-    step["paused_seconds"] = pause
-    step["pause_review_pending"] = confirmed_pause_seconds is None
-    payload = {"step_progress": progress}
-    if confirmed_pause_seconds is not None:
-        total_pause = safe_float(job.get("paused_seconds", job.get("เวลาพักสะสม (วินาที)")), 0.0)
-        if total_pause + 0.001 < old_pause:
-            raise ValueError("เวลาพักระดับ Drawing น้อยกว่า Step กรุณาตรวจสอบยอดพักก่อนยืนยัน")
-        payload["paused_seconds"] = max(0.0, total_pause - old_pause + pause)
-    return payload
-
-
-def render_admin_current_step_start_editor(jobs_df):
-    live = jobs_df[jobs_df["สถานะงาน"].astype(str).str.contains("กำลังผลิต", na=False)]
-    if live.empty:
-        return
-    version = safe_int(st.session_state.get("admin_step_start_version"), 0)
-    with st.expander("🛠️ ผู้ดูแล: แก้เวลาเริ่ม Step ปัจจุบัน", expanded=False):
-        st.caption("แยกจากเวลาเริ่ม Drawing เก็บข้อมูลเดิมไว้สอบกลับ หากจำเวลาพักไม่ได้ ให้คงเครื่องหมายรอตรวจสอบไว้")
-        rows = {f"{r.get('เลือกเครื่องจักร')} | แผน {r.get('แผนงาน')} | {r.get('ชื่อ Drawing.')} | ID {r.get('ID')}": r for _, r in live.iterrows()}
-        chosen = st.selectbox("เลือกงานที่จะแก้ Step", list(rows), index=None, placeholder="เลือกเครื่องและ Drawing", key=f"step_start_job_{version}")
-        if chosen is None:
-            return
-        row = rows[chosen]
-        progress = production_schedule_metadata(row)
-        steps = progress.get("steps", [])
-        index = safe_int(progress.get("current_index"), 0)
-        if not steps or not 0 <= index < len(steps):
-            st.warning("งานนี้ไม่มีประวัติ Step กรุณาตรวจสอบก่อน")
-            return
-        step = steps[index]
-        start = first_valid_datetime(step.get("started_at")) or get_bangkok_now().replace(tzinfo=None)
-        st.info(f"Step {index + 1}: {step.get('name')} | เริ่มเดิม {start:%d/%m/%Y %H:%M:%S}")
-        with st.form(f"step_start_form_{version}_{safe_int(row.get('ID'))}"):
-            day = st.date_input("วันที่เริ่ม Step จริง", value=start.date())
-            clock = st.time_input("เวลาเริ่ม Step จริง", value=start.time(), step=60)
-            unknown = st.checkbox("เวลาพักยังไม่ยืนยัน / จำช่วงพักไม่ได้", value=True)
-            minutes = st.number_input("เวลาพักสะสมในกะที่ยืนยันได้ (นาที) — ใช้เมื่อเอาเครื่องหมายด้านบนออก", min_value=0.0, value=0.0)
-            reason = st.text_input("เหตุผลการแก้ไข Step")
-            submitted = st.form_submit_button("บันทึกเวลา Step", type="primary")
-        if submitted:
-            try:
-                endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
-                response = requests.get(endpoint, headers=get_supabase_headers(), params={"select": "*", "id": f"eq.{safe_int(row.get('ID'))}", "limit": "1"}, timeout=8)
-                if response.status_code != 200 or not response.json():
-                    raise ValueError("อ่านข้อมูลล่าสุดไม่สำเร็จ ยังไม่ได้บันทึก")
-                fresh = response.json()[0]
-                payload = prepare_current_step_correction(fresh, progress, datetime.combine(day, clock), reason, None if unknown else minutes * 60)
-                headers = dict(get_supabase_headers())
-                headers["Prefer"] = "return=representation"
-                result = requests.patch(endpoint, headers=headers, params={"id": f"eq.{safe_int(row.get('ID'))}", "status": f"eq.{fresh.get('status')}", "step_progress": "eq." + json.dumps(progress, ensure_ascii=False)}, json=payload, timeout=8)
-                if result.status_code not in (200, 201) or not result.json():
-                    raise ValueError("บันทึกไม่สำเร็จหรือข้อมูลถูกแก้พร้อมกัน กรุณารีเฟรชตรวจสอบ")
-                st.cache_data.clear()
-                logged = log_job_event(row.get("ID"), row.get("แผนงาน"), row.get("ชื่อ Drawing."), row.get("เลือกเครื่องจักร"), "แก้เวลาเริ่ม Step", step_index=index, step_name=step.get("name"), reason=reason, note=json.dumps(payload["step_progress"]["time_corrections"][-1], ensure_ascii=False))
-                st.session_state["admin_step_start_version"] = version + 1
-                st.success("บันทึกเวลา Step แล้ว ข้อมูลเดิมอยู่ในประวัติ" + (" — เวลาพักรอตรวจสอบ" if unknown else ""))
-                if not logged:
-                    st.warning("บันทึกงานสำเร็จ แต่บันทึกเหตุการณ์ไม่สำเร็จ ข้อมูลก่อนแก้ยังอยู่ในประวัติ Step")
-                st.rerun()
-            except Exception as exc:
-                st.error(str(exc))
-
-
 def get_current_step_timer_context(job_row):
     """เวลาเดินหน้าเครื่อง/ทีวีใช้เริ่มและพักจาก Step เดียวกัน"""
     progress = normalize_step_progress(
@@ -1690,203 +1584,178 @@ def get_current_step_timer_context(job_row):
             max(0.0, safe_float(job_row.get("เวลาพักสะสม (วินาที)", job_row.get("paused_seconds")), 0.0)),
             safe_str(job_row.get("ขั้นตอน (Step)", job_row.get("step_name")), ""))
 
+def prepare_work_order_time_restart(job, new_actual_start, reason, note=""):
+    """ยกเลิกเวลารอบเดิมของใบงาน เก็บหลักฐานแยกจากเวลาที่ใช้คำนวณ"""
+    start = parse_flexible_datetime(new_actual_start)
+    if start is None or pd.isna(start) or start > get_bangkok_now().replace(tzinfo=None):
+        raise ValueError("เวลาเริ่มใหม่ไม่ถูกต้องหรือตรงกับเวลาในอนาคต")
+    status = safe_str(job.get("status"), "")
+    if not any(word in status for word in ("กำลังผลิต", "พักงาน", "รอวัสดุ")):
+        raise ValueError("เริ่มเวลาใหม่ได้เฉพาะงานกำลังผลิต/พักงาน/รอวัสดุ")
+    if not str(reason).strip():
+        raise ValueError("กรุณาระบุเหตุผล")
+    old_progress = production_schedule_metadata(job)
+    progress = normalize_step_progress(job.get("step_progress"), job.get("step_name"), status,
+                                       job.get("actual_start"), job.get("actual_finish"))
+    steps = progress.get("steps", [])
+    index = safe_int(progress.get("current_index"), 0)
+    if not steps or not 0 <= index < len(steps) or steps[index].get("finished_at"):
+        raise ValueError("ไม่พบ Step ปัจจุบันที่ยังไม่เสร็จ กรุณาตรวจสอบสถานะก่อน")
+    stamp = start.strftime("%Y-%m-%d %H:%M:%S")
+    _, finish = add_work_time_with_shift(get_next_valid_work_time(start), get_planned_minutes({
+        "Setup (น.)": job.get("setup_mins", DEFAULT_SETUP_MINUTES),
+        "Basic (น.)": job.get("basic_hrs", DEFAULT_BASIC_MINUTES),
+        "โปรแกรม (น.)": job.get("prog_hrs", DEFAULT_PROGRAM_MINUTES),
+    }) / 60.0)
+    archive_fields = ("actual_start", "actual_finish", "ready_at", "baseline_ready_at", "baseline_finish_at",
+                      "paused_seconds", "hold_started_at", "status", "step_progress")
+    # Snapshot ไม่เก็บประวัติรุ่นก่อนซ้ำซ้อนในแต่ละรุ่น
+    snapshot = {field: job.get(field) for field in archive_fields}
+    snapshot["step_progress"] = {key: value for key, value in old_progress.items() if key != "restart_history"}
+    history = json.loads(json.dumps(old_progress.get("restart_history", [])))
+    history.append({"changed_at": get_bangkok_str(), "new_started_at": stamp, "reason": str(reason).strip(),
+                    "note": str(note).strip(), "cancelled_timing": snapshot})
+    progress["restart_history"] = history
+    progress["timing_restarted_at"] = stamp
+    progress["schedule_mode"] = "auto"
+    progress.pop("planned_not_before", None)
+    for step_index, step in enumerate(steps):
+        step["paused_seconds"] = 0.0
+        step["pending_pause_started_at"] = None
+        if step.get("finished_at"):
+            # finished_at เป็นหลักฐานเสร็จแล้วเท่านั้น; step_elapsed_seconds ไม่นำช่วงเก่านี้มาคำนวณ
+            step["timing_cancelled"] = True
+        else:
+            step["timing_cancelled"] = False
+            step["started_at"] = stamp if step_index == index else None
+            step["finished_at"] = None
+    return {"actual_start": stamp, "actual_finish": None, "ready_at": stamp,
+            "baseline_ready_at": stamp, "baseline_finish_at": finish.strftime("%Y-%m-%d %H:%M:%S"),
+            "paused_seconds": 0.0, "hold_started_at": stamp if any(word in status for word in ("พักงาน", "รอวัสดุ")) else None,
+            "step_progress": progress}
+
+
+def patch_job_timing_if_unchanged(endpoint, job_id, expected, payload):
+    """บันทึกเฉพาะเมื่อข้อมูลยังตรงกับที่อ่าน ป้องกันทับ Start/Pause/Finish ของหน้าเครื่อง"""
+    params = {"id": f"eq.{safe_int(job_id)}"}
+    for key, value in expected.items():
+        if value is None:
+            params[key] = "is.null"
+        elif isinstance(value, (dict, list)):
+            params[key] = "eq." + json.dumps(value, ensure_ascii=False)
+        else:
+            params[key] = "eq." + str(value)
+    headers = dict(get_supabase_headers())
+    headers["Prefer"] = "return=representation"
+    response = requests.patch(endpoint, headers=headers, params=params, json=payload, timeout=8)
+    return response.status_code == 200 and isinstance(response.json(), list) and len(response.json()) == 1
+
+
 def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason: str, note: str = "") -> tuple[bool, str, int]:
-    """แก้เวลาเริ่มจริงของงานสดและคำนวณ ready_at ของคิวรอเครื่องนั้นใหม่แบบคืนค่าได้"""
-    job_id = safe_int(job_id)
-    new_start_dt = parse_flexible_datetime(new_actual_start)
-    if job_id <= 0 or new_start_dt is None or pd.isna(new_start_dt):
-        return False, "ข้อมูลรายการหรือเวลาเริ่มจริงไม่ถูกต้อง", 0
-    now_dt = get_bangkok_now().replace(tzinfo=None)
-    if new_start_dt > now_dt:
-        return False, "เวลาเริ่มจริงต้องไม่เป็นเวลาในอนาคต", 0
-    if not safe_str(reason, "").strip():
-        return False, "กรุณาระบุเหตุผลการแก้ไข", 0
-
+    """เริ่มเวลารอบใหม่เฉพาะใบงานที่เลือก ใช้สูตรลูกโซ่เดิมสำหรับคิวรอเครื่องเดียวกัน"""
+    applied = []
+    endpoint = None
     try:
-        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
-        endpoint = f"{base_url}/rest/v1/cnc_jobs"
-        target_res = requests.get(
-            endpoint,
-            headers=get_supabase_headers(),
-            params={"select": "*", "id": f"eq.{job_id}", "limit": "1"},
-            timeout=8,
-        )
-        if target_res.status_code != 200 or not target_res.json():
-            return False, "ไม่พบงานที่เลือกในฐานข้อมูล", 0
-        target_row = target_res.json()[0]
-        target_status = safe_str(target_row.get("status"), "")
-        if not any(word in target_status for word in ["กำลังผลิต", "พักงาน", "รอวัสดุ"]):
-            return False, "แก้เวลาเริ่มจริงได้เฉพาะงานที่กำลังผลิตหรือพักงานเท่านั้น", 0
-
-        machine_name = safe_str(target_row.get("machine_name"), "")
-        old_actual_start = parse_flexible_datetime(target_row.get("actual_start"))
-        hold_started_at = parse_flexible_datetime(target_row.get("hold_started_at"))
-        if hold_started_at is not None and not pd.isna(hold_started_at) and new_start_dt > hold_started_at:
-            return False, "เวลาเริ่มจริงใหม่ต้องไม่อยู่หลังเวลาเริ่มพักงาน", 0
-
-        # เวลาเริ่มจริงระดับ Drawing และ started_at ของ Step แรกต้องตรงกัน
-        # แต่ห้ามแก้ started_at ของ Step 2–3 ซึ่งเป็นเหตุการณ์เริ่มงานคนละช่วงเวลา
-        old_step_progress = target_row.get("step_progress")
-        updated_step_progress = normalize_step_progress(
-            old_step_progress,
-            target_row.get("step_name"),
-            target_row.get("status"),
-            target_row.get("actual_start"),
-            target_row.get("actual_finish"),
-        )
-        current_step_index = max(
-            0,
-            min(
-                safe_int(updated_step_progress.get("current_index"), 0),
-                len(updated_step_progress.get("steps", [])) - 1,
-            ),
-        ) if updated_step_progress.get("steps") else 0
-        recorded_steps = updated_step_progress.get("steps", [])
-        protected_starts = [first_valid_datetime(step.get("started_at")) for step in recorded_steps
-                            if first_valid_datetime(step.get("finished_at")) is not None]
-        if current_step_index > 0 and recorded_steps:
-            protected_starts.append(first_valid_datetime(recorded_steps[0].get("started_at")))
-        protected_starts = [value for value in protected_starts if value is not None]
-        if protected_starts and new_start_dt > min(protected_starts):
-            return False, "เวลาเริ่มทั้ง Drawing ต้องไม่อยู่หลังเวลาเริ่ม Step ที่ทำไปแล้ว กรุณาคงประวัติ Step เดิมไว้", 0
-        if (old_actual_start is not None and new_start_dt > old_actual_start
-                and safe_float(target_row.get("paused_seconds"), 0.0) > 0):
-            return False, "งานมีเวลาพักสะสมแล้ว การเลื่อนเวลาเริ่มไปข้างหน้าต้องตรวจช่วงพักก่อน เพื่อไม่ให้หักพักจากช่วงเดิม", 0
-        step_start_synced = False
-        if updated_step_progress.get("steps"):
-            current_step = updated_step_progress["steps"][current_step_index]
-            current_step_start = parse_flexible_datetime(current_step.get("started_at"))
-            step_matches_drawing_start = (
-                old_actual_start is not None and not pd.isna(old_actual_start)
-                and current_step_start is not None and not pd.isna(current_step_start)
-                and abs((current_step_start - old_actual_start).total_seconds()) <= 60
-            )
-            if current_step_index == 0 or step_matches_drawing_start:
-                pending_pause = parse_flexible_datetime(current_step.get("pending_pause_started_at"))
-                if pending_pause is not None and not pd.isna(pending_pause) and new_start_dt > pending_pause:
-                    return False, "เวลาเริ่มจริงใหม่ต้องไม่อยู่หลังเวลาเริ่มพักของ Step ปัจจุบัน", 0
-                current_step["started_at"] = new_start_dt.strftime("%Y-%m-%d %H:%M:%S")
-                step_start_synced = True
-        machine_res = requests.get(
-            endpoint,
-            headers=get_supabase_headers(),
-            params={
-                "select": (
-                    "id,plan_code,drawing_name,machine_name,status,ready_at,actual_start,"
-                    "setup_mins,basic_hrs,prog_hrs,step_progress"
-                ),
-                "machine_name": f"eq.{machine_name}",
-                "order": "ready_at.asc,id.asc",
-            },
-            timeout=8,
-        )
-        if machine_res.status_code != 200:
+        job_id = safe_int(job_id)
+        if job_id <= 0:
+            return False, "ไม่พบรายการที่เลือก", 0
+        endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
+        response = requests.get(endpoint, headers=get_supabase_headers(), params={"select": "*", "id": f"eq.{job_id}", "limit": "1"}, timeout=8)
+        if response.status_code != 200 or not response.json():
+            return False, "อ่านใบงานล่าสุดไม่สำเร็จ", 0
+        target = response.json()[0]
+        target_payload = prepare_work_order_time_restart(target, new_actual_start, reason, note)
+        machine = target.get("machine_name")
+        queue_response = requests.get(endpoint, headers=get_supabase_headers(), params={"select": "*", "machine_name": f"eq.{machine}", "order": "ready_at.asc,id.asc"}, timeout=8)
+        if queue_response.status_code != 200:
             return False, "อ่านคิวล่าสุดของเครื่องไม่สำเร็จ", 0
-
-        machine_rows = machine_res.json() if isinstance(machine_res.json(), list) else []
-        live_rows = [
-            dict(row) for row in machine_rows
-            if any(word in safe_str(row.get("status"), "") for word in ["กำลังผลิต", "พักงาน", "รอวัสดุ"])
-        ]
-        waiting_rows = [dict(row) for row in machine_rows if "รอคิว" in safe_str(row.get("status"), "")]
-        target_found = False
-        for row in live_rows:
+        original_rows = queue_response.json()
+        fresh_target = next((row for row in original_rows if safe_int(row.get("id")) == job_id), None)
+        guard_keys = ("status", "actual_start", "actual_finish", "paused_seconds", "hold_started_at", "step_progress", "ready_at", "baseline_ready_at", "baseline_finish_at", "setup_mins", "basic_hrs", "prog_hrs", "machine_name", "step_name")
+        if fresh_target is None or any(fresh_target.get(key) != target.get(key) for key in guard_keys):
+            return False, "ข้อมูลใบงานเปลี่ยนระหว่างแก้ไข กรุณารีเฟรชและลองใหม่", 0
+        live = [dict(row) for row in original_rows if any(word in safe_str(row.get("status"), "") for word in ("กำลังผลิต", "พักงาน", "รอวัสดุ"))]
+        waiting = [dict(row) for row in original_rows if "รอคิว" in safe_str(row.get("status"), "")]
+        for row in live:
             if safe_int(row.get("id")) == job_id:
-                row["actual_start"] = new_start_dt.strftime("%Y-%m-%d %H:%M:%S")
-                target_found = True
-                break
-        if not target_found:
-            return False, "สถานะงานเปลี่ยนระหว่างแก้ไข กรุณารีเฟรชแล้วลองใหม่", 0
-
-        original_ready = {
-            safe_int(row.get("id")): parse_flexible_datetime(row.get("ready_at"))
-            for row in waiting_rows if safe_int(row.get("id")) > 0
-        }
-        ordered_df = pd.DataFrame(live_rows + waiting_rows).rename(columns={
-            "id": "ID", "plan_code": "แผนงาน", "drawing_name": "ชื่อ Drawing.",
-            "machine_name": "เลือกเครื่องจักร", "status": "สถานะงาน",
-            "ready_at": "วัน-เวลาขึ้นงาน", "actual_start": "เริ่มจริง",
-            "step_progress": "ติดตาม Step", "job_type": "ประเภทงาน", "baseline_ready_at": "กำหนดพร้อมขึ้นงาน (Baseline)",
-            "setup_mins": "Setup (น.)", "basic_hrs": "Basic (น.)", "prog_hrs": "โปรแกรม (น.)",
+                row.update(target_payload)
+        ordered = pd.DataFrame(live + waiting).rename(columns={
+            "id": "ID", "machine_name": "เลือกเครื่องจักร", "status": "สถานะงาน", "actual_start": "เริ่มจริง",
+            "ready_at": "วัน-เวลาขึ้นงาน", "setup_mins": "Setup (น.)", "basic_hrs": "Basic (น.)", "prog_hrs": "โปรแกรม (น.)",
+            "step_progress": "ติดตาม Step", "baseline_ready_at": "กำหนดพร้อมขึ้นงาน (Baseline)", "baseline_finish_at": "เวลาจบ Baseline",
         })
-        chain_df = calculate_production_chain(ordered_df, active_only=True, preserve_input_order=True)
-        waiting_chain = chain_df[
-            chain_df["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)
-        ].copy()
-        expected_by_id = {}
-        for _, row in waiting_chain.iterrows():
+        # คงกฎเครื่องว่าง, เบรก, วันหยุด, manual not-before และ Batch เดิม
+        chain = calculate_production_chain(ordered, active_only=True, preserve_input_order=True)
+        target_chain = chain[chain["ID"].map(safe_int).eq(job_id)]
+        if target_chain.empty:
+            return False, "คำนวณแผนใหม่ของใบงานไม่สำเร็จ", 0
+        target_payload["baseline_ready_at"] = target_chain.iloc[0]["_chain_start"].strftime("%Y-%m-%d %H:%M:%S")
+        target_payload["baseline_finish_at"] = target_chain.iloc[0]["_chain_finish"].strftime("%Y-%m-%d %H:%M:%S")
+        mutations = [(target, target_payload)]
+        by_id = {safe_int(row.get("id")): row for row in waiting}
+        for _, row in chain.iterrows():
             waiting_id = safe_int(row.get("ID"))
-            ready_dt = row.get("_chain_start")
-            if waiting_id <= 0 or ready_dt is None or pd.isna(ready_dt):
-                return False, "คำนวณเวลาคิวรอใหม่ไม่สำเร็จ จึงยังไม่แก้เวลาเริ่มจริง", 0
-            expected_by_id[waiting_id] = ready_dt
-
-        target_update_payload = {"actual_start": new_start_dt.strftime("%Y-%m-%d %H:%M:%S")}
-        if step_start_synced:
-            target_update_payload["step_progress"] = updated_step_progress
-        if not update_supabase_job(job_id, target_update_payload, clear_cache=False):
-            return False, "ฐานข้อมูลไม่รับเวลาเริ่มจริงใหม่", 0
-
-        updated_waiting_ids = []
-        for waiting_id, ready_dt in expected_by_id.items():
-            if not update_supabase_job(
-                waiting_id,
-                {"ready_at": ready_dt.strftime("%Y-%m-%d %H:%M:%S")},
-                clear_cache=False,
-            ):
-                rollback_start = old_actual_start.strftime("%Y-%m-%d %H:%M:%S") if old_actual_start is not None and not pd.isna(old_actual_start) else None
-                rollback_payload = {"actual_start": rollback_start}
-                if step_start_synced:
-                    rollback_payload["step_progress"] = old_step_progress
-                update_supabase_job(job_id, rollback_payload, clear_cache=False)
-                for rollback_id in updated_waiting_ids:
-                    old_ready = original_ready.get(rollback_id)
-                    if old_ready is not None and not pd.isna(old_ready):
-                        update_supabase_job(
-                            rollback_id,
-                            {"ready_at": old_ready.strftime("%Y-%m-%d %H:%M:%S")},
-                            clear_cache=False,
-                        )
-                st.cache_data.clear()
-                return False, "อัปเดตลูกโซ่ไม่ครบ ระบบคืนเวลาเดิมแล้ว", 0
-            updated_waiting_ids.append(waiting_id)
-
-        if expected_by_id and not verify_supabase_ready_times(expected_by_id):
-            rollback_start = old_actual_start.strftime("%Y-%m-%d %H:%M:%S") if old_actual_start is not None and not pd.isna(old_actual_start) else None
-            rollback_payload = {"actual_start": rollback_start}
-            if step_start_synced:
-                rollback_payload["step_progress"] = old_step_progress
-            update_supabase_job(job_id, rollback_payload, clear_cache=False)
-            for rollback_id in updated_waiting_ids:
-                old_ready = original_ready.get(rollback_id)
-                if old_ready is not None and not pd.isna(old_ready):
-                    update_supabase_job(
-                        rollback_id,
-                        {"ready_at": old_ready.strftime("%Y-%m-%d %H:%M:%S")},
-                        clear_cache=False,
-                    )
-            st.cache_data.clear()
-            return False, "ตรวจสอบเวลาลูกโซ่หลังบันทึกไม่ผ่าน ระบบคืนเวลาเดิมแล้ว", 0
-
-        old_text = old_actual_start.strftime("%d/%m/%Y %H:%M") if old_actual_start is not None and not pd.isna(old_actual_start) else "ไม่พบเวลาเดิม"
-        new_text = new_start_dt.strftime("%d/%m/%Y %H:%M")
-        log_job_event(
-            job_id,
-            target_row.get("plan_code"),
-            target_row.get("drawing_name"),
-            machine_name,
-            "Admin Edit Actual Start",
-            reason=reason,
-            note=(
-                f"เวลาเดิม {old_text} → เวลาใหม่ {new_text}"
-                + (" | ซิงก์เวลาเริ่ม Step แรกแล้ว" if step_start_synced else " | คงเวลาเริ่ม Step ปัจจุบันเดิม")
-                + (f" | {safe_str(note)}" if safe_str(note) else "")
-            ),
-        )
+            if waiting_id not in by_id:
+                continue
+            start, finish = row.get("_chain_start"), row.get("_chain_finish")
+            if start is None or finish is None or pd.isna(start) or pd.isna(finish):
+                return False, "คำนวณคิวรอไม่ครบ ยังไม่ได้บันทึก", 0
+            waiting_payload = {"ready_at": start.strftime("%Y-%m-%d %H:%M:%S"),
+                               "baseline_ready_at": start.strftime("%Y-%m-%d %H:%M:%S"),
+                               "baseline_finish_at": finish.strftime("%Y-%m-%d %H:%M:%S")}
+            mutations.append((by_id[waiting_id], waiting_payload))
+        for old_row, payload in mutations:
+            old_id = safe_int(old_row.get("id"))
+            expected = {key: old_row.get(key) for key in guard_keys}
+            # เก็บ rollback ก่อนเรียก REST เผื่อ timeout หลังฐานข้อมูลรับค่าแล้ว
+            applied.append((old_id, {key: old_row.get(key) for key in payload}, payload, expected))
+            if not patch_job_timing_if_unchanged(endpoint, old_id, expected, payload):
+                raise ValueError("บันทึกไม่ครบหรือข้อมูลเปลี่ยนระหว่างบันทึก")
+        check = requests.get(endpoint, headers=get_supabase_headers(), params={"select": "*", "machine_name": f"eq.{machine}"}, timeout=8)
+        if check.status_code != 200:
+            raise ValueError("ตรวจสอบหลังบันทึกไม่สำเร็จ")
+        saved = {safe_int(row.get("id")): row for row in check.json()}
+        for live_row in live:
+            live_id = safe_int(live_row.get("id"))
+            if live_id == job_id:
+                continue
+            original_live = next(row for row in original_rows if safe_int(row.get("id")) == live_id)
+            if any(saved.get(live_id, {}).get(key) != original_live.get(key) for key in guard_keys):
+                raise ValueError("งานสดอื่นของเครื่องเปลี่ยนระหว่างคำนวณ กรุณารีเฟรชแล้วลองใหม่")
+        for old_id, _, payload, _ in applied:
+            saved_row = saved.get(old_id, {})
+            for key, value in payload.items():
+                actual = saved_row.get(key)
+                if key.endswith("_at") or key in ("actual_start", "actual_finish", "ready_at"):
+                    matches = first_valid_datetime(actual) == first_valid_datetime(value)
+                elif key == "step_progress":
+                    matches = production_schedule_metadata(saved_row) == value
+                else:
+                    matches = actual == value
+                if not matches:
+                    raise ValueError("ข้อมูลหลังบันทึกไม่ตรงกับแผนใหม่")
+        log_job_event(job_id, target.get("plan_code"), target.get("drawing_name"), machine, "Admin Restart Work Order Timing",
+                      reason=reason, note=f"ยกเลิกเวลารอบเดิม เริ่มแผนและเวลาจริงใหม่ {target_payload['actual_start']} | {safe_str(note)}")
         st.cache_data.clear()
-        return True, "", len(expected_by_id)
+        return True, "", len(waiting)
     except Exception as exc:
-        return False, f"เกิดข้อผิดพลาดระหว่างแก้เวลาเริ่มจริง: {safe_str(exc, 'ไม่ทราบสาเหตุ')}", 0
+        unresolved = []
+        for old_id, old_payload, new_payload, original_guard in reversed(applied):
+            try:
+                if not patch_job_timing_if_unchanged(endpoint, old_id, {**original_guard, **new_payload}, old_payload):
+                    # อาจยังเป็นค่าเดิม (คำสั่งแรกไม่ถูกบันทึก) จึงตรวจซ้ำก่อนแจ้งคืนค่าไม่ครบ
+                    response = requests.get(endpoint, headers=get_supabase_headers(), params={"id": f"eq.{old_id}", "select": "*", "limit": "1"}, timeout=8)
+                    row = response.json()[0] if response.status_code == 200 and response.json() else {}
+                    same = all(first_valid_datetime(row.get(key)) == first_valid_datetime(value) if key.endswith("_at") or key in ("actual_start", "actual_finish", "ready_at") else row.get(key) == value for key, value in old_payload.items())
+                    if not same:
+                        unresolved.append(old_id)
+            except Exception:
+                unresolved.append(old_id)
+        if applied:
+            st.cache_data.clear()
+        suffix = f" | คืนข้อมูลไม่ครบ ID {unresolved} กรุณารีเฟรชตรวจสอบก่อนดำเนินการต่อ" if unresolved else (" | คืนข้อมูลเดิมแล้ว" if applied else " | ยังไม่ได้บันทึก")
+        return False, safe_str(exc, "เกิดข้อผิดพลาด") + suffix, 0
+
 
 def reset_work_order_queue_controls_if_requested():
     """ล้างค่าจัดคิวก่อนสร้าง widget รอบใหม่ หลังบันทึกสำเร็จเท่านั้น"""
@@ -2350,9 +2219,9 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
 
     with st.expander("🛠️ ผู้ดูแล: แก้ไขเวลาเริ่มจริงของงานที่กำลังรัน", expanded=False):
         st.warning(
-            "ใช้เฉพาะกรณีกด Start ผิดเวลาเท่านั้น การแก้ไขจะคำนวณเวลาคิวรอของเครื่องนั้นใหม่ "
-            "ซิงก์เวลาเริ่มของ Step แรก และบันทึกเวลาเดิม เวลาใหม่ พร้อมเหตุผลไว้ในประวัติกิจกรรม "
-            "โดยไม่เปลี่ยนเวลาเริ่มของ Step 2–3"
+            "เมื่อบันทึก เวลาแผน เวลาเริ่มจริง และเวลาพักรอบเดิมของใบงานนี้จะถูกยกเลิกจากการคำนวณ "
+            "เริ่มนับใหม่จากเวลาที่ระบุ เก็บข้อมูลเดิมไว้เป็นประวัติเท่านั้น "
+            "เวลาจบใหม่ใช้ Setup + Basic + โปรแกรมตามใบงานปัจจุบัน แล้วต่อคิวรอของเครื่องนี้ใหม่"
         )
         machine_column, plan_column, drawing_column = st.columns([1, 1, 2])
         machine_options = ["ทั้งหมด"] + sorted(live_jobs["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
@@ -2393,32 +2262,7 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
         default_start = old_start if old_start is not None and not pd.isna(old_start) else get_bangkok_now().replace(tzinfo=None)
         old_start_text = old_start.strftime("%d/%m/%Y %H:%M") if old_start is not None and not pd.isna(old_start) else "ไม่พบเวลาเริ่มจริงเดิม"
         st.info(f"เวลาเริ่มจริงปัจจุบัน: **{old_start_text}**")
-        if old_start is not None and pd.notna(old_start):
-            elapsed_gross = get_work_seconds_between(old_start, get_bangkok_now().replace(tzinfo=None))
-            saved_pause = max(0.0, safe_float(selected_row.get("เวลาพักสะสม (วินาที)"), 0.0))
-            elapsed_net = max(0.0, elapsed_gross - saved_pause)
-            st.caption(f"ตรวจสอบตัวจับเวลา: เวลาในกะ {elapsed_gross / 3600:,.2f} ชม. − พักสะสม {saved_pause / 3600:,.2f} ชม. = เดินสุทธิ {elapsed_net / 3600:,.2f} ชม.")
-            if saved_pause > elapsed_gross:
-                st.warning("เวลาพักสะสมมากกว่าช่วงในกะนับจากเวลาเริ่มจริงปัจจุบัน จึงแสดงเดินสุทธิเป็นศูนย์ ต้องตรวจประวัติการพักก่อนแก้ข้อมูล")
-
-
-        stored_progress = production_schedule_metadata(selected_row)
-        stored_steps = stored_progress.get("steps", []) if isinstance(stored_progress, dict) else []
-        first_step_start = first_valid_datetime(stored_steps[0].get("started_at")) if stored_steps else None
-        if first_step_start is not None and old_start is not None and old_start > first_step_start:
-            st.info(f"ประวัติ Step แรกเริ่ม {first_step_start.strftime('%d/%m/%Y %H:%M:%S')} แต่เวลาเริ่ม Drawing อยู่หลังเวลานี้")
-            if st.button("↩️ คืนเวลาเริ่ม Drawing ตามประวัติ Step แรก", key=f"restore_drawing_start_{form_version}_{selected_id}"):
-                restored, restore_error, shifted_count = update_running_actual_start_with_chain(
-                    selected_id, first_step_start, "แก้ไขข้อมูลโดยผู้ดูแล",
-                    "คืนเวลาเริ่ม Drawing ตามประวัติ Step แรก โดยคงเวลาพักและประวัติ Step เดิม",
-                )
-                if restored:
-                    st.session_state["admin_actual_start_form_version"] = form_version + 1
-                    st.toast("คืนเวลาเริ่ม Drawing สำเร็จ และคำนวณคิวใหม่แล้ว", icon="✅")
-                    st.rerun()
-                else:
-                    st.error(restore_error)
-        st.caption("ช่องนี้แก้เวลาเริ่มทั้ง Drawing • ตัวจับเวลาหน้าเครื่องและทีวีใช้เวลา Step ปัจจุบัน")
+        st.caption("เริ่มแผนและเวลาจริงใหม่ทั้งใบงาน ล้างค่าพักเดิม และคำนวณคิวรอของเครื่องนี้ด้วยกฎลูกโซ่เดิม งานที่เสร็จแล้วไม่เปิดกลับมาทำใหม่")
         with st.form(f"admin_actual_start_form_{form_version}_{selected_id}", clear_on_submit=False):
             edit_col1, edit_col2 = st.columns(2)
             with edit_col1:
@@ -2442,11 +2286,11 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
             )
             edit_note = st.text_input("หมายเหตุเพิ่มเติม", placeholder="ระบุรายละเอียดเพิ่มเติม (ถ้ามี)", key=f"admin_actual_start_note_{form_version}_{selected_id}")
             confirm_edit = st.checkbox(
-                "ยืนยันว่าได้ตรวจสอบเวลาใหม่แล้ว และยอมรับให้ระบบคำนวณคิวรอของเครื่องนี้ใหม่",
+                "ยืนยันยกเลิกเวลารอบเดิมและค่าพักทั้งหมด เริ่มคำนวณใหม่จากเวลานี้ และปรับคิวรอของเครื่องนี้",
                 key=f"admin_actual_start_confirm_{form_version}_{selected_id}"
             )
             submitted = st.form_submit_button(
-                "💾 ยืนยันแก้ไขเวลาเริ่มจริง",
+                "💾 บันทึกเวลาเริ่มใหม่และยกเลิกเวลาเดิม",
                 type="primary",
                 use_container_width=True,
             )
@@ -2459,15 +2303,13 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
                 st.error("กรุณาระบุหมายเหตุเมื่อเลือกเหตุผล ‘อื่น ๆ’")
             elif not confirm_edit:
                 st.error("กรุณาติ๊กยืนยันก่อนแก้ไขเวลาเริ่มจริง")
-            elif new_start.replace(second=0, microsecond=0) == default_start.replace(second=0, microsecond=0):
-                st.info("เวลาใหม่ตรงกับเวลาเดิม จึงไม่มีข้อมูลที่ต้องแก้ไข")
             else:
                 saved, error_message, shifted_count = update_running_actual_start_with_chain(
                     selected_id, new_start, edit_reason, edit_note
                 )
                 if saved:
                     st.success(
-                        f"แก้เวลาเริ่มจริงเป็น {new_start.strftime('%d/%m/%Y %H:%M')} เรียบร้อยแล้ว "
+                        f"เริ่มแผนและเวลาจริงใหม่เป็น {new_start.strftime('%d/%m/%Y %H:%M')} เรียบร้อยแล้ว "
                         f"และคำนวณคิวรอใหม่ {shifted_count} รายการ"
                     )
                     st.session_state["admin_actual_start_form_version"] = form_version + 1
@@ -4052,8 +3894,6 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
         finished_costs = df_db[df_db["สถานะงาน"].isin(["🟩 เสร็จสิ้นแล้ว", "✅ เสร็จสิ้นแล้ว"])].copy()
         if not finished_costs.empty:
             finished_costs = build_performance_metrics(finished_costs)
-            if finished_costs["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
-                st.warning("รายงานยังไม่ครบ: เวลาสุทธิและต้นทุนของงานที่เวลาพักรอตรวจสอบยังไม่รวมในยอดสรุป")
             finished_costs["_cost_date"] = pd.to_datetime(finished_costs["_actual_finish_dt"], errors="coerce")
             finished_costs["แผนงาน"] = finished_costs["แผนงาน"].map(lambda value: safe_str(value, "ไม่ระบุแผนงาน"))
             finished_costs["_machine_rate"] = finished_costs["เลือกเครื่องจักร"].map(rate_map).fillna(500.0)
@@ -5948,7 +5788,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             <div class="shop-live-banner shop-live-running">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span class="tv-pulse-dot"></span>
-                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ Step ปัจจุบัน: <span class="pes-live-timer" data-time-unverified="{int(current_step_pause_unverified(r_cur))}" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">{"เวลาพักรอตรวจสอบ" if current_step_pause_unverified(r_cur) else "00:00:00"}</span>)</span>
+                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ Step ปัจจุบัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
                 </div>
                 <div style="font-size:12.5px; opacity:0.9;">
                     📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
@@ -6448,7 +6288,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                     step_render_now = get_bangkok_now().replace(tzinfo=None)
                     step_base_work_seconds = int(get_net_actual_work_seconds(st_parsed, step_render_now, current_step_paused)) if st_parsed is not None else 0
                     step_render_epoch = to_bangkok_epoch_ms(step_render_now)
-                    st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-time-unverified='{int(bool(current_step_item.get("pause_review_pending")))}' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' data-base-work-seconds='{step_base_work_seconds}' data-render-epoch='{step_render_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
+                    st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' data-base-work-seconds='{step_base_work_seconds}' data-render-epoch='{step_render_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                     if is_running_overdue:
                         st.error(f"🚨 งานนี้กำลังผลิตและเกินเวลาจบตามแผนแล้ว {overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที")
                 elif is_step_hold:
@@ -6718,8 +6558,8 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 else:
                     icon = "⚪"
                     state_text = "รอทำ"
-                if item.get("pause_review_pending"):
-                    state_text = "เวลาพักรอตรวจสอบ — ยังไม่ยืนยันเวลาสุทธิ"
+                if item.get("timing_cancelled"):
+                    state_text = "เสร็จแล้วก่อนเริ่มรอบใหม่ — ไม่นำเวลาเดิมมาคำนวณ"
                 step_status_lines.append(f"{icon} **Step {idx + 1}:** {item.get('name', '-')} · {state_text}")
             st.markdown("  \n".join(step_status_lines))
 
@@ -6928,9 +6768,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                                 st.error("ย้ายเครื่องไม่สำเร็จ")
 
             completed_step_seconds = sum(step_elapsed_seconds(item) for item in tracked_steps if item.get("finished_at"))
-            if is_step_finished and any(item.get("pause_review_pending") for item in tracked_steps):
-                st.warning("งานเสร็จแล้ว แต่เวลาพักยังรอตรวจสอบ จึงยังไม่สรุปเวลาสุทธิและประสิทธิภาพ")
-            elif is_step_finished:
+            if is_step_finished:
                 planned_seconds = max(0.0, tot_h * 3600.0)
                 variance_seconds = completed_step_seconds - planned_seconds
                 result_text = (
@@ -7021,7 +6859,6 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 const nowTs = new Date().getTime();
                 const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
                 timerEls.forEach(el => {
-                    if (el.getAttribute('data-time-unverified') === '1') { el.innerText = 'เวลาพักรอตรวจสอบ'; return; }
                     const startAttr = el.getAttribute('data-start-epoch');
                     const startTs = parseInt(startAttr, 10);
                     if (startTs && startTs > 0) {
@@ -7082,7 +6919,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         if is_admin:
             render_admin_actual_start_editor(df_db)
-            render_admin_current_step_start_editor(df_db)
             render_outsource_management(df_db)
             templates = fetch_drawing_templates()
             with st.expander("📚 Drawing Template — ลดการพิมพ์ข้อมูลซ้ำ", expanded=False):
@@ -9207,7 +9043,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     # ใช้ Baseline/เวลาจบที่บันทึกไว้เป็นแหล่งเดียวกับหน้าอื่น
                     plan_fn = get_job_planned_finish(r)
 
-                    if st_p and fn_p and not job_has_unverified_actual_time(r):
+                    if st_p and fn_p:
                         net_seconds = get_net_actual_work_seconds(st_p, fn_p, pause_seconds)
                         act_hrs_list.append(round(net_seconds / 3600.0, 2))
                     else:
@@ -9830,10 +9666,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         actual_start = parse_flexible_datetime(cost_row.get("เริ่มจริง"))
                         actual_finish = parse_flexible_datetime(cost_row.get("เสร็จจริง"))
                         paused_seconds = max(0.0, safe_float(cost_row.get("เวลาพักสะสม (วินาที)"), 0.0))
-                        if job_has_unverified_actual_time(cost_row):
-                            actual_net_hours.append(float("nan"))
-                            time_sources.append("⚠️ เวลาพักรอตรวจสอบ")
-                        elif actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
+                        if actual_start is not None and actual_finish is not None and actual_finish >= actual_start:
                             net_seconds = get_net_actual_work_seconds(actual_start, actual_finish, paused_seconds)
                             actual_net_hours.append(round(net_seconds / 3600.0, 2))
                             time_sources.append("✅ เวลาจริง")
@@ -9849,8 +9682,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cost_df["ต้นทุนจริงสุทธิ (บาท)"] = (cost_df["เวลาจริงสุทธิ (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]).round(2)
                     cost_df["ผลต่างต้นทุน (บาท)"] = (cost_df["ต้นทุนจริงสุทธิ (บาท)"] - cost_df["ต้นทุนตามแผน (บาท)"]).round(2)
 
-                    if cost_df["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
-                        st.warning("ยอดต้นทุนจริงยังไม่ครบ: ไม่นับงานที่เวลาพักรอตรวจสอบ กรุณายืนยันเวลาพักก่อนใช้ยอดสรุป")
                     total_plan_cost = cost_df["ต้นทุนตามแผน (บาท)"].sum()
                     total_actual_cost = cost_df["ต้นทุนจริงสุทธิ (บาท)"].sum()
                     total_actual_hrs = cost_df["เวลาจริงสุทธิ (ชม.)"].sum()
@@ -10226,8 +10057,6 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
 
             if not monthly_dw_jobs.empty:
                 monthly_dw_jobs = build_performance_metrics(monthly_dw_jobs)
-                if monthly_dw_jobs["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
-                    st.warning("รายงานยังไม่ครบ: เวลาสุทธิและต้นทุนของงานที่เวลาพักรอตรวจสอบยังไม่รวมในยอดสรุป")
                 monthly_dw_jobs["แผนงาน"] = monthly_dw_jobs["แผนงาน"].map(lambda v: safe_str(v, "ไม่ระบุแผนงาน"))
                 monthly_dw_jobs["ชื่อ Drawing."] = monthly_dw_jobs["ชื่อ Drawing."].map(lambda v: safe_str(v, "ไม่ระบุ Drawing"))
 
@@ -10555,10 +10384,7 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
                                 s_st, s_fn = sr.get("เริ่มจริง"), sr.get("เสร็จจริง")
                                 act_st = parse_flexible_datetime(s_st)
                                 act_fn = parse_flexible_datetime(s_fn)
-                                if job_has_unverified_actual_time(sr):
-                                    step_diffs.append(float("nan"))
-                                    step_evals.append("⚠️ เวลาพักรอตรวจสอบ")
-                                elif act_st is not None and act_fn is not None:
+                                if act_st is not None and act_fn is not None:
                                     d_sec = get_net_actual_work_seconds(
                                         act_st, act_fn, safe_float(sr.get("เวลาพักสะสม (วินาที)"), 0.0)
                                     )
@@ -10683,8 +10509,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
         if not monthly_jobs.empty:
             monthly_jobs = build_performance_metrics(monthly_jobs)
-            if monthly_jobs["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
-                st.warning("รายงานยังไม่ครบ: เวลาสุทธิและต้นทุนของงานที่เวลาพักรอตรวจสอบยังไม่รวมในยอดสรุป")
             monthly_jobs["แผนงาน"] = monthly_jobs["แผนงาน"].map(lambda v: safe_str(v, "ไม่ระบุแผนงาน"))
             monthly_jobs["ชื่อ Drawing."] = monthly_jobs["ชื่อ Drawing."].map(lambda v: safe_str(v, "ไม่ระบุ Drawing"))
             monthly_jobs["เลือกเครื่องจักร"] = monthly_jobs["เลือกเครื่องจักร"].map(lambda v: safe_str(v, "ไม่ระบุเครื่อง"))
@@ -10767,8 +10591,6 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
             if not prev_monthly_jobs.empty:
                 prev_monthly_jobs = build_performance_metrics(prev_monthly_jobs)
-                if prev_monthly_jobs["แหล่งเวลา"].eq("⚠️ เวลาพักรอตรวจสอบ").any():
-                    st.warning("รายงานยังไม่ครบ: เวลาสุทธิและต้นทุนของงานที่เวลาพักรอตรวจสอบยังไม่รวมในยอดสรุป")
                 prev_qty = unique_drawing_quantity(prev_monthly_jobs)
                 prev_rates = prev_monthly_jobs["เลือกเครื่องจักร"].map(rate_map).fillna(500)
                 prev_val = (prev_monthly_jobs["เวลาจริง (ชม.)"] * prev_rates).sum()
@@ -11588,7 +11410,6 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           const isWorkingNow = windows.some(w => minuteOfDay >= w[0] && minuteOfDay < w[1]);
           const timerEls = window.parent.document.querySelectorAll('.dept-tv-live-timer');
           timerEls.forEach(el => {
-                    if (el.getAttribute('data-time-unverified') === '1') { el.innerText = 'เวลาพักรอตรวจสอบ'; return; }
             let totalSecs = Number(el.dataset.liveSeconds);
             if (!Number.isFinite(totalSecs)) {
               totalSecs = Number(el.getAttribute('data-base-work-seconds') || '0') || 0;
@@ -11737,7 +11558,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                 tv_render_now = get_bangkok_now().replace(tzinfo=None)
                 tv_base_work_seconds = int(get_net_actual_work_seconds(r_start_parsed, tv_render_now, r_paused_seconds))
                 tv_render_epoch = to_bangkok_epoch_ms(tv_render_now)
-                timer_display_html = f'<span class="pes-live-timer" data-time-unverified="{int(current_step_pause_unverified(r_info))}" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" data-base-work-seconds="{tv_base_work_seconds}" data-render-epoch="{tv_render_epoch}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span>'
+                timer_display_html = f'<span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" data-base-work-seconds="{tv_base_work_seconds}" data-render-epoch="{tv_render_epoch}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span>'
                 actual_start_report = r_start_parsed.strftime("%d/%m/%Y %H:%M")
             else:
                 # ห้ามใช้เวลาแผนแทนเวลาเริ่มจริง เพราะจะทำให้ตัวจับเวลาเริ่มเองเมื่อถึงเวลาแผน
@@ -12073,7 +11894,6 @@ components.html("""
 
             const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
             timerEls.forEach(el => {
-                    if (el.getAttribute('data-time-unverified') === '1') { el.innerText = 'เวลาพักรอตรวจสอบ'; return; }
                 const startAttr = el.getAttribute('data-start-epoch');
                 const startTs = parseInt(startAttr, 10);
                 if (startTs && startTs > 0) {
