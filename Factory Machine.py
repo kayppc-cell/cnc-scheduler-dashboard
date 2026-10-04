@@ -12,6 +12,9 @@ import io
 import uuid
 import re
 import textwrap
+import hashlib
+import hmac
+import time as tpc_auth_time
 from PIL import Image
 import requests
 import streamlit.components.v1 as components
@@ -2454,8 +2457,85 @@ def build_project_active_chain(calc_df):
     jobs["_finish"] = jobs.get("_chain_finish", pd.Series(index=jobs.index, dtype="datetime64[ns]"))
     return jobs
 
+def get_timing_editor_password():
+    """รหัสแยกจากการเข้าแดชบอร์ด; ไม่ตั้งค่าแปลว่าเครื่องมือยังล็อก"""
+    try:
+        value = st.secrets.get("TPC_TIMING_EDIT_PASSWORD", "")
+        return value if isinstance(value, str) and value.strip() else ""
+    except Exception:
+        return ""
+
+
+def lock_timing_editors():
+    st.session_state.pop("tpc_timing_editor_grant", None)
+
+
+def timing_editors_are_unlocked():
+    """ตรวจสิทธิ์ฝั่งเซิร์ฟเวอร์ทุกครั้ง รวม fragment และก่อนบันทึก"""
+    password = get_timing_editor_password()
+    grant = st.session_state.get("tpc_timing_editor_grant")
+    if st.session_state.get("user_role") != "admin" or not password or not isinstance(grant, dict):
+        lock_timing_editors()
+        return False
+    digest = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    valid = (
+        isinstance(grant.get("expires_at"), (int, float))
+        and tpc_auth_time.time() < grant["expires_at"]
+        and hmac.compare_digest(str(grant.get("password_digest", "")), digest)
+    )
+    if not valid:
+        lock_timing_editors()
+    return valid
+
+
+def unlock_timing_editors(password_attempt):
+    configured = get_timing_editor_password()
+    if st.session_state.get("user_role") != "admin" or not configured or not isinstance(password_attempt, str):
+        lock_timing_editors()
+        return False
+    if not hmac.compare_digest(password_attempt.encode("utf-8"), configured.encode("utf-8")):
+        lock_timing_editors()
+        return False
+    st.session_state["tpc_timing_editor_grant"] = {
+        "expires_at": tpc_auth_time.time() + 15 * 60,
+        "password_digest": hashlib.sha256(configured.encode("utf-8")).hexdigest(),
+    }
+    return True
+
+
+def render_locked_timing_editors(jobs_df, render_waiting_editor):
+    if st.session_state.get("user_role") != "admin":
+        lock_timing_editors()
+        return
+    with st.expander("🔐 เครื่องมือแก้ไขเวลา — ต้องใช้รหัสผ่าน", expanded=False):
+        if not get_timing_editor_password():
+            lock_timing_editors()
+            st.info("เครื่องมือแก้ไขเวลายังล็อกอยู่ กรุณาตั้งรหัสสำหรับแก้เวลาใน Secrets ก่อนใช้งาน")
+            return
+        if not timing_editors_are_unlocked():
+            st.caption("กรอกรหัสเพื่อเปิดแก้เวลาเริ่มจริงและกำหนดเวลาเริ่มของคิวรอ")
+            with st.form("tpc_timing_editor_unlock_form", clear_on_submit=True):
+                password_attempt = st.text_input("รหัสสำหรับแก้ไขเวลา", type="password", key="tpc_timing_editor_password")
+                submitted = st.form_submit_button("🔓 เปิดเครื่องมือแก้ไขเวลา", use_container_width=True)
+            if not submitted:
+                return
+            if not unlock_timing_editors(password_attempt):
+                st.error("รหัสไม่ถูกต้อง")
+                return
+        st.caption("เปิดสิทธิ์ไว้ 15 นาที แล้วกลับมาล็อกเมื่อมีการใช้งานครั้งถัดไป หรือกดล็อกทันทีหลังใช้งาน")
+        if st.button("🔒 ล็อกเครื่องมืออีกครั้ง", key="tpc_timing_editor_lock", use_container_width=True):
+            lock_timing_editors()
+            st.rerun()
+            return
+        render_admin_actual_start_editor(jobs_df)
+        st.divider()
+        render_waiting_editor()
+
+
 def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
     """เครื่องมือผู้ดูแลสำหรับแก้เวลาเริ่มจริง โดยไม่เปิดสิทธิ์ให้หน้าเครื่องแก้เอง"""
+    if not timing_editors_are_unlocked():
+        return
     if not isinstance(jobs_df, pd.DataFrame) or jobs_df.empty:
         return
     live_jobs = jobs_df[
@@ -2475,7 +2555,8 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
         )
         label_map[label] = row
 
-    with st.expander("🛠️ ผู้ดูแล: แก้ไขเวลาเริ่มจริงของงานที่กำลังรัน", expanded=False):
+    with st.container():
+        st.markdown("#### 🛠️ ผู้ดูแล: แก้ไขเวลาเริ่มจริงของงานที่กำลังรัน")
         st.warning(
             "เมื่อบันทึก เวลาแผน เวลาเริ่มจริง และเวลาพักรอบเดิมของใบงานนี้จะถูกยกเลิกจากการคำนวณ "
             "เริ่มนับใหม่จากเวลาที่ระบุ เก็บข้อมูลเดิมไว้เป็นประวัติเท่านั้น "
@@ -2554,6 +2635,9 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
             )
 
         if submitted:
+            if not timing_editors_are_unlocked():
+                st.warning("เครื่องมือถูกล็อกหรือสิทธิ์หมดอายุ กรุณากรอกรหัสอีกครั้งก่อนบันทึก")
+                return
             new_start = datetime.combine(edited_date, edited_time)
             if edit_reason == "เลือกเหตุผล":
                 st.error("กรุณาเลือกเหตุผลการแก้ไข")
@@ -7168,13 +7252,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.subheader("📊 แดชบอร์ดภาพรวมโรงงานและการคำนวณต้นทุน 👁️ (โหมดเข้าชมทั่วไป - ดูอย่างเดียว)")
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True):
+                lock_timing_editors()
                 st.session_state.user_role = None
                 st.rerun()
 
         df_db = fetch_jobs_from_supabase()
 
         if is_admin:
-            render_admin_actual_start_editor(df_db)
             render_outsource_management(df_db)
             templates = fetch_drawing_templates()
             with st.expander("📚 Drawing Template — ลดการพิมพ์ข้อมูลซ้ำ", expanded=False):
@@ -7575,7 +7659,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             @st.fragment
             def render_waiting_start_requirement():
-                with st.expander("🗓️ แก้กำหนดเวลาเริ่มของใบงานที่รอคิว", expanded=False):
+                if not timing_editors_are_unlocked():
+                    st.info("เครื่องมือแก้ไขเวลาถูกล็อก กรุณากรอกรหัสอีกครั้ง")
+                    return
+                with st.container():
+                    st.markdown("#### 🗓️ แก้กำหนดเวลาเริ่มของใบงานที่รอคิว")
                     waiting = df_db[df_db["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)] if not df_db.empty else pd.DataFrame()
                     if waiting.empty:
                         st.caption("ไม่มีใบงานรอคิว")
@@ -7642,6 +7730,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     if already_saved:
                         st.success("✅ บันทึกกำหนดเวลาเริ่มสำเร็จแล้ว")
                     if st.button("✅ บันทึกแล้ว" if already_saved else "💾 บันทึกกำหนดเวลาเริ่ม", key="waiting_start_submit", disabled=already_saved):
+                        if not timing_editors_are_unlocked():
+                            st.warning("เครื่องมือถูกล็อกหรือสิทธิ์หมดอายุ กรุณากรอกรหัสอีกครั้งก่อนบันทึก")
+                            return
                         try:
                             endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
                             response = requests.get(endpoint, headers=get_supabase_headers(), params={"id": f"eq.{job_id}", "select": "status,step_progress"}, timeout=8)
@@ -7665,7 +7756,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         except Exception:
                             st.error("เชื่อมต่อฐานข้อมูลไม่สำเร็จ กรุณาลองใหม่")
 
-            render_waiting_start_requirement()
+            render_locked_timing_editors(df_db, render_waiting_start_requirement)
 
             @st.fragment
             def render_urgent_template_controls():
@@ -10715,6 +10806,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.subheader("📑 รายงานสรุปผลการผลิตและประสิทธิภาพประจำเดือน (Monthly Production Report)")
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True, key="btn_logout_monthly"):
+                lock_timing_editors()
                 st.session_state.user_role = None
                 st.rerun()
 
