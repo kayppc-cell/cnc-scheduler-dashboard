@@ -1645,33 +1645,13 @@ def timing_value_matches(key, actual, expected):
 
 
 def build_job_timing_guard_params(job_id, expected):
-    """ใช้ scalar JSON paths แทนการเทียบ JSON ทั้งก้อนใน URL"""
+    """ใช้เงื่อนไข scalar หลักแบบเดียวกับ REST เดิม ไม่กรอง JSON/ชื่อ Step"""
     params = {"id": f"eq.{safe_int(job_id)}"}
-
-    def add_filter(path, value):
-        if value is None:
-            params[path] = "is.null"
-        elif isinstance(value, bool):
-            params[path] = "eq." + json.dumps("true" if value else "false")
-        elif isinstance(value, (int, float)):
-            params[path] = "eq." + str(value)
-        else:
-            # PostgREST reserved characters เช่น comma/วงเล็บ/colon ต้อง quote ค่า
-            escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
-            params[path] = 'eq."' + escaped + '"'
-
-    for key, value in expected.items():
-        if key == "step_progress":
-            progress = production_schedule_metadata({"step_progress": value})
-            for field in ("current_index", "schedule_mode", "planned_not_before", "timing_restarted_at"):
-                scalar = progress.get(field)
-                add_filter(f"step_progress->>{field}", str(scalar) if scalar is not None else None)
-            for index, step in enumerate(progress.get("steps", [])):
-                for field in ("step_id", "name", "started_at", "finished_at", "pending_pause_started_at"):
-                    add_filter(f"step_progress->steps->{index}->>{field}", step.get(field))
-            # ตรวจ JSON เต็มชุดจาก read ก่อน PATCH; ไม่ส่งประวัติยาวทั้งหมดเป็นเงื่อนไข URL
-        else:
-            add_filter(key, value)
+    for key in ("status", "machine_name", "actual_start"):
+        if key not in expected:
+            continue
+        value = expected[key]
+        params[key] = "is.null" if value is None else "eq." + str(value)
     return params
 
 
@@ -1704,7 +1684,9 @@ def patch_job_timing_if_unchanged(endpoint, job_id, expected, payload):
         saved = after.json()
         return isinstance(saved, list) and len(saved) == 1 and all(timing_value_matches(key, saved[0].get(key), value) for key, value in payload.items())
     saved = response.json()
-    return isinstance(saved, list) and len(saved) == 1
+    if not isinstance(saved, list) or len(saved) != 1:
+        raise ValueError(f"บันทึก ID {safe_int(job_id)} ไม่พบแถวที่ตรงเงื่อนไขสถานะ/เครื่อง/เวลาเริ่ม หรือไม่มีสิทธิ์แก้ไข")
+    return all(timing_value_matches(key, saved[0].get(key), value) for key, value in payload.items())
 
 
 def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason: str, note: str = "") -> tuple[bool, str, int]:
