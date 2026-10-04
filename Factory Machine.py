@@ -7259,6 +7259,107 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         df_db = fetch_jobs_from_supabase()
 
         if is_admin:
+            @st.fragment
+            def render_waiting_start_requirement():
+                if not timing_editors_are_unlocked():
+                    st.info("เครื่องมือแก้ไขเวลาถูกล็อก กรุณากรอกรหัสอีกครั้ง")
+                    return
+                with st.container():
+                    st.markdown("#### 🗓️ แก้กำหนดเวลาเริ่มของใบงานที่รอคิว")
+                    waiting = df_db[df_db["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)] if not df_db.empty else pd.DataFrame()
+                    if waiting.empty:
+                        st.caption("ไม่มีใบงานรอคิว")
+                        return
+                    filter_machine_column, filter_plan_column, filter_drawing_column = st.columns([1, 1, 2])
+                    machine_options = ["ทั้งหมด"] + sorted(waiting["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
+                    selected_machine = filter_machine_column.selectbox("🔎 เครื่องจักร", machine_options, key="waiting_start_filter_machine")
+                    if selected_machine != "ทั้งหมด":
+                        waiting = waiting[waiting["เลือกเครื่องจักร"].astype(str).eq(selected_machine)]
+                    plan_options = ["ทั้งหมด"] + sorted(waiting["แผนงาน"].dropna().astype(str).unique().tolist())
+                    if st.session_state.get("waiting_start_filter_plan", "ทั้งหมด") not in plan_options:
+                        st.session_state["waiting_start_filter_plan"] = "ทั้งหมด"
+                    selected_plan = filter_plan_column.selectbox("🔎 แผนงาน", plan_options, key="waiting_start_filter_plan")
+                    if selected_plan != "ทั้งหมด":
+                        waiting = waiting[waiting["แผนงาน"].astype(str).eq(selected_plan)]
+                    drawing_query = filter_drawing_column.text_input("🔎 ค้นหา Drawing", placeholder="พิมพ์รหัสหรือชื่อบางส่วน", key="waiting_start_filter_drawing").strip()
+                    if drawing_query:
+                        waiting = waiting[waiting["ชื่อ Drawing."].astype(str).str.contains(drawing_query, case=False, regex=False, na=False)]
+                    st.caption(f"พบใบงานรอคิว {len(waiting)} รายการ")
+                    if waiting.empty:
+                        st.info("ไม่พบใบงานตามตัวกรอง ลองเปลี่ยนเครื่องจักร แผนงาน หรือคำค้นหา")
+                        return
+                    waiting_map = {safe_int(row["ID"]): row for _, row in waiting.iterrows()}
+                    if st.session_state.get("waiting_start_job") not in waiting_map:
+                        st.session_state["waiting_start_job"] = next(iter(waiting_map))
+                    job_id = st.selectbox("เลือกใบงานรอคิว", list(waiting_map),
+                        format_func=lambda value: f"{waiting_map[value]['เลือกเครื่องจักร']} | {waiting_map[value]['แผนงาน']} | {waiting_map[value]['ชื่อ Drawing.']}", key="waiting_start_job")
+                    job = waiting_map[job_id]
+                    initial = first_valid_datetime(production_not_before(job), job.get("กำหนดพร้อมขึ้นงาน (Baseline)"), job.get("วัน-เวลาขึ้นงาน")) or get_bangkok_now().replace(tzinfo=None)
+                    manual_default = production_not_before(job) is not None
+                    mode = st.radio("วิธีเริ่มใบงาน", ["ต่อคิวอัตโนมัติ", "เริ่มไม่ก่อนวันเวลาที่กำหนด"], index=1 if manual_default else 0, key=f"waiting_start_mode_{job_id}")
+                    requested = None
+                    if mode != "ต่อคิวอัตโนมัติ":
+                        c1, c2 = st.columns(2)
+                        date = c1.date_input("วันเริ่มขึ้นงาน", initial.date(), format="DD/MM/YYYY", key=f"waiting_start_date_{job_id}")
+                        time = c2.time_input("เวลาขึ้นงาน", initial.time(), key=f"waiting_start_time_{job_id}")
+                        requested = datetime.combine(date, time)
+                    st.caption("คงลำดับคิวเดิม: เริ่มหลังคิวก่อนหน้าเสร็จ และไม่ก่อนเวลาที่กำหนด โดยใช้กะโรงงาน")
+                    preview_jobs = df_db.copy()
+                    preview_metadata = production_schedule_metadata(job).copy()
+                    preview_metadata["schedule_mode"] = "auto" if requested is None else "manual"
+                    if requested is None:
+                        preview_metadata.pop("planned_not_before", None)
+                    else:
+                        preview_metadata["planned_not_before"] = requested.strftime("%Y-%m-%d %H:%M:%S")
+                    if "ติดตาม Step" not in preview_jobs.columns:
+                        preview_jobs["ติดตาม Step"] = None
+                    selected_mask = preview_jobs["ID"].map(safe_int).eq(job_id)
+                    for selected_index in preview_jobs.index[selected_mask]:
+                        preview_jobs.at[selected_index, "ติดตาม Step"] = preview_metadata
+                    preview_chain = calculate_production_chain(preview_jobs)
+                    preview_selected = preview_chain[preview_chain["ID"].map(safe_int).eq(job_id)]
+                    if not preview_selected.empty:
+                        preview_row = preview_selected.iloc[0]
+                        preview_start = first_valid_datetime(preview_row.get("_chain_start"))
+                        preview_finish = first_valid_datetime(preview_row.get("_chain_finish"))
+                        start_column, finish_column = st.columns(2)
+                        start_column.metric("เริ่มตามแผนหลังปรับ", preview_start.strftime("%d/%m/%Y %H:%M") if preview_start else "—")
+                        finish_column.metric("จบตามแผนหลังปรับ", preview_finish.strftime("%d/%m/%Y %H:%M") if preview_finish else "—")
+                        st.caption("ตัวอย่างก่อนบันทึก: รวม Setup + Basic + โปรแกรม และข้ามเบรก/นอกกะแล้ว กดบันทึกเพื่อใช้กำหนดเวลาใหม่นี้")
+                    save_signature = (preview_metadata["schedule_mode"], preview_metadata.get("planned_not_before"))
+                    saved_signature_key = f"waiting_start_saved_signature_{job_id}"
+                    already_saved = st.session_state.get(saved_signature_key) == save_signature
+                    if already_saved:
+                        st.success("✅ บันทึกกำหนดเวลาเริ่มสำเร็จแล้ว")
+                    if st.button("✅ บันทึกแล้ว" if already_saved else "💾 บันทึกกำหนดเวลาเริ่ม", key="waiting_start_submit", disabled=already_saved):
+                        if not timing_editors_are_unlocked():
+                            st.warning("เครื่องมือถูกล็อกหรือสิทธิ์หมดอายุ กรุณากรอกรหัสอีกครั้งก่อนบันทึก")
+                            return
+                        try:
+                            endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
+                            response = requests.get(endpoint, headers=get_supabase_headers(), params={"id": f"eq.{job_id}", "select": "status,step_progress"}, timeout=8)
+                            live_rows = response.json() if response.status_code == 200 else []
+                            if not live_rows or "รอคิว" not in safe_str(live_rows[0].get("status")):
+                                st.error("ใบงานเปลี่ยนสถานะหรืออ่านข้อมูลไม่สำเร็จ กรุณารีเฟรช")
+                                return
+                            metadata = production_schedule_metadata(live_rows[0]).copy()
+                            metadata["schedule_mode"] = "auto" if requested is None else "manual"
+                            if requested is None:
+                                metadata.pop("planned_not_before", None)
+                            else:
+                                metadata["planned_not_before"] = requested.strftime("%Y-%m-%d %H:%M:%S")
+                            if update_supabase_job(job_id, {"step_progress": metadata}):
+                                st.session_state[saved_signature_key] = save_signature
+                                st.session_state.pop("editor_cnc_jobs_grid_main", None)
+                                st.toast("บันทึกเวลาเริ่มและคำนวณคิวใหม่แล้ว", icon="✅")
+                                st.rerun()
+                            else:
+                                st.error("บันทึกไม่สำเร็จ กรุณาลองใหม่")
+                        except Exception:
+                            st.error("เชื่อมต่อฐานข้อมูลไม่สำเร็จ กรุณาลองใหม่")
+
+            render_locked_timing_editors(df_db, render_waiting_start_requirement)
+
             render_outsource_management(df_db)
             templates = fetch_drawing_templates()
             with st.expander("📚 Drawing Template — ลดการพิมพ์ข้อมูลซ้ำ", expanded=False):
@@ -7657,106 +7758,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             render_normal_template_controls()
 
-            @st.fragment
-            def render_waiting_start_requirement():
-                if not timing_editors_are_unlocked():
-                    st.info("เครื่องมือแก้ไขเวลาถูกล็อก กรุณากรอกรหัสอีกครั้ง")
-                    return
-                with st.container():
-                    st.markdown("#### 🗓️ แก้กำหนดเวลาเริ่มของใบงานที่รอคิว")
-                    waiting = df_db[df_db["สถานะงาน"].astype(str).str.contains("รอคิว", na=False)] if not df_db.empty else pd.DataFrame()
-                    if waiting.empty:
-                        st.caption("ไม่มีใบงานรอคิว")
-                        return
-                    filter_machine_column, filter_plan_column, filter_drawing_column = st.columns([1, 1, 2])
-                    machine_options = ["ทั้งหมด"] + sorted(waiting["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
-                    selected_machine = filter_machine_column.selectbox("🔎 เครื่องจักร", machine_options, key="waiting_start_filter_machine")
-                    if selected_machine != "ทั้งหมด":
-                        waiting = waiting[waiting["เลือกเครื่องจักร"].astype(str).eq(selected_machine)]
-                    plan_options = ["ทั้งหมด"] + sorted(waiting["แผนงาน"].dropna().astype(str).unique().tolist())
-                    if st.session_state.get("waiting_start_filter_plan", "ทั้งหมด") not in plan_options:
-                        st.session_state["waiting_start_filter_plan"] = "ทั้งหมด"
-                    selected_plan = filter_plan_column.selectbox("🔎 แผนงาน", plan_options, key="waiting_start_filter_plan")
-                    if selected_plan != "ทั้งหมด":
-                        waiting = waiting[waiting["แผนงาน"].astype(str).eq(selected_plan)]
-                    drawing_query = filter_drawing_column.text_input("🔎 ค้นหา Drawing", placeholder="พิมพ์รหัสหรือชื่อบางส่วน", key="waiting_start_filter_drawing").strip()
-                    if drawing_query:
-                        waiting = waiting[waiting["ชื่อ Drawing."].astype(str).str.contains(drawing_query, case=False, regex=False, na=False)]
-                    st.caption(f"พบใบงานรอคิว {len(waiting)} รายการ")
-                    if waiting.empty:
-                        st.info("ไม่พบใบงานตามตัวกรอง ลองเปลี่ยนเครื่องจักร แผนงาน หรือคำค้นหา")
-                        return
-                    waiting_map = {safe_int(row["ID"]): row for _, row in waiting.iterrows()}
-                    if st.session_state.get("waiting_start_job") not in waiting_map:
-                        st.session_state["waiting_start_job"] = next(iter(waiting_map))
-                    job_id = st.selectbox("เลือกใบงานรอคิว", list(waiting_map),
-                        format_func=lambda value: f"{waiting_map[value]['เลือกเครื่องจักร']} | {waiting_map[value]['แผนงาน']} | {waiting_map[value]['ชื่อ Drawing.']}", key="waiting_start_job")
-                    job = waiting_map[job_id]
-                    initial = first_valid_datetime(production_not_before(job), job.get("กำหนดพร้อมขึ้นงาน (Baseline)"), job.get("วัน-เวลาขึ้นงาน")) or get_bangkok_now().replace(tzinfo=None)
-                    manual_default = production_not_before(job) is not None
-                    mode = st.radio("วิธีเริ่มใบงาน", ["ต่อคิวอัตโนมัติ", "เริ่มไม่ก่อนวันเวลาที่กำหนด"], index=1 if manual_default else 0, key=f"waiting_start_mode_{job_id}")
-                    requested = None
-                    if mode != "ต่อคิวอัตโนมัติ":
-                        c1, c2 = st.columns(2)
-                        date = c1.date_input("วันเริ่มขึ้นงาน", initial.date(), format="DD/MM/YYYY", key=f"waiting_start_date_{job_id}")
-                        time = c2.time_input("เวลาขึ้นงาน", initial.time(), key=f"waiting_start_time_{job_id}")
-                        requested = datetime.combine(date, time)
-                    st.caption("คงลำดับคิวเดิม: เริ่มหลังคิวก่อนหน้าเสร็จ และไม่ก่อนเวลาที่กำหนด โดยใช้กะโรงงาน")
-                    preview_jobs = df_db.copy()
-                    preview_metadata = production_schedule_metadata(job).copy()
-                    preview_metadata["schedule_mode"] = "auto" if requested is None else "manual"
-                    if requested is None:
-                        preview_metadata.pop("planned_not_before", None)
-                    else:
-                        preview_metadata["planned_not_before"] = requested.strftime("%Y-%m-%d %H:%M:%S")
-                    if "ติดตาม Step" not in preview_jobs.columns:
-                        preview_jobs["ติดตาม Step"] = None
-                    selected_mask = preview_jobs["ID"].map(safe_int).eq(job_id)
-                    for selected_index in preview_jobs.index[selected_mask]:
-                        preview_jobs.at[selected_index, "ติดตาม Step"] = preview_metadata
-                    preview_chain = calculate_production_chain(preview_jobs)
-                    preview_selected = preview_chain[preview_chain["ID"].map(safe_int).eq(job_id)]
-                    if not preview_selected.empty:
-                        preview_row = preview_selected.iloc[0]
-                        preview_start = first_valid_datetime(preview_row.get("_chain_start"))
-                        preview_finish = first_valid_datetime(preview_row.get("_chain_finish"))
-                        start_column, finish_column = st.columns(2)
-                        start_column.metric("เริ่มตามแผนหลังปรับ", preview_start.strftime("%d/%m/%Y %H:%M") if preview_start else "—")
-                        finish_column.metric("จบตามแผนหลังปรับ", preview_finish.strftime("%d/%m/%Y %H:%M") if preview_finish else "—")
-                        st.caption("ตัวอย่างก่อนบันทึก: รวม Setup + Basic + โปรแกรม และข้ามเบรก/นอกกะแล้ว กดบันทึกเพื่อใช้กำหนดเวลาใหม่นี้")
-                    save_signature = (preview_metadata["schedule_mode"], preview_metadata.get("planned_not_before"))
-                    saved_signature_key = f"waiting_start_saved_signature_{job_id}"
-                    already_saved = st.session_state.get(saved_signature_key) == save_signature
-                    if already_saved:
-                        st.success("✅ บันทึกกำหนดเวลาเริ่มสำเร็จแล้ว")
-                    if st.button("✅ บันทึกแล้ว" if already_saved else "💾 บันทึกกำหนดเวลาเริ่ม", key="waiting_start_submit", disabled=already_saved):
-                        if not timing_editors_are_unlocked():
-                            st.warning("เครื่องมือถูกล็อกหรือสิทธิ์หมดอายุ กรุณากรอกรหัสอีกครั้งก่อนบันทึก")
-                            return
-                        try:
-                            endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
-                            response = requests.get(endpoint, headers=get_supabase_headers(), params={"id": f"eq.{job_id}", "select": "status,step_progress"}, timeout=8)
-                            live_rows = response.json() if response.status_code == 200 else []
-                            if not live_rows or "รอคิว" not in safe_str(live_rows[0].get("status")):
-                                st.error("ใบงานเปลี่ยนสถานะหรืออ่านข้อมูลไม่สำเร็จ กรุณารีเฟรช")
-                                return
-                            metadata = production_schedule_metadata(live_rows[0]).copy()
-                            metadata["schedule_mode"] = "auto" if requested is None else "manual"
-                            if requested is None:
-                                metadata.pop("planned_not_before", None)
-                            else:
-                                metadata["planned_not_before"] = requested.strftime("%Y-%m-%d %H:%M:%S")
-                            if update_supabase_job(job_id, {"step_progress": metadata}):
-                                st.session_state[saved_signature_key] = save_signature
-                                st.session_state.pop("editor_cnc_jobs_grid_main", None)
-                                st.toast("บันทึกเวลาเริ่มและคำนวณคิวใหม่แล้ว", icon="✅")
-                                st.rerun()
-                            else:
-                                st.error("บันทึกไม่สำเร็จ กรุณาลองใหม่")
-                        except Exception:
-                            st.error("เชื่อมต่อฐานข้อมูลไม่สำเร็จ กรุณาลองใหม่")
-
-            render_locked_timing_editors(df_db, render_waiting_start_requirement)
 
             @st.fragment
             def render_urgent_template_controls():
