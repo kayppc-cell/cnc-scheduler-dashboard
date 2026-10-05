@@ -63,6 +63,13 @@ def render_touch_safe_chart(tpc_chart_key, figure, **kwargs):
         st.caption("ปัดเลื่อนหน้าได้ตามปกติ • เปิดการลาก/ซูมด้านบนเพื่อดูรายละเอียดกราฟ")
     return st.plotly_chart(chart, config=config, **kwargs)
 
+def filter_batch_jobs_by_plan(jobs, selected_plans=None):
+    """None = ทุกแผน, [] = ไม่เลือกแผน; คงลำดับและข้อมูลคิวเดิม"""
+    if selected_plans is None:
+        return jobs.copy()
+    plan_keys = {str(value).strip() for value in selected_plans}
+    return jobs[jobs["แผนงาน"].fillna("").astype(str).str.strip().isin(plan_keys)].copy()
+
 def get_planned_minutes(row):
     """คืนเวลาแผนรวมเป็นนาทีด้วยค่าเริ่มต้นมาตรฐานชุดเดียวทั้งระบบ"""
     return max(0.0, (
@@ -6245,6 +6252,35 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 </div>
                 """, unsafe_allow_html=True)
 
+                batch_plan_mode = st.radio(
+                    "📋 แผนงานที่ต้องการควบคุม",
+                    ["ทุกแผน", "เลือกแผน"], horizontal=True,
+                    key=f"batch_plan_mode_{selected_m}",
+                )
+                batch_selected_plans = None
+                if batch_plan_mode == "เลือกแผน":
+                    batch_plan_options = sorted(m_all_jobs["แผนงาน"].fillna("").astype(str).str.strip().unique().tolist())
+                    batch_plan_key = f"batch_selected_plans_{selected_m}"
+                    if batch_plan_key in st.session_state:
+                        st.session_state[batch_plan_key] = [value for value in st.session_state[batch_plan_key] if value in batch_plan_options]
+                    batch_selected_plans = st.multiselect(
+                        "เลือกแผนได้มากกว่า 1 แผน", batch_plan_options,
+                        format_func=lambda value: value or "(ไม่ระบุแผน)",
+                        key=batch_plan_key,
+                    )
+                    if not batch_selected_plans:
+                        st.info("เลือกอย่างน้อย 1 แผนก่อนใช้คำสั่ง Batch")
+                batch_plan_scope = None if batch_selected_plans is None else sorted(batch_selected_plans)
+                if batch_guard and batch_guard.get("plans") != batch_plan_scope:
+                    st.session_state.pop("batch_bulk_guard", None)
+                    batch_guard = None
+                    st.info("เปลี่ยนแผนที่เลือกแล้ว กรุณาตรวจรายการใหม่ก่อนยืนยัน")
+                waiting_jobs = filter_batch_jobs_by_plan(waiting_jobs, batch_selected_plans)
+                running_jobs = filter_batch_jobs_by_plan(running_jobs, batch_selected_plans)
+                hold_jobs = filter_batch_jobs_by_plan(hold_jobs, batch_selected_plans)
+                batch_stopped_hold_jobs = filter_batch_jobs_by_plan(batch_stopped_hold_jobs, batch_selected_plans)
+                st.caption("คำสั่ง Start / Resume / หยุด / Finish / คืนคิว ใช้เฉพาะแผนที่เลือกบนเครื่องนี้")
+
                 if guard_expired:
                     st.warning("⌛ การยืนยันครั้งก่อนหมดอายุแล้ว กรุณาตรวจรายการใหม่")
 
@@ -6261,6 +6297,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             st.session_state.batch_bulk_guard = {
                                 "action": "start",
                                 "machine": selected_m,
+                                "plans": batch_plan_scope,
                                 "ids": [safe_int(v) for v in waiting_jobs["ID"].tolist()],
                                 "armed_at": get_bangkok_str(),
                                 "nonce": uuid.uuid4().hex
@@ -6277,6 +6314,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             st.session_state.batch_bulk_guard = {
                                 "action": "resume",
                                 "machine": selected_m,
+                                "plans": batch_plan_scope,
                                 "ids": [safe_int(v) for v in hold_jobs["ID"].tolist()],
                                 "armed_at": get_bangkok_str(),
                                 "nonce": uuid.uuid4().hex
@@ -6286,7 +6324,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                     b_c3, b_c4 = st.columns(2)
                     with b_c3:
                         if st.button(
-                            f"🔎 ตรวจรายการก่อนหยุดคิวทั้งหมด ({len(running_jobs)} คิว)",
+                            f"🔎 ตรวจรายการก่อนหยุดคิวตามแผนที่เลือก ({len(running_jobs)} คิว)",
                             disabled=(len(running_jobs) == 0),
                             type="secondary",
                             use_container_width=True,
@@ -6295,6 +6333,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             st.session_state.batch_bulk_guard = {
                                 "action": "pause",
                                 "machine": selected_m,
+                                "plans": batch_plan_scope,
                                 "ids": [safe_int(v) for v in running_jobs["ID"].tolist()],
                                 "armed_at": get_bangkok_str(),
                                 "nonce": uuid.uuid4().hex
@@ -6311,6 +6350,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             st.session_state.batch_bulk_guard = {
                                 "action": "finish",
                                 "machine": selected_m,
+                                "plans": batch_plan_scope,
                                 "ids": [safe_int(v) for v in running_jobs["ID"].tolist()],
                                 "armed_at": get_bangkok_str(),
                                 "nonce": uuid.uuid4().hex
@@ -6326,6 +6366,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                         st.session_state.batch_bulk_guard = {
                             "action": "return_waiting",
                             "machine": selected_m,
+                                "plans": batch_plan_scope,
                             "ids": [safe_int(v) for v in batch_stopped_hold_jobs["ID"].tolist()],
                             "armed_at": get_bangkok_str(),
                             "nonce": uuid.uuid4().hex
@@ -6404,6 +6445,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                                 (fresh_jobs["ID"].apply(safe_int).isin(guard_ids)) &
                                 (fresh_jobs["สถานะงาน"].astype(str).str.contains(expected_status_text, na=False))
                             ].copy()
+                            fresh_batch_jobs = filter_batch_jobs_by_plan(fresh_batch_jobs, batch_guard.get("plans"))
                             fresh_ids = {safe_int(v) for v in fresh_batch_jobs["ID"].tolist()}
                             if fresh_ids != guard_ids:
                                 st.session_state.pop("batch_bulk_guard", None)
