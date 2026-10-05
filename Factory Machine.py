@@ -33,7 +33,22 @@ def render_touch_safe_chart(tpc_chart_key, figure, **kwargs):
         help="เปิดเมื่อต้องการดูรายละเอียด ปิดเพื่อปัดเลื่อนหน้าเว็บได้สะดวกบนมือถือ",
     )
     chart = go.Figure(figure)
-    chart.update_layout(dragmode="pan" if interactive else False)
+    # กราฟพื้นขาวต้องใช้ตัวอักษรเข้มทั้งใน Light/Dark โดยไม่รับ Streamlit theme ทับ
+    chart.update_layout(
+        template="plotly_white", paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
+        font=dict(color="#0F172A"),
+        title=dict(font=dict(color="#0F172A")),
+        legend=dict(font=dict(color="#0F172A"), title=dict(font=dict(color="#0F172A"))),
+        hoverlabel=dict(bgcolor="#FFFFFF", bordercolor="#64748B", font=dict(color="#0F172A")),
+        dragmode="pan" if interactive else False,
+    )
+    chart.update_xaxes(tickfont=dict(color="#0F172A"), title_font=dict(color="#0F172A"), gridcolor="#CBD5E1", linecolor="#64748B")
+    chart.update_yaxes(tickfont=dict(color="#0F172A"), title_font=dict(color="#0F172A"), gridcolor="#CBD5E1", linecolor="#64748B")
+    for trace in chart.data:
+        # คงสีข้อความในแท่ง Gantt; ตัวเลขนอกแท่งต้องเข้มบนพื้นขาว
+        if getattr(trace, "textposition", None) == "outside":
+            trace.update(textfont=dict(color="#0F172A"))
+    kwargs["theme"] = None
     chart.update_xaxes(fixedrange=not interactive)
     chart.update_yaxes(fixedrange=not interactive)
     config = dict(kwargs.pop("config", {}) or {})
@@ -1243,6 +1258,14 @@ st.markdown("""
         display: inline-block;
         vertical-align: middle !important;
         box-shadow: 0 0 8px #10B981, 0 0 16px rgba(16, 185, 129, 0.8) !important;
+    }
+
+    /* กล่องพื้นอ่อนคงตัวอักษรเข้มเมื่อ Windows/Streamlit ใช้ธีมมืด */
+    .tpc-light-panel { color:#0F172A !important; }
+    .tpc-light-panel p, .tpc-light-panel b, .tpc-light-panel small,
+    .tpc-light-panel div:not([style*="color:"]) { color:inherit !important; }
+    .step-card-running, .step-card-hold, .step-card-ready, .step-card-finished {
+        color:#0F172A !important;
     }
 
     /* ตาราง Native: สีข้อความตามธีม; canvas ใช้ .streamlit/config.toml */
@@ -2718,7 +2741,7 @@ def render_machine_activity_dashboard(calc_df):
                         note_text = safe_str(latest_pause.get("note"), "")
                 with alert_cols[alert_idx % len(alert_cols)]:
                     st.markdown(f"""
-                    <div style="border:2px solid #F59E0B;border-left:7px solid #D97706;border-radius:12px;padding:12px;background:#FFFBEB;margin-bottom:8px;">
+                    <div class="tpc-light-panel" style="color:#0F172A;border:2px solid #F59E0B;border-left:7px solid #D97706;border-radius:12px;padding:12px;background:#FFFBEB;margin-bottom:8px;">
                       <div style="font-size:16px;font-weight:900;color:#92400E;">🟨 {html.escape(safe_str(row.get('เลือกเครื่องจักร'), '-'))}</div>
                       <div><b>พักมา:</b> {format_duration_short(elapsed)}</div>
                       <div><b>สาเหตุ:</b> {html.escape(reason_text)}</div>
@@ -3258,7 +3281,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         (f"มีแผนที่ต้องตัดสินใจ {exec_decision_count} แผน" if exec_decision_count > 0 else "ทุกแผนยังอยู่ในกรอบ Production")
     )
     st.markdown(
-        f"<div style='border:2px solid {exec_health_color};border-left:9px solid {exec_health_color};"
+        f"<div class='tpc-light-panel' style='color:#0F172A;border:2px solid {exec_health_color};border-left:9px solid {exec_health_color};"
         f"border-radius:12px;padding:14px 16px;background:{exec_health_bg};margin:5px 0 12px'>"
         f"<div style='font-size:20px;font-weight:900;color:{exec_health_color}'>{exec_health_icon} สถานการณ์รวม: {exec_health} — {executive_health_reason}</div>"
         f"<div style='margin-top:6px;font-size:15px'>มีแผนงาน {exec_total_plans} แผน — "
