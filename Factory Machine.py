@@ -1245,20 +1245,42 @@ st.markdown("""
         box-shadow: 0 0 8px #10B981, 0 0 16px rgba(16, 185, 129, 0.8) !important;
     }
 
-    /* มาตรฐานหน้าตาตารางทั้งระบบ */
-    div[data-testid="stDataFrame"] {
-        border: 1px solid #DCE3EC;
+    /* ตาราง Native: สีข้อความตามธีม; canvas ใช้ .streamlit/config.toml */
+    div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
+        border: 2px solid #64748B;
         border-radius: 10px;
         overflow: hidden;
-        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+        box-shadow: 0 2px 8px rgba(15,23,42,.18);
     }
-    div[data-testid="stDataFrame"] [role="columnheader"] {
-        font-size: 12px !important;
-        font-weight: 700 !important;
-        color: #334155 !important;
+    div[data-testid="stDataFrame"] [role="columnheader"],
+    div[data-testid="stDataEditor"] [role="columnheader"] {
+        font-size: 13px !important;
+        font-weight: 800 !important;
+        color: var(--text-color, inherit) !important;
     }
-    div[data-testid="stDataFrame"] [role="gridcell"] {
-        font-size: 12px !important;
+    /* ตาราง HTML กำหนดสีพื้นและตัวอักษรคู่กัน ไม่รับตัวอักษรขาวจากธีมมืด */
+    [data-testid="stTable"] table,
+    [data-testid="stMarkdownContainer"] table {
+        color: #0F172A !important;
+        background: #FFFFFF !important;
+        border-collapse: collapse;
+        border: 2px solid #64748B !important;
+    }
+    [data-testid="stTable"] table th,
+    [data-testid="stMarkdownContainer"] table th {
+        background: #1E3A5F !important;
+        color: #FFFFFF !important;
+        border: 1px solid #94A3B8 !important;
+        font-weight: 800 !important;
+    }
+    [data-testid="stTable"] table td,
+    [data-testid="stMarkdownContainer"] table td {
+        color: #0F172A;
+        border: 1px solid #64748B !important;
+    }
+    [data-testid="stTable"] table tbody tr:nth-child(even),
+    [data-testid="stMarkdownContainer"] table tbody tr:nth-child(even) {
+        background: #E2E8F0;
     }
 
     /* เมนูแบบยาวใช้เฉพาะ Data Editor ตารางสั่งผลิตหลัก */
@@ -3711,13 +3733,13 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
 
         responsive_project_html = textwrap.dedent("""
         <style>
-        .project-responsive-desktop{width:100%;overflow-x:auto;border:1px solid #D8DEE9;border-radius:10px;background:#FFF}
+        .project-responsive-desktop{width:100%;overflow-x:auto;border:2px solid #64748B;border-radius:10px;background:#FFF;color:#0F172A}
         .project-responsive-desktop table{width:max-content;min-width:100%;border-collapse:collapse;font-size:13px}
         .project-responsive-desktop th,.project-responsive-desktop td{border-bottom:1px solid #E5E7EB;border-right:1px solid #E5E7EB;padding:8px 10px;text-align:left;white-space:nowrap}
         .project-responsive-desktop th{position:sticky;top:0;background:#F3F4F6;color:#4B5563;font-weight:600}
-        .project-responsive-desktop tr:nth-child(even){background:#FAFAFA}
+        .project-responsive-desktop tr:nth-child(even){background:#E2E8F0}
         .project-responsive-mobile{display:none}
-        .project-responsive-tablet{display:none;width:100%;overflow-x:auto;border:1px solid #D8DEE9;border-radius:10px;background:#FFF}
+        .project-responsive-tablet{display:none;width:100%;overflow-x:auto;border:2px solid #64748B;border-radius:10px;background:#FFF;color:#0F172A}
         .project-responsive-tablet table{width:100%;border-collapse:collapse;font-size:13px}
         .project-responsive-tablet th,.project-responsive-tablet td{border-bottom:1px solid #E5E7EB;padding:9px 8px;text-align:left;vertical-align:top}
         .project-responsive-tablet th{background:#F3F4F6;color:#334155;white-space:nowrap}
@@ -3728,7 +3750,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         .device-mobile .project-responsive-desktop{display:none}
         .device-mobile .project-responsive-mobile{display:block}
         @media (max-width:768px){
-            .project-mobile-card{border:1px solid #D8DEE9;border-radius:12px;background:#FFF;padding:12px;margin:0 0 12px;box-shadow:0 2px 8px rgba(15,23,42,.06)}
+            .project-mobile-card{border:2px solid #64748B;border-radius:12px;background:#FFF;color:#0F172A;padding:12px;margin:0 0 12px;box-shadow:0 2px 8px rgba(15,23,42,.06)}
             .project-mobile-title{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
             .project-mobile-title b{font-size:18px;color:#0F172A}.project-mobile-title span{font-size:13px;color:#475569}
             .project-mobile-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
