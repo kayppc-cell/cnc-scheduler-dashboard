@@ -6280,6 +6280,38 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 hold_jobs = filter_batch_jobs_by_plan(hold_jobs, batch_selected_plans)
                 batch_stopped_hold_jobs = filter_batch_jobs_by_plan(batch_stopped_hold_jobs, batch_selected_plans)
                 st.caption("คำสั่ง Start / Resume / หยุด / Finish / คืนคิว ใช้เฉพาะแผนที่เลือกบนเครื่องนี้")
+                batch_start_mode = st.radio(
+                    "🚀 Drawing ที่ต้องการ Start",
+                    ["ทุก Drawing ในแผนที่เลือก", "เลือก Drawing"], horizontal=True,
+                    key=f"batch_start_mode_{selected_m}",
+                )
+                batch_start_scope = None
+                if batch_start_mode == "เลือก Drawing":
+                    batch_start_rows = {safe_int(row["ID"]): row for _, row in waiting_jobs.iterrows()}
+                    batch_start_numbers = {job_id: number for number, job_id in enumerate(batch_start_rows, start=1)}
+                    batch_start_key = f"batch_start_drawings_{selected_m}"
+                    if batch_start_key in st.session_state:
+                        st.session_state[batch_start_key] = [job_id for job_id in st.session_state[batch_start_key] if job_id in batch_start_rows]
+                    batch_start_ids = st.multiselect(
+                        "เลือก Drawing รอคิวที่จะ Start ได้หลายรายการ",
+                        list(batch_start_rows), key=batch_start_key,
+                        format_func=lambda job_id: (
+                            f"คิว {batch_start_numbers[job_id]} | แผน {safe_str(batch_start_rows[job_id].get('แผนงาน'), '-')} | "
+                            f"Drawing {safe_str(batch_start_rows[job_id].get('ชื่อ Drawing.'), '-')} | "
+                            f"Step {safe_str(batch_start_rows[job_id].get('ขั้นตอน (Step)'), '-')}"
+                        ),
+                    )
+                    batch_start_scope = sorted(batch_start_ids)
+                    waiting_jobs = waiting_jobs[waiting_jobs["ID"].apply(safe_int).isin(batch_start_ids)].copy()
+                    if not batch_start_ids:
+                        st.info("เลือกอย่างน้อย 1 Drawing ก่อนตรวจรายการ Start")
+                if batch_guard and batch_guard.get("action") == "start" and batch_guard.get("start_drawings") != batch_start_scope:
+                    st.session_state.pop("batch_bulk_guard", None)
+                    batch_guard = None
+                    st.info("เปลี่ยน Drawing ที่จะ Start แล้ว กรุณาตรวจรายการใหม่")
+                st.caption(f"Start เฉพาะ Drawing รอคิวที่เลือก ({len(waiting_jobs)} คิว) • ตัวเลือก Drawing นี้ไม่มีผลกับ Resume / หยุด / Finish / คืนคิว")
+
+
 
                 if guard_expired:
                     st.warning("⌛ การยืนยันครั้งก่อนหมดอายุแล้ว กรุณาตรวจรายการใหม่")
@@ -6296,6 +6328,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                         ):
                             st.session_state.batch_bulk_guard = {
                                 "action": "start",
+                                "start_drawings": batch_start_scope,
                                 "machine": selected_m,
                                 "plans": batch_plan_scope,
                                 "ids": [safe_int(v) for v in waiting_jobs["ID"].tolist()],
