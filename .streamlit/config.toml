@@ -1,0 +1,19 @@
+# TPC: save as .streamlit/config.toml in the app repository root.
+# Merge these theme tables with existing config; preserve unrelated settings.
+[theme.light]
+primaryColor = "#1D4ED8"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#E2E8F0"
+textColor = "#0F172A"
+borderColor = "#64748B"
+dataframeBorderColor = "#64748B"
+dataframeHeaderBackgroundColor = "#CBD5E1"
+
+[theme.dark]
+primaryColor = "#60A5FA"
+backgroundColor = "#0F172A"
+secondaryBackgroundColor = "#26364D"
+textColor = "#F8FAFC"
+borderColor = "#94A3B8"
+dataframeBorderColor = "#94A3B8"
+dataframeHeaderBackgroundColor = "#334155"
