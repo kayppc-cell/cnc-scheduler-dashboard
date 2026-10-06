@@ -7199,8 +7199,6 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                 with st.expander(transfer_title, expanded=False):
                     if is_step_waiting and not current_step_item.get("started_at"):
                         st.caption("คิวนี้ยังไม่เคย Start ระบบจะเปลี่ยนเฉพาะเครื่องปลายทาง โดยไม่สร้างเวลาพักหรือเปลี่ยนเวลา Step")
-                    else:
-                        st.caption("เก็บเวลา Step เดิมและแยกต้นทุนตามเครื่อง งานจะไปรอ Start ต่อที่เครื่องใหม่; ประวัติย้ายก่อนรุ่นนี้ยังต้องตรวจสอบแยก")
                     transfer_options = [machine for machine in MACHINE_LIST if machine != selected_m]
                     with st.form(key=f"transfer_step_form_{target_id}"):
                         transfer_machine = st.selectbox(
