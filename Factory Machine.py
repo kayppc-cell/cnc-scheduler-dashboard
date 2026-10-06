@@ -7037,7 +7037,7 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
             st.markdown("  \n".join(step_status_lines))
 
             if not is_step_finished:
-                with st.expander("🛠️ จัดการ Step (แก้ชื่อ / ลบ)", expanded=False):
+                with st.expander("🛠️ ตั้งชื่อ Step เริ่มต้น (แก้ชื่อ / ลบ)", expanded=False):
                     st.caption("Step ที่เสร็จแล้วจะถูกล็อก และ Step ที่เริ่มจับเวลาแล้วจะไม่สามารถลบได้")
                     for idx, item in enumerate(tracked_steps):
                         step_locked = bool(item.get("finished_at"))
