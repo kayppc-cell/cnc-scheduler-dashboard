@@ -5953,7 +5953,16 @@ def render_outsource_management(df_all):
         send_tab, receive_tab = st.tabs(["📤 ตัดส่งจ้างภายนอก", f"📊 สถิติงานจ้างภายนอก ({len(outsourced_jobs)})"])
 
         with send_tab:
-            if eligible_jobs.empty:
+            sent_receipt = st.session_state.get("dashboard_outsource_sent_receipt")
+            if sent_receipt:
+                st.success("บันทึกส่งจ้างภายนอกสำเร็จ: " + sent_receipt)
+                st.button("✓ ยืนยันส่งจ้างแล้ว", type="secondary", disabled=True,
+                          use_container_width=True, key="dashboard_outsource_sent_indicator")
+                if not eligible_jobs.empty and st.button("📤 ส่งจ้างรายการถัดไป", key="dashboard_outsource_next"):
+                    st.session_state.pop("dashboard_outsource_sent_receipt", None)
+                    st.session_state.pop("dashboard_outsource_job_select", None)
+                    st.rerun()
+            elif eligible_jobs.empty:
                 st.info("ไม่มีคิวงานที่สามารถเลือกส่งจ้างภายนอกได้")
             else:
                 eligible_jobs = eligible_jobs.sort_values(
@@ -6024,6 +6033,11 @@ def render_outsource_management(df_all):
                                 outsource_index + 1, current_step_name,
                                 reason=f"ตัดส่งจ้างภายนอก: {vendor_input.strip()}",
                                 note=f"วันที่ส่ง {sent_at.strftime('%d/%m/%Y %H:%M')}" + (f" | {outsource_note.strip()}" if outsource_note.strip() else "")
+                            )
+                            st.session_state["dashboard_outsource_sent_receipt"] = (
+                                f"แผน {safe_str(selected_row.get('แผนงาน'), '-')} | "
+                                f"Drawing {safe_str(selected_row.get('ชื่อ Drawing.'), '-')} | "
+                                f"Step {current_step_name} | ผู้รับจ้าง {vendor_input.strip()}"
                             )
                             st.toast("ตัดงานออกจากระบบผลิตภายในและบันทึกสถิติแล้ว", icon="🟣")
                             st.rerun()
@@ -7505,7 +7519,16 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         st.info(f"✏️ กำลังแก้ไข Drawing Template: {selected_template_name}")
                     else:
                         st.caption("สร้าง Drawing Template ใหม่ — การบันทึกส่วนนี้ยังไม่สร้างคิวงานผลิต")
+                    template_saved_key = f"drawing_template_saved_{template_form_suffix}"
+                    if "plan_code" not in selected_template and templates and not any("plan_code" in item for item in templates):
+                        st.info("หากยังไม่เคยเพิ่มช่องรหัสแผนงาน ให้รัน SQL ด้านล่างใน Supabase SQL Editor หนึ่งครั้งก่อนบันทึก")
+                        st.code("ALTER TABLE public.cnc_drawing_templates ADD COLUMN IF NOT EXISTS plan_code text NOT NULL DEFAULT '';", language="sql")
                     with st.form(f"drawing_template_form_{template_form_suffix}", clear_on_submit=False):
+                        tpl_plan_code = st.text_input(
+                            "รหัสแผนงาน", value=safe_str(selected_template.get("plan_code")),
+                            placeholder="เช่น 26-146", key=f"tpl_plan_code_{template_form_suffix}",
+                            help="รหัสแผนงานสำหรับ Template นี้ การบันทึก Template ยังไม่สร้างคิวงานผลิต",
+                        )
                         t1, t2, t3, t_qty = st.columns([2.0, 1.3, 1.3, 0.8])
                         with t1:
                             tpl_drawing = st.text_input(
@@ -7565,8 +7588,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             key=f"tpl_steps_{template_form_suffix}",
                         )
                         save_tpl = st.form_submit_button(
-                            "💾 บันทึกการแก้ไข Drawing Template" if selected_template_id > 0 else "💾 บันทึก Drawing Template ใหม่",
-                            type="primary", use_container_width=True,
+                            ("✓ บันทึกแล้ว — กดเพื่อบันทึกการแก้ไขอีกครั้ง" if st.session_state.get(template_saved_key, False)
+                             else ("💾 บันทึกการแก้ไข Drawing Template" if selected_template_id > 0 else "💾 บันทึก Drawing Template ใหม่")),
+                            type="secondary" if st.session_state.get(template_saved_key, False) else "primary",
+                            use_container_width=True,
                         )
                     if save_tpl:
                         step_names = [line.strip() for line in tpl_steps_text.splitlines() if line.strip()]
@@ -7589,6 +7614,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.error("กรุณาระบุอย่างน้อย 1 Step")
                         else:
                             template_payload = {
+                                "plan_code": tpl_plan_code.strip(),
                                 "drawing_name": tpl_drawing.strip(), "material": tpl_material.strip(),
                                 "default_qty": int(tpl_qty), "machine_name": tpl_machine,
                                 "setup_mins": float(tpl_setup), "basic_mins": float(tpl_basic),
@@ -7602,6 +7628,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 save_drawing_template(template_payload)
                             )
                             if ok:
+                                st.session_state[template_saved_key] = True
                                 st.success(
                                     f"บันทึกการแก้ไข Template {tpl_drawing.strip()} แล้ว"
                                     if selected_template_id > 0 else
@@ -7609,7 +7636,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 )
                                 st.rerun()
                             else:
+                                st.session_state[template_saved_key] = False
                                 st.error(f"บันทึก Template ไม่สำเร็จ: {error}")
+                                if "plan_code" in safe_str(error):
+                                    st.info("เพิ่มคอลัมน์รหัสแผนงานใน Supabase SQL Editor แล้วลองบันทึกใหม่")
+                                    st.code("ALTER TABLE public.cnc_drawing_templates ADD COLUMN IF NOT EXISTS plan_code text NOT NULL DEFAULT '';", language="sql")
                     if selected_template and st.button("🗑️ ลบ Template ที่เลือก", key="delete_selected_drawing_template"):
                         ok, error = delete_drawing_template(safe_int(selected_template.get("id"), 0))
                         if ok:
