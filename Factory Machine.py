@@ -6319,7 +6319,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 st.session_state.pop("batch_bulk_guard", None)
                 st.rerun()
     if st.session_state.get("operator_training_scope") != training_active:
-        for key in ("op_machine_select", "batch_bulk_guard", "pending_shop_finish_confirmation", "operator_finish_feedback", "operator_cancel_start_feedback"):
+        for key in ("op_machine_select", "batch_bulk_guard", "pending_shop_start_confirmation", "pending_shop_finish_confirmation", "operator_finish_feedback", "operator_cancel_start_feedback"):
             st.session_state.pop(key, None)
         st.session_state.operator_training_scope = training_active
     from contextlib import nullcontext
@@ -6360,7 +6360,11 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         return f"🟨 พักงานชั่วคราว — {reason}"
             return "🟨 พักงานชั่วคราว รอขึ้นงาน"
 
-        machine_queue_counts = {machine_name: 0 for machine_name in MACHINE_LIST}
+        operator_machine_options = list(TRAINING_MACHINES if training_active else MACHINE_LIST)
+        operator_machine_select_key = "training_op_machine_select" if training_active else "op_machine_select"
+        if st.session_state.get(operator_machine_select_key) not in operator_machine_options:
+            st.session_state.pop(operator_machine_select_key, None)
+        machine_queue_counts = {machine_name: 0 for machine_name in operator_machine_options}
         if isinstance(df_all, pd.DataFrame) and not df_all.empty:
             active_machine_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
             active_machine_rows = df_all[
@@ -6374,9 +6378,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
         with c_m_sel:
             selected_m = st.selectbox(
                 "🏭 เลือกเครื่องจักร / แผนก:",
-                MACHINE_LIST,
+                operator_machine_options,
                 format_func=lambda machine_name: f"{machine_name} — มี {machine_queue_counts.get(machine_name, 0)} คิว",
-                key="op_machine_select"
+                key=operator_machine_select_key
             )
         with c_mode_sel:
             operator_mode_key = f"operator_run_mode_{selected_m}"
@@ -7214,6 +7218,64 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         else:
                             if can_start:
                                 if st.button(f"🚀 Start Step {current_step_index + 1}: {current_step_name}", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
+                                    st.session_state.pending_shop_start_confirmation = {
+                                        "job_id": target_id, "machine": selected_m, "step_index": current_step_index,
+                                        "training": training_active, "armed_at": get_bangkok_str(),
+                                        "nonce": str(uuid.uuid4()),
+                                    }
+                                    st.rerun()
+                                start_guard = st.session_state.get("pending_shop_start_confirmation")
+                                start_matches = bool(start_guard and start_guard.get("job_id") == target_id
+                                    and start_guard.get("machine") == selected_m
+                                    and start_guard.get("step_index") == current_step_index
+                                    and start_guard.get("training") == training_active)
+                                confirm_start = False
+                                if start_matches:
+                                    armed = parse_flexible_datetime(start_guard.get("armed_at"))
+                                    if armed is None or (get_bangkok_now().replace(tzinfo=None) - armed).total_seconds() > 30:
+                                        st.session_state.pop("pending_shop_start_confirmation", None)
+                                        st.warning("การยืนยัน Start หมดอายุ กรุณากด Start ใหม่")
+                                    else:
+                                        st.warning(f"ยืนยันเริ่มงาน: เครื่อง {selected_m} | แผน {plan_code} | Drawing {drawing_code} | Step {current_step_index + 1}: {current_step_name}")
+                                        start_yes_col, start_no_col = st.columns(2)
+                                        confirm_start = start_yes_col.button("✅ ยืนยัน Start", key="confirm_start_" + start_guard["nonce"], type="primary", use_container_width=True)
+                                        if start_no_col.button("ยกเลิก", key="cancel_start_" + start_guard["nonce"], use_container_width=True):
+                                            st.session_state.pop("pending_shop_start_confirmation", None)
+                                            st.rerun()
+                                if confirm_start:
+                                    if (get_bangkok_now().replace(tzinfo=None) - parse_flexible_datetime(start_guard["armed_at"])).total_seconds() > 30:
+                                        st.session_state.pop("pending_shop_start_confirmation", None)
+                                        st.error("ยืนยัน Start หมดอายุ กรุณาตรวจรายการใหม่")
+                                        st.stop()
+                                    fetch_jobs_from_supabase.clear()
+                                    fresh_start_jobs = fetch_jobs_from_supabase()
+                                    fresh_start_matches = fresh_start_jobs[
+                                        fresh_start_jobs["ID"].map(safe_int).eq(target_id)
+                                        & fresh_start_jobs["เลือกเครื่องจักร"].eq(selected_m)
+                                    ] if not fresh_start_jobs.empty else pd.DataFrame()
+                                    if len(fresh_start_matches) != 1:
+                                        st.error("ไม่พบคิวเดิม กรุณารีเฟรชตรวจใหม่")
+                                        st.stop()
+                                    fresh_start_row = fresh_start_matches.iloc[0]
+                                    fresh_start_progress = normalize_step_progress(
+                                        fresh_start_row.get("ติดตาม Step"), fresh_start_row.get("ขั้นตอน (Step)"),
+                                        fresh_start_row.get("สถานะงาน"), fresh_start_row.get("เริ่มจริง"), fresh_start_row.get("เสร็จจริง"))
+                                    if ("รอคิว" not in safe_str(fresh_start_row.get("สถานะงาน"))
+                                        or fresh_start_progress["current_index"] != current_step_index
+                                        or [{k: item.get(k) for k in ("name", "started_at", "finished_at", "paused_seconds", "pending_pause_started_at")} for item in fresh_start_progress["steps"]]
+                                           != [{k: item.get(k) for k in ("name", "started_at", "finished_at", "paused_seconds", "pending_pause_started_at")} for item in step_progress["steps"]]
+                                        or safe_float(fresh_start_row.get("เวลาพักสะสม (วินาที)"), 0.0) != s_paused_seconds):
+                                        st.session_state.pop("pending_shop_start_confirmation", None)
+                                        st.error("สถานะหรือ Step เปลี่ยนแล้ว ระบบยังไม่ Start กรุณารีเฟรชตรวจใหม่")
+                                        st.stop()
+                                    if "Batch" not in run_mode:
+                                        fresh_machine_queue = fresh_start_jobs[fresh_start_jobs["เลือกเครื่องจักร"].eq(selected_m)].copy()
+                                        fresh_machine_queue["_sort_key"] = fresh_machine_queue.apply(get_production_queue_sort_key, axis=1)
+                                        fresh_machine_queue = fresh_machine_queue.sort_values("_sort_key")
+                                        fresh_pending_queue = fresh_machine_queue[fresh_machine_queue["สถานะงาน"].astype(str).str.contains("รอคิว|พักงาน", regex=True, na=False)]
+                                        if fresh_pending_queue.empty or safe_int(fresh_pending_queue.iloc[0]["ID"]) != target_id:
+                                            st.error("ลำดับคิวเปลี่ยนแล้ว กรุณาตรวจใหม่ก่อน Start")
+                                            st.stop()
                                     live_blocker = get_other_running_job(selected_m, target_id)
                                     if live_blocker:
                                         st.error(f"Start ไม่ได้ เพราะเครื่องกำลังรัน {running_job_label(live_blocker)}")
@@ -7237,6 +7299,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                         start_payload["actual_start"] = start_now_str
                                     if update_supabase_job(target_id, start_payload):
                                         log_job_event(target_id, plan_code, drawing_code, selected_m, "Start Step", current_step_index + 1, current_step_name)
+                                        st.session_state.pop("pending_shop_start_confirmation", None)
                                         st.toast(f"เริ่ม Step {current_step_index + 1}: {current_step_name}", icon="🚀")
                                         st.rerun()
                                     else:
@@ -7251,12 +7314,24 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         st.caption("ใช้เมื่อกด Start ผิดและยังไม่ได้ทำงานจริง คืนเฉพาะการเริ่ม Step แรกที่ยังไม่มี Step จบ")
                         st.info(f"แผน {plan_code} | Drawing {drawing_code} | Step {current_step_name}")
                         with st.form(f"cancel_wrong_start_{target_id}"):
-                            cancel_reason = st.text_input("เหตุผลที่ยกเลิก *", placeholder="เช่น เลือกคิวผิด ยังไม่ได้ผลิตจริง")
+                            cancel_reason_choice = st.selectbox(
+                                "เหตุผลที่ยกเลิก *",
+                                ["กรุณาเลือกสาเหตุ", "เลือกคิวผิด", "เลือก Drawing ผิด", "เลือกแผนงานผิด", "เลือกเครื่องจักรผิด", "กด Start โดยไม่ตั้งใจ", "อื่น ๆ"],
+                            )
+                            cancel_reason_detail = st.text_input(
+                                "รายละเอียดเพิ่มเติม (กรอกเมื่อเลือกอื่น ๆ)",
+                                placeholder="สาเหตุสำเร็จรูปไม่ต้องพิมพ์เพิ่ม",
+                            )
                             cancel_confirm = st.checkbox("ยืนยันว่าเริ่มผิดและยังไม่ได้ผลิตจริง เวลาที่กดผิดจะไม่ถูกนำมาคำนวณ")
                             cancel_submit = st.form_submit_button("↩️ ยืนยันยกเลิกการเริ่มผิด", use_container_width=True)
                         if cancel_submit:
-                            if not cancel_confirm or not cancel_reason.strip():
-                                st.warning("กรอกเหตุผลและติ๊กยืนยันก่อนคืนคิว")
+                            reason_detail = cancel_reason_detail.strip()
+                            cancel_reason = "" if cancel_reason_choice == "กรุณาเลือกสาเหตุ" else (
+                                reason_detail if cancel_reason_choice == "อื่น ๆ" else
+                                cancel_reason_choice + (f" — {reason_detail}" if reason_detail else "")
+                            )
+                            if not cancel_confirm or not cancel_reason:
+                                st.warning("เลือกสาเหตุและติ๊กยืนยันก่อนคืนคิว หากเลือกอื่น ๆ กรุณากรอกรายละเอียด")
                             else:
                                 cancelled, cancel_message = cancel_wrong_job_start(target_id, selected_m, s_start, cancel_reason)
                                 if cancelled:
@@ -7439,7 +7514,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     with st.expander(transfer_title, expanded=False):
                         if is_step_waiting and not current_step_item.get("started_at"):
                             st.caption("คิวนี้ยังไม่เคย Start ระบบจะเปลี่ยนเฉพาะเครื่องปลายทาง โดยไม่สร้างเวลาพักหรือเปลี่ยนเวลา Step")
-                        transfer_options = [machine for machine in MACHINE_LIST if machine != selected_m]
+                        transfer_options = [machine for machine in operator_machine_options if machine != selected_m]
                         with st.form(key=f"transfer_step_form_{target_id}"):
                             transfer_machine = st.selectbox(
                                 "เลือกเครื่องปลายทาง", transfer_options,
