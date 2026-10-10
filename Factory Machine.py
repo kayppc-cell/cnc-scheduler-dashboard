@@ -6127,8 +6127,135 @@ def render_outsource_management(df_all):
                         f"วันที่ส่ง **{sent_text}** | หมายเหตุ **{note}**"
                     )
 
+TRAINING_MACHINES = [f"TRAINING-{i:02d}" for i in range(1, 16)]
+
+
+def seed_training_machine(machine, machine_index):
+    start = get_next_valid_work_time(get_bangkok_now().replace(tzinfo=None))
+    rows = []
+    for i in range(4):
+        _, finish = add_work_time_with_shift(start, (40 + 15 * i) / 60)
+        names = ["ตั้งงาน", "ผลิตชิ้นงาน", "ตรวจชิ้นงาน"]
+        rows.append({"id": 900000 + machine_index * 100 + i, "plan_code": f"TRAIN-{(i % 3) + 1:02d}",
+            "drawing_name": f"DEMO-{machine_index:02d}-{i + 1:02d}", "qty": 2, "material": "SS400",
+            "job_type": "🟢 งานปกติ", "step_name": " → ".join(names), "machine_name": machine,
+            "ready_at": start.strftime("%Y-%m-%d %H:%M:%S"),
+            "baseline_ready_at": start.strftime("%Y-%m-%d %H:%M:%S"),
+            "baseline_finish_at": finish.strftime("%Y-%m-%d %H:%M:%S"),
+            "setup_mins": 10, "basic_hrs": 0, "prog_hrs": 30 + 15 * i,
+            "status": "🟧 รอคิวผลิต", "actual_start": None, "actual_finish": None,
+            "paused_seconds": 0.0, "hold_started_at": None,
+            "step_progress": {"current_index": 0, "queue_rank": i, "steps": [
+                {"step_id": str(uuid.uuid4()), "name": name, "started_at": None, "finished_at": None,
+                 "paused_seconds": 0.0, "pending_pause_started_at": None} for name in names]}})
+        start = finish
+    return rows
+
+
+class TrainingResponse:
+    def __init__(self, data, status=200):
+        self.data = json.loads(json.dumps(data, default=str))
+        self.status_code = status
+        self.text = json.dumps(self.data, ensure_ascii=False)
+    def json(self):
+        return json.loads(self.text)
+
+
+class TrainingRequests:
+    """รับคำขอของโหมดหน้าเครื่องไว้ใน session เท่านั้น ไม่มี network fallback."""
+    def __init__(self, utils):
+        self.utils = utils
+    def request(self, method, url, **kwargs):
+        from urllib.parse import urlsplit, parse_qsl
+        parsed = urlsplit(url)
+        table = parsed.path.rsplit("/", 1)[-1]
+        if table not in ("cnc_jobs", "cnc_job_events"):
+            return TrainingResponse({"message": "โหมดฝึกไม่อนุญาตปลายทางนี้"}, 403)
+        store_key = "training_raw_jobs" if table == "cnc_jobs" else "training_raw_events"
+        rows = st.session_state[store_key]
+        params = dict(parse_qsl(parsed.query))
+        params.update(kwargs.get("params") or {})
+        def matches(row):
+            for key, condition in params.items():
+                if key in ("select", "order", "limit", "on_conflict", "offset"):
+                    continue
+                value = row.get(key)
+                condition = str(condition)
+                if condition == "is.null":
+                    if value is not None: return False
+                elif condition == "not.is.null":
+                    if value is None: return False
+                elif condition.startswith("eq."):
+                    expected = condition[3:]
+                    if isinstance(value, (dict, list)):
+                        try:
+                            if value != json.loads(expected): return False
+                        except Exception: return False
+                    elif str(value) != expected: return False
+                elif condition.startswith("neq."):
+                    if str(value) == condition[4:]: return False
+                elif condition.startswith("in.(") and condition.endswith(")"):
+                    if str(value) not in condition[4:-1].replace('"', '').split(','): return False
+                else:
+                    raise ValueError("ตัวกรองโหมดฝึกไม่รองรับ: " + key)
+            return True
+        try:
+            selected = [row for row in rows if matches(row)]
+        except ValueError as exc:
+            return TrainingResponse({"message": str(exc)}, 400)
+        if method == "GET":
+            for sort in reversed(str(params.get("order", "")).split(',')):
+                if sort:
+                    key, _, direction = sort.partition('.')
+                    selected = sorted(selected, key=lambda r: (r.get(key) is None, str(r.get(key) or "")), reverse=direction=="desc")
+            limit = int(params.get("limit", len(selected)))
+            return TrainingResponse(selected[:limit])
+        payload = kwargs.get("json") or {}
+        if method == "PATCH" and table == "cnc_jobs":
+            if payload.get("machine_name") and payload["machine_name"] not in TRAINING_MACHINES:
+                return TrainingResponse({"message": "ย้ายได้เฉพาะเครื่องจำลอง"}, 403)
+            for row in selected: row.update(json.loads(json.dumps(payload, default=str)))
+            return TrainingResponse(selected)
+        if method == "POST" and table == "cnc_job_events":
+            if payload.get("machine_name") not in TRAINING_MACHINES:
+                return TrainingResponse({"message": "เหตุการณ์ต้องเป็นเครื่องจำลอง"}, 403)
+            item = dict(payload, id=len(rows)+1)
+            rows.append(item)
+            return TrainingResponse([item], 201)
+        return TrainingResponse({"message": "โหมดฝึกไม่อนุญาตคำสั่งนี้"}, 403)
+    def get(self, url, **kwargs): return self.request("GET", url, **kwargs)
+    def patch(self, url, **kwargs): return self.request("PATCH", url, **kwargs)
+    def post(self, url, **kwargs): return self.request("POST", url, **kwargs)
+    def delete(self, url, **kwargs): return self.request("DELETE", url, **kwargs)
+
+
+class TrainingUncached:
+    def __init__(self, function):
+        self.function = getattr(function, "__wrapped__", function)
+    def __call__(self, *args, **kwargs): return self.function(*args, **kwargs)
+    def clear(self): pass
+
+
+class TrainingOperatorContext:
+    def __enter__(self):
+        self.names = ("requests", "MACHINE_LIST", "fetch_jobs_from_supabase", "fetch_job_events", "get_supabase_headers")
+        self.saved = {name: globals()[name] for name in self.names}
+        if "training_raw_jobs" not in st.session_state:
+            st.session_state.training_raw_jobs = [row for i, machine in enumerate(TRAINING_MACHINES, 1) for row in seed_training_machine(machine, i)]
+            st.session_state.training_raw_events = []
+        globals()["requests"] = TrainingRequests(self.saved["requests"].utils)
+        globals()["MACHINE_LIST"] = list(TRAINING_MACHINES)
+        globals()["fetch_jobs_from_supabase"] = TrainingUncached(self.saved["fetch_jobs_from_supabase"])
+        globals()["fetch_job_events"] = TrainingUncached(self.saved["fetch_job_events"])
+        globals()["get_supabase_headers"] = lambda: {"Prefer": "return=representation"}
+        return self
+    def __exit__(self, *args):
+        globals().update(self.saved)
+
+
 nav_options = [
-    "👷 โหมดหน้าเครื่อง", 
+    "👷 โหมดหน้าเครื่อง",
+    "🎓 โหมดฝึกหน้าเครื่อง", 
     "👤 โหมดผู้ปฏิบัติงาน",
     "🧪 งานตรวจสอบ QC",
     "🤖 ใบสั่งงาน Automation",
@@ -6175,1261 +6302,1292 @@ elif st.session_state.current_view == "🤖 ใบสั่งงาน Automati
 elif st.session_state.current_view == "👤 โหมดผู้ปฏิบัติงาน":
     render_department_operator_mode()
 
-elif st.session_state.current_view == "👷 โหมดหน้าเครื่อง":
-    st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
+elif st.session_state.current_view in ("👷 โหมดหน้าเครื่อง", "🎓 โหมดฝึกหน้าเครื่อง"):
+    training_active = st.session_state.current_view == "🎓 โหมดฝึกหน้าเครื่อง"
+    if training_active:
+        st.warning("🎓 โหมดฝึกใช้งาน — 15 เครื่องจำลอง • หน้าจอและคำสั่งชุดเดียวกับหน้างานจริง • ไม่บันทึกลง Supabase")
+        st.caption("ข้อมูลฝึกแยกของผู้ใช้แต่ละ session ปิด session แล้วข้อมูลอาจหาย; ใช้กะและเวลาจริงของระบบ")
+        with st.expander("🔄 รีเซ็ตใบงานฝึกของเครื่องจำลอง"):
+            with st.form("training_reset_machine"):
+                reset_machine = st.selectbox("เครื่องจำลองที่จะรีเซ็ต", TRAINING_MACHINES)
+                reset_confirm = st.checkbox("ยืนยันล้างข้อมูลฝึกเครื่องนี้และสร้างใบงานตัวอย่างใหม่")
+                reset_submit = st.form_submit_button("รีเซ็ตเครื่องจำลอง")
+            if reset_submit and reset_confirm:
+                if "training_raw_jobs" in st.session_state:
+                    st.session_state.training_raw_jobs = [r for r in st.session_state.training_raw_jobs if r["machine_name"] != reset_machine] + seed_training_machine(reset_machine, TRAINING_MACHINES.index(reset_machine)+1)
+                    st.session_state.training_raw_events = [r for r in st.session_state.training_raw_events if r.get("machine_name") != reset_machine]
+                st.session_state.pop("batch_bulk_guard", None)
+                st.rerun()
+    if st.session_state.get("operator_training_scope") != training_active:
+        for key in ("op_machine_select", "batch_bulk_guard", "pending_shop_finish_confirmation", "operator_finish_feedback", "operator_cancel_start_feedback"):
+            st.session_state.pop(key, None)
+        st.session_state.operator_training_scope = training_active
+    from contextlib import nullcontext
+    with TrainingOperatorContext() if training_active else nullcontext():
+        st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
 
-    cancel_feedback = st.session_state.pop("operator_cancel_start_feedback", None)
-    if cancel_feedback:
-        st.success(cancel_feedback)
-    operator_finish_feedback = st.session_state.pop("operator_finish_feedback", None)
-    if operator_finish_feedback:
-        feedback_kind = operator_finish_feedback.get("kind", "info")
-        feedback_message = operator_finish_feedback.get("message", "บันทึก Finish เรียบร้อยแล้ว")
-        if feedback_kind == "success":
-            st.balloons()
-            st.success(feedback_message)
-        elif feedback_kind == "warning":
-            st.warning(feedback_message)
-        else:
-            st.info(feedback_message)
+        cancel_feedback = st.session_state.pop("operator_cancel_start_feedback", None)
+        if cancel_feedback:
+            st.success(cancel_feedback)
+        operator_finish_feedback = st.session_state.pop("operator_finish_feedback", None)
+        if operator_finish_feedback:
+            feedback_kind = operator_finish_feedback.get("kind", "info")
+            feedback_message = operator_finish_feedback.get("message", "บันทึก Finish เรียบร้อยแล้ว")
+            if feedback_kind == "success":
+                st.balloons()
+                st.success(feedback_message)
+            elif feedback_kind == "warning":
+                st.warning(feedback_message)
+            else:
+                st.info(feedback_message)
 
-    df_all = fetch_jobs_from_supabase()
-    operator_events = fetch_job_events(1000)
+        df_all = fetch_jobs_from_supabase()
+        operator_events = fetch_job_events(1000)
 
-    def get_operator_pause_text(job_id):
-        """แสดงสาเหตุพักล่าสุดของคิว; ไม่ใช้ข้อความสาเหตุแบบตายตัว"""
-        if not operator_events.empty and {"job_id", "event_type"}.issubset(operator_events.columns):
-            job_ids = pd.to_numeric(operator_events["job_id"], errors="coerce")
-            matched = operator_events[
-                (job_ids == safe_int(job_id)) &
-                (operator_events["event_type"].astype(str) == "Pause Step")
-            ]
-            if not matched.empty:
-                reason = safe_str(matched.iloc[0].get("reason"), "").strip()
-                if reason == "หยุดคิวทั้งหมดจาก Batch Processing":
-                    return "⏸️ หยุดคิวชั่วคราวจาก Batch Processing"
-                if reason:
-                    return f"🟨 พักงานชั่วคราว — {reason}"
-        return "🟨 พักงานชั่วคราว รอขึ้นงาน"
-
-    machine_queue_counts = {machine_name: 0 for machine_name in MACHINE_LIST}
-    if isinstance(df_all, pd.DataFrame) and not df_all.empty:
-        active_machine_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
-        active_machine_rows = df_all[
-            df_all.get("สถานะงาน", pd.Series(index=df_all.index, dtype=str)).isin(active_machine_statuses)
-        ]
-        if not active_machine_rows.empty and "เลือกเครื่องจักร" in active_machine_rows.columns:
-            counted_queues = active_machine_rows.groupby("เลือกเครื่องจักร").size().to_dict()
-            machine_queue_counts.update({safe_str(name): int(count) for name, count in counted_queues.items()})
-    
-    c_m_sel, c_mode_sel = st.columns([2, 2])
-    with c_m_sel:
-        selected_m = st.selectbox(
-            "🏭 เลือกเครื่องจักร / แผนก:",
-            MACHINE_LIST,
-            format_func=lambda machine_name: f"{machine_name} — มี {machine_queue_counts.get(machine_name, 0)} คิว",
-            key="op_machine_select"
-        )
-    with c_mode_sel:
-        run_mode = st.radio("⚙️ รูปแบบการผลิต:", ["🔹 รันทีละคิว (Piece by Piece)", "📦 รันรวมหลายงานพร้อมกัน (Batch Processing)"], horizontal=True)
-
-    if not df_all.empty:
-        m_all_jobs = df_all[
-            (df_all["เลือกเครื่องจักร"] == selected_m) &
-            (df_all["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
-        ].copy()
-    else:
-        m_all_jobs = pd.DataFrame()
-
-    if not m_all_jobs.empty:
-        running_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
-        hold_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
-        
-        if not running_now.empty:
-            r_cur = running_now.iloc[0]
-            st_t, banner_step_pause, banner_step_name = get_current_step_timer_context(r_cur)
-            banner_paused_seconds = int(banner_step_pause)
-            st_txt = "-"
-            start_epoch = to_bangkok_epoch_ms(st_t)
-            act_dt = parse_flexible_datetime(st_t)
-            banner_render_now = get_bangkok_now().replace(tzinfo=None)
-            banner_base_work_seconds = int(get_net_actual_work_seconds(act_dt, banner_render_now, banner_paused_seconds)) if act_dt is not None else 0
-            banner_render_epoch = to_bangkok_epoch_ms(banner_render_now)
-            if act_dt is not None:
-                st_txt = act_dt.strftime("%H:%M น.")
-
-            st.markdown(f"""
-            <div class="shop-live-banner shop-live-running">
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <span class="tv-pulse-dot"></span>
-                    <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ Step ปัจจุบัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
-                </div>
-                <div style="font-size:12.5px; opacity:0.9;">
-                    📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        elif not hold_now.empty:
-            h_cur = hold_now.iloc[0]
-            banner_pause_text = html.escape(get_operator_pause_text(h_cur.get("ID")))
-            st.markdown(f"""
-            <div class="shop-live-banner shop-live-hold">
-                <div>🛑 <b>{selected_m}: {banner_pause_text}</b></div>
-                <div style="font-size:12.5px;">📌 <b>แผนงาน:</b> {h_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {h_cur.get('ชื่อ Drawing.', '-')}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="shop-live-banner shop-live-idle">
-                <div>⚪ <b>{selected_m}: เครื่องว่าง (IDLE)</b> — พร้อมกด Start เริ่มงานใหม่</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    if m_all_jobs.empty:
-        st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
-    else:
-        if "Batch" in run_mode:
-            waiting_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("รอคิว")]
-            running_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
-            hold_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
-            batch_paused_job_ids = set()
-            if not operator_events.empty and {"job_id", "event_type", "reason"}.issubset(operator_events.columns):
-                batch_pause_events = operator_events[
-                    operator_events["event_type"].astype(str).eq("Pause Step") &
-                    operator_events["reason"].astype(str).eq("หยุดคิวทั้งหมดจาก Batch Processing")
+        def get_operator_pause_text(job_id):
+            """แสดงสาเหตุพักล่าสุดของคิว; ไม่ใช้ข้อความสาเหตุแบบตายตัว"""
+            if not operator_events.empty and {"job_id", "event_type"}.issubset(operator_events.columns):
+                job_ids = pd.to_numeric(operator_events["job_id"], errors="coerce")
+                matched = operator_events[
+                    (job_ids == safe_int(job_id)) &
+                    (operator_events["event_type"].astype(str) == "Pause Step")
                 ]
-                batch_paused_job_ids = {
-                    safe_int(value) for value in batch_pause_events["job_id"].tolist()
-                }
-            batch_stopped_hold_jobs = hold_jobs[
-                hold_jobs["ID"].apply(safe_int).isin(batch_paused_job_ids)
-            ].copy()
-            batch_guard = st.session_state.get("batch_bulk_guard")
-            guard_now = get_bangkok_now().replace(tzinfo=None)
-            guard_expired = False
-            if batch_guard:
-                armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
-                guard_expired = armed_at is None or (guard_now - armed_at).total_seconds() > 15
-                if guard_expired or batch_guard.get("machine") != selected_m:
-                    st.session_state.pop("batch_bulk_guard", None)
-                    batch_guard = None
+                if not matched.empty:
+                    reason = safe_str(matched.iloc[0].get("reason"), "").strip()
+                    if reason == "หยุดคิวทั้งหมดจาก Batch Processing":
+                        return "⏸️ หยุดคิวชั่วคราวจาก Batch Processing"
+                    if reason:
+                        return f"🟨 พักงานชั่วคราว — {reason}"
+            return "🟨 พักงานชั่วคราว รอขึ้นงาน"
 
-            with st.expander(
-                "🔒 เปิดแผงควบคุม Batch Processing",
-                expanded=bool(batch_guard)
-            ):
-                st.markdown("""
-                <div class="batch-toolbar">
-                    <div>
-                        <b style="color:#1E3A8A; font-size:14.5px;">📦 แผงควบคุมการรันงานแบบกลุ่ม (Batch Processing Mode)</b><br>
-                        <span style="font-size:12px; color:#64748B;">คำสั่งรวมต้องตรวจรายการและยืนยัน 2 ชั้นก่อนบันทึกทุกครั้ง</span>
+        machine_queue_counts = {machine_name: 0 for machine_name in MACHINE_LIST}
+        if isinstance(df_all, pd.DataFrame) and not df_all.empty:
+            active_machine_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
+            active_machine_rows = df_all[
+                df_all.get("สถานะงาน", pd.Series(index=df_all.index, dtype=str)).isin(active_machine_statuses)
+            ]
+            if not active_machine_rows.empty and "เลือกเครื่องจักร" in active_machine_rows.columns:
+                counted_queues = active_machine_rows.groupby("เลือกเครื่องจักร").size().to_dict()
+                machine_queue_counts.update({safe_str(name): int(count) for name, count in counted_queues.items()})
+    
+        c_m_sel, c_mode_sel = st.columns([2, 2])
+        with c_m_sel:
+            selected_m = st.selectbox(
+                "🏭 เลือกเครื่องจักร / แผนก:",
+                MACHINE_LIST,
+                format_func=lambda machine_name: f"{machine_name} — มี {machine_queue_counts.get(machine_name, 0)} คิว",
+                key="op_machine_select"
+            )
+        with c_mode_sel:
+            operator_mode_key = f"operator_run_mode_{selected_m}"
+            if st.session_state.pop("operator_reset_piece_mode", False):
+                st.session_state[operator_mode_key] = "🔹 รันทีละคิว (Piece by Piece)"
+            run_mode = st.radio(
+                "⚙️ รูปแบบการผลิต:",
+                ["🔹 รันทีละคิว (Piece by Piece)", "📦 รันรวมหลายงานพร้อมกัน (Batch Processing)"],
+                index=0, horizontal=True, key=operator_mode_key,
+            )
+            if "Batch" not in run_mode:
+                st.session_state.pop("batch_bulk_guard", None)
+
+        if not df_all.empty:
+            m_all_jobs = df_all[
+                (df_all["เลือกเครื่องจักร"] == selected_m) &
+                (df_all["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]))
+            ].copy()
+        else:
+            m_all_jobs = pd.DataFrame()
+
+        if not m_all_jobs.empty:
+            running_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
+            hold_now = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
+        
+            if not running_now.empty:
+                r_cur = running_now.iloc[0]
+                st_t, banner_step_pause, banner_step_name = get_current_step_timer_context(r_cur)
+                banner_paused_seconds = int(banner_step_pause)
+                st_txt = "-"
+                start_epoch = to_bangkok_epoch_ms(st_t)
+                act_dt = parse_flexible_datetime(st_t)
+                banner_render_now = get_bangkok_now().replace(tzinfo=None)
+                banner_base_work_seconds = int(get_net_actual_work_seconds(act_dt, banner_render_now, banner_paused_seconds)) if act_dt is not None else 0
+                banner_render_epoch = to_bangkok_epoch_ms(banner_render_now)
+                if act_dt is not None:
+                    st_txt = act_dt.strftime("%H:%M น.")
+
+                st.markdown(f"""
+                <div class="shop-live-banner shop-live-running">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <span class="tv-pulse-dot"></span>
+                        <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ Step ปัจจุบัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
+                    </div>
+                    <div style="font-size:12.5px; opacity:0.9;">
+                        📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+            elif not hold_now.empty:
+                h_cur = hold_now.iloc[0]
+                banner_pause_text = html.escape(get_operator_pause_text(h_cur.get("ID")))
+                st.markdown(f"""
+                <div class="shop-live-banner shop-live-hold">
+                    <div>🛑 <b>{selected_m}: {banner_pause_text}</b></div>
+                    <div style="font-size:12.5px;">📌 <b>แผนงาน:</b> {h_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {h_cur.get('ชื่อ Drawing.', '-')}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="shop-live-banner shop-live-idle">
+                    <div>⚪ <b>{selected_m}: เครื่องว่าง (IDLE)</b> — พร้อมกด Start เริ่มงานใหม่</div>
+                </div>
+                """, unsafe_allow_html=True)
 
-                batch_plan_mode = st.radio(
-                    "📋 แผนงานที่ต้องการควบคุม",
-                    ["ทุกแผน", "เลือกแผน"], horizontal=True,
-                    key=f"batch_plan_mode_{selected_m}",
-                )
-                batch_selected_plans = None
-                if batch_plan_mode == "เลือกแผน":
-                    batch_plan_options = sorted(m_all_jobs["แผนงาน"].fillna("").astype(str).str.strip().unique().tolist())
-                    batch_plan_key = f"batch_selected_plans_{selected_m}"
-                    if batch_plan_key in st.session_state:
-                        st.session_state[batch_plan_key] = [value for value in st.session_state[batch_plan_key] if value in batch_plan_options]
-                    batch_selected_plans = st.multiselect(
-                        "เลือกแผนได้มากกว่า 1 แผน", batch_plan_options,
-                        format_func=lambda value: value or "(ไม่ระบุแผน)",
-                        key=batch_plan_key,
-                    )
-                    if not batch_selected_plans:
-                        st.info("เลือกอย่างน้อย 1 แผนก่อนใช้คำสั่ง Batch")
-                batch_plan_scope = None if batch_selected_plans is None else sorted(batch_selected_plans)
-                if batch_guard and batch_guard.get("plans") != batch_plan_scope:
-                    st.session_state.pop("batch_bulk_guard", None)
-                    batch_guard = None
-                    st.info("เปลี่ยนแผนที่เลือกแล้ว กรุณาตรวจรายการใหม่ก่อนยืนยัน")
-                waiting_jobs = filter_batch_jobs_by_plan(waiting_jobs, batch_selected_plans)
-                running_jobs = filter_batch_jobs_by_plan(running_jobs, batch_selected_plans)
-                hold_jobs = filter_batch_jobs_by_plan(hold_jobs, batch_selected_plans)
-                batch_stopped_hold_jobs = filter_batch_jobs_by_plan(batch_stopped_hold_jobs, batch_selected_plans)
-                st.caption("คำสั่ง Start / Resume / หยุด / Finish / คืนคิว ใช้เฉพาะแผนที่เลือกบนเครื่องนี้")
-                batch_start_mode = st.radio(
-                    "🚀 Drawing ที่ต้องการ Start",
-                    ["ทุก Drawing ในแผนที่เลือก", "เลือก Drawing"], horizontal=True,
-                    key=f"batch_start_mode_{selected_m}",
-                )
-                batch_start_scope = None
-                if batch_start_mode == "เลือก Drawing":
-                    batch_start_rows = {safe_int(row["ID"]): row for _, row in waiting_jobs.iterrows()}
-                    batch_start_numbers = {job_id: number for number, job_id in enumerate(batch_start_rows, start=1)}
-                    batch_start_key = f"batch_start_drawings_{selected_m}"
-                    if batch_start_key in st.session_state:
-                        st.session_state[batch_start_key] = [job_id for job_id in st.session_state[batch_start_key] if job_id in batch_start_rows]
-                    batch_start_ids = st.multiselect(
-                        "เลือก Drawing รอคิวที่จะ Start ได้หลายรายการ",
-                        list(batch_start_rows), key=batch_start_key,
-                        format_func=lambda job_id: (
-                            f"คิว {batch_start_numbers[job_id]} | แผน {safe_str(batch_start_rows[job_id].get('แผนงาน'), '-')} | "
-                            f"Drawing {safe_str(batch_start_rows[job_id].get('ชื่อ Drawing.'), '-')} | "
-                            f"Step {safe_str(batch_start_rows[job_id].get('ขั้นตอน (Step)'), '-')}"
-                        ),
-                    )
-                    batch_start_scope = sorted(batch_start_ids)
-                    waiting_jobs = waiting_jobs[waiting_jobs["ID"].apply(safe_int).isin(batch_start_ids)].copy()
-                    if not batch_start_ids:
-                        st.info("เลือกอย่างน้อย 1 Drawing ก่อนตรวจรายการ Start")
-                if batch_guard and batch_guard.get("action") == "start" and batch_guard.get("start_drawings") != batch_start_scope:
-                    st.session_state.pop("batch_bulk_guard", None)
-                    batch_guard = None
-                    st.info("เปลี่ยน Drawing ที่จะ Start แล้ว กรุณาตรวจรายการใหม่")
-                st.caption(f"Start เฉพาะ Drawing รอคิวที่เลือก ({len(waiting_jobs)} คิว) • ตัวเลือก Drawing นี้ไม่มีผลกับ Resume / หยุด / Finish / คืนคิว")
-
-
-
-                if guard_expired:
-                    st.warning("⌛ การยืนยันครั้งก่อนหมดอายุแล้ว กรุณาตรวจรายการใหม่")
-
-                if not batch_guard:
-                    b_c1, b_c2 = st.columns(2)
-                    with b_c1:
-                        if st.button(
-                            f"🔎 ตรวจรายการก่อน Start รวม ({len(waiting_jobs)} คิว)",
-                            disabled=(len(waiting_jobs) == 0),
-                            type="secondary",
-                            use_container_width=True,
-                            key="prepare_batch_start"
-                        ):
-                            st.session_state.batch_bulk_guard = {
-                                "action": "start",
-                                "start_drawings": batch_start_scope,
-                                "machine": selected_m,
-                                "plans": batch_plan_scope,
-                                "ids": [safe_int(v) for v in waiting_jobs["ID"].tolist()],
-                                "armed_at": get_bangkok_str(),
-                                "nonce": uuid.uuid4().hex
-                            }
-                            st.rerun()
-                    with b_c2:
-                        if st.button(
-                            f"🔎 ตรวจรายการก่อน Resume รวม ({len(hold_jobs)} คิว)",
-                            disabled=(len(hold_jobs) == 0),
-                            type="secondary",
-                            use_container_width=True,
-                            key="prepare_batch_resume"
-                        ):
-                            st.session_state.batch_bulk_guard = {
-                                "action": "resume",
-                                "machine": selected_m,
-                                "plans": batch_plan_scope,
-                                "ids": [safe_int(v) for v in hold_jobs["ID"].tolist()],
-                                "armed_at": get_bangkok_str(),
-                                "nonce": uuid.uuid4().hex
-                            }
-                            st.rerun()
-
-                    b_c3, b_c4 = st.columns(2)
-                    with b_c3:
-                        if st.button(
-                            f"🔎 ตรวจรายการก่อนหยุดคิวตามแผนที่เลือก ({len(running_jobs)} คิว)",
-                            disabled=(len(running_jobs) == 0),
-                            type="secondary",
-                            use_container_width=True,
-                            key="prepare_batch_pause"
-                        ):
-                            st.session_state.batch_bulk_guard = {
-                                "action": "pause",
-                                "machine": selected_m,
-                                "plans": batch_plan_scope,
-                                "ids": [safe_int(v) for v in running_jobs["ID"].tolist()],
-                                "armed_at": get_bangkok_str(),
-                                "nonce": uuid.uuid4().hex
-                            }
-                            st.rerun()
-                    with b_c4:
-                        if st.button(
-                            f"🔎 ตรวจรายการก่อน Finish รวม ({len(running_jobs)} คิว)",
-                            disabled=(len(running_jobs) == 0),
-                            type="secondary",
-                            use_container_width=True,
-                            key="prepare_batch_finish"
-                        ):
-                            st.session_state.batch_bulk_guard = {
-                                "action": "finish",
-                                "machine": selected_m,
-                                "plans": batch_plan_scope,
-                                "ids": [safe_int(v) for v in running_jobs["ID"].tolist()],
-                                "armed_at": get_bangkok_str(),
-                                "nonce": uuid.uuid4().hex
-                            }
-                            st.rerun()
-                    if st.button(
-                        f"↩️ คืนคิวที่หยุดจาก Batch เป็นรอคิวปกติ ({len(batch_stopped_hold_jobs)} คิว)",
-                        disabled=(len(batch_stopped_hold_jobs) == 0),
-                        type="secondary",
-                        use_container_width=True,
-                        key="prepare_batch_return_waiting"
-                    ):
-                        st.session_state.batch_bulk_guard = {
-                            "action": "return_waiting",
-                            "machine": selected_m,
-                                "plans": batch_plan_scope,
-                            "ids": [safe_int(v) for v in batch_stopped_hold_jobs["ID"].tolist()],
-                            "armed_at": get_bangkok_str(),
-                            "nonce": uuid.uuid4().hex
-                        }
-                        st.rerun()
-                else:
-                    guard_action = batch_guard.get("action")
-                    guard_ids = {safe_int(v) for v in batch_guard.get("ids", [])}
-                    if guard_action == "start":
-                        review_source = waiting_jobs
-                    elif guard_action == "resume":
-                        review_source = hold_jobs
-                    elif guard_action == "return_waiting":
-                        review_source = batch_stopped_hold_jobs
-                    else:
-                        review_source = running_jobs
-                    review_jobs = review_source[review_source["ID"].apply(safe_int).isin(guard_ids)].copy()
-                    action_labels = {
-                        "start": ("Start", "🚀"),
-                        "resume": ("Resume", "▶️"),
-                        "pause": ("หยุดคิว", "⏸️"),
-                        "return_waiting": ("คืนเป็นรอคิวปกติ", "↩️"),
-                        "finish": ("Finish", "🏁")
-                    }
-                    action_th, action_icon = action_labels.get(guard_action, ("ดำเนินการ", "⚙️"))
-
-                    st.warning(
-                        f"⚠️ กำลังจะ {action_th} รวมจำนวน {len(guard_ids)} คิวบนเครื่อง {selected_m} "
-                        "กรุณาตรวจรายการก่อนยืนยัน"
-                    )
-                    review_lines = []
-                    for review_no, (_, review_row) in enumerate(review_jobs.iterrows(), start=1):
-                        review_lines.append(
-                            f"{review_no}. แผน {safe_str(review_row.get('แผนงาน'), '-')} | "
-                            f"Drawing {safe_str(review_row.get('ชื่อ Drawing.'), '-')} | "
-                            f"Step {safe_str(review_row.get('ขั้นตอน (Step)'), '-')}"
-                        )
-                    st.markdown("  \n".join(review_lines) if review_lines else "⚠️ ไม่พบรายการตามสถานะเดิม")
-
-                    confirm_key = f"batch_bulk_confirm_{batch_guard.get('nonce', 'current')}"
-                    confirmed = st.checkbox(
-                        f"ตรวจสอบรายการแล้ว ยืนยัน {action_th} งานพร้อมกัน",
-                        key=confirm_key
-                    )
-                    confirm_col, cancel_col = st.columns(2)
-                    with cancel_col:
-                        if st.button("ยกเลิกคำสั่งรวม", use_container_width=True, key=f"cancel_{confirm_key}"):
-                            st.session_state.pop("batch_bulk_guard", None)
-                            st.rerun()
-                    with confirm_col:
-                        if st.button(
-                            f"{action_icon} ยืนยัน {action_th} {len(guard_ids)} คิว",
-                            disabled=not confirmed,
-                            type="primary",
-                            use_container_width=True,
-                            key=f"execute_{confirm_key}"
-                        ):
-                            confirm_now = get_bangkok_now().replace(tzinfo=None)
-                            armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
-                            if armed_at is None or (confirm_now - armed_at).total_seconds() > 15:
-                                st.session_state.pop("batch_bulk_guard", None)
-                                st.error("⌛ การยืนยันหมดอายุแล้ว กรุณาเปิดตรวจรายการใหม่")
-                                st.rerun()
-
-                            # อ่านข้อมูลล่าสุดซ้ำก่อนบันทึก และทำเฉพาะ ID ที่ผู้ใช้ตรวจไว้เท่านั้น
-                            fetch_jobs_from_supabase.clear()
-                            fresh_jobs = fetch_jobs_from_supabase()
-                            if guard_action == "start":
-                                expected_status_text = "รอคิว"
-                            elif guard_action in {"resume", "return_waiting"}:
-                                expected_status_text = "พักงาน"
-                            else:
-                                expected_status_text = "กำลังผลิต"
-                            fresh_batch_jobs = fresh_jobs[
-                                (fresh_jobs["เลือกเครื่องจักร"] == selected_m) &
-                                (fresh_jobs["ID"].apply(safe_int).isin(guard_ids)) &
-                                (fresh_jobs["สถานะงาน"].astype(str).str.contains(expected_status_text, na=False))
-                            ].copy()
-                            fresh_batch_jobs = filter_batch_jobs_by_plan(fresh_batch_jobs, batch_guard.get("plans"))
-                            fresh_ids = {safe_int(v) for v in fresh_batch_jobs["ID"].tolist()}
-                            if fresh_ids != guard_ids:
-                                st.session_state.pop("batch_bulk_guard", None)
-                                st.error("⚠️ สถานะคิวมีการเปลี่ยนแปลง ระบบยกเลิกคำสั่งรวม กรุณาตรวจรายการใหม่")
-                                st.rerun()
-
-                            now_str = confirm_now.strftime("%Y-%m-%d %H:%M:%S")
-                            update_results = []
-                            fully_finished_rows = []
-                            for _, r in fresh_batch_jobs.iterrows():
-                                progress = normalize_step_progress(
-                                    r.get("ติดตาม Step"), r.get("ขั้นตอน (Step)"), r.get("สถานะงาน"),
-                                    r.get("เริ่มจริง"), r.get("เสร็จจริง")
-                                )
-                                idx = progress["current_index"]
-                                if guard_action == "start":
-                                    current = progress["steps"][idx]
-                                    pause_delta = 0.0
-                                    pending_dt = parse_flexible_datetime(current.get("pending_pause_started_at"))
-                                    if current.get("started_at") and pending_dt is not None and pd.notna(pending_dt):
-                                        pause_delta = get_work_seconds_between(pending_dt, confirm_now)
-                                        current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + pause_delta
-                                    elif not current.get("started_at"):
-                                        current["started_at"] = now_str
-                                    current.pop("pending_pause_started_at", None)
-                                    payload = {
-                                        "status": "🟦 กำลังผลิต", "actual_finish": None,
-                                        "hold_started_at": None, "step_progress": progress,
-                                        "paused_seconds": safe_float(r.get("เวลาพักสะสม (วินาที)"), 0.0) + pause_delta,
-                                    }
-                                    if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
-                                        payload["actual_start"] = now_str
-                                elif guard_action == "resume":
-                                    current = progress["steps"][idx]
-                                    hold_started_dt = parse_flexible_datetime(r.get("เริ่มพักจริง"))
-                                    pause_delta = 0.0
-                                    if hold_started_dt is not None and pd.notna(hold_started_dt):
-                                        pause_delta = get_work_seconds_between(hold_started_dt, confirm_now)
-                                    current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + pause_delta
-                                    payload = {
-                                        "status": "🟦 กำลังผลิต",
-                                        "hold_started_at": None,
-                                        "paused_seconds": safe_float(r.get("เวลาพักสะสม (วินาที)"), 0.0) + pause_delta,
-                                        "step_progress": progress
-                                    }
-                                    if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
-                                        payload["actual_start"] = now_str
-                                elif guard_action == "pause":
-                                    current = progress["steps"][idx]
-                                    current["pending_pause_started_at"] = now_str
-                                    payload = {
-                                        "status": "🟧 รอคิวผลิต",
-                                        "hold_started_at": None,
-                                        "step_progress": progress
-                                    }
-                                elif guard_action == "return_waiting":
-                                    current = progress["steps"][idx]
-                                    original_hold_started = parse_flexible_datetime(r.get("เริ่มพักจริง"))
-                                    pause_from = original_hold_started if original_hold_started is not None and pd.notna(original_hold_started) else confirm_now
-                                    current["pending_pause_started_at"] = pause_from.strftime("%Y-%m-%d %H:%M:%S")
-                                    payload = {
-                                        "status": "🟧 รอคิวผลิต",
-                                        "hold_started_at": None,
-                                        "step_progress": progress
-                                    }
-                                else:
-                                    progress["steps"][idx]["finished_at"] = now_str
-                                    if idx < len(progress["steps"]) - 1:
-                                        progress["current_index"] = idx + 1
-                                        progress["steps"][idx + 1]["started_at"] = now_str
-                                        payload = {"status": "🟦 กำลังผลิต", "actual_finish": None, "step_progress": progress}
-                                    else:
-                                        payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str, "step_progress": progress}
-                                        fully_finished_rows.append(r)
-                                update_ok = update_supabase_job(int(r["ID"]), payload, clear_cache=False)
-                                update_results.append(update_ok)
-                                if update_ok and guard_action in {"pause", "resume", "return_waiting"}:
-                                    current_step = progress["steps"][idx]
-                                    log_job_event(
-                                        safe_int(r["ID"]),
-                                        safe_str(r.get("แผนงาน"), "-"),
-                                        safe_str(r.get("ชื่อ Drawing."), "-"),
-                                        selected_m,
-                                        "Resume Step" if guard_action == "resume" else "Return to Queue",
-                                        idx + 1,
-                                        safe_str(current_step.get("name"), safe_str(r.get("ขั้นตอน (Step)"), "-")),
-                                        (
-                                            "หยุดคิวทั้งหมดจาก Batch Processing"
-                                            if guard_action == "pause" else
-                                            ("คืนคิวที่หยุดจาก Batch เป็นรอคิวปกติ" if guard_action == "return_waiting" else "Resume คิวทั้งหมดจาก Batch Processing")
-                                        ),
-                                        "คำสั่งแบบกลุ่มโดยผู้ใช้งานหน้าเครื่อง"
-                                    )
-
-                            st.session_state.pop("batch_bulk_guard", None)
-                            fetch_jobs_from_supabase.clear()
-                            if update_results and all(update_results):
-                                if guard_action == "start":
-                                    st.toast("เริ่มจับเวลาจริงทุกคิวที่ยืนยันเรียบร้อย!", icon="🚀")
-                                elif guard_action == "resume":
-                                    st.toast("Resume คิวทั้งหมดและคำนวณเวลาพักสะสมเรียบร้อย!", icon="▶️")
-                                elif guard_action == "pause":
-                                    st.toast("หยุดงานและคืนทุกคิวเป็นรอคิวปกติแล้ว!", icon="↩️")
-                                elif guard_action == "return_waiting":
-                                    st.toast("คืนคิวที่เคยหยุดจาก Batch เป็นรอคิวปกติแล้ว!", icon="↩️")
-                                elif fully_finished_rows:
-                                    st.session_state.operator_finish_feedback = build_operator_finish_feedback(
-                                        pd.DataFrame(fully_finished_rows), confirm_now
-                                    )
-                                st.rerun()
-                            else:
-                                st.error(f"{action_th} แบบกลุ่มไม่สำเร็จครบทุกรายการ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
-
-        m_active = m_all_jobs.copy()
-        m_active["_sort_key"] = m_active.apply(get_production_queue_sort_key, axis=1)
-        m_active = m_active.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
-
-        # ใช้ลูกโซ่กลางหลังสลับคิว; เก็บ Baseline แยกสำหรับงานที่เริ่มแล้ว
-        m_active = calculate_production_chain(m_active, active_only=True).reset_index(drop=True)
-
-        machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
-        machine_has_paused = any("พักงาน" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
-        piece_mode = "Batch" not in run_mode
-        active_queue_order_ids = [safe_int(v) for v in m_active["ID"].tolist()]
-        piece_resume_allowed_id = None
-        if piece_mode and not machine_any_running:
-            first_paused = m_active[
-                m_active["สถานะงาน"].astype(str).str.contains("พักงาน", na=False)
-            ]
-            if not first_paused.empty:
-                piece_resume_allowed_id = safe_int(first_paused.iloc[0]["ID"])
-        next_available_start_found = False
-
-        for queue_idx, step_row in m_active.iterrows():
-            target_id = safe_int(step_row["ID"])
-            plan_code = str(step_row.get("แผนงาน", "-"))
-            drawing_code = str(step_row.get("ชื่อ Drawing.", "-"))
-            qty_val = int(step_row.get("จำนวน", 1) or 1)
-            mat_val = str(step_row.get("วัสดุ", "-"))
-            raw_s_name = str(step_row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
-            s_name = raw_s_name if raw_s_name not in ["", "None", "nan", "รอหน้าเครื่องระบุ"] else f"OP{(queue_idx+1)*10}"
-            s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
-            s_start = step_row.get("เริ่มจริง")
-            s_finish = step_row.get("เสร็จจริง")
-            s_hold_started = step_row.get("เริ่มพักจริง")
-            s_paused_seconds = safe_float(step_row.get("เวลาพักสะสม (วินาที)"), 0.0)
-
-            step_progress = normalize_step_progress(
-                step_row.get("ติดตาม Step"), raw_s_name, s_status, s_start, s_finish
-            )
-            tracked_steps = step_progress["steps"]
-            current_step_index = step_progress["current_index"]
-            current_step_item = tracked_steps[current_step_index]
-            current_step_name = current_step_item.get("name", s_name)
-
-            is_step_running = "กำลังผลิต" in s_status
-            is_step_hold = "พักงาน" in s_status
-            is_step_finished = "เสร็จสิ้น" in s_status
-            is_step_waiting = not is_step_running and not is_step_finished and not is_step_hold
-            is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
-            pause_status_text = get_operator_pause_text(target_id) if is_step_hold else ""
-            pause_status_html = html.escape(pause_status_text)
-            other_running_rows = m_all_jobs[
-                (m_all_jobs["ID"].apply(safe_int) != target_id)
-                & m_all_jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต", na=False)
-            ]
-            blocking_running_row = other_running_rows.iloc[0] if not other_running_rows.empty else None
-            blocking_running_text = (
-                f"แผน {blocking_running_row.get('แผนงาน', '-')} / Drawing {blocking_running_row.get('ชื่อ Drawing.', '-')}"
-                if blocking_running_row is not None else ""
-            )
-
-            s_m = safe_float(step_row.get("Setup (น.)"), 10.0)
-            b_m = safe_float(step_row.get("Basic (น.)"), 0.0)
-            p_m = safe_float(step_row.get("โปรแกรม (น.)"), 120.0)
-            tot_h = (s_m + b_m + p_m) / 60.0
-
-            # เวลาแสดงหลักตรงกับใบจ่ายคิวและทีวีทุกสถานะ/ทุกเครื่อง
-            start_w_dt, finish_w_dt = get_current_production_window(step_row)
-            queue_start_label = "เริ่มตามคิวปัจจุบัน"
-            queue_finish_label = "จบตามคิวปัจจุบัน"
-            ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.") if start_w_dt is not None else "-"
-            finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.") if finish_w_dt is not None else "-"
-            baseline_caption_html = html.escape(production_baseline_caption(step_row))
-
-            operator_now = get_bangkok_now().replace(tzinfo=None)
-            if is_step_running or is_step_hold:
-                step_time_issue = active_step_time_issue(step_row, operator_now)
-                if step_time_issue:
-                    st.warning("ข้อมูลเวลาไม่สมบูรณ์: " + step_time_issue)
-            is_running_overdue = bool(
-                is_step_running and finish_w_dt is not None and pd.notna(finish_w_dt) and operator_now > finish_w_dt
-            )
-            overdue_minutes = int(get_signed_work_seconds_between(finish_w_dt, operator_now) // 60) if is_running_overdue else 0
-
+        if m_all_jobs.empty:
+            st.info(f"🎉 สถานี {selected_m} ไม่มีคิวงานค้างในระบบ")
+        else:
             if "Batch" in run_mode:
-                can_start = is_step_waiting and not machine_any_running
-            else:
-                can_start = False
-                if is_step_waiting and not machine_any_running and not machine_has_paused and not next_available_start_found:
-                    can_start = True
-                    next_available_start_found = True
+                waiting_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("รอคิว")]
+                running_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("กำลังผลิต")]
+                hold_jobs = m_all_jobs[m_all_jobs["สถานะงาน"].str.contains("พักงาน")]
+                batch_paused_job_ids = set()
+                if not operator_events.empty and {"job_id", "event_type", "reason"}.issubset(operator_events.columns):
+                    batch_pause_events = operator_events[
+                        operator_events["event_type"].astype(str).eq("Pause Step") &
+                        operator_events["reason"].astype(str).eq("หยุดคิวทั้งหมดจาก Batch Processing")
+                    ]
+                    batch_paused_job_ids = {
+                        safe_int(value) for value in batch_pause_events["job_id"].tolist()
+                    }
+                batch_stopped_hold_jobs = hold_jobs[
+                    hold_jobs["ID"].apply(safe_int).isin(batch_paused_job_ids)
+                ].copy()
+                batch_guard = st.session_state.get("batch_bulk_guard")
+                guard_now = get_bangkok_now().replace(tzinfo=None)
+                guard_expired = False
+                if batch_guard:
+                    armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
+                    guard_expired = armed_at is None or (guard_now - armed_at).total_seconds() > 15
+                    if guard_expired or batch_guard.get("machine") != selected_m:
+                        st.session_state.pop("batch_bulk_guard", None)
+                        batch_guard = None
 
-            if is_step_hold:
-                header_box_class = "op-job-header op-job-header-hold"
-                badge_gradient = "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)"
-                status_badge_html = f'<span class="badge-chip badge-hold">{pause_status_html}</span>'
-            elif is_step_running:
-                if is_running_overdue:
-                    header_box_class = "op-job-header op-job-header-overdue"
-                    badge_gradient = "linear-gradient(135deg, #B91C1C 0%, #EF4444 100%)"
-                    status_badge_html = f'<span class="badge-chip badge-overdue">🚨 หลุดแผน {overdue_minutes // 60:02d}:{overdue_minutes % 60:02d} ชม.</span>'
-                else:
-                    header_box_class = "op-job-header op-job-header-running"
-                    badge_gradient = "linear-gradient(135deg, #059669 0%, #10B981 100%)"
-                    status_badge_html = '<span class="badge-chip badge-running"><span class="tv-pulse-dot" style="margin-right:6px;"></span> 🟦 กำลังผลิต (รันงานอยู่ ⏱️)</span>'
-            elif is_urgent:
-                header_box_class = "op-job-header op-job-header-urgent"
-                badge_gradient = "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)"
-                status_badge_html = '<span class="badge-chip badge-urgent">🔥 🔴 งานด่วนแทรก</span>'
-            else:
-                header_box_class = "op-job-header"
-                badge_gradient = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
-                status_badge_html = ''
+                with st.expander(
+                    "🔒 เปิดแผงควบคุม Batch Processing",
+                    expanded=bool(batch_guard)
+                ):
+                    st.markdown("""
+                    <div class="batch-toolbar">
+                        <div>
+                            <b style="color:#1E3A8A; font-size:14.5px;">📦 แผงควบคุมการรันงานแบบกลุ่ม (Batch Processing Mode)</b><br>
+                            <span style="font-size:12px; color:#64748B;">คำสั่งรวมต้องตรวจรายการและยืนยัน 2 ชั้นก่อนบันทึกทุกครั้ง</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>{queue_start_label}:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>{queue_finish_label}:</b> {finish_plan_display_str}</span><span class="badge-chip badge-date">{baseline_caption_html}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
-            st.markdown(card_header_html, unsafe_allow_html=True)
-
-            card_style_class = "step-card"
-            if is_running_overdue: card_style_class += " step-card-overdue"
-            elif is_step_running: card_style_class += " step-card-running"
-            elif is_step_hold: card_style_class += " step-card-hold"
-            elif can_start: card_style_class += " step-card-ready"
-            elif is_step_finished: card_style_class += " step-card-finished"
-
-            if is_running_overdue:
-                card_status_class = "operator-status-overdue"
-                card_status_text = (
-                    f"🚨 งานกำลังรันและเกินเวลาตามแผนแล้ว "
-                    f"{overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที กรุณาเร่งงานในมือ ด่วนๆๆ"
-                )
-            elif is_step_running:
-                card_status_class = "operator-status-running"
-                card_status_text = f"⚙️ กำลังดำเนินงาน — Step ปัจจุบัน: {current_step_name}"
-            elif is_step_hold:
-                card_status_class = "operator-status-hold"
-                card_status_text = f"🟨 {pause_status_text or 'พักงานชั่วคราว รอขึ้นงาน'}"
-            elif is_step_finished:
-                card_status_class = "operator-status-finished"
-                card_status_text = "✅ งานเสร็จสิ้นแล้ว"
-            elif is_urgent:
-                card_status_class = "operator-status-overdue"
-                card_status_text = "🔥 งานด่วนแทรก กรุณาดำเนินการตามลำดับเร่งด่วน"
-            elif can_start:
-                card_status_class = "operator-status-ready"
-                card_status_text = "🚀 พร้อมเริ่มงาน — สามารถกด Start ได้"
-            else:
-                card_status_class = "operator-status-waiting"
-                card_status_text = "🔒 รอคิวก่อนหน้าเสร็จ"
-
-            with st.container():
-                st.markdown(
-                    f"<div class='{card_style_class}'><div class='operator-status-banner {card_status_class}'>"
-                    f"{html.escape(card_status_text)}</div></div>",
-                    unsafe_allow_html=True
-                )
-                if is_step_finished:
-                    fin_dt = parse_flexible_datetime(s_finish)
-                    finish_txt = fin_dt.strftime('%d/%m %H:%M') if (fin_dt is not None and pd.notna(fin_dt)) else '-'
-                    st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
-                elif is_step_running:
-                    st_parsed = parse_flexible_datetime(current_step_item.get("started_at"))
-                    if (st_parsed is None or pd.isna(st_parsed)) and current_step_index == 0:
-                        st_parsed = parse_flexible_datetime(s_start)
-                    if st_parsed is None or pd.isna(st_parsed):
-                        st.warning("ไม่พบเวลาเริ่มของ Step ปัจจุบัน จึงไม่ใช้เวลา Drawing แทน กรุณาตรวจข้อมูลหรือเริ่มเวลารอบใหม่เมื่อยืนยันเวลาได้")
-                    start_txt = st_parsed.strftime('%H:%M น.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
-                    step_start_epoch = to_bangkok_epoch_ms(st_parsed)
-                    current_step_paused = safe_float(current_step_item.get("paused_seconds"), 0.0)
-                    step_render_now = get_bangkok_now().replace(tzinfo=None)
-                    step_base_work_seconds = int(get_net_actual_work_seconds(st_parsed, step_render_now, current_step_paused)) if st_parsed is not None else 0
-                    step_render_epoch = to_bangkok_epoch_ms(step_render_now)
-                    st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' data-base-work-seconds='{step_base_work_seconds}' data-render-epoch='{step_render_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
-                    if is_running_overdue:
-                        st.error(f"🚨 งานนี้กำลังผลิตและเกินเวลาจบตามแผนแล้ว {overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที")
-                elif is_step_hold:
-                    st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>{pause_status_html}</span>", unsafe_allow_html=True)
-                else:
-                    if can_start:
-                        st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800;'>🟧 พร้อมเริ่มงาน (Ready to Start)</span>", unsafe_allow_html=True)
-                    else:
-                        st.caption(f"**ขั้นตอน:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับคิวก่อนหน้าตามแผน</span>", unsafe_allow_html=True)
-
-                if not is_step_finished:
-                    if is_step_hold:
-                        resume_sequence_blocked = bool(
-                            piece_mode and target_id != piece_resume_allowed_id
+                    batch_plan_mode = st.radio(
+                        "📋 แผนงานที่ต้องการควบคุม",
+                        ["ทุกแผน", "เลือกแผน"], horizontal=True,
+                        key=f"batch_plan_mode_{selected_m}",
+                    )
+                    batch_selected_plans = None
+                    if batch_plan_mode == "เลือกแผน":
+                        batch_plan_options = sorted(m_all_jobs["แผนงาน"].fillna("").astype(str).str.strip().unique().tolist())
+                        batch_plan_key = f"batch_selected_plans_{selected_m}"
+                        if batch_plan_key in st.session_state:
+                            st.session_state[batch_plan_key] = [value for value in st.session_state[batch_plan_key] if value in batch_plan_options]
+                        batch_selected_plans = st.multiselect(
+                            "เลือกแผนได้มากกว่า 1 แผน", batch_plan_options,
+                            format_func=lambda value: value or "(ไม่ระบุแผน)",
+                            key=batch_plan_key,
                         )
-                        resume_blocked = blocking_running_row is not None or resume_sequence_blocked
-                        if blocking_running_row is not None:
-                            st.warning(f"🔒 ยัง Resume ไม่ได้: {selected_m} กำลังรัน {blocking_running_text} กรุณาพักหรือจบงานนั้นก่อน")
-                        elif resume_sequence_blocked:
-                            st.info("🔒 โหมดรันทีละคิว: ต้อง Resume และ Finish คิวพักลำดับก่อนหน้าให้เสร็จก่อน")
-                        if st.button("▶️ Resume Step เดิม (แก้ไขพร้อมแล้ว)", key=f"btn_resume_{target_id}", type="primary", disabled=resume_blocked, use_container_width=True):
-                            live_blocker = get_other_running_job(selected_m, target_id)
-                            if live_blocker:
-                                st.error(f"Resume ไม่ได้ เพราะเครื่องกำลังรัน {running_job_label(live_blocker)}")
-                                st.stop()
-                            if piece_mode:
-                                # ตรวจลำดับซ้ำจากสถานะล่าสุด เพื่อกันการเปิดหลายหน้าจอแล้วกดข้ามคิว
-                                fetch_jobs_from_supabase.clear()
-                                fresh_resume_jobs = fetch_jobs_from_supabase()
-                                fresh_machine_jobs = fresh_resume_jobs[
-                                    fresh_resume_jobs["เลือกเครื่องจักร"].eq(selected_m) &
-                                    fresh_resume_jobs["ID"].apply(safe_int).isin(active_queue_order_ids)
-                                ].copy()
-                                fresh_status_by_id = {
-                                    safe_int(row["ID"]): safe_str(row.get("สถานะงาน"), "")
-                                    for _, row in fresh_machine_jobs.iterrows()
-                                }
-                                fresh_first_paused_id = next((
-                                    queue_id for queue_id in active_queue_order_ids
-                                    if "พักงาน" in fresh_status_by_id.get(queue_id, "")
-                                ), None)
-                                if fresh_first_paused_id != target_id:
-                                    st.error("Resume ไม่ได้: คิวนี้ไม่ใช่คิวพักลำดับแรก กรุณารีเฟรชและทำคิวก่อนหน้าให้เสร็จก่อน")
-                                    st.stop()
-                            resume_now = get_bangkok_now().replace(tzinfo=None)
-                            resume_payload = {"status": "🟦 กำลังผลิต", "hold_started_at": None}
-                            hold_started_dt = parse_flexible_datetime(s_hold_started)
-                            if hold_started_dt is not None and pd.notna(hold_started_dt):
-                                pause_delta = get_work_seconds_between(hold_started_dt, resume_now)
-                                resume_payload["paused_seconds"] = s_paused_seconds + pause_delta
-                                current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + pause_delta
-                            resume_payload["step_progress"] = step_progress
-                            if parse_flexible_datetime(s_start) is None:
-                                resume_payload["actual_start"] = resume_now.strftime("%Y-%m-%d %H:%M:%S")
-                            if update_supabase_job(target_id, resume_payload):
-                                log_job_event(
-                                    target_id, plan_code, drawing_code, selected_m, "Resume Step",
-                                    current_step_index + 1, current_step_name
-                                )
-                                st.toast("เริ่มรัน Step เดิมต่อเรียบร้อย", icon="▶️")
-                                st.rerun()
-                            else:
-                                st.error("Resume ไม่สำเร็จ")
-                    elif is_step_running:
-                        c_btn_hold, c_btn_finish = st.columns([2.5, 2])
-                        with c_btn_hold:
-                            with st.expander("🛑 พัก Step", expanded=False):
-                                with st.form(key=f"pause_step_form_{target_id}"):
-                                    pause_reason = st.selectbox("เหตุผลการพัก", PAUSE_REASONS, key=f"pause_reason_{target_id}")
-                                    pause_note = st.text_area(
-                                        "หมายเหตุเพิ่มเติม", placeholder="กรอกรายละเอียด โดยเฉพาะเมื่อเลือก ‘อื่น ๆ’",
-                                        key=f"pause_note_{target_id}"
-                                    )
-                                    pause_submitted = st.form_submit_button("🛑 ยืนยันพัก Step", use_container_width=True)
-                                if pause_submitted:
-                                    if pause_reason == "อื่น ๆ" and not pause_note.strip():
-                                        st.warning("กรุณากรอกหมายเหตุเมื่อเลือก ‘อื่น ๆ’")
-                                    else:
-                                        pause_now_str = get_bangkok_str()
-                                        if update_supabase_job(target_id, {
-                                            "status": "🟨 พักงาน (รอวัสดุ)", "hold_started_at": pause_now_str,
-                                            "step_progress": step_progress
-                                        }):
-                                            log_job_event(
-                                                target_id, plan_code, drawing_code, selected_m, "Pause Step",
-                                                current_step_index + 1, current_step_name, pause_reason, pause_note
-                                            )
-                                            st.toast("พัก Step และหยุดนับเวลาเดินสุทธิแล้ว", icon="🛑")
-                                            st.rerun()
-                                        else:
-                                            st.error("เปลี่ยนสถานะพักงานไม่สำเร็จ")
-                        with c_btn_finish:
-                            has_next_step = current_step_index < len(tracked_steps) - 1
-                            finish_button_label = (
-                                f"✅ จบ Step {current_step_index + 1} → เริ่ม Step {current_step_index + 2}"
-                                if has_next_step else "🏁 Finish Drawing (ครบทุก Step)"
-                            )
-                            if st.button(finish_button_label, key=f"btn_finish_step_{target_id}", type="primary", use_container_width=True):
-                                # แตะครั้งแรกเป็นเพียงการเปิดกล่องยืนยัน ห้ามบันทึก Finish ทันที
-                                st.session_state.pending_shop_finish_confirmation = {
-                                    "job_id": target_id,
+                        if not batch_selected_plans:
+                            st.info("เลือกอย่างน้อย 1 แผนก่อนใช้คำสั่ง Batch")
+                    batch_plan_scope = None if batch_selected_plans is None else sorted(batch_selected_plans)
+                    if batch_guard and batch_guard.get("plans") != batch_plan_scope:
+                        st.session_state.pop("batch_bulk_guard", None)
+                        batch_guard = None
+                        st.info("เปลี่ยนแผนที่เลือกแล้ว กรุณาตรวจรายการใหม่ก่อนยืนยัน")
+                    waiting_jobs = filter_batch_jobs_by_plan(waiting_jobs, batch_selected_plans)
+                    running_jobs = filter_batch_jobs_by_plan(running_jobs, batch_selected_plans)
+                    hold_jobs = filter_batch_jobs_by_plan(hold_jobs, batch_selected_plans)
+                    batch_stopped_hold_jobs = filter_batch_jobs_by_plan(batch_stopped_hold_jobs, batch_selected_plans)
+                    st.caption("คำสั่ง Start / Resume / หยุด / Finish / คืนคิว ใช้เฉพาะแผนที่เลือกบนเครื่องนี้")
+                    batch_start_mode = st.radio(
+                        "🚀 Drawing ที่ต้องการ Start",
+                        ["ทุก Drawing ในแผนที่เลือก", "เลือก Drawing"], horizontal=True,
+                        key=f"batch_start_mode_{selected_m}",
+                    )
+                    batch_start_scope = None
+                    if batch_start_mode == "เลือก Drawing":
+                        batch_start_rows = {safe_int(row["ID"]): row for _, row in waiting_jobs.iterrows()}
+                        batch_start_numbers = {job_id: number for number, job_id in enumerate(batch_start_rows, start=1)}
+                        batch_start_key = f"batch_start_drawings_{selected_m}"
+                        if batch_start_key in st.session_state:
+                            st.session_state[batch_start_key] = [job_id for job_id in st.session_state[batch_start_key] if job_id in batch_start_rows]
+                        batch_start_ids = st.multiselect(
+                            "เลือก Drawing รอคิวที่จะ Start ได้หลายรายการ",
+                            list(batch_start_rows), key=batch_start_key,
+                            format_func=lambda job_id: (
+                                f"คิว {batch_start_numbers[job_id]} | แผน {safe_str(batch_start_rows[job_id].get('แผนงาน'), '-')} | "
+                                f"Drawing {safe_str(batch_start_rows[job_id].get('ชื่อ Drawing.'), '-')} | "
+                                f"Step {safe_str(batch_start_rows[job_id].get('ขั้นตอน (Step)'), '-')}"
+                            ),
+                        )
+                        batch_start_scope = sorted(batch_start_ids)
+                        waiting_jobs = waiting_jobs[waiting_jobs["ID"].apply(safe_int).isin(batch_start_ids)].copy()
+                        if not batch_start_ids:
+                            st.info("เลือกอย่างน้อย 1 Drawing ก่อนตรวจรายการ Start")
+                    if batch_guard and batch_guard.get("action") == "start" and batch_guard.get("start_drawings") != batch_start_scope:
+                        st.session_state.pop("batch_bulk_guard", None)
+                        batch_guard = None
+                        st.info("เปลี่ยน Drawing ที่จะ Start แล้ว กรุณาตรวจรายการใหม่")
+                    st.caption(f"Start เฉพาะ Drawing รอคิวที่เลือก ({len(waiting_jobs)} คิว) • ตัวเลือก Drawing นี้ไม่มีผลกับ Resume / หยุด / Finish / คืนคิว")
+
+
+
+                    if guard_expired:
+                        st.warning("⌛ การยืนยันครั้งก่อนหมดอายุแล้ว กรุณาตรวจรายการใหม่")
+
+                    if not batch_guard:
+                        b_c1, b_c2 = st.columns(2)
+                        with b_c1:
+                            if st.button(
+                                f"🔎 ตรวจรายการก่อน Start รวม ({len(waiting_jobs)} คิว)",
+                                disabled=(len(waiting_jobs) == 0),
+                                type="secondary",
+                                use_container_width=True,
+                                key="prepare_batch_start"
+                            ):
+                                st.session_state.batch_bulk_guard = {
+                                    "action": "start",
+                                    "start_drawings": batch_start_scope,
                                     "machine": selected_m,
-                                    "step_index": current_step_index,
+                                    "plans": batch_plan_scope,
+                                    "ids": [safe_int(v) for v in waiting_jobs["ID"].tolist()],
                                     "armed_at": get_bangkok_str(),
-                                    "nonce": uuid.uuid4().hex,
+                                    "nonce": uuid.uuid4().hex
+                                }
+                                st.rerun()
+                        with b_c2:
+                            if st.button(
+                                f"🔎 ตรวจรายการก่อน Resume รวม ({len(hold_jobs)} คิว)",
+                                disabled=(len(hold_jobs) == 0),
+                                type="secondary",
+                                use_container_width=True,
+                                key="prepare_batch_resume"
+                            ):
+                                st.session_state.batch_bulk_guard = {
+                                    "action": "resume",
+                                    "machine": selected_m,
+                                    "plans": batch_plan_scope,
+                                    "ids": [safe_int(v) for v in hold_jobs["ID"].tolist()],
+                                    "armed_at": get_bangkok_str(),
+                                    "nonce": uuid.uuid4().hex
                                 }
                                 st.rerun()
 
-                            pending_finish = st.session_state.get("pending_shop_finish_confirmation")
-                            pending_matches = bool(
-                                pending_finish
-                                and safe_int(pending_finish.get("job_id")) == target_id
-                                and safe_str(pending_finish.get("machine")) == safe_str(selected_m)
-                                and safe_int(pending_finish.get("step_index"), -1) == current_step_index
-                            )
-                            if pending_matches:
-                                confirmation_started = parse_flexible_datetime(pending_finish.get("armed_at"))
-                                confirmation_now = get_bangkok_now().replace(tzinfo=None)
-                                confirmation_expired = bool(
-                                    confirmation_started is None
-                                    or (confirmation_now - confirmation_started).total_seconds() > 30
-                                )
-                                if confirmation_expired:
-                                    st.session_state.pop("pending_shop_finish_confirmation", None)
-                                    st.warning("⌛ การยืนยัน Finish หมดอายุแล้ว กรุณากดปุ่ม Finish ใหม่")
-                                else:
-                                    finish_action_text = (
-                                        f"จบ Step {current_step_index + 1} และเริ่ม Step {current_step_index + 2}"
-                                        if has_next_step else "Finish Drawing นี้"
-                                    )
-                                    st.warning(
-                                        f"⚠️ ยืนยันว่าจะ {finish_action_text} หรือไม่?  \n"
-                                        f"แผนงาน: **{plan_code}** | Drawing: **{drawing_code}** | Step: **{current_step_name}**"
-                                    )
-                                    confirm_finish_col, cancel_finish_col = st.columns(2)
-                                    with cancel_finish_col:
-                                        cancel_finish = st.button(
-                                            "✖️ ยกเลิก",
-                                            key=f"cancel_finish_step_{target_id}_{pending_finish.get('nonce', 'current')}",
-                                            use_container_width=True,
-                                        )
-                                    with confirm_finish_col:
-                                        confirm_finish = st.button(
-                                            "✅ ยืนยัน Finish",
-                                            key=f"confirm_finish_step_{target_id}_{pending_finish.get('nonce', 'current')}",
-                                            type="primary",
-                                            use_container_width=True,
-                                        )
-
-                                    if cancel_finish:
-                                        st.session_state.pop("pending_shop_finish_confirmation", None)
-                                        st.rerun()
-
-                                    if confirm_finish:
-                                        # อ่านสถานะล่าสุดก่อนบันทึก ป้องกันการกดยืนยันซ้ำหรือสถานะถูกเปลี่ยนจากหน้าจออื่น
-                                        fetch_jobs_from_supabase.clear()
-                                        fresh_finish_jobs = fetch_jobs_from_supabase()
-                                        fresh_finish_rows = fresh_finish_jobs[
-                                            fresh_finish_jobs["ID"].apply(safe_int).eq(target_id)
-                                        ].copy()
-                                        if fresh_finish_rows.empty:
-                                            st.session_state.pop("pending_shop_finish_confirmation", None)
-                                            st.error("ไม่พบคิวงานนี้แล้ว กรุณารีเฟรชหน้าจอ")
-                                            st.rerun()
-
-                                        fresh_finish_row = fresh_finish_rows.iloc[0]
-                                        fresh_finish_status = safe_str(fresh_finish_row.get("สถานะงาน"), "")
-                                        fresh_step_progress = normalize_step_progress(
-                                            fresh_finish_row.get("ติดตาม Step"),
-                                            fresh_finish_row.get("ขั้นตอน (Step)"),
-                                            fresh_finish_status,
-                                            fresh_finish_row.get("เริ่มจริง"),
-                                            fresh_finish_row.get("เสร็จจริง"),
-                                        )
-                                        fresh_step_index = safe_int(fresh_step_progress.get("current_index"), 0)
-                                        fresh_tracked_steps = fresh_step_progress.get("steps", [])
-                                        if (
-                                            "กำลังผลิต" not in fresh_finish_status
-                                            or fresh_step_index != current_step_index
-                                            or fresh_step_index >= len(fresh_tracked_steps)
-                                        ):
-                                            st.session_state.pop("pending_shop_finish_confirmation", None)
-                                            st.error("⚠️ สถานะหรือ Step ของคิวเปลี่ยนไปแล้ว ระบบยังไม่บันทึก Finish กรุณาตรวจสอบใหม่")
-                                            st.rerun()
-
-                                        step_finish_dt = get_bangkok_now().replace(tzinfo=None)
-                                        step_finish_str = step_finish_dt.strftime("%Y-%m-%d %H:%M:%S")
-                                        fresh_tracked_steps[fresh_step_index]["finished_at"] = step_finish_str
-                                        fresh_has_next_step = fresh_step_index < len(fresh_tracked_steps) - 1
-                                        if fresh_has_next_step:
-                                            fresh_step_progress["current_index"] = fresh_step_index + 1
-                                            fresh_tracked_steps[fresh_step_index + 1]["started_at"] = step_finish_str
-                                            finish_payload = {
-                                                "status": "🟦 กำลังผลิต", "actual_finish": None,
-                                                "hold_started_at": None, "step_progress": fresh_step_progress,
-                                            }
-                                        else:
-                                            finish_payload = {
-                                                "status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": step_finish_str,
-                                                "hold_started_at": None, "step_progress": fresh_step_progress,
-                                            }
-
-                                        if update_supabase_job(target_id, finish_payload):
-                                            st.session_state.pop("pending_shop_finish_confirmation", None)
-                                            if fresh_has_next_step:
-                                                next_step_name = safe_str(fresh_tracked_steps[fresh_step_index + 1].get("name"), "Step ถัดไป")
-                                                log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Step", fresh_step_index + 1, current_step_name)
-                                                log_job_event(target_id, plan_code, drawing_code, selected_m, "Start Step", fresh_step_index + 2, next_step_name)
-                                                st.toast(f"เริ่ม Step ถัดไป: {next_step_name}", icon="➡️")
-                                            else:
-                                                log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Drawing", fresh_step_index + 1, current_step_name)
-                                                st.session_state.operator_finish_feedback = build_operator_finish_feedback(
-                                                    pd.DataFrame([fresh_finish_row]), step_finish_dt
-                                                )
-                                            st.rerun()
-                                        else:
-                                            st.error("บันทึกจบ Step ไม่สำเร็จ")
-                    else:
-                        if can_start:
-                            if st.button(f"🚀 Start Step {current_step_index + 1}: {current_step_name}", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
-                                live_blocker = get_other_running_job(selected_m, target_id)
-                                if live_blocker:
-                                    st.error(f"Start ไม่ได้ เพราะเครื่องกำลังรัน {running_job_label(live_blocker)}")
-                                    st.stop()
-                                start_now = get_bangkok_now().replace(tzinfo=None)
-                                start_now_str = start_now.strftime("%Y-%m-%d %H:%M:%S")
-                                pause_delta = 0.0
-                                pending_pause_dt = parse_flexible_datetime(current_step_item.get("pending_pause_started_at"))
-                                if current_step_item.get("started_at") and pending_pause_dt is not None and pd.notna(pending_pause_dt):
-                                    pause_delta = get_work_seconds_between(pending_pause_dt, start_now)
-                                    current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + pause_delta
-                                elif not current_step_item.get("started_at"):
-                                    current_step_item["started_at"] = start_now_str
-                                current_step_item.pop("pending_pause_started_at", None)
-                                start_payload = {
-                                    "status": "🟦 กำลังผลิต", "actual_finish": None,
-                                    "hold_started_at": None, "step_progress": step_progress,
-                                    "paused_seconds": s_paused_seconds + pause_delta,
+                        b_c3, b_c4 = st.columns(2)
+                        with b_c3:
+                            if st.button(
+                                f"🔎 ตรวจรายการก่อนหยุดคิวตามแผนที่เลือก ({len(running_jobs)} คิว)",
+                                disabled=(len(running_jobs) == 0),
+                                type="secondary",
+                                use_container_width=True,
+                                key="prepare_batch_pause"
+                            ):
+                                st.session_state.batch_bulk_guard = {
+                                    "action": "pause",
+                                    "machine": selected_m,
+                                    "plans": batch_plan_scope,
+                                    "ids": [safe_int(v) for v in running_jobs["ID"].tolist()],
+                                    "armed_at": get_bangkok_str(),
+                                    "nonce": uuid.uuid4().hex
                                 }
-                                if parse_flexible_datetime(s_start) is None:
-                                    start_payload["actual_start"] = start_now_str
-                                if update_supabase_job(target_id, start_payload):
-                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Start Step", current_step_index + 1, current_step_name)
-                                    st.toast(f"เริ่ม Step {current_step_index + 1}: {current_step_name}", icon="🚀")
+                                st.rerun()
+                        with b_c4:
+                            if st.button(
+                                f"🔎 ตรวจรายการก่อน Finish รวม ({len(running_jobs)} คิว)",
+                                disabled=(len(running_jobs) == 0),
+                                type="secondary",
+                                use_container_width=True,
+                                key="prepare_batch_finish"
+                            ):
+                                st.session_state.batch_bulk_guard = {
+                                    "action": "finish",
+                                    "machine": selected_m,
+                                    "plans": batch_plan_scope,
+                                    "ids": [safe_int(v) for v in running_jobs["ID"].tolist()],
+                                    "armed_at": get_bangkok_str(),
+                                    "nonce": uuid.uuid4().hex
+                                }
+                                st.rerun()
+                        if st.button(
+                            f"↩️ คืนคิวที่หยุดจาก Batch เป็นรอคิวปกติ ({len(batch_stopped_hold_jobs)} คิว)",
+                            disabled=(len(batch_stopped_hold_jobs) == 0),
+                            type="secondary",
+                            use_container_width=True,
+                            key="prepare_batch_return_waiting"
+                        ):
+                            st.session_state.batch_bulk_guard = {
+                                "action": "return_waiting",
+                                "machine": selected_m,
+                                    "plans": batch_plan_scope,
+                                "ids": [safe_int(v) for v in batch_stopped_hold_jobs["ID"].tolist()],
+                                "armed_at": get_bangkok_str(),
+                                "nonce": uuid.uuid4().hex
+                            }
+                            st.rerun()
+                    else:
+                        guard_action = batch_guard.get("action")
+                        guard_ids = {safe_int(v) for v in batch_guard.get("ids", [])}
+                        if guard_action == "start":
+                            review_source = waiting_jobs
+                        elif guard_action == "resume":
+                            review_source = hold_jobs
+                        elif guard_action == "return_waiting":
+                            review_source = batch_stopped_hold_jobs
+                        else:
+                            review_source = running_jobs
+                        review_jobs = review_source[review_source["ID"].apply(safe_int).isin(guard_ids)].copy()
+                        action_labels = {
+                            "start": ("Start", "🚀"),
+                            "resume": ("Resume", "▶️"),
+                            "pause": ("หยุดคิว", "⏸️"),
+                            "return_waiting": ("คืนเป็นรอคิวปกติ", "↩️"),
+                            "finish": ("Finish", "🏁")
+                        }
+                        action_th, action_icon = action_labels.get(guard_action, ("ดำเนินการ", "⚙️"))
+
+                        st.warning(
+                            f"⚠️ กำลังจะ {action_th} รวมจำนวน {len(guard_ids)} คิวบนเครื่อง {selected_m} "
+                            "กรุณาตรวจรายการก่อนยืนยัน"
+                        )
+                        review_lines = []
+                        for review_no, (_, review_row) in enumerate(review_jobs.iterrows(), start=1):
+                            review_lines.append(
+                                f"{review_no}. แผน {safe_str(review_row.get('แผนงาน'), '-')} | "
+                                f"Drawing {safe_str(review_row.get('ชื่อ Drawing.'), '-')} | "
+                                f"Step {safe_str(review_row.get('ขั้นตอน (Step)'), '-')}"
+                            )
+                        st.markdown("  \n".join(review_lines) if review_lines else "⚠️ ไม่พบรายการตามสถานะเดิม")
+
+                        confirm_key = f"batch_bulk_confirm_{batch_guard.get('nonce', 'current')}"
+                        confirmed = st.checkbox(
+                            f"ตรวจสอบรายการแล้ว ยืนยัน {action_th} งานพร้อมกัน",
+                            key=confirm_key
+                        )
+                        confirm_col, cancel_col = st.columns(2)
+                        with cancel_col:
+                            if st.button("ยกเลิกคำสั่งรวม", use_container_width=True, key=f"cancel_{confirm_key}"):
+                                st.session_state.pop("batch_bulk_guard", None)
+                                st.rerun()
+                        with confirm_col:
+                            if st.button(
+                                f"{action_icon} ยืนยัน {action_th} {len(guard_ids)} คิว",
+                                disabled=not confirmed,
+                                type="primary",
+                                use_container_width=True,
+                                key=f"execute_{confirm_key}"
+                            ):
+                                confirm_now = get_bangkok_now().replace(tzinfo=None)
+                                armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
+                                if armed_at is None or (confirm_now - armed_at).total_seconds() > 15:
+                                    st.session_state.pop("batch_bulk_guard", None)
+                                    st.error("⌛ การยืนยันหมดอายุแล้ว กรุณาเปิดตรวจรายการใหม่")
+                                    st.rerun()
+
+                                # อ่านข้อมูลล่าสุดซ้ำก่อนบันทึก และทำเฉพาะ ID ที่ผู้ใช้ตรวจไว้เท่านั้น
+                                fetch_jobs_from_supabase.clear()
+                                fresh_jobs = fetch_jobs_from_supabase()
+                                if guard_action == "start":
+                                    expected_status_text = "รอคิว"
+                                elif guard_action in {"resume", "return_waiting"}:
+                                    expected_status_text = "พักงาน"
+                                else:
+                                    expected_status_text = "กำลังผลิต"
+                                fresh_batch_jobs = fresh_jobs[
+                                    (fresh_jobs["เลือกเครื่องจักร"] == selected_m) &
+                                    (fresh_jobs["ID"].apply(safe_int).isin(guard_ids)) &
+                                    (fresh_jobs["สถานะงาน"].astype(str).str.contains(expected_status_text, na=False))
+                                ].copy()
+                                fresh_batch_jobs = filter_batch_jobs_by_plan(fresh_batch_jobs, batch_guard.get("plans"))
+                                fresh_ids = {safe_int(v) for v in fresh_batch_jobs["ID"].tolist()}
+                                if fresh_ids != guard_ids:
+                                    st.session_state.pop("batch_bulk_guard", None)
+                                    st.error("⚠️ สถานะคิวมีการเปลี่ยนแปลง ระบบยกเลิกคำสั่งรวม กรุณาตรวจรายการใหม่")
+                                    st.rerun()
+
+                                now_str = confirm_now.strftime("%Y-%m-%d %H:%M:%S")
+                                update_results = []
+                                fully_finished_rows = []
+                                for _, r in fresh_batch_jobs.iterrows():
+                                    progress = normalize_step_progress(
+                                        r.get("ติดตาม Step"), r.get("ขั้นตอน (Step)"), r.get("สถานะงาน"),
+                                        r.get("เริ่มจริง"), r.get("เสร็จจริง")
+                                    )
+                                    idx = progress["current_index"]
+                                    if guard_action == "start":
+                                        current = progress["steps"][idx]
+                                        pause_delta = 0.0
+                                        pending_dt = parse_flexible_datetime(current.get("pending_pause_started_at"))
+                                        if current.get("started_at") and pending_dt is not None and pd.notna(pending_dt):
+                                            pause_delta = get_work_seconds_between(pending_dt, confirm_now)
+                                            current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + pause_delta
+                                        elif not current.get("started_at"):
+                                            current["started_at"] = now_str
+                                        current.pop("pending_pause_started_at", None)
+                                        payload = {
+                                            "status": "🟦 กำลังผลิต", "actual_finish": None,
+                                            "hold_started_at": None, "step_progress": progress,
+                                            "paused_seconds": safe_float(r.get("เวลาพักสะสม (วินาที)"), 0.0) + pause_delta,
+                                        }
+                                        if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
+                                            payload["actual_start"] = now_str
+                                    elif guard_action == "resume":
+                                        current = progress["steps"][idx]
+                                        hold_started_dt = parse_flexible_datetime(r.get("เริ่มพักจริง"))
+                                        pause_delta = 0.0
+                                        if hold_started_dt is not None and pd.notna(hold_started_dt):
+                                            pause_delta = get_work_seconds_between(hold_started_dt, confirm_now)
+                                        current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + pause_delta
+                                        payload = {
+                                            "status": "🟦 กำลังผลิต",
+                                            "hold_started_at": None,
+                                            "paused_seconds": safe_float(r.get("เวลาพักสะสม (วินาที)"), 0.0) + pause_delta,
+                                            "step_progress": progress
+                                        }
+                                        if parse_flexible_datetime(r.get("เริ่มจริง")) is None:
+                                            payload["actual_start"] = now_str
+                                    elif guard_action == "pause":
+                                        current = progress["steps"][idx]
+                                        current["pending_pause_started_at"] = now_str
+                                        payload = {
+                                            "status": "🟧 รอคิวผลิต",
+                                            "hold_started_at": None,
+                                            "step_progress": progress
+                                        }
+                                    elif guard_action == "return_waiting":
+                                        current = progress["steps"][idx]
+                                        original_hold_started = parse_flexible_datetime(r.get("เริ่มพักจริง"))
+                                        pause_from = original_hold_started if original_hold_started is not None and pd.notna(original_hold_started) else confirm_now
+                                        current["pending_pause_started_at"] = pause_from.strftime("%Y-%m-%d %H:%M:%S")
+                                        payload = {
+                                            "status": "🟧 รอคิวผลิต",
+                                            "hold_started_at": None,
+                                            "step_progress": progress
+                                        }
+                                    else:
+                                        progress["steps"][idx]["finished_at"] = now_str
+                                        if idx < len(progress["steps"]) - 1:
+                                            progress["current_index"] = idx + 1
+                                            progress["steps"][idx + 1]["started_at"] = now_str
+                                            payload = {"status": "🟦 กำลังผลิต", "actual_finish": None, "step_progress": progress}
+                                        else:
+                                            payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str, "step_progress": progress}
+                                            fully_finished_rows.append(r)
+                                    update_ok = update_supabase_job(int(r["ID"]), payload, clear_cache=False)
+                                    update_results.append(update_ok)
+                                    if update_ok and guard_action in {"pause", "resume", "return_waiting"}:
+                                        current_step = progress["steps"][idx]
+                                        log_job_event(
+                                            safe_int(r["ID"]),
+                                            safe_str(r.get("แผนงาน"), "-"),
+                                            safe_str(r.get("ชื่อ Drawing."), "-"),
+                                            selected_m,
+                                            "Resume Step" if guard_action == "resume" else "Return to Queue",
+                                            idx + 1,
+                                            safe_str(current_step.get("name"), safe_str(r.get("ขั้นตอน (Step)"), "-")),
+                                            (
+                                                "หยุดคิวทั้งหมดจาก Batch Processing"
+                                                if guard_action == "pause" else
+                                                ("คืนคิวที่หยุดจาก Batch เป็นรอคิวปกติ" if guard_action == "return_waiting" else "Resume คิวทั้งหมดจาก Batch Processing")
+                                            ),
+                                            "คำสั่งแบบกลุ่มโดยผู้ใช้งานหน้าเครื่อง"
+                                        )
+
+                                st.session_state.pop("batch_bulk_guard", None)
+                                fetch_jobs_from_supabase.clear()
+                                if update_results and all(update_results):
+                                    if guard_action == "start":
+                                        st.toast("เริ่มจับเวลาจริงทุกคิวที่ยืนยันเรียบร้อย!", icon="🚀")
+                                    elif guard_action == "resume":
+                                        st.toast("Resume คิวทั้งหมดและคำนวณเวลาพักสะสมเรียบร้อย!", icon="▶️")
+                                    elif guard_action == "pause":
+                                        st.toast("หยุดงานและคืนทุกคิวเป็นรอคิวปกติแล้ว!", icon="↩️")
+                                    elif guard_action == "return_waiting":
+                                        st.toast("คืนคิวที่เคยหยุดจาก Batch เป็นรอคิวปกติแล้ว!", icon="↩️")
+                                    elif fully_finished_rows:
+                                        st.session_state.operator_finish_feedback = build_operator_finish_feedback(
+                                            pd.DataFrame(fully_finished_rows), confirm_now
+                                        )
                                     st.rerun()
                                 else:
-                                    st.error("เริ่มงานไม่สำเร็จ")
-                        else:
-                            st.button("🚀 Start — รอคิวก่อนหน้า", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
-                            if is_step_waiting and blocking_running_text:
-                                st.caption(f"🔒 เครื่องกำลังรัน {blocking_running_text}")
+                                    st.error(f"{action_th} แบบกลุ่มไม่สำเร็จครบทุกรายการ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
 
-            if is_step_running or is_step_hold:
-                with st.expander("↩️ ยกเลิกการเริ่มผิด → คืนเป็นรอคิว", expanded=False):
-                    st.caption("ใช้เมื่อกด Start ผิดและยังไม่ได้ทำงานจริง คืนเฉพาะการเริ่ม Step แรกที่ยังไม่มี Step จบ")
-                    st.info(f"แผน {plan_code} | Drawing {drawing_code} | Step {current_step_name}")
-                    with st.form(f"cancel_wrong_start_{target_id}"):
-                        cancel_reason = st.text_input("เหตุผลที่ยกเลิก *", placeholder="เช่น เลือกคิวผิด ยังไม่ได้ผลิตจริง")
-                        cancel_confirm = st.checkbox("ยืนยันว่าเริ่มผิดและยังไม่ได้ผลิตจริง เวลาที่กดผิดจะไม่ถูกนำมาคำนวณ")
-                        cancel_submit = st.form_submit_button("↩️ ยืนยันยกเลิกการเริ่มผิด", use_container_width=True)
-                    if cancel_submit:
-                        if not cancel_confirm or not cancel_reason.strip():
-                            st.warning("กรอกเหตุผลและติ๊กยืนยันก่อนคืนคิว")
-                        else:
-                            cancelled, cancel_message = cancel_wrong_job_start(target_id, selected_m, s_start, cancel_reason)
-                            if cancelled:
-                                st.session_state.pop("batch_bulk_guard", None)
-                                st.session_state.pop("pending_shop_finish_confirmation", None)
-                                st.session_state["operator_cancel_start_feedback"] = cancel_message
-                                st.rerun()
-                            else:
-                                st.error(cancel_message)
+            m_active = m_all_jobs.copy()
+            m_active["_sort_key"] = m_active.apply(get_production_queue_sort_key, axis=1)
+            m_active = m_active.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
 
-            current_step_names = [item.get("name", f"Step {idx + 1}") for idx, item in enumerate(tracked_steps)]
-            st.markdown("**รายการ Step และเวลาทำงานจริงในคิวนี้**")
-            step_status_lines = []
-            for idx, item in enumerate(tracked_steps):
-                if item.get("finished_at"):
-                    icon = "✅"
-                    state_text = f"เสร็จแล้ว — {format_duration_short(step_elapsed_seconds(item))}"
-                elif idx == current_step_index and is_step_running:
-                    icon = "🔵"
-                    state_text = f"กำลังทำ — {format_duration_short(step_elapsed_seconds(item))}"
-                elif idx == current_step_index and is_step_hold:
-                    icon = "⏸️"
-                    hold_dt = parse_flexible_datetime(s_hold_started)
-                    state_text = f"พักงาน — {format_duration_short(step_elapsed_seconds(item, hold_dt))}"
+            # ใช้ลูกโซ่กลางหลังสลับคิว; เก็บ Baseline แยกสำหรับงานที่เริ่มแล้ว
+            m_active = calculate_production_chain(m_active, active_only=True).reset_index(drop=True)
+
+            machine_any_running = any("กำลังผลิต" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
+            machine_has_paused = any("พักงาน" in str(r.get("สถานะงาน", "")) for _, r in m_all_jobs.iterrows())
+            piece_mode = "Batch" not in run_mode
+            active_queue_order_ids = [safe_int(v) for v in m_active["ID"].tolist()]
+            piece_resume_allowed_id = None
+            if piece_mode and not machine_any_running:
+                first_paused = m_active[
+                    m_active["สถานะงาน"].astype(str).str.contains("พักงาน", na=False)
+                ]
+                if not first_paused.empty:
+                    piece_resume_allowed_id = safe_int(first_paused.iloc[0]["ID"])
+            next_available_start_found = False
+
+            for queue_idx, step_row in m_active.iterrows():
+                target_id = safe_int(step_row["ID"])
+                plan_code = str(step_row.get("แผนงาน", "-"))
+                drawing_code = str(step_row.get("ชื่อ Drawing.", "-"))
+                qty_val = int(step_row.get("จำนวน", 1) or 1)
+                mat_val = str(step_row.get("วัสดุ", "-"))
+                raw_s_name = str(step_row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
+                s_name = raw_s_name if raw_s_name not in ["", "None", "nan", "รอหน้าเครื่องระบุ"] else f"OP{(queue_idx+1)*10}"
+                s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
+                s_start = step_row.get("เริ่มจริง")
+                s_finish = step_row.get("เสร็จจริง")
+                s_hold_started = step_row.get("เริ่มพักจริง")
+                s_paused_seconds = safe_float(step_row.get("เวลาพักสะสม (วินาที)"), 0.0)
+
+                step_progress = normalize_step_progress(
+                    step_row.get("ติดตาม Step"), raw_s_name, s_status, s_start, s_finish
+                )
+                tracked_steps = step_progress["steps"]
+                current_step_index = step_progress["current_index"]
+                current_step_item = tracked_steps[current_step_index]
+                current_step_name = current_step_item.get("name", s_name)
+
+                is_step_running = "กำลังผลิต" in s_status
+                is_step_hold = "พักงาน" in s_status
+                is_step_finished = "เสร็จสิ้น" in s_status
+                is_step_waiting = not is_step_running and not is_step_finished and not is_step_hold
+                is_urgent = "ด่วนแทรก" in str(step_row.get("ประเภทงาน", ""))
+                pause_status_text = get_operator_pause_text(target_id) if is_step_hold else ""
+                pause_status_html = html.escape(pause_status_text)
+                other_running_rows = m_all_jobs[
+                    (m_all_jobs["ID"].apply(safe_int) != target_id)
+                    & m_all_jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต", na=False)
+                ]
+                blocking_running_row = other_running_rows.iloc[0] if not other_running_rows.empty else None
+                blocking_running_text = (
+                    f"แผน {blocking_running_row.get('แผนงาน', '-')} / Drawing {blocking_running_row.get('ชื่อ Drawing.', '-')}"
+                    if blocking_running_row is not None else ""
+                )
+
+                s_m = safe_float(step_row.get("Setup (น.)"), 10.0)
+                b_m = safe_float(step_row.get("Basic (น.)"), 0.0)
+                p_m = safe_float(step_row.get("โปรแกรม (น.)"), 120.0)
+                tot_h = (s_m + b_m + p_m) / 60.0
+
+                # เวลาแสดงหลักตรงกับใบจ่ายคิวและทีวีทุกสถานะ/ทุกเครื่อง
+                start_w_dt, finish_w_dt = get_current_production_window(step_row)
+                queue_start_label = "เริ่มตามคิวปัจจุบัน"
+                queue_finish_label = "จบตามคิวปัจจุบัน"
+                ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.") if start_w_dt is not None else "-"
+                finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.") if finish_w_dt is not None else "-"
+                baseline_caption_html = html.escape(production_baseline_caption(step_row))
+
+                operator_now = get_bangkok_now().replace(tzinfo=None)
+                if is_step_running or is_step_hold:
+                    step_time_issue = active_step_time_issue(step_row, operator_now)
+                    if step_time_issue:
+                        st.warning("ข้อมูลเวลาไม่สมบูรณ์: " + step_time_issue)
+                is_running_overdue = bool(
+                    is_step_running and finish_w_dt is not None and pd.notna(finish_w_dt) and operator_now > finish_w_dt
+                )
+                overdue_minutes = int(get_signed_work_seconds_between(finish_w_dt, operator_now) // 60) if is_running_overdue else 0
+
+                if "Batch" in run_mode:
+                    can_start = is_step_waiting and not machine_any_running
                 else:
-                    icon = "⚪"
-                    state_text = "รอทำ"
-                if item.get("timing_cancelled"):
-                    state_text = "เสร็จแล้วก่อนเริ่มรอบใหม่ — ไม่นำเวลาเดิมมาคำนวณ"
-                step_status_lines.append(f"{icon} **Step {idx + 1}:** {item.get('name', '-')} · {state_text}")
-            st.markdown("  \n".join(step_status_lines))
+                    can_start = False
+                    if is_step_waiting and not machine_any_running and not machine_has_paused and not next_available_start_found:
+                        can_start = True
+                        next_available_start_found = True
 
-            if not is_step_finished:
-                with st.expander("🛠️ ตั้งชื่อ Step เริ่มต้น (แก้ชื่อ / ลบ)", expanded=False):
-                    st.caption("Step ที่เสร็จแล้วจะถูกล็อก และ Step ที่เริ่มจับเวลาแล้วจะไม่สามารถลบได้")
-                    for idx, item in enumerate(tracked_steps):
-                        step_locked = bool(item.get("finished_at"))
-                        delete_allowed = (
-                            len(tracked_steps) > 1
-                            and not item.get("started_at")
-                            and not item.get("finished_at")
-                        )
-                        with st.form(key=f"manage_step_form_{target_id}_{idx}"):
-                            edited_name = st.text_input(
-                                f"Step {idx + 1}", value=item.get("name", ""),
-                                disabled=step_locked, key=f"edit_step_name_{target_id}_{idx}"
+                if is_step_hold:
+                    header_box_class = "op-job-header op-job-header-hold"
+                    badge_gradient = "linear-gradient(135deg, #D97706 0%, #F59E0B 100%)"
+                    status_badge_html = f'<span class="badge-chip badge-hold">{pause_status_html}</span>'
+                elif is_step_running:
+                    if is_running_overdue:
+                        header_box_class = "op-job-header op-job-header-overdue"
+                        badge_gradient = "linear-gradient(135deg, #B91C1C 0%, #EF4444 100%)"
+                        status_badge_html = f'<span class="badge-chip badge-overdue">🚨 หลุดแผน {overdue_minutes // 60:02d}:{overdue_minutes % 60:02d} ชม.</span>'
+                    else:
+                        header_box_class = "op-job-header op-job-header-running"
+                        badge_gradient = "linear-gradient(135deg, #059669 0%, #10B981 100%)"
+                        status_badge_html = '<span class="badge-chip badge-running"><span class="tv-pulse-dot" style="margin-right:6px;"></span> 🟦 กำลังผลิต (รันงานอยู่ ⏱️)</span>'
+                elif is_urgent:
+                    header_box_class = "op-job-header op-job-header-urgent"
+                    badge_gradient = "linear-gradient(135deg, #DC2626 0%, #EF4444 100%)"
+                    status_badge_html = '<span class="badge-chip badge-urgent">🔥 🔴 งานด่วนแทรก</span>'
+                else:
+                    header_box_class = "op-job-header"
+                    badge_gradient = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
+                    status_badge_html = ''
+
+                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>{queue_start_label}:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>{queue_finish_label}:</b> {finish_plan_display_str}</span><span class="badge-chip badge-date">{baseline_caption_html}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
+                st.markdown(card_header_html, unsafe_allow_html=True)
+
+                card_style_class = "step-card"
+                if is_running_overdue: card_style_class += " step-card-overdue"
+                elif is_step_running: card_style_class += " step-card-running"
+                elif is_step_hold: card_style_class += " step-card-hold"
+                elif can_start: card_style_class += " step-card-ready"
+                elif is_step_finished: card_style_class += " step-card-finished"
+
+                if is_running_overdue:
+                    card_status_class = "operator-status-overdue"
+                    card_status_text = (
+                        f"🚨 งานกำลังรันและเกินเวลาตามแผนแล้ว "
+                        f"{overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที กรุณาเร่งงานในมือ ด่วนๆๆ"
+                    )
+                elif is_step_running:
+                    card_status_class = "operator-status-running"
+                    card_status_text = f"⚙️ กำลังดำเนินงาน — Step ปัจจุบัน: {current_step_name}"
+                elif is_step_hold:
+                    card_status_class = "operator-status-hold"
+                    card_status_text = f"🟨 {pause_status_text or 'พักงานชั่วคราว รอขึ้นงาน'}"
+                elif is_step_finished:
+                    card_status_class = "operator-status-finished"
+                    card_status_text = "✅ งานเสร็จสิ้นแล้ว"
+                elif is_urgent:
+                    card_status_class = "operator-status-overdue"
+                    card_status_text = "🔥 งานด่วนแทรก กรุณาดำเนินการตามลำดับเร่งด่วน"
+                elif can_start:
+                    card_status_class = "operator-status-ready"
+                    card_status_text = "🚀 พร้อมเริ่มงาน — สามารถกด Start ได้"
+                else:
+                    card_status_class = "operator-status-waiting"
+                    card_status_text = "🔒 รอคิวก่อนหน้าเสร็จ"
+
+                with st.container():
+                    st.markdown(
+                        f"<div class='{card_style_class}'><div class='operator-status-banner {card_status_class}'>"
+                        f"{html.escape(card_status_text)}</div></div>",
+                        unsafe_allow_html=True
+                    )
+                    if is_step_finished:
+                        fin_dt = parse_flexible_datetime(s_finish)
+                        finish_txt = fin_dt.strftime('%d/%m %H:%M') if (fin_dt is not None and pd.notna(fin_dt)) else '-'
+                        st.caption(f"**ขั้นตอน:** <span style='color:#059669; font-weight:800;'>🟩 เสร็จสิ้นแล้ว (จบงาน: {finish_txt})</span>", unsafe_allow_html=True)
+                    elif is_step_running:
+                        st_parsed = parse_flexible_datetime(current_step_item.get("started_at"))
+                        if (st_parsed is None or pd.isna(st_parsed)) and current_step_index == 0:
+                            st_parsed = parse_flexible_datetime(s_start)
+                        if st_parsed is None or pd.isna(st_parsed):
+                            st.warning("ไม่พบเวลาเริ่มของ Step ปัจจุบัน จึงไม่ใช้เวลา Drawing แทน กรุณาตรวจข้อมูลหรือเริ่มเวลารอบใหม่เมื่อยืนยันเวลาได้")
+                        start_txt = st_parsed.strftime('%H:%M น.') if (st_parsed is not None and pd.notna(st_parsed)) else '-'
+                        step_start_epoch = to_bangkok_epoch_ms(st_parsed)
+                        current_step_paused = safe_float(current_step_item.get("paused_seconds"), 0.0)
+                        step_render_now = get_bangkok_now().replace(tzinfo=None)
+                        step_base_work_seconds = int(get_net_actual_work_seconds(st_parsed, step_render_now, current_step_paused)) if st_parsed is not None else 0
+                        step_render_epoch = to_bangkok_epoch_ms(step_render_now)
+                        st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' data-base-work-seconds='{step_base_work_seconds}' data-render-epoch='{step_render_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
+                        if is_running_overdue:
+                            st.error(f"🚨 งานนี้กำลังผลิตและเกินเวลาจบตามแผนแล้ว {overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที")
+                    elif is_step_hold:
+                        st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800; font-size:13.5px;'>{pause_status_html}</span>", unsafe_allow_html=True)
+                    else:
+                        if can_start:
+                            st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800;'>🟧 พร้อมเริ่มงาน (Ready to Start)</span>", unsafe_allow_html=True)
+                        else:
+                            st.caption(f"**ขั้นตอน:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับคิวก่อนหน้าตามแผน</span>", unsafe_allow_html=True)
+
+                    if not is_step_finished:
+                        if is_step_hold:
+                            resume_sequence_blocked = bool(
+                                piece_mode and target_id != piece_resume_allowed_id
                             )
-                            edit_col, delete_col = st.columns(2)
-                            with edit_col:
-                                save_step_name = st.form_submit_button(
-                                    "💾 บันทึกชื่อ Step", disabled=step_locked, use_container_width=True
+                            resume_blocked = blocking_running_row is not None or resume_sequence_blocked
+                            if blocking_running_row is not None:
+                                st.warning(f"🔒 ยัง Resume ไม่ได้: {selected_m} กำลังรัน {blocking_running_text} กรุณาพักหรือจบงานนั้นก่อน")
+                            elif resume_sequence_blocked:
+                                st.info("🔒 โหมดรันทีละคิว: ต้อง Resume และ Finish คิวพักลำดับก่อนหน้าให้เสร็จก่อน")
+                            if st.button("▶️ Resume Step เดิม (แก้ไขพร้อมแล้ว)", key=f"btn_resume_{target_id}", type="primary", disabled=resume_blocked, use_container_width=True):
+                                live_blocker = get_other_running_job(selected_m, target_id)
+                                if live_blocker:
+                                    st.error(f"Resume ไม่ได้ เพราะเครื่องกำลังรัน {running_job_label(live_blocker)}")
+                                    st.stop()
+                                if piece_mode:
+                                    # ตรวจลำดับซ้ำจากสถานะล่าสุด เพื่อกันการเปิดหลายหน้าจอแล้วกดข้ามคิว
+                                    fetch_jobs_from_supabase.clear()
+                                    fresh_resume_jobs = fetch_jobs_from_supabase()
+                                    fresh_machine_jobs = fresh_resume_jobs[
+                                        fresh_resume_jobs["เลือกเครื่องจักร"].eq(selected_m) &
+                                        fresh_resume_jobs["ID"].apply(safe_int).isin(active_queue_order_ids)
+                                    ].copy()
+                                    fresh_status_by_id = {
+                                        safe_int(row["ID"]): safe_str(row.get("สถานะงาน"), "")
+                                        for _, row in fresh_machine_jobs.iterrows()
+                                    }
+                                    fresh_first_paused_id = next((
+                                        queue_id for queue_id in active_queue_order_ids
+                                        if "พักงาน" in fresh_status_by_id.get(queue_id, "")
+                                    ), None)
+                                    if fresh_first_paused_id != target_id:
+                                        st.error("Resume ไม่ได้: คิวนี้ไม่ใช่คิวพักลำดับแรก กรุณารีเฟรชและทำคิวก่อนหน้าให้เสร็จก่อน")
+                                        st.stop()
+                                resume_now = get_bangkok_now().replace(tzinfo=None)
+                                resume_payload = {"status": "🟦 กำลังผลิต", "hold_started_at": None}
+                                hold_started_dt = parse_flexible_datetime(s_hold_started)
+                                if hold_started_dt is not None and pd.notna(hold_started_dt):
+                                    pause_delta = get_work_seconds_between(hold_started_dt, resume_now)
+                                    resume_payload["paused_seconds"] = s_paused_seconds + pause_delta
+                                    current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + pause_delta
+                                resume_payload["step_progress"] = step_progress
+                                if parse_flexible_datetime(s_start) is None:
+                                    resume_payload["actual_start"] = resume_now.strftime("%Y-%m-%d %H:%M:%S")
+                                if update_supabase_job(target_id, resume_payload):
+                                    log_job_event(
+                                        target_id, plan_code, drawing_code, selected_m, "Resume Step",
+                                        current_step_index + 1, current_step_name
+                                    )
+                                    st.toast("เริ่มรัน Step เดิมต่อเรียบร้อย", icon="▶️")
+                                    st.rerun()
+                                else:
+                                    st.error("Resume ไม่สำเร็จ")
+                        elif is_step_running:
+                            c_btn_hold, c_btn_finish = st.columns([2.5, 2])
+                            with c_btn_hold:
+                                with st.expander("🛑 พัก Step", expanded=False):
+                                    with st.form(key=f"pause_step_form_{target_id}"):
+                                        pause_reason = st.selectbox("เหตุผลการพัก", PAUSE_REASONS, key=f"pause_reason_{target_id}")
+                                        pause_note = st.text_area(
+                                            "หมายเหตุเพิ่มเติม", placeholder="กรอกรายละเอียด โดยเฉพาะเมื่อเลือก ‘อื่น ๆ’",
+                                            key=f"pause_note_{target_id}"
+                                        )
+                                        pause_submitted = st.form_submit_button("🛑 ยืนยันพัก Step", use_container_width=True)
+                                    if pause_submitted:
+                                        if pause_reason == "อื่น ๆ" and not pause_note.strip():
+                                            st.warning("กรุณากรอกหมายเหตุเมื่อเลือก ‘อื่น ๆ’")
+                                        else:
+                                            pause_now_str = get_bangkok_str()
+                                            if update_supabase_job(target_id, {
+                                                "status": "🟨 พักงาน (รอวัสดุ)", "hold_started_at": pause_now_str,
+                                                "step_progress": step_progress
+                                            }):
+                                                log_job_event(
+                                                    target_id, plan_code, drawing_code, selected_m, "Pause Step",
+                                                    current_step_index + 1, current_step_name, pause_reason, pause_note
+                                                )
+                                                st.toast("พัก Step และหยุดนับเวลาเดินสุทธิแล้ว", icon="🛑")
+                                                st.rerun()
+                                            else:
+                                                st.error("เปลี่ยนสถานะพักงานไม่สำเร็จ")
+                            with c_btn_finish:
+                                has_next_step = current_step_index < len(tracked_steps) - 1
+                                finish_button_label = (
+                                    f"✅ จบ Step {current_step_index + 1} → เริ่ม Step {current_step_index + 2}"
+                                    if has_next_step else "🏁 Finish Drawing (ครบทุก Step)"
                                 )
-                            with delete_col:
-                                delete_step = st.form_submit_button(
-                                    "🗑️ ลบ Step", disabled=not delete_allowed, use_container_width=True
+                                if st.button(finish_button_label, key=f"btn_finish_step_{target_id}", type="primary", use_container_width=True):
+                                    # แตะครั้งแรกเป็นเพียงการเปิดกล่องยืนยัน ห้ามบันทึก Finish ทันที
+                                    st.session_state.pending_shop_finish_confirmation = {
+                                        "job_id": target_id,
+                                        "machine": selected_m,
+                                        "step_index": current_step_index,
+                                        "armed_at": get_bangkok_str(),
+                                        "nonce": uuid.uuid4().hex,
+                                    }
+                                    st.rerun()
+
+                                pending_finish = st.session_state.get("pending_shop_finish_confirmation")
+                                pending_matches = bool(
+                                    pending_finish
+                                    and safe_int(pending_finish.get("job_id")) == target_id
+                                    and safe_str(pending_finish.get("machine")) == safe_str(selected_m)
+                                    and safe_int(pending_finish.get("step_index"), -1) == current_step_index
                                 )
-                        if save_step_name:
-                            clean_name = edited_name.strip()
-                            if not clean_name:
-                                st.warning("ชื่อ Step ต้องไม่เป็นค่าว่าง")
+                                if pending_matches:
+                                    confirmation_started = parse_flexible_datetime(pending_finish.get("armed_at"))
+                                    confirmation_now = get_bangkok_now().replace(tzinfo=None)
+                                    confirmation_expired = bool(
+                                        confirmation_started is None
+                                        or (confirmation_now - confirmation_started).total_seconds() > 30
+                                    )
+                                    if confirmation_expired:
+                                        st.session_state.pop("pending_shop_finish_confirmation", None)
+                                        st.warning("⌛ การยืนยัน Finish หมดอายุแล้ว กรุณากดปุ่ม Finish ใหม่")
+                                    else:
+                                        finish_action_text = (
+                                            f"จบ Step {current_step_index + 1} และเริ่ม Step {current_step_index + 2}"
+                                            if has_next_step else "Finish Drawing นี้"
+                                        )
+                                        st.warning(
+                                            f"⚠️ ยืนยันว่าจะ {finish_action_text} หรือไม่?  \n"
+                                            f"แผนงาน: **{plan_code}** | Drawing: **{drawing_code}** | Step: **{current_step_name}**"
+                                        )
+                                        confirm_finish_col, cancel_finish_col = st.columns(2)
+                                        with cancel_finish_col:
+                                            cancel_finish = st.button(
+                                                "✖️ ยกเลิก",
+                                                key=f"cancel_finish_step_{target_id}_{pending_finish.get('nonce', 'current')}",
+                                                use_container_width=True,
+                                            )
+                                        with confirm_finish_col:
+                                            confirm_finish = st.button(
+                                                "✅ ยืนยัน Finish",
+                                                key=f"confirm_finish_step_{target_id}_{pending_finish.get('nonce', 'current')}",
+                                                type="primary",
+                                                use_container_width=True,
+                                            )
+
+                                        if cancel_finish:
+                                            st.session_state.pop("pending_shop_finish_confirmation", None)
+                                            st.rerun()
+
+                                        if confirm_finish:
+                                            # อ่านสถานะล่าสุดก่อนบันทึก ป้องกันการกดยืนยันซ้ำหรือสถานะถูกเปลี่ยนจากหน้าจออื่น
+                                            fetch_jobs_from_supabase.clear()
+                                            fresh_finish_jobs = fetch_jobs_from_supabase()
+                                            fresh_finish_rows = fresh_finish_jobs[
+                                                fresh_finish_jobs["ID"].apply(safe_int).eq(target_id)
+                                            ].copy()
+                                            if fresh_finish_rows.empty:
+                                                st.session_state.pop("pending_shop_finish_confirmation", None)
+                                                st.error("ไม่พบคิวงานนี้แล้ว กรุณารีเฟรชหน้าจอ")
+                                                st.rerun()
+
+                                            fresh_finish_row = fresh_finish_rows.iloc[0]
+                                            fresh_finish_status = safe_str(fresh_finish_row.get("สถานะงาน"), "")
+                                            fresh_step_progress = normalize_step_progress(
+                                                fresh_finish_row.get("ติดตาม Step"),
+                                                fresh_finish_row.get("ขั้นตอน (Step)"),
+                                                fresh_finish_status,
+                                                fresh_finish_row.get("เริ่มจริง"),
+                                                fresh_finish_row.get("เสร็จจริง"),
+                                            )
+                                            fresh_step_index = safe_int(fresh_step_progress.get("current_index"), 0)
+                                            fresh_tracked_steps = fresh_step_progress.get("steps", [])
+                                            if (
+                                                "กำลังผลิต" not in fresh_finish_status
+                                                or fresh_step_index != current_step_index
+                                                or fresh_step_index >= len(fresh_tracked_steps)
+                                            ):
+                                                st.session_state.pop("pending_shop_finish_confirmation", None)
+                                                st.error("⚠️ สถานะหรือ Step ของคิวเปลี่ยนไปแล้ว ระบบยังไม่บันทึก Finish กรุณาตรวจสอบใหม่")
+                                                st.rerun()
+
+                                            step_finish_dt = get_bangkok_now().replace(tzinfo=None)
+                                            step_finish_str = step_finish_dt.strftime("%Y-%m-%d %H:%M:%S")
+                                            fresh_tracked_steps[fresh_step_index]["finished_at"] = step_finish_str
+                                            fresh_has_next_step = fresh_step_index < len(fresh_tracked_steps) - 1
+                                            if fresh_has_next_step:
+                                                fresh_step_progress["current_index"] = fresh_step_index + 1
+                                                fresh_tracked_steps[fresh_step_index + 1]["started_at"] = step_finish_str
+                                                finish_payload = {
+                                                    "status": "🟦 กำลังผลิต", "actual_finish": None,
+                                                    "hold_started_at": None, "step_progress": fresh_step_progress,
+                                                }
+                                            else:
+                                                finish_payload = {
+                                                    "status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": step_finish_str,
+                                                    "hold_started_at": None, "step_progress": fresh_step_progress,
+                                                }
+
+                                            if update_supabase_job(target_id, finish_payload):
+                                                st.session_state.pop("pending_shop_finish_confirmation", None)
+                                                if fresh_has_next_step:
+                                                    next_step_name = safe_str(fresh_tracked_steps[fresh_step_index + 1].get("name"), "Step ถัดไป")
+                                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Step", fresh_step_index + 1, current_step_name)
+                                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Start Step", fresh_step_index + 2, next_step_name)
+                                                    st.toast(f"เริ่ม Step ถัดไป: {next_step_name}", icon="➡️")
+                                                else:
+                                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Drawing", fresh_step_index + 1, current_step_name)
+                                                    st.session_state.operator_finish_feedback = build_operator_finish_feedback(
+                                                        pd.DataFrame([fresh_finish_row]), step_finish_dt
+                                                    )
+                                                st.rerun()
+                                            else:
+                                                st.error("บันทึกจบ Step ไม่สำเร็จ")
+                        else:
+                            if can_start:
+                                if st.button(f"🚀 Start Step {current_step_index + 1}: {current_step_name}", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
+                                    live_blocker = get_other_running_job(selected_m, target_id)
+                                    if live_blocker:
+                                        st.error(f"Start ไม่ได้ เพราะเครื่องกำลังรัน {running_job_label(live_blocker)}")
+                                        st.stop()
+                                    start_now = get_bangkok_now().replace(tzinfo=None)
+                                    start_now_str = start_now.strftime("%Y-%m-%d %H:%M:%S")
+                                    pause_delta = 0.0
+                                    pending_pause_dt = parse_flexible_datetime(current_step_item.get("pending_pause_started_at"))
+                                    if current_step_item.get("started_at") and pending_pause_dt is not None and pd.notna(pending_pause_dt):
+                                        pause_delta = get_work_seconds_between(pending_pause_dt, start_now)
+                                        current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + pause_delta
+                                    elif not current_step_item.get("started_at"):
+                                        current_step_item["started_at"] = start_now_str
+                                    current_step_item.pop("pending_pause_started_at", None)
+                                    start_payload = {
+                                        "status": "🟦 กำลังผลิต", "actual_finish": None,
+                                        "hold_started_at": None, "step_progress": step_progress,
+                                        "paused_seconds": s_paused_seconds + pause_delta,
+                                    }
+                                    if parse_flexible_datetime(s_start) is None:
+                                        start_payload["actual_start"] = start_now_str
+                                    if update_supabase_job(target_id, start_payload):
+                                        log_job_event(target_id, plan_code, drawing_code, selected_m, "Start Step", current_step_index + 1, current_step_name)
+                                        st.toast(f"เริ่ม Step {current_step_index + 1}: {current_step_name}", icon="🚀")
+                                        st.rerun()
+                                    else:
+                                        st.error("เริ่มงานไม่สำเร็จ")
                             else:
-                                tracked_steps[idx]["name"] = clean_name
+                                st.button("🚀 Start — รอคิวก่อนหน้า", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
+                                if is_step_waiting and blocking_running_text:
+                                    st.caption(f"🔒 เครื่องกำลังรัน {blocking_running_text}")
+
+                if "Batch" not in run_mode and (is_step_running or is_step_hold):
+                    with st.expander("↩️ ยกเลิกการเริ่มผิด → คืนเป็นรอคิว", expanded=False):
+                        st.caption("ใช้เมื่อกด Start ผิดและยังไม่ได้ทำงานจริง คืนเฉพาะการเริ่ม Step แรกที่ยังไม่มี Step จบ")
+                        st.info(f"แผน {plan_code} | Drawing {drawing_code} | Step {current_step_name}")
+                        with st.form(f"cancel_wrong_start_{target_id}"):
+                            cancel_reason = st.text_input("เหตุผลที่ยกเลิก *", placeholder="เช่น เลือกคิวผิด ยังไม่ได้ผลิตจริง")
+                            cancel_confirm = st.checkbox("ยืนยันว่าเริ่มผิดและยังไม่ได้ผลิตจริง เวลาที่กดผิดจะไม่ถูกนำมาคำนวณ")
+                            cancel_submit = st.form_submit_button("↩️ ยืนยันยกเลิกการเริ่มผิด", use_container_width=True)
+                        if cancel_submit:
+                            if not cancel_confirm or not cancel_reason.strip():
+                                st.warning("กรอกเหตุผลและติ๊กยืนยันก่อนคืนคิว")
+                            else:
+                                cancelled, cancel_message = cancel_wrong_job_start(target_id, selected_m, s_start, cancel_reason)
+                                if cancelled:
+                                    st.session_state.pop("batch_bulk_guard", None)
+                                    st.session_state.pop("pending_shop_finish_confirmation", None)
+                                    st.session_state["operator_cancel_start_feedback"] = cancel_message
+                                    st.session_state["operator_reset_piece_mode"] = True
+                                    st.rerun()
+                                else:
+                                    st.error(cancel_message)
+
+                current_step_names = [item.get("name", f"Step {idx + 1}") for idx, item in enumerate(tracked_steps)]
+                st.markdown("**รายการ Step และเวลาทำงานจริงในคิวนี้**")
+                step_status_lines = []
+                for idx, item in enumerate(tracked_steps):
+                    if item.get("finished_at"):
+                        icon = "✅"
+                        state_text = f"เสร็จแล้ว — {format_duration_short(step_elapsed_seconds(item))}"
+                    elif idx == current_step_index and is_step_running:
+                        icon = "🔵"
+                        state_text = f"กำลังทำ — {format_duration_short(step_elapsed_seconds(item))}"
+                    elif idx == current_step_index and is_step_hold:
+                        icon = "⏸️"
+                        hold_dt = parse_flexible_datetime(s_hold_started)
+                        state_text = f"พักงาน — {format_duration_short(step_elapsed_seconds(item, hold_dt))}"
+                    else:
+                        icon = "⚪"
+                        state_text = "รอทำ"
+                    if item.get("timing_cancelled"):
+                        state_text = "เสร็จแล้วก่อนเริ่มรอบใหม่ — ไม่นำเวลาเดิมมาคำนวณ"
+                    step_status_lines.append(f"{icon} **Step {idx + 1}:** {item.get('name', '-')} · {state_text}")
+                st.markdown("  \n".join(step_status_lines))
+
+                if not is_step_finished:
+                    with st.expander("🛠️ ตั้งชื่อ Step เริ่มต้น (แก้ชื่อ / ลบ)", expanded=False):
+                        st.caption("Step ที่เสร็จแล้วจะถูกล็อก และ Step ที่เริ่มจับเวลาแล้วจะไม่สามารถลบได้")
+                        for idx, item in enumerate(tracked_steps):
+                            step_locked = bool(item.get("finished_at"))
+                            delete_allowed = (
+                                len(tracked_steps) > 1
+                                and not item.get("started_at")
+                                and not item.get("finished_at")
+                            )
+                            with st.form(key=f"manage_step_form_{target_id}_{idx}"):
+                                edited_name = st.text_input(
+                                    f"Step {idx + 1}", value=item.get("name", ""),
+                                    disabled=step_locked, key=f"edit_step_name_{target_id}_{idx}"
+                                )
+                                edit_col, delete_col = st.columns(2)
+                                with edit_col:
+                                    save_step_name = st.form_submit_button(
+                                        "💾 บันทึกชื่อ Step", disabled=step_locked, use_container_width=True
+                                    )
+                                with delete_col:
+                                    delete_step = st.form_submit_button(
+                                        "🗑️ ลบ Step", disabled=not delete_allowed, use_container_width=True
+                                    )
+                            if save_step_name:
+                                clean_name = edited_name.strip()
+                                if not clean_name:
+                                    st.warning("ชื่อ Step ต้องไม่เป็นค่าว่าง")
+                                else:
+                                    tracked_steps[idx]["name"] = clean_name
+                                    combined_names = " → ".join(step.get("name", "-") for step in tracked_steps)
+                                    saved, error = update_job_step_preserving_state(target_id, combined_names, step_progress)
+                                    if saved:
+                                        log_job_event(target_id, plan_code, drawing_code, selected_m, "Edit Step", idx + 1, clean_name)
+                                        st.toast(f"แก้ชื่อ Step {idx + 1} เรียบร้อย", icon="💾")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"แก้ชื่อไม่สำเร็จ: {error}")
+                            if delete_step:
+                                deleted_name = tracked_steps[idx].get("name", f"Step {idx + 1}")
+                                tracked_steps.pop(idx)
+                                if idx < step_progress["current_index"]:
+                                    step_progress["current_index"] -= 1
+                                step_progress["current_index"] = max(0, min(step_progress["current_index"], len(tracked_steps) - 1))
                                 combined_names = " → ".join(step.get("name", "-") for step in tracked_steps)
                                 saved, error = update_job_step_preserving_state(target_id, combined_names, step_progress)
                                 if saved:
-                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Edit Step", idx + 1, clean_name)
-                                    st.toast(f"แก้ชื่อ Step {idx + 1} เรียบร้อย", icon="💾")
+                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Delete Step", idx + 1, deleted_name)
+                                    st.toast(f"ลบ Step ‘{deleted_name}’ เรียบร้อย", icon="🗑️")
                                     st.rerun()
                                 else:
-                                    st.error(f"แก้ชื่อไม่สำเร็จ: {error}")
-                        if delete_step:
-                            deleted_name = tracked_steps[idx].get("name", f"Step {idx + 1}")
-                            tracked_steps.pop(idx)
-                            if idx < step_progress["current_index"]:
-                                step_progress["current_index"] -= 1
-                            step_progress["current_index"] = max(0, min(step_progress["current_index"], len(tracked_steps) - 1))
-                            combined_names = " → ".join(step.get("name", "-") for step in tracked_steps)
-                            saved, error = update_job_step_preserving_state(target_id, combined_names, step_progress)
-                            if saved:
-                                log_job_event(target_id, plan_code, drawing_code, selected_m, "Delete Step", idx + 1, deleted_name)
-                                st.toast(f"ลบ Step ‘{deleted_name}’ เรียบร้อย", icon="🗑️")
-                                st.rerun()
-                            else:
-                                st.error(f"ลบ Step ไม่สำเร็จ: {error}")
+                                    st.error(f"ลบ Step ไม่สำเร็จ: {error}")
 
-            if is_step_waiting:
-                other_waiting_options = []
-                for other_queue_idx, other_row in m_active.iterrows():
-                    other_status = safe_str(other_row.get("สถานะงาน"))
-                    other_id = safe_int(other_row.get("ID"))
-                    if other_id == target_id or "รอคิว" not in other_status:
-                        continue
-                    other_waiting_options.append({
-                        "id": other_id,
-                        "queue_no": other_queue_idx + 1,
-                        "plan_code": safe_str(other_row.get("แผนงาน"), "-"),
-                        "drawing_name": safe_str(other_row.get("ชื่อ Drawing."), "-")
-                    })
+                if is_step_waiting:
+                    other_waiting_options = []
+                    for other_queue_idx, other_row in m_active.iterrows():
+                        other_status = safe_str(other_row.get("สถานะงาน"))
+                        other_id = safe_int(other_row.get("ID"))
+                        if other_id == target_id or "รอคิว" not in other_status:
+                            continue
+                        other_waiting_options.append({
+                            "id": other_id,
+                            "queue_no": other_queue_idx + 1,
+                            "plan_code": safe_str(other_row.get("แผนงาน"), "-"),
+                            "drawing_name": safe_str(other_row.get("ชื่อ Drawing."), "-")
+                        })
 
-                with st.expander("🔀 สลับลำดับคิว", expanded=False):
-                    if not other_waiting_options:
-                        st.caption("เครื่องนี้ยังไม่มีคิวรอรายการอื่นให้สลับ")
-                    else:
-                        st.caption(
-                            "สลับได้เฉพาะคิวรอของเครื่องเดียวกัน งานที่กำลังรัน/พักจะไม่ถูกย้าย "
-                            "และระบบจะคำนวณเวลาเริ่มของคิวรอทั้งหมดใหม่ตามลูกโซ่"
-                        )
-                        option_by_id = {item["id"]: item for item in other_waiting_options}
-                        with st.form(key=f"swap_queue_form_{target_id}"):
-                            swap_target_id = st.selectbox(
-                                "เลือกคิวที่ต้องการสลับตำแหน่ง",
-                                options=list(option_by_id),
-                                format_func=lambda job_id: (
-                                    f"คิวที่ {option_by_id[job_id]['queue_no']} | "
-                                    f"{option_by_id[job_id]['plan_code']} | "
-                                    f"{option_by_id[job_id]['drawing_name']}"
-                                ),
-                                key=f"swap_queue_target_{target_id}"
+                    with st.expander("🔀 สลับลำดับคิว", expanded=False):
+                        if not other_waiting_options:
+                            st.caption("เครื่องนี้ยังไม่มีคิวรอรายการอื่นให้สลับ")
+                        else:
+                            st.caption(
+                                "สลับได้เฉพาะคิวรอของเครื่องเดียวกัน งานที่กำลังรัน/พักจะไม่ถูกย้าย "
+                                "และระบบจะคำนวณเวลาเริ่มของคิวรอทั้งหมดใหม่ตามลูกโซ่"
                             )
-                            selected_swap = option_by_id[swap_target_id]
-                            st.info(
-                                f"ตัวอย่างหลังยืนยัน: คิวที่ {queue_idx + 1} ({plan_code} / {drawing_code}) "
-                                f"↔ คิวที่ {selected_swap['queue_no']} "
-                                f"({selected_swap['plan_code']} / {selected_swap['drawing_name']})"
-                            )
-                            swap_reason = st.selectbox(
-                                "เหตุผลการสลับคิว",
-                                ["ปรับลำดับการผลิต", "งานด่วนแทรก", "ความพร้อมวัสดุ/Tool", "อื่น ๆ"],
-                                key=f"swap_queue_reason_{target_id}"
-                            )
-                            swap_note = st.text_input(
-                                "หมายเหตุ (ถ้ามี)", key=f"swap_queue_note_{target_id}"
-                            )
-                            confirm_swap = st.checkbox(
-                                "ยืนยันการสลับลำดับคิวและคำนวณเวลาลูกโซ่ใหม่",
-                                key=f"confirm_swap_queue_{target_id}"
-                            )
-                            swap_submitted = st.form_submit_button(
-                                "🔀 สลับลำดับคิว", type="secondary", use_container_width=True
-                            )
-
-                        if swap_submitted:
-                            if not confirm_swap:
-                                st.warning("กรุณาติ๊กยืนยันก่อนสลับลำดับคิว")
-                            else:
-                                swapped, swap_error, changed_rows = reorder_waiting_queue(
-                                    selected_m, target_id, swap_target_id
+                            option_by_id = {item["id"]: item for item in other_waiting_options}
+                            with st.form(key=f"swap_queue_form_{target_id}"):
+                                swap_target_id = st.selectbox(
+                                    "เลือกคิวที่ต้องการสลับตำแหน่ง",
+                                    options=list(option_by_id),
+                                    format_func=lambda job_id: (
+                                        f"คิวที่ {option_by_id[job_id]['queue_no']} | "
+                                        f"{option_by_id[job_id]['plan_code']} | "
+                                        f"{option_by_id[job_id]['drawing_name']}"
+                                    ),
+                                    key=f"swap_queue_target_{target_id}"
                                 )
-                                if swapped:
-                                    event_note = (
-                                        f"สลับคิว {plan_code}/{drawing_code} กับ "
-                                        f"{selected_swap['plan_code']}/{selected_swap['drawing_name']}"
+                                selected_swap = option_by_id[swap_target_id]
+                                st.info(
+                                    f"ตัวอย่างหลังยืนยัน: คิวที่ {queue_idx + 1} ({plan_code} / {drawing_code}) "
+                                    f"↔ คิวที่ {selected_swap['queue_no']} "
+                                    f"({selected_swap['plan_code']} / {selected_swap['drawing_name']})"
+                                )
+                                swap_reason = st.selectbox(
+                                    "เหตุผลการสลับคิว",
+                                    ["ปรับลำดับการผลิต", "งานด่วนแทรก", "ความพร้อมวัสดุ/Tool", "อื่น ๆ"],
+                                    key=f"swap_queue_reason_{target_id}"
+                                )
+                                swap_note = st.text_input(
+                                    "หมายเหตุ (ถ้ามี)", key=f"swap_queue_note_{target_id}"
+                                )
+                                confirm_swap = st.checkbox(
+                                    "ยืนยันการสลับลำดับคิวและคำนวณเวลาลูกโซ่ใหม่",
+                                    key=f"confirm_swap_queue_{target_id}"
+                                )
+                                swap_submitted = st.form_submit_button(
+                                    "🔀 สลับลำดับคิว", type="secondary", use_container_width=True
+                                )
+
+                            if swap_submitted:
+                                if not confirm_swap:
+                                    st.warning("กรุณาติ๊กยืนยันก่อนสลับลำดับคิว")
+                                else:
+                                    swapped, swap_error, changed_rows = reorder_waiting_queue(
+                                        selected_m, target_id, swap_target_id
                                     )
-                                    if swap_note.strip():
-                                        event_note += f" | {swap_note.strip()}"
+                                    if swapped:
+                                        event_note = (
+                                            f"สลับคิว {plan_code}/{drawing_code} กับ "
+                                            f"{selected_swap['plan_code']}/{selected_swap['drawing_name']}"
+                                        )
+                                        if swap_note.strip():
+                                            event_note += f" | {swap_note.strip()}"
+                                        log_job_event(
+                                            target_id, plan_code, drawing_code, selected_m, "Swap Queue",
+                                            current_step_index + 1, current_step_name,
+                                            reason=swap_reason, note=event_note
+                                        )
+                                        log_job_event(
+                                            swap_target_id, selected_swap["plan_code"],
+                                            selected_swap["drawing_name"], selected_m, "Swap Queue",
+                                            reason=swap_reason, note=event_note
+                                        )
+                                        st.toast(
+                                            f"สลับคิวเรียบร้อย และคำนวณเวลาใหม่ {len(changed_rows)} คิว",
+                                            icon="🔀"
+                                        )
+                                        st.rerun()
+                                    else:
+                                        st.error(f"สลับคิวไม่สำเร็จ: {swap_error}")
+
+                if is_step_running or is_step_hold or is_step_waiting:
+                    transfer_title = (
+                        "🔁 ย้ายงานไปเครื่องอื่น"
+                        if is_step_waiting else "🔁 ย้าย Step ปัจจุบันและ Step ที่เหลือไปเครื่องอื่น"
+                    )
+                    with st.expander(transfer_title, expanded=False):
+                        if is_step_waiting and not current_step_item.get("started_at"):
+                            st.caption("คิวนี้ยังไม่เคย Start ระบบจะเปลี่ยนเฉพาะเครื่องปลายทาง โดยไม่สร้างเวลาพักหรือเปลี่ยนเวลา Step")
+                        transfer_options = [machine for machine in MACHINE_LIST if machine != selected_m]
+                        with st.form(key=f"transfer_step_form_{target_id}"):
+                            transfer_machine = st.selectbox(
+                                "เลือกเครื่องปลายทาง", transfer_options,
+                                key=f"transfer_machine_{target_id}"
+                            )
+                            confirm_transfer = st.checkbox(
+                                "ยืนยันย้ายไปเครื่องที่เลือกด้านบน", key=f"confirm_transfer_{target_id}"
+                            )
+                            transfer_button_label = (
+                                "🔁 ย้ายงานไปเครื่องอื่น"
+                                if is_step_waiting and not current_step_item.get("started_at")
+                                else "🔁 ย้าย Step ปัจจุบันและ Step ที่เหลือ"
+                            )
+                            transfer_submitted = st.form_submit_button(
+                                transfer_button_label, type="secondary",
+                                use_container_width=True
+                            )
+                        if transfer_submitted:
+                            if not confirm_transfer:
+                                st.warning("กรุณาติ๊กยืนยันการย้ายเครื่องก่อน")
+                            else:
+                                transfer_saved, transfer_error = move_work_order_with_timing(target_id, selected_m, transfer_machine, step_progress)
+                                if transfer_saved:
                                     log_job_event(
-                                        target_id, plan_code, drawing_code, selected_m, "Swap Queue",
+                                        target_id, plan_code, drawing_code, transfer_machine, "Move Machine",
                                         current_step_index + 1, current_step_name,
-                                        reason=swap_reason, note=event_note
+                                        reason="ย้ายเครื่อง",
+                                        note=(
+                                            f"ย้ายงานจาก {selected_m} ไป {transfer_machine}"
+                                            if is_step_waiting and not current_step_item.get("started_at")
+                                            else f"ย้าย Step ปัจจุบันและ Step ที่เหลือจาก {selected_m} ไป {transfer_machine}"
+                                        ),
+                                        from_machine=selected_m, to_machine=transfer_machine
                                     )
-                                    log_job_event(
-                                        swap_target_id, selected_swap["plan_code"],
-                                        selected_swap["drawing_name"], selected_m, "Swap Queue",
-                                        reason=swap_reason, note=event_note
-                                    )
-                                    st.toast(
-                                        f"สลับคิวเรียบร้อย และคำนวณเวลาใหม่ {len(changed_rows)} คิว",
-                                        icon="🔀"
-                                    )
+                                    st.toast(f"ย้ายไป {transfer_machine} แล้ว กรุณา Start ต่อที่เครื่องใหม่", icon="🔁")
                                     st.rerun()
                                 else:
-                                    st.error(f"สลับคิวไม่สำเร็จ: {swap_error}")
+                                    st.error("ย้ายเครื่องไม่สำเร็จ: " + transfer_error)
 
-            if is_step_running or is_step_hold or is_step_waiting:
-                transfer_title = (
-                    "🔁 ย้ายงานไปเครื่องอื่น"
-                    if is_step_waiting else "🔁 ย้าย Step ปัจจุบันและ Step ที่เหลือไปเครื่องอื่น"
-                )
-                with st.expander(transfer_title, expanded=False):
-                    if is_step_waiting and not current_step_item.get("started_at"):
-                        st.caption("คิวนี้ยังไม่เคย Start ระบบจะเปลี่ยนเฉพาะเครื่องปลายทาง โดยไม่สร้างเวลาพักหรือเปลี่ยนเวลา Step")
-                    transfer_options = [machine for machine in MACHINE_LIST if machine != selected_m]
-                    with st.form(key=f"transfer_step_form_{target_id}"):
-                        transfer_machine = st.selectbox(
-                            "เลือกเครื่องปลายทาง", transfer_options,
-                            key=f"transfer_machine_{target_id}"
+                completed_step_seconds = sum(step_elapsed_seconds(item) for item in tracked_steps if item.get("finished_at"))
+                if is_step_finished:
+                    planned_seconds = max(0.0, tot_h * 3600.0)
+                    variance_seconds = completed_step_seconds - planned_seconds
+                    result_text = (
+                        f"เร็วกว่าแผน {format_duration_short(abs(variance_seconds))}"
+                        if variance_seconds <= 0 else f"เกินแผน {format_duration_short(variance_seconds)}"
+                    )
+                    st.info(
+                        f"สรุปครบทุก Step: ใช้จริง {format_duration_short(completed_step_seconds)} | "
+                        f"เวลาแผน {format_duration_short(planned_seconds)} | {result_text}"
+                    )
+
+                with st.expander(f"➕ เพิ่ม Step ในคิวเดิมสำหรับ {plan_code} ({drawing_code})", expanded=False):
+                    st.caption("Step ที่เพิ่มจะอยู่ใน Drawing และคิวเดิม โดยไม่เพิ่มเวลา Setup / Basic / Program และไม่เลื่อนคิวถัดไป")
+                    # แยกเป็น form เฉพาะ ป้องกัน Enter/Click ไปเรียกปุ่มบันทึกชื่อหรือ Finish ด้านบน
+                    with st.form(key=f"add_step_form_{target_id}", clear_on_submit=True):
+                        new_step_input = st.text_input(
+                            "ชื่อ Step เพิ่มเติม:",
+                            value="",
+                            placeholder="เช่น OP20, กลึง, เจียร, เชื่อม",
+                            key=f"new_step_name_input_{target_id}"
                         )
-                        confirm_transfer = st.checkbox(
-                            "ยืนยันย้ายไปเครื่องที่เลือกด้านบน", key=f"confirm_transfer_{target_id}"
-                        )
-                        transfer_button_label = (
-                            "🔁 ย้ายงานไปเครื่องอื่น"
-                            if is_step_waiting and not current_step_item.get("started_at")
-                            else "🔁 ย้าย Step ปัจจุบันและ Step ที่เหลือ"
-                        )
-                        transfer_submitted = st.form_submit_button(
-                            transfer_button_label, type="secondary",
+                        add_step_submitted = st.form_submit_button(
+                            "➕ เพิ่ม Step เข้าคิวเดิม",
+                            type="secondary",
+                            disabled=is_step_finished,
                             use_container_width=True
                         )
-                    if transfer_submitted:
-                        if not confirm_transfer:
-                            st.warning("กรุณาติ๊กยืนยันการย้ายเครื่องก่อน")
+
+                    if add_step_submitted:
+                        new_step_name = new_step_input.strip()
+                        if not new_step_name:
+                            st.warning("กรุณาระบุชื่อ Step ที่ต้องการเพิ่ม")
                         else:
-                            transfer_saved, transfer_error = move_work_order_with_timing(target_id, selected_m, transfer_machine, step_progress)
-                            if transfer_saved:
-                                log_job_event(
-                                    target_id, plan_code, drawing_code, transfer_machine, "Move Machine",
-                                    current_step_index + 1, current_step_name,
-                                    reason="ย้ายเครื่อง",
-                                    note=(
-                                        f"ย้ายงานจาก {selected_m} ไป {transfer_machine}"
-                                        if is_step_waiting and not current_step_item.get("started_at")
-                                        else f"ย้าย Step ปัจจุบันและ Step ที่เหลือจาก {selected_m} ไป {transfer_machine}"
-                                    ),
-                                    from_machine=selected_m, to_machine=transfer_machine
-                                )
-                                st.toast(f"ย้ายไป {transfer_machine} แล้ว กรุณา Start ต่อที่เครื่องใหม่", icon="🔁")
-                                st.rerun()
+                            # หนึ่ง Drawing คือหนึ่งคิวและหนึ่งกรอบเวลา แม้มีหลาย Step
+                            # จึงบันทึก Step เพิ่มในแถวเดิม ห้าม insert งานใหม่หรือคำนวณเวลาเพิ่มซ้ำ
+                            existing_steps = current_step_names
+                            normalized_steps = {normalize_filter_key(part) for part in existing_steps}
+                            if normalize_filter_key(new_step_name) in normalized_steps:
+                                st.warning(f"มี Step ‘{new_step_name}’ อยู่ในคิวนี้แล้ว")
                             else:
-                                st.error("ย้ายเครื่องไม่สำเร็จ: " + transfer_error)
-
-            completed_step_seconds = sum(step_elapsed_seconds(item) for item in tracked_steps if item.get("finished_at"))
-            if is_step_finished:
-                planned_seconds = max(0.0, tot_h * 3600.0)
-                variance_seconds = completed_step_seconds - planned_seconds
-                result_text = (
-                    f"เร็วกว่าแผน {format_duration_short(abs(variance_seconds))}"
-                    if variance_seconds <= 0 else f"เกินแผน {format_duration_short(variance_seconds)}"
-                )
-                st.info(
-                    f"สรุปครบทุก Step: ใช้จริง {format_duration_short(completed_step_seconds)} | "
-                    f"เวลาแผน {format_duration_short(planned_seconds)} | {result_text}"
-                )
-
-            with st.expander(f"➕ เพิ่ม Step ในคิวเดิมสำหรับ {plan_code} ({drawing_code})", expanded=False):
-                st.caption("Step ที่เพิ่มจะอยู่ใน Drawing และคิวเดิม โดยไม่เพิ่มเวลา Setup / Basic / Program และไม่เลื่อนคิวถัดไป")
-                # แยกเป็น form เฉพาะ ป้องกัน Enter/Click ไปเรียกปุ่มบันทึกชื่อหรือ Finish ด้านบน
-                with st.form(key=f"add_step_form_{target_id}", clear_on_submit=True):
-                    new_step_input = st.text_input(
-                        "ชื่อ Step เพิ่มเติม:",
-                        value="",
-                        placeholder="เช่น OP20, กลึง, เจียร, เชื่อม",
-                        key=f"new_step_name_input_{target_id}"
-                    )
-                    add_step_submitted = st.form_submit_button(
-                        "➕ เพิ่ม Step เข้าคิวเดิม",
-                        type="secondary",
-                        disabled=is_step_finished,
-                        use_container_width=True
-                    )
-
-                if add_step_submitted:
-                    new_step_name = new_step_input.strip()
-                    if not new_step_name:
-                        st.warning("กรุณาระบุชื่อ Step ที่ต้องการเพิ่ม")
-                    else:
-                        # หนึ่ง Drawing คือหนึ่งคิวและหนึ่งกรอบเวลา แม้มีหลาย Step
-                        # จึงบันทึก Step เพิ่มในแถวเดิม ห้าม insert งานใหม่หรือคำนวณเวลาเพิ่มซ้ำ
-                        existing_steps = current_step_names
-                        normalized_steps = {normalize_filter_key(part) for part in existing_steps}
-                        if normalize_filter_key(new_step_name) in normalized_steps:
-                            st.warning(f"มี Step ‘{new_step_name}’ อยู่ในคิวนี้แล้ว")
-                        else:
-                            combined_step_name = " → ".join(existing_steps + [new_step_name])
-                            updated_step_progress = normalize_step_progress(
-                                step_progress, combined_step_name, s_status, s_start, s_finish
-                            )
-                            step_saved, step_error = update_job_step_preserving_state(
-                                target_id, combined_step_name, updated_step_progress
-                            )
-                            if step_saved:
-                                log_job_event(
-                                    target_id, plan_code, drawing_code, selected_m, "Add Step",
-                                    len(updated_step_progress["steps"]), new_step_name
+                                combined_step_name = " → ".join(existing_steps + [new_step_name])
+                                updated_step_progress = normalize_step_progress(
+                                    step_progress, combined_step_name, s_status, s_start, s_finish
                                 )
-                                st.toast(f"เพิ่ม Step {new_step_name} ในคิวเดิมเรียบร้อยแล้ว", icon="✅")
-                                st.rerun()
-                            else:
-                                st.error(f"เพิ่ม Step ไม่สำเร็จ: {step_error}")
-            st.write("")
+                                step_saved, step_error = update_job_step_preserving_state(
+                                    target_id, combined_step_name, updated_step_progress
+                                )
+                                if step_saved:
+                                    log_job_event(
+                                        target_id, plan_code, drawing_code, selected_m, "Add Step",
+                                        len(updated_step_progress["steps"]), new_step_name
+                                    )
+                                    st.toast(f"เพิ่ม Step {new_step_name} ในคิวเดิมเรียบร้อยแล้ว", icon="✅")
+                                    st.rerun()
+                                else:
+                                    st.error(f"เพิ่ม Step ไม่สำเร็จ: {step_error}")
+                st.write("")
 
-    components.html("""
-    <script>
-    function tpcNetTimerSeconds(el, startTs) {
-        const renderTs = Number(el.getAttribute('data-render-epoch'));
-        if (!Number.isFinite(renderTs) || renderTs <= 0) return null;
-        const paused = Math.max(0, Number(el.getAttribute('data-paused-seconds') || 0));
-        const fingerprint = startTs + ':' + renderTs + ':' + paused;
-        if (!el._tpcClock || el._tpcClock.fingerprint !== fingerprint) {
-            el._tpcClock = {fingerprint: fingerprint, anchor: performance.now()};
-        }
-        const endTs = renderTs + Math.max(0, performance.now() - el._tpcClock.anchor);
-        const offset = 7 * 3600000;
-        const dayMs = 86400000;
-        let dayStart = Math.floor((startTs + offset) / dayMs) * dayMs - offset;
-        let workMs = 0;
-        for (; dayStart < endTs; dayStart += dayMs) {
-            const day = new Date(dayStart + offset).getUTCDay();
-            const windows = day === 0 ? [] : (day === 6
-                ? [[510,600],[610,720],[780,900],[910,1020]]
-                : [[510,600],[610,720],[780,900],[910,1020],[1050,1200]]);
-            windows.forEach(w => {
-                workMs += Math.max(0, Math.min(endTs, dayStart + w[1]*60000)
-                    - Math.max(startTs, dayStart + w[0]*60000));
-            });
-        }
-        return Math.floor(Math.max(0, workMs / 1000 - paused));
-    }
-        function runLiveStopwatches() {
-            try {
-                const nowTs = new Date().getTime();
-                const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
-                timerEls.forEach(el => {
-                    const startAttr = el.getAttribute('data-start-epoch');
-                    const startTs = parseInt(startAttr, 10);
-                    if (startTs && startTs > 0) {
-                        const totalSecs = tpcNetTimerSeconds(el, startTs);
-                        if (totalSecs === null) { el.innerText = '—'; return; }
-                        const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
-                        const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
-                        const secs = String(totalSecs % 60).padStart(2, '0');
-                        el.innerText = hrs + ":" + mins + ":" + secs;
-                    }
+        components.html("""
+        <script>
+        function tpcNetTimerSeconds(el, startTs) {
+            const renderTs = Number(el.getAttribute('data-render-epoch'));
+            if (!Number.isFinite(renderTs) || renderTs <= 0) return null;
+            const paused = Math.max(0, Number(el.getAttribute('data-paused-seconds') || 0));
+            const fingerprint = startTs + ':' + renderTs + ':' + paused;
+            if (!el._tpcClock || el._tpcClock.fingerprint !== fingerprint) {
+                el._tpcClock = {fingerprint: fingerprint, anchor: performance.now()};
+            }
+            const endTs = renderTs + Math.max(0, performance.now() - el._tpcClock.anchor);
+            const offset = 7 * 3600000;
+            const dayMs = 86400000;
+            let dayStart = Math.floor((startTs + offset) / dayMs) * dayMs - offset;
+            let workMs = 0;
+            for (; dayStart < endTs; dayStart += dayMs) {
+                const day = new Date(dayStart + offset).getUTCDay();
+                const windows = day === 0 ? [] : (day === 6
+                    ? [[510,600],[610,720],[780,900],[910,1020]]
+                    : [[510,600],[610,720],[780,900],[910,1020],[1050,1200]]);
+                windows.forEach(w => {
+                    workMs += Math.max(0, Math.min(endTs, dayStart + w[1]*60000)
+                        - Math.max(startTs, dayStart + w[0]*60000));
                 });
-            } catch (e) {}
+            }
+            return Math.floor(Math.max(0, workMs / 1000 - paused));
         }
-        setInterval(runLiveStopwatches, 1000);
-        runLiveStopwatches();
-    </script>
-    """, height=0)
+            function runLiveStopwatches() {
+                try {
+                    const nowTs = new Date().getTime();
+                    const timerEls = window.parent.document.querySelectorAll('.pes-live-timer');
+                    timerEls.forEach(el => {
+                        const startAttr = el.getAttribute('data-start-epoch');
+                        const startTs = parseInt(startAttr, 10);
+                        if (startTs && startTs > 0) {
+                            const totalSecs = tpcNetTimerSeconds(el, startTs);
+                            if (totalSecs === null) { el.innerText = '—'; return; }
+                            const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
+                            const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
+                            const secs = String(totalSecs % 60).padStart(2, '0');
+                            el.innerText = hrs + ":" + mins + ":" + secs;
+                        }
+                    });
+                } catch (e) {}
+            }
+            setInterval(runLiveStopwatches, 1000);
+            runLiveStopwatches();
+        </script>
+        """, height=0)
 
 # ---------------------------------------------------------
 # VIEW 2: แดชบอร์ดภาพรวมโรงงาน (ล็อก Baseline + รันลูกโซ่ 100%)
