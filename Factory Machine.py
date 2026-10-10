@@ -1775,10 +1775,68 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
             steps[-1]["finished_at"] = finish_dt.strftime("%Y-%m-%d %H:%M:%S")
         current_index = len(steps) - 1
     result = {"steps": steps, "current_index": current_index}
-    for key in ("schedule_mode", "planned_not_before", "restart_history", "timing_restarted_at", "queue_rank", "machine_time_segments", "machine_cost_history_incomplete"):
+    for key in ("schedule_mode", "planned_not_before", "restart_history", "timing_restarted_at", "queue_rank", "machine_time_segments", "machine_cost_history_incomplete", "cancelled_start_history"):
         if key in progress:
             result[key] = progress[key]
     return result
+
+def build_cancel_wrong_start_payload(row, reason, cancelled_at):
+    """คืนเฉพาะการเริ่มครั้งแรกผิด โดยเก็บ snapshot และไม่เปลี่ยนแผน/ลำดับคิว."""
+    if not reason.strip():
+        raise ValueError("กรุณาระบุเหตุผล")
+    if not any(word in safe_str(row.get("status")) for word in ("กำลังผลิต", "พักงาน")):
+        raise ValueError("คืนได้เฉพาะงานกำลังผลิตหรือพักงาน")
+    progress = normalize_step_progress(row.get("step_progress"), row.get("step_name"),
+                                      row.get("status"), row.get("actual_start"), row.get("actual_finish"))
+    steps = progress["steps"]
+    if progress["current_index"] != 0 or row.get("actual_finish") or any(step.get("finished_at") for step in steps):
+        raise ValueError("มี Step ที่ทำเสร็จแล้ว ต้องให้ผู้ดูแลตรวจสอบ ไม่คืนเวลางานนี้อัตโนมัติ")
+    if any(step.get("started_at") for step in steps[1:]) or progress.get("machine_time_segments"):
+        raise ValueError("มีเวลาของ Step อื่นหรือประวัติย้ายเครื่อง ต้องให้ผู้ดูแลตรวจสอบ")
+    if not steps[0].get("started_at") and not row.get("actual_start"):
+        raise ValueError("ไม่พบเวลาเริ่มที่ต้องยกเลิก")
+    snapshot = json.loads(json.dumps({key: row.get(key) for key in
+        ("status", "actual_start", "actual_finish", "paused_seconds", "hold_started_at", "step_progress")}, default=str))
+    history = list(progress.get("cancelled_start_history", []))
+    history.append({"cancelled_at": cancelled_at, "reason": reason.strip(), "before": snapshot})
+    progress["cancelled_start_history"] = history
+    steps[0].update(started_at=None, finished_at=None, paused_seconds=0.0,
+                    pending_pause_started_at=None, timing_cancelled=False)
+    return {"status": "🟧 รอคิวผลิต", "actual_start": None, "actual_finish": None,
+            "paused_seconds": 0.0, "hold_started_at": None, "step_progress": progress}
+
+
+def cancel_wrong_job_start(job_id, machine, expected_start, reason):
+    """อ่านสดและบันทึกแบบตรวจสถานะเดิมก่อนคืนคิว."""
+    try:
+        endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
+        res = requests.get(endpoint, headers=get_supabase_headers(),
+                           params={"id": f"eq.{int(job_id)}", "select": "*"}, timeout=8)
+        rows = res.json() if res.status_code == 200 else []
+        if len(rows) != 1:
+            return False, "อ่านใบงานล่าสุดไม่สำเร็จ"
+        row = rows[0]
+        if row.get("machine_name") != machine or parse_flexible_datetime(row.get("actual_start")) != parse_flexible_datetime(expected_start):
+            return False, "เครื่องหรือเวลาเริ่มเปลี่ยนแล้ว กรุณารีเฟรชตรวจใหม่"
+        payload = build_cancel_wrong_start_payload(row, reason, get_bangkok_str())
+        params = {"id": f"eq.{int(job_id)}", "status": "eq." + row["status"]}
+        for key in ("actual_start", "actual_finish", "hold_started_at", "paused_seconds", "step_progress"):
+            value = row.get(key)
+            params[key] = "is.null" if value is None else "eq." + (
+                json.dumps(value, ensure_ascii=False, separators=(",", ":")) if isinstance(value, (dict, list)) else str(value))
+        headers = get_supabase_headers().copy()
+        headers["Prefer"] = "return=representation"
+        result = requests.patch(endpoint, headers=headers, params=params, json=payload, timeout=8)
+        if result.status_code != 200 or not result.json():
+            return False, "ยังไม่คืนคิว: ข้อมูลเปลี่ยนระหว่างยืนยัน หรือบันทึกไม่สำเร็จ กรุณารีเฟรชตรวจใหม่"
+        st.cache_data.clear()
+        logged = log_job_event(job_id, row.get("plan_code"), row.get("drawing_name"), machine,
+                               "Cancel Wrong Start", 1, payload["step_progress"]["steps"][0]["name"],
+                               reason=reason, note="ยกเลิกการเริ่มผิดและคืนเป็นรอคิว; เก็บข้อมูลเดิมในประวัติใบงาน")
+        return True, "คืนเป็นรอคิวแล้ว" if logged else "คืนเป็นรอคิวแล้ว เก็บข้อมูลเดิมในใบงาน แต่บันทึกเหตุการณ์แยกไม่สำเร็จ"
+    except Exception as exc:
+        return False, str(exc)
+
 
 def step_elapsed_seconds(step_item, now_dt=None):
     if step_item.get("timing_cancelled"):
@@ -6120,6 +6178,9 @@ elif st.session_state.current_view == "👤 โหมดผู้ปฏิบั
 elif st.session_state.current_view == "👷 โหมดหน้าเครื่อง":
     st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
 
+    cancel_feedback = st.session_state.pop("operator_cancel_start_feedback", None)
+    if cancel_feedback:
+        st.success(cancel_feedback)
     operator_finish_feedback = st.session_state.pop("operator_finish_feedback", None)
     if operator_finish_feedback:
         feedback_kind = operator_finish_feedback.get("kind", "info")
@@ -7027,6 +7088,27 @@ elif st.session_state.current_view == "👷 โหมดหน้าเครื
                             st.button("🚀 Start — รอคิวก่อนหน้า", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
                             if is_step_waiting and blocking_running_text:
                                 st.caption(f"🔒 เครื่องกำลังรัน {blocking_running_text}")
+
+            if is_step_running or is_step_hold:
+                with st.expander("↩️ ยกเลิกการเริ่มผิด → คืนเป็นรอคิว", expanded=False):
+                    st.caption("ใช้เมื่อกด Start ผิดและยังไม่ได้ทำงานจริง คืนเฉพาะการเริ่ม Step แรกที่ยังไม่มี Step จบ")
+                    st.info(f"แผน {plan_code} | Drawing {drawing_code} | Step {current_step_name}")
+                    with st.form(f"cancel_wrong_start_{target_id}"):
+                        cancel_reason = st.text_input("เหตุผลที่ยกเลิก *", placeholder="เช่น เลือกคิวผิด ยังไม่ได้ผลิตจริง")
+                        cancel_confirm = st.checkbox("ยืนยันว่าเริ่มผิดและยังไม่ได้ผลิตจริง เวลาที่กดผิดจะไม่ถูกนำมาคำนวณ")
+                        cancel_submit = st.form_submit_button("↩️ ยืนยันยกเลิกการเริ่มผิด", use_container_width=True)
+                    if cancel_submit:
+                        if not cancel_confirm or not cancel_reason.strip():
+                            st.warning("กรอกเหตุผลและติ๊กยืนยันก่อนคืนคิว")
+                        else:
+                            cancelled, cancel_message = cancel_wrong_job_start(target_id, selected_m, s_start, cancel_reason)
+                            if cancelled:
+                                st.session_state.pop("batch_bulk_guard", None)
+                                st.session_state.pop("pending_shop_finish_confirmation", None)
+                                st.session_state["operator_cancel_start_feedback"] = cancel_message
+                                st.rerun()
+                            else:
+                                st.error(cancel_message)
 
             current_step_names = [item.get("name", f"Step {idx + 1}") for idx, item in enumerate(tracked_steps)]
             st.markdown("**รายการ Step และเวลาทำงานจริงในคิวนี้**")
