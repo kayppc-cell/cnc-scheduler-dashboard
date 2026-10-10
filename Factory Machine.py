@@ -2453,16 +2453,37 @@ def normalize_status(status_str: str) -> str:
     else:
         return "🟧 รอคิวผลิต"
 
+def read_all_job_rows(endpoint, headers):
+    """Read stable ID pages, including when the server caps responses below our limit."""
+    rows = []
+    last_id = None
+    while True:
+        params = {"select": "*", "order": "id.asc", "limit": 500}
+        if last_id is not None:
+            params["id"] = f"gt.{last_id}"
+        response = requests.get(endpoint, headers=headers, params=params, timeout=8)
+        if response.status_code not in (200, 206):
+            raise ValueError(f"โหลดใบงานไม่ครบ (HTTP {response.status_code})")
+        page = response.json()
+        if not isinstance(page, list):
+            raise ValueError("รูปแบบข้อมูลใบงานไม่ถูกต้อง")
+        if not page:
+            return rows
+        ids = [int(row["id"]) for row in page]
+        if ids != sorted(set(ids)) or (last_id is not None and ids[0] <= last_id):
+            raise ValueError("ข้อมูลใบงานแต่ละชุดไม่ต่อเนื่อง กรุณารีเฟรชใหม่")
+        rows.extend(page)
+        last_id = ids[-1]
+
+
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_jobs_from_supabase() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
-        endpoint = f"{base_url}/rest/v1/cnc_jobs?select=*&order=id.asc"
-        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=8)
-        
-        if res.status_code == 200:
-            data = res.json()
-            if isinstance(data, list) and len(data) > 0:
+        endpoint = f"{base_url}/rest/v1/cnc_jobs"
+        data = read_all_job_rows(endpoint, get_supabase_headers())
+        if isinstance(data, list):
+            if len(data) > 0:
                 df = pd.DataFrame(data)
                 if "ready_at" in df.columns:
                     df["ready_at"] = df["ready_at"].apply(parse_flexible_datetime)
@@ -2503,6 +2524,7 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                 return df.rename(columns=col_map)
         return pd.DataFrame()
     except Exception:
+        st.error("โหลดใบงานจากฐานข้อมูลไม่ครบ กรุณารีเฟรชใหม่ก่อนสร้างหรือแก้ไขงาน")
         return pd.DataFrame()
 
 @st.cache_data(ttl=5, show_spinner=False)
@@ -6192,6 +6214,8 @@ class TrainingRequests:
                             if value != json.loads(expected): return False
                         except Exception: return False
                     elif str(value) != expected: return False
+                elif condition.startswith("gt."):
+                    if value is None or int(value) <= int(condition[3:]): return False
                 elif condition.startswith("neq."):
                     if str(value) == condition[4:]: return False
                 elif condition.startswith("in.(") and condition.endswith(")"):
@@ -7965,6 +7989,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
             @st.fragment
             def render_normal_template_controls():
+                created_feedback = st.session_state.pop("production_created_feedback", None)
+                if created_feedback:
+                    st.success(created_feedback)
                 with st.expander("📝 สร้างใบงาน Production จาก Drawing Template", expanded=False):
                     if templates is None:
                         st.warning("กรุณาสร้างตาราง Template ใน Supabase ก่อน")
@@ -8213,10 +8240,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                         st.session_state[normal_last_drawing_key] = normal_template_name
                                         st.session_state[normal_form_version_key] = normal_form_version + 1
                                         fetch_jobs_from_supabase.clear()
-                                        st.success(
+                                        st.session_state["production_created_feedback"] = (
                                             f"สร้างใบงาน {normal_plan.strip()} / {normal_drawing} และส่งเข้าคิว {normal_machine} เรียบร้อยแล้ว"
                                         )
-                                        st.rerun()
+                                        st.rerun(scope="app")
                                     else:
                                         st.error("สร้างใบงานไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อฐานข้อมูล")
 
