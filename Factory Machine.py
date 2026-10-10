@@ -497,7 +497,7 @@ def move_work_order_with_timing(job_id, source_machine, target_machine, rendered
         if current.get("started_at"):
             candidates = [first_valid_datetime(current.get("pending_pause_started_at")), first_valid_datetime(before.get("hold_started_at")), now_dt]
             current["pending_pause_started_at"] = min(value for value in candidates if value is not None).strftime("%Y-%m-%d %H:%M:%S")
-        queue = requests.get(endpoint, headers=get_supabase_headers(), params={"machine_name": f"eq.{target_machine}", "select": "*"}, timeout=8)
+        queue = get_complete_job_response(endpoint, headers=get_supabase_headers(), params={"machine_name": f"eq.{target_machine}", "select": "*"}, timeout=8)
         if queue.status_code != 200:
             return False, "อ่านคิวเครื่องปลายทางไม่สำเร็จ"
         raw_target = queue.json()
@@ -1447,25 +1447,43 @@ def get_supabase_headers():
     }
 
 def insert_supabase_job(payload: dict, clear_cache: bool = True) -> bool:
+    st.session_state.pop("last_job_insert_receipt", None)
     try:
-        base_url = st.secrets["SUPABASE_URL"].rstrip("/")
-        endpoint = f"{base_url}/rest/v1/cnc_jobs"
+        endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/cnc_jobs"
         res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
-        if res.status_code in [200, 201]:
-            if clear_cache:
-                st.cache_data.clear()
-            return True
-        else:
-            if "qty" in payload:
-                payload_no_qty = {k: v for k, v in payload.items() if k != "qty"}
-                res2 = requests.post(endpoint, headers=get_supabase_headers(), json=payload_no_qty, timeout=8)
-                if res2.status_code in [200, 201]:
-                    if clear_cache:
-                        st.cache_data.clear()
-                    return True
-            return False
+        if res.status_code not in (200, 201):
+            # Only retry without qty when the server explicitly rejects that column.
+            error_text = res.text.lower()
+            if res.status_code == 400 and "qty" in payload and "qty" in error_text and ("column" in error_text or "schema" in error_text):
+                payload = {k: v for k, v in payload.items() if k != "qty"}
+                res = requests.post(endpoint, headers=get_supabase_headers(), json=payload, timeout=8)
+            if res.status_code not in (200, 201):
+                st.error(f"ฐานข้อมูลไม่รับใบงาน (HTTP {res.status_code})")
+                return False
+        receipt = {"id": None, "verified": False}
+        try:
+            inserted = res.json()
+            if isinstance(inserted, list) and len(inserted) == 1:
+                receipt["id"] = int(inserted[0]["id"])
+            if receipt["id"] is not None:
+                check = requests.get(endpoint, headers=get_supabase_headers(),
+                    params={"id": f"eq.{receipt['id']}", "select": "id,plan_code,drawing_name,machine_name", "limit": 1}, timeout=8)
+                rows = check.json() if check.status_code == 200 else []
+                receipt["verified"] = (isinstance(rows, list) and len(rows) == 1
+                    and int(rows[0].get("id", -1)) == receipt["id"]
+                    and all(rows[0].get(key) == payload.get(key) for key in ("plan_code", "drawing_name", "machine_name")))
+        except Exception:
+            pass
+        st.session_state["last_job_insert_receipt"] = receipt
+        if clear_cache:
+            st.cache_data.clear()
+        if not receipt["verified"]:
+            st.warning(f"ฐานข้อมูลตอบรับการบันทึกแล้ว แต่ยังตรวจอ่านกลับไม่ได้ (ID {receipt['id'] or 'ยังไม่ทราบ'}) อย่าสร้างรายการนี้ซ้ำ ให้รีเฟรชหรือตรวจ Supabase ก่อน")
+        return True  # Accepted POST must never be treated as an invitation to insert again.
     except Exception:
+        st.error("ยังยืนยันผลบันทึกไม่ได้ การเชื่อมต่ออาจขาดหลังส่งข้อมูล อย่าสร้างซ้ำจนกว่าจะตรวจ Supabase")
         return False
+
 
 def update_supabase_job(job_id: int, payload: dict, clear_cache: bool = True) -> bool:
     try:
@@ -1661,7 +1679,7 @@ def get_other_running_job(machine_name: str, exclude_job_id=None):
             "select": "id,plan_code,drawing_name,status,machine_name",
             "machine_name": f"eq.{machine_name}"
         }
-        res = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        res = get_complete_job_response(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
         if res.status_code != 200:
             return {"_check_error": True}
         for row in res.json():
@@ -2062,7 +2080,7 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
         target = response.json()[0]
         target_payload = prepare_work_order_time_restart(target, new_actual_start, reason, note)
         machine = target.get("machine_name")
-        queue_response = requests.get(endpoint, headers=get_supabase_headers(), params={"select": "*", "machine_name": f"eq.{machine}", "order": "ready_at.asc,id.asc"}, timeout=8)
+        queue_response = get_complete_job_response(endpoint, headers=get_supabase_headers(), params={"select": "*", "machine_name": f"eq.{machine}", "order": "ready_at.asc,id.asc"}, timeout=8)
         if queue_response.status_code != 200:
             return False, "อ่านคิวล่าสุดของเครื่องไม่สำเร็จ", 0
         original_rows = queue_response.json()
@@ -2113,7 +2131,7 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
             applied.append((old_id, {key: old_row.get(key) for key in payload}, payload, expected))
             if not patch_job_timing_if_unchanged(endpoint, old_id, expected, payload):
                 raise ValueError("บันทึกไม่ครบหรือข้อมูลเปลี่ยนระหว่างบันทึก")
-        check = requests.get(endpoint, headers=get_supabase_headers(), params={"select": "*", "machine_name": f"eq.{machine}"}, timeout=8)
+        check = get_complete_job_response(endpoint, headers=get_supabase_headers(), params={"select": "*", "machine_name": f"eq.{machine}"}, timeout=8)
         if check.status_code != 200:
             raise ValueError("ตรวจสอบหลังบันทึกไม่สำเร็จ")
         saved = {safe_int(row.get("id")): row for row in check.json()}
@@ -2194,7 +2212,7 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
             "machine_name": f"eq.{machine_name}",
             "order": "ready_at.asc,id.asc"
         }
-        res = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        res = get_complete_job_response(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
         if res.status_code != 200:
             return False, "อ่านคิวล่าสุดจากฐานข้อมูลไม่สำเร็จ", []
 
@@ -2289,7 +2307,7 @@ def insert_urgent_job_into_waiting_queue(
             "machine_name": f"eq.{machine_name}",
             "order": "ready_at.asc,id.asc",
         }
-        res = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        res = get_complete_job_response(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
         if res.status_code != 200:
             return False, f"อ่านคิวล่าสุดไม่สำเร็จ ({res.status_code})", []
 
@@ -2453,12 +2471,13 @@ def normalize_status(status_str: str) -> str:
     else:
         return "🟧 รอคิวผลิต"
 
-def read_all_job_rows(endpoint, headers):
+def read_all_job_rows(endpoint, headers, filters=None):
     """Read stable ID pages, including when the server caps responses below our limit."""
     rows = []
     last_id = None
     while True:
-        params = {"select": "*", "order": "id.asc", "limit": 500}
+        params = dict(filters or {})
+        params.update({"select": "*", "order": "id.asc", "limit": 500})
         if last_id is not None:
             params["id"] = f"gt.{last_id}"
         response = requests.get(endpoint, headers=headers, params=params, timeout=8)
@@ -2474,6 +2493,16 @@ def read_all_job_rows(endpoint, headers):
             raise ValueError("ข้อมูลใบงานแต่ละชุดไม่ต่อเนื่อง กรุณารีเฟรชใหม่")
         rows.extend(page)
         last_id = ids[-1]
+
+
+def get_complete_job_response(endpoint, headers, params=None, timeout=8):
+    """Queue writers receive all rows or an exception before any mutation."""
+    rows = read_all_job_rows(endpoint, headers, params)
+    class CompleteResponse:
+        status_code = 200
+        def json(self):
+            return rows
+    return CompleteResponse()
 
 
 @st.cache_data(ttl=5, show_spinner=False)
@@ -2524,8 +2553,8 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
                 return df.rename(columns=col_map)
         return pd.DataFrame()
     except Exception:
-        st.error("โหลดใบงานจากฐานข้อมูลไม่ครบ กรุณารีเฟรชใหม่ก่อนสร้างหรือแก้ไขงาน")
-        return pd.DataFrame()
+        st.error("โหลดใบงานจากฐานข้อมูลไม่ครบ ระบบหยุดการสร้างและจัดคิวไว้ก่อน กรุณารีเฟรชใหม่")
+        st.stop()
 
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_plan_masters():
@@ -7991,7 +8020,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             def render_normal_template_controls():
                 created_feedback = st.session_state.pop("production_created_feedback", None)
                 if created_feedback:
-                    st.success(created_feedback)
+                    if created_feedback.get("verified"):
+                        st.success(created_feedback["message"])
+                    else:
+                        st.warning(created_feedback["message"])
                 with st.expander("📝 สร้างใบงาน Production จาก Drawing Template", expanded=False):
                     if templates is None:
                         st.warning("กรุณาสร้างตาราง Template ใน Supabase ก่อน")
@@ -8240,9 +8272,17 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                         st.session_state[normal_last_drawing_key] = normal_template_name
                                         st.session_state[normal_form_version_key] = normal_form_version + 1
                                         fetch_jobs_from_supabase.clear()
-                                        st.session_state["production_created_feedback"] = (
-                                            f"สร้างใบงาน {normal_plan.strip()} / {normal_drawing} และส่งเข้าคิว {normal_machine} เรียบร้อยแล้ว"
-                                        )
+                                        receipt = st.session_state.get("last_job_insert_receipt", {})
+                                        receipt_id = receipt.get("id")
+                                        verified = receipt.get("verified", False)
+                                        st.session_state["production_created_feedback"] = {
+                                            "verified": verified,
+                                            "message": (
+                                                f"สร้างใบงาน ID {receipt_id} | {normal_plan.strip()} / {normal_drawing} | {normal_machine} และตรวจข้อมูลในฐานข้อมูลแล้ว"
+                                                if verified else
+                                                f"ฐานข้อมูลตอบรับใบงานแล้ว ID {receipt_id or 'ยังไม่ทราบ'} แต่ยังตรวจอ่านกลับไม่ได้ อย่าสร้างซ้ำ กรุณาตรวจรายการใน Supabase"
+                                            ),
+                                        }
                                         st.rerun(scope="app")
                                     else:
                                         st.error("สร้างใบงานไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อฐานข้อมูล")
