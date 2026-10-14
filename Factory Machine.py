@@ -6394,8 +6394,12 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
     if training_active:
         st.warning("🎓 โหมดฝึกใช้งาน — 15 เครื่องจำลอง • หน้าจอและคำสั่งชุดเดียวกับหน้างานจริง • ไม่บันทึกลง Supabase")
         st.caption("ข้อมูลฝึกแยกของผู้ใช้แต่ละ session ปิด session แล้วข้อมูลอาจหาย; ใช้กะและเวลาจริงของระบบ")
+        reset_feedback = st.session_state.pop("training_reset_feedback", None)
+        if reset_feedback:
+            st.success(reset_feedback)
+            st.toast(reset_feedback, icon="✅")
         with st.expander("🔄 รีเซ็ตใบงานฝึกของเครื่องจำลอง"):
-            with st.form("training_reset_machine"):
+            with st.form("training_reset_machine", clear_on_submit=True):
                 reset_machine = st.selectbox("เครื่องจำลองที่จะรีเซ็ต", TRAINING_MACHINES)
                 reset_confirm = st.checkbox("ยืนยันล้างข้อมูลฝึกเครื่องนี้และสร้างใบงานตัวอย่างใหม่")
                 reset_submit = st.form_submit_button("รีเซ็ตเครื่องจำลอง")
@@ -6403,8 +6407,17 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 if "training_raw_jobs" in st.session_state:
                     st.session_state.training_raw_jobs = [r for r in st.session_state.training_raw_jobs if r["machine_name"] != reset_machine] + seed_training_machine(reset_machine, TRAINING_MACHINES.index(reset_machine)+1)
                     st.session_state.training_raw_events = [r for r in st.session_state.training_raw_events if r.get("machine_name") != reset_machine]
-                st.session_state.pop("batch_bulk_guard", None)
+                for pending_key in ("batch_bulk_guard", "pending_shop_start_confirmation", "pending_shop_finish_confirmation"):
+                    st.session_state.pop(pending_key, None)
+                st.session_state.pop(f"batch_start_drawings_{reset_machine}", None)
+                st.session_state[f"batch_start_mode_{reset_machine}"] = "เลือก Drawing"
+                st.session_state[f"operator_run_mode_{reset_machine}"] = "🔹 รันทีละคิว (Piece by Piece)"
+                st.session_state["training_reset_feedback"] = (
+                    f"✅ รีเซ็ต {reset_machine} สำเร็จแล้ว ล้างข้อมูลฝึกและสร้างใบงานตัวอย่างใหม่เรียบร้อย"
+                )
                 st.rerun()
+            elif reset_submit:
+                st.warning("กรุณาติ๊กยืนยันก่อนรีเซ็ตเครื่องจำลอง")
     if st.session_state.get("operator_training_scope") != training_active:
         for key in ("op_machine_select", "batch_bulk_guard", "pending_shop_start_confirmation", "pending_shop_finish_confirmation", "operator_finish_feedback", "operator_cancel_start_feedback"):
             st.session_state.pop(key, None)
