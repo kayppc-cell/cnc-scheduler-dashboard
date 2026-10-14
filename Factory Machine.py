@@ -6220,6 +6220,39 @@ class TrainingRequests:
         from urllib.parse import urlsplit, parse_qsl
         parsed = urlsplit(url)
         table = parsed.path.rsplit("/", 1)[-1]
+        if "/rpc/" in parsed.path:
+            if method != "POST" or table != "tpc_apply_job_updates":
+                return TrainingResponse({"message": "โหมดฝึกไม่อนุญาตคำสั่งนี้"}, 403)
+            operations = (kwargs.get("json") or {}).get("operations")
+            if not isinstance(operations, list):
+                return TrainingResponse({"message": "ชุดข้อมูลฝึกไม่ถูกต้อง"}, 400)
+            staged_rows = json.loads(json.dumps(st.session_state["training_raw_jobs"], default=str))
+            staged_by_id = {safe_int(row.get("id")): row for row in staged_rows}
+            saved = []
+            seen_ids = set()
+            for operation in operations:
+                if not isinstance(operation, dict):
+                    return TrainingResponse({"message": "รายการฝึกไม่ถูกต้อง"}, 400)
+                job_id = safe_int(operation.get("id"))
+                row = staged_by_id.get(job_id)
+                expected = operation.get("expected")
+                payload = operation.get("payload")
+                if (row is None or job_id in seen_ids or not isinstance(expected, dict)
+                        or not isinstance(payload, dict)):
+                    return TrainingResponse({"message": "ไม่พบรายการฝึกหรือรายการซ้ำ"}, 409)
+                if row.get("machine_name") not in TRAINING_MACHINES or (
+                        "machine_name" in payload and payload["machine_name"] not in TRAINING_MACHINES):
+                    return TrainingResponse({"message": "ย้ายได้เฉพาะเครื่องจำลอง"}, 403)
+                if "id" in payload:
+                    return TrainingResponse({"message": "ไม่อนุญาตเปลี่ยน ID ใบงานฝึก"}, 400)
+                if any(not timing_value_matches(key, row.get(key), value) for key, value in expected.items()):
+                    return TrainingResponse({"message": "ข้อมูลฝึกเปลี่ยนแล้ว กรุณารีเฟรช"}, 409)
+                seen_ids.add(job_id)
+                row.update(json.loads(json.dumps(payload, default=str)))
+                saved.append(row)
+            # Commit only after every simulated operation has passed its guards.
+            st.session_state["training_raw_jobs"] = staged_rows
+            return TrainingResponse(saved)
         if table not in ("cnc_jobs", "cnc_job_events"):
             return TrainingResponse({"message": "โหมดฝึกไม่อนุญาตปลายทางนี้"}, 403)
         store_key = "training_raw_jobs" if table == "cnc_jobs" else "training_raw_events"
@@ -6260,9 +6293,10 @@ class TrainingRequests:
             for sort in reversed(str(params.get("order", "")).split(',')):
                 if sort:
                     key, _, direction = sort.partition('.')
-                    selected = sorted(selected, key=lambda r: (r.get(key) is None, str(r.get(key) or "")), reverse=direction=="desc")
+                    selected = sorted(selected, key=lambda r: (r.get(key) is None, r.get(key) if r.get(key) is not None else ""), reverse=direction=="desc")
             limit = int(params.get("limit", len(selected)))
-            return TrainingResponse(selected[:limit])
+            offset = int(params.get("offset", 0))
+            return TrainingResponse(selected[offset:offset + limit])
         payload = kwargs.get("json") or {}
         if method == "PATCH" and table == "cnc_jobs":
             if payload.get("machine_name") and payload["machine_name"] not in TRAINING_MACHINES:
@@ -6444,6 +6478,13 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 ["🔹 รันทีละคิว (Piece by Piece)", "📦 รันรวมหลายงานพร้อมกัน (Batch Processing)"],
                 index=0, horizontal=True, key=operator_mode_key,
             )
+            mode_scope_key = f"operator_previous_run_mode_{selected_m}"
+            if "Batch" in run_mode and st.session_state.get(mode_scope_key) != run_mode:
+                st.session_state[f"batch_start_mode_{selected_m}"] = "เลือก Drawing"
+                st.session_state[f"batch_start_drawings_{selected_m}"] = []
+                st.session_state.pop("batch_bulk_guard", None)
+                st.session_state.pop("pending_shop_start_confirmation", None)
+            st.session_state[mode_scope_key] = run_mode
             if "Batch" not in run_mode:
                 st.session_state.pop("batch_bulk_guard", None)
 
@@ -6530,7 +6571,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
 
                 with st.expander(
                     "🔒 เปิดแผงควบคุม Batch Processing",
-                    expanded=bool(batch_guard)
+                    expanded=True
                 ):
                     st.markdown("""
                     <div class="batch-toolbar">
@@ -6571,7 +6612,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     st.caption("คำสั่ง Start / Resume / หยุด / Finish / คืนคิว ใช้เฉพาะแผนที่เลือกบนเครื่องนี้")
                     batch_start_mode = st.radio(
                         "🚀 Drawing ที่ต้องการ Start",
-                        ["ทุก Drawing ในแผนที่เลือก", "เลือก Drawing"], horizontal=True,
+                        ["เลือก Drawing", "ทุก Drawing ในแผนที่เลือก"], horizontal=True,
                         key=f"batch_start_mode_{selected_m}",
                     )
                     batch_start_scope = None
@@ -6787,10 +6828,11 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                         current = progress["steps"][idx]
                                         pause_delta = 0.0
                                         pending_dt = parse_flexible_datetime(current.get("pending_pause_started_at"))
-                                        if current.get("started_at") and pending_dt is not None and pd.notna(pending_dt):
+                                        if pending_dt is not None and pd.notna(pending_dt):
                                             pause_delta = get_work_seconds_between(pending_dt, confirm_now)
-                                            current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + pause_delta
-                                        elif not current.get("started_at"):
+                                            if current.get("started_at"):
+                                                current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + pause_delta
+                                        if not current.get("started_at"):
                                             current["started_at"] = now_str
                                         current.pop("pending_pause_started_at", None)
                                         payload = {
@@ -6837,8 +6879,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                         progress["steps"][idx]["finished_at"] = now_str
                                         if idx < len(progress["steps"]) - 1:
                                             progress["current_index"] = idx + 1
-                                            progress["steps"][idx + 1]["started_at"] = now_str
-                                            payload = {"status": "🟦 กำลังผลิต", "actual_finish": None, "step_progress": progress}
+                                            progress["steps"][idx + 1]["started_at"] = None
+                                            progress["steps"][idx + 1]["pending_pause_started_at"] = now_str
+                                            payload = {"status": "🟧 รอคิวผลิต", "actual_finish": None, "hold_started_at": None, "step_progress": progress}
                                         else:
                                             payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str, "step_progress": progress}
                                             fully_finished_rows.append(r)
@@ -6964,7 +7007,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 overdue_minutes = int(get_signed_work_seconds_between(finish_w_dt, operator_now) // 60) if is_running_overdue else 0
 
                 if "Batch" in run_mode:
-                    can_start = is_step_waiting and not machine_any_running
+                    can_start = False  # Batch Start must use the reviewed selection in its control panel.
                 else:
                     can_start = False
                     if is_step_waiting and not machine_any_running and not machine_has_paused and not next_available_start_found:
@@ -7059,7 +7102,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         if can_start:
                             st.caption(f"**ขั้นตอน:** <span style='color:#D97706; font-weight:800;'>🟧 พร้อมเริ่มงาน (Ready to Start)</span>", unsafe_allow_html=True)
                         else:
-                            st.caption(f"**ขั้นตอน:** <span style='color:#64748B; font-weight:600;'>🔒 รอลำดับคิวก่อนหน้าตามแผน</span>", unsafe_allow_html=True)
+                            st.caption(f"**ขั้นตอน:** <span style='color:#64748B; font-weight:600;'>{('เลือก Drawing และยืนยัน Start ในแผง Batch ด้านบน' if not piece_mode else '🔒 รอลำดับคิวก่อนหน้าตามแผน')}</span>", unsafe_allow_html=True)
 
                     if not is_step_finished:
                         if is_step_hold:
@@ -7145,7 +7188,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                             with c_btn_finish:
                                 has_next_step = current_step_index < len(tracked_steps) - 1
                                 finish_button_label = (
-                                    f"✅ จบ Step {current_step_index + 1} → เริ่ม Step {current_step_index + 2}"
+                                    f"✅ จบ Step {current_step_index + 1} → รอ Start Step {current_step_index + 2}"
                                     if has_next_step else "🏁 Finish Drawing (ครบทุก Step)"
                                 )
                                 if st.button(finish_button_label, key=f"btn_finish_step_{target_id}", type="primary", use_container_width=True):
@@ -7178,7 +7221,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                         st.warning("⌛ การยืนยัน Finish หมดอายุแล้ว กรุณากดปุ่ม Finish ใหม่")
                                     else:
                                         finish_action_text = (
-                                            f"จบ Step {current_step_index + 1} และเริ่ม Step {current_step_index + 2}"
+                                            f"จบ Step {current_step_index + 1} และให้ Step {current_step_index + 2} รอ Start"
                                             if has_next_step else "Finish Drawing นี้"
                                         )
                                         st.warning(
@@ -7242,9 +7285,10 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                             fresh_has_next_step = fresh_step_index < len(fresh_tracked_steps) - 1
                                             if fresh_has_next_step:
                                                 fresh_step_progress["current_index"] = fresh_step_index + 1
-                                                fresh_tracked_steps[fresh_step_index + 1]["started_at"] = step_finish_str
+                                                fresh_tracked_steps[fresh_step_index + 1]["started_at"] = None
+                                                fresh_tracked_steps[fresh_step_index + 1]["pending_pause_started_at"] = step_finish_str
                                                 finish_payload = {
-                                                    "status": "🟦 กำลังผลิต", "actual_finish": None,
+                                                    "status": "🟧 รอคิวผลิต", "actual_finish": None,
                                                     "hold_started_at": None, "step_progress": fresh_step_progress,
                                                 }
                                             else:
@@ -7258,8 +7302,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                                 if fresh_has_next_step:
                                                     next_step_name = safe_str(fresh_tracked_steps[fresh_step_index + 1].get("name"), "Step ถัดไป")
                                                     log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Step", fresh_step_index + 1, current_step_name)
-                                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Start Step", fresh_step_index + 2, next_step_name)
-                                                    st.toast(f"เริ่ม Step ถัดไป: {next_step_name}", icon="➡️")
+                                                    st.toast(f"จบ Step แล้ว กรุณากด Start และยืนยันเพื่อเริ่ม {next_step_name}", icon="➡️")
                                                 else:
                                                     log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Drawing", fresh_step_index + 1, current_step_name)
                                                     st.session_state.operator_finish_feedback = build_operator_finish_feedback(
@@ -7337,10 +7380,11 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                     start_now_str = start_now.strftime("%Y-%m-%d %H:%M:%S")
                                     pause_delta = 0.0
                                     pending_pause_dt = parse_flexible_datetime(current_step_item.get("pending_pause_started_at"))
-                                    if current_step_item.get("started_at") and pending_pause_dt is not None and pd.notna(pending_pause_dt):
+                                    if pending_pause_dt is not None and pd.notna(pending_pause_dt):
                                         pause_delta = get_work_seconds_between(pending_pause_dt, start_now)
-                                        current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + pause_delta
-                                    elif not current_step_item.get("started_at"):
+                                        if current_step_item.get("started_at"):
+                                            current_step_item["paused_seconds"] = safe_float(current_step_item.get("paused_seconds"), 0.0) + pause_delta
+                                    if not current_step_item.get("started_at"):
                                         current_step_item["started_at"] = start_now_str
                                     current_step_item.pop("pending_pause_started_at", None)
                                     start_payload = {
@@ -7358,7 +7402,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                     else:
                                         st.error("เริ่มงานไม่สำเร็จ")
                             else:
-                                st.button("🚀 Start — รอคิวก่อนหน้า", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
+                                st.button("🚀 เลือก Start ในแผง Batch" if not piece_mode else "🚀 Start — รอคิวก่อนหน้า", key=f"btn_start_disabled_{target_id}", disabled=True, use_container_width=True)
                                 if is_step_waiting and blocking_running_text:
                                     st.caption(f"🔒 เครื่องกำลังรัน {blocking_running_text}")
 
@@ -10023,15 +10067,27 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 machine_options = ["🌐 ทุกเครื่อง"] + sorted(fin_display_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
                 plan_options = ["🌐 ทุกแผนงาน"] + sorted(fin_display_df["แผนงาน"].dropna().astype(str).unique().tolist())
-                drawing_options = ["🌐 ทุก Drawing"] + sorted(fin_display_df["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
 
                 sel_c1, sel_c2, sel_c3 = st.columns([1.2, 1, 1.5])
                 with sel_c1:
                     selected_fin_machine = st.selectbox("🏭 เลือกเครื่องจักร:", machine_options, key="finished_history_machine_select")
                 with sel_c2:
                     selected_fin_plan = st.selectbox("📌 เลือกแผนงาน:", plan_options, key="finished_history_plan_select")
+                # Build Drawing options after the plan selector, before rendering its widget.
+                drawing_scope = fin_display_df
+                if normalize_filter_key(selected_fin_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
+                    drawing_scope = drawing_scope[
+                        drawing_scope["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_fin_plan)
+                    ]
+                drawing_options = ["🌐 ทุก Drawing"] + sorted(drawing_scope["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
+                drawing_key = "finished_history_drawing_select"
+                previous_plan_key = "finished_history_drawing_plan_scope"
+                if (st.session_state.get(previous_plan_key) != selected_fin_plan
+                        or st.session_state.get(drawing_key, "🌐 ทุก Drawing") not in drawing_options):
+                    st.session_state[drawing_key] = "🌐 ทุก Drawing"
+                st.session_state[previous_plan_key] = selected_fin_plan
                 with sel_c3:
-                    selected_fin_drawing = st.selectbox("📄 เลือก Drawing:", drawing_options, key="finished_history_drawing_select")
+                    selected_fin_drawing = st.selectbox("📄 เลือก Drawing:", drawing_options, key=drawing_key)
 
                 selected_fin_machine = st.session_state.get("finished_history_machine_select", "🌐 ทุกเครื่อง")
                 selected_fin_plan = st.session_state.get("finished_history_plan_select", "🌐 ทุกแผนงาน")
@@ -10130,12 +10186,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 performance_source["_plan_key"] = performance_source["แผนงาน"].apply(
                     lambda value: safe_str(value, "ไม่ระบุแผน") or "ไม่ระบุแผน"
                 )
-                performance_source["_drawing_key"] = performance_source.apply(
-                    lambda row: (
-                        safe_str(row.get("ชื่อ Drawing."), "").strip()
-                        or f"ไม่ระบุ Drawing #{safe_int(row.get('ID'), row.name)}"
-                    ),
-                    axis=1
+                performance_source["_drawing_key"] = pd.Series(
+                    [safe_str(row.get("ชื่อ Drawing."), "").strip()
+                     or f"ไม่ระบุ Drawing #{safe_int(row.get('ID'), row.name)}"
+                     for _, row in performance_source.iterrows()],
+                    index=performance_source.index, dtype="object"
                 )
                 performance_source["_finish_diff_num"] = pd.to_numeric(
                     performance_source["จบคลาดเคลื่อน (น.)"], errors="coerce"
