@@ -6178,6 +6178,35 @@ def render_outsource_management(df_all):
                         f"วันที่ส่ง **{sent_text}** | หมายเหตุ **{note}**"
                     )
 
+def build_work_order_print_document(source_df, filters, printed_at):
+    """Print the already filtered queue in its displayed order; escape user-entered fields."""
+    columns = ["เครื่องจักร / แผนก", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.",
+               "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", "เริ่มขึ้นงานตามแผน",
+               "จบงานตามแผน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)"]
+    selected_columns = [column for column in columns if column in source_df.columns]
+    printable = source_df[selected_columns].copy()
+    table = printable.to_html(index=False, escape=True, na_rep="", border=0)
+    filter_text = " | ".join(f"{html.escape(str(label))}: {html.escape(str(value))}" for label, value in filters.items())
+    return f"""<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">
+    <title>TPC - ใบจ่ายคิวงานหน้าเครื่อง</title><style>
+    @page {{ size:A4 landscape; margin:10mm; }}
+    * {{ box-sizing:border-box; }}
+    body {{ font-family:Tahoma,'Angsana New',sans-serif; color:#111; background:#fff; margin:0; font-size:10px; }}
+    h1 {{ font-size:19px; margin:0 0 8px; }}
+    .meta {{ font-size:10px; line-height:1.6; margin-bottom:10px; }}
+    table {{ border-collapse:collapse; width:100%; table-layout:fixed; font-size:8px; }}
+    th,td {{ border:1px solid #56616b; padding:4px 3px; text-align:left; vertical-align:top; overflow-wrap:anywhere; }}
+    th {{ background:#e5ebf2; font-weight:bold; }}
+    thead {{ display:table-header-group; }}
+    tr {{ break-inside:avoid; page-break-inside:avoid; }}
+    th:nth-child(6),td:nth-child(6),th:nth-child(9),td:nth-child(9) {{ width:11%; }}
+    th:nth-child(10),td:nth-child(10),th:nth-child(11),td:nth-child(11),th:nth-child(12),td:nth-child(12) {{ width:8%; }}
+    th:nth-child(2),td:nth-child(2),th:nth-child(7),td:nth-child(7) {{ width:3%; }}
+    </style></head><body><h1>Timing Process Control (TPC) - ใบจ่ายคิวงานหน้าเครื่อง</h1>
+    <div class="meta">{filter_text}<br>พิมพ์เมื่อ {html.escape(str(printed_at))} | จำนวน {len(printable):,} รายการ</div>
+    {table}</body></html>"""
+
+
 TRAINING_MACHINES = [f"TRAINING-{i:02d}" for i in range(1, 16)]
 
 
@@ -7007,7 +7036,6 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 queue_finish_label = "จบตามคิวปัจจุบัน"
                 ready_display_str = start_w_dt.strftime("%d/%m/%Y %H:%M น.") if start_w_dt is not None else "-"
                 finish_plan_display_str = finish_w_dt.strftime("%d/%m/%Y %H:%M น.") if finish_w_dt is not None else "-"
-                baseline_caption_html = html.escape(production_baseline_caption(step_row))
 
                 operator_now = get_bangkok_now().replace(tzinfo=None)
                 if is_step_running or is_step_hold:
@@ -7049,7 +7077,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     badge_gradient = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
                     status_badge_html = ''
 
-                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>{queue_start_label}:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>{queue_finish_label}:</b> {finish_plan_display_str}</span><span class="badge-chip badge-date">{baseline_caption_html}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
+                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>{queue_start_label}:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>{queue_finish_label}:</b> {finish_plan_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
                 st.markdown(card_header_html, unsafe_allow_html=True)
 
                 card_style_class = "step-card"
@@ -9621,6 +9649,30 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 hide_index=True,
                 row_height=30
             )
+
+            if not df_display.empty:
+                wo_print_document = build_work_order_print_document(
+                    df_display,
+                    {"เครื่อง": selected_wo_machine, "แผน": selected_wo_plan,
+                     "Drawing": selected_wo_drawing, "วัสดุ": selected_wo_material,
+                     "สถานะ": dict(wo_filter_buttons).get(selected_wo_filter, selected_wo_filter)},
+                    get_bangkok_now().strftime("%d/%m/%Y %H:%M"),
+                )
+                wo_print_json = json.dumps(wo_print_document, ensure_ascii=False).replace("</", "<\\/")
+                components.html(f"""
+                <button id="wo-print" style="display:block;width:280px;max-width:100%;margin:8px auto;background:#DC2626;color:white;border:0;padding:11px 16px;border-radius:8px;font-weight:700;cursor:pointer;">🖨️ พิมพ์ / บันทึก PDF</button>
+                <script>
+                document.getElementById('wo-print').addEventListener('click', () => {{
+                    const report = {wo_print_json};
+                    const printWindow = window.open('', '_blank');
+                    if (!printWindow) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์ใบจ่ายคิวงาน'); return; }}
+                    printWindow.document.open();
+                    printWindow.document.write(report);
+                    printWindow.document.close();
+                    printWindow.document.fonts.ready.then(() => {{ printWindow.focus(); printWindow.print(); }});
+                }});
+                </script>
+                """, height=65)
 
             st.divider()
 
