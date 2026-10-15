@@ -1793,7 +1793,7 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
             steps[-1]["finished_at"] = finish_dt.strftime("%Y-%m-%d %H:%M:%S")
         current_index = len(steps) - 1
     result = {"steps": steps, "current_index": current_index}
-    for key in ("schedule_mode", "planned_not_before", "restart_history", "timing_restarted_at", "queue_rank", "machine_time_segments", "machine_cost_history_incomplete", "cancelled_start_history"):
+    for key in ("schedule_mode", "planned_not_before", "restart_history", "timing_restarted_at", "queue_rank", "machine_time_segments", "machine_cost_history_incomplete", "cancelled_start_history", "yielded_for_urgent"):
         if key in progress:
             result[key] = progress[key]
     return result
@@ -2291,8 +2291,24 @@ def reorder_waiting_queue(machine_name: str, source_job_id: int, target_job_id: 
     except Exception as exc:
         return False, "สลับคิวไม่สำเร็จ: " + safe_str(exc, "ไม่ทราบสาเหตุ"), []
 
+def prepare_paused_job_for_urgent(row, now_dt):
+    """Yield a held job to the waiting queue without losing its live Step or pause origin."""
+    status = safe_str(row.get("status"), "")
+    if not any(word in status for word in ("พักงาน", "รอวัสดุ")):
+        raise ValueError("เลือกแทรกก่อนงานพักได้เฉพาะงานที่ยังพักอยู่")
+    progress = normalize_step_progress(row.get("step_progress"), row.get("step_name"), status,
+                                       row.get("actual_start"), row.get("actual_finish"))
+    current = progress["steps"][progress["current_index"]]
+    pause_start = first_valid_datetime(row.get("hold_started_at"), current.get("pending_pause_started_at"))
+    if pause_start is None or pause_start > now_dt:
+        raise ValueError("งานพักไม่มีเวลาเริ่มพักที่ถูกต้อง กรุณาตรวจข้อมูลก่อนแทรก")
+    current["pending_pause_started_at"] = pause_start.strftime("%Y-%m-%d %H:%M:%S")
+    progress["yielded_for_urgent"] = True
+    return {"status": "🟧 รอคิวผลิต", "hold_started_at": None, "step_progress": progress}
+
+
 def insert_urgent_job_into_waiting_queue(
-    machine_name: str, target_job_id, payload: dict, requested_start=None
+    machine_name: str, target_job_id, payload: dict, requested_start=None, before_paused=False
 ) -> tuple[bool, str, list]:
     """เพิ่มงานด่วนในตำแหน่งคิวที่เลือกและคำนวณเวลาใหม่เฉพาะคิวรอของเครื่องนั้น
 
@@ -2324,6 +2340,19 @@ def insert_urgent_job_into_waiting_queue(
             return False, "คิวเป้าหมายเปลี่ยนสถานะหรือถูกย้ายแล้ว กรุณารีเฟรชและเลือกตำแหน่งใหม่", []
 
         insert_index = waiting_ids.index(target_job_id) if target_job_id is not None else 0
+        yielded_payloads = {}
+        if before_paused:
+            if target_job_id is not None:
+                return False, "ตำแหน่งแทรกก่อนงานพักไม่รองรับคิวเป้าหมายอื่น", []
+            paused_rows = [row for row in active_rows if any(word in safe_str(row.get("status"), "") for word in ("พักงาน", "รอวัสดุ"))]
+            if not paused_rows:
+                return False, "ไม่พบงานพักแล้ว กรุณารีเฟรชเลือกตำแหน่งใหม่", []
+            actual_now = get_bangkok_now().replace(tzinfo=None)
+            for paused_row in paused_rows:
+                yielded_payloads[safe_int(paused_row["id"])] = prepare_paused_job_for_urgent(paused_row, actual_now)
+            waiting_rows = [{**row, **yielded_payloads[safe_int(row["id"]) ]} for row in paused_rows] + waiting_rows
+            active_rows = [row for row in active_rows if safe_int(row["id"]) not in yielded_payloads]
+            insert_index = 0
         now_dt = get_next_valid_work_time(get_bangkok_now().replace(tzinfo=None))
         requested_start_dt = parse_flexible_datetime(requested_start)
         if requested_start_dt is not None and not pd.isna(requested_start_dt):
@@ -2428,9 +2457,12 @@ def insert_urgent_job_into_waiting_queue(
         originals[inserted_id] = inserted_snapshot
         operations = []
         for rank, (job_id, ready_dt) in enumerate(expected_by_id.items()):
-            metadata = json.loads(json.dumps(production_schedule_metadata(originals[job_id])))
+            metadata_source = yielded_payloads[job_id]["step_progress"] if job_id in yielded_payloads else production_schedule_metadata(originals[job_id])
+            metadata = json.loads(json.dumps(metadata_source))
             metadata["queue_rank"] = rank
             update_payload = {"ready_at": ready_dt.strftime("%Y-%m-%d %H:%M:%S"), "step_progress": metadata}
+            if job_id in yielded_payloads:
+                update_payload.update({"status": "🟧 รอคิวผลิต", "hold_started_at": None})
             if job_id == inserted_id and urgent_finish is not None:
                 update_payload.update({"baseline_ready_at": ready_dt.strftime("%Y-%m-%d %H:%M:%S"),
                                        "baseline_finish_at": urgent_finish.strftime("%Y-%m-%d %H:%M:%S")})
@@ -7021,6 +7053,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                         if not current.get("started_at"):
                                             current["started_at"] = now_str
                                         current.pop("pending_pause_started_at", None)
+                                        progress.pop("yielded_for_urgent", None)
                                         payload = {
                                             "status": "🟦 กำลังผลิต", "actual_finish": None,
                                             "hold_started_at": None, "step_progress": progress,
@@ -7289,6 +7322,8 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         else:
                             st.caption(f"**ขั้นตอน:** <span style='color:#64748B; font-weight:600;'>{('เลือก Drawing และยืนยัน Start ในแผง Batch ด้านบน' if not piece_mode else '🔒 รอลำดับคิวก่อนหน้าตามแผน')}</span>", unsafe_allow_html=True)
 
+                    if is_step_waiting and step_progress.get("yielded_for_urgent"):
+                        st.caption("⏸️ งานเดิมรอ Resume หลังงานด่วน — เก็บเวลาและ Step เดิมไว้")
                     if not is_step_finished:
                         if is_step_hold:
                             resume_sequence_blocked = bool(
@@ -7498,7 +7533,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                                 st.error("บันทึกจบ Step ไม่สำเร็จ")
                         else:
                             if can_start:
-                                if st.button(f"🚀 Start Step {current_step_index + 1}: {current_step_name}", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
+                                if st.button(f"{'▶️ Resume' if step_progress.get('yielded_for_urgent') else '🚀 Start'} Step {current_step_index + 1}: {current_step_name}", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
                                     st.session_state.pending_shop_start_confirmation = {
                                         "job_id": target_id, "machine": selected_m, "step_index": current_step_index,
                                         "training": training_active, "armed_at": get_bangkok_str(),
@@ -7572,6 +7607,8 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                     if not current_step_item.get("started_at"):
                                         current_step_item["started_at"] = start_now_str
                                     current_step_item.pop("pending_pause_started_at", None)
+                                    is_urgent_resume = bool(step_progress.get("yielded_for_urgent"))
+                                    step_progress.pop("yielded_for_urgent", None)
                                     start_payload = {
                                         "status": "🟦 กำลังผลิต", "actual_finish": None,
                                         "hold_started_at": None, "step_progress": step_progress,
@@ -7580,7 +7617,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                     if parse_flexible_datetime(s_start) is None:
                                         start_payload["actual_start"] = start_now_str
                                     if update_supabase_job(target_id, start_payload):
-                                        log_job_event(target_id, plan_code, drawing_code, selected_m, "Start Step", current_step_index + 1, current_step_name)
+                                        log_job_event(target_id, plan_code, drawing_code, selected_m, "Resume Step" if is_urgent_resume else "Start Step", current_step_index + 1, current_step_name)
                                         st.session_state.pop("pending_shop_start_confirmation", None)
                                         st.toast(f"เริ่ม Step {current_step_index + 1}: {current_step_name}", icon="🚀")
                                         st.rerun()
@@ -8632,14 +8669,22 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 )
                                 target_map[target_label] = safe_int(row.get("id"))
                         next_queue_label = "คิวถัดไป — หลังงานที่กำลังรัน/พักอยู่"
-                        insert_choices = [next_queue_label] + list(target_map.keys())
+                        before_paused_label = "แทรกก่อนงานที่พัก — ให้งานพักรอ Resume หลังงานด่วน"
+                        has_paused_for_urgent = any("พักงาน" in safe_str(item.get("status"), "") for item in timeline_live)
+                        insert_choices = ([before_paused_label] if has_paused_for_urgent else []) + [next_queue_label] + list(target_map.keys())
                         with u5:
-                            urgent_position = st.selectbox("ตำแหน่งแทรก", insert_choices, key="urgent_insert_position")
+                            urgent_position = st.selectbox("ตำแหน่งแทรก", insert_choices, index=insert_choices.index(next_queue_label), key="urgent_insert_position")
                         urgent_reason = st.text_input("เหตุผล/หมายเหตุงานด่วน", placeholder="เช่น ลูกค้าเร่งส่ง, งานแก้ไขเร่งด่วน", key="urgent_reason")
 
                         auto_urgent_start = urgent_insert_ready_at(
                             urgent_machine, urgent_position, target_map.get(urgent_position), df_db
                         )
+                        before_paused_selected = urgent_position == before_paused_label
+                        if before_paused_selected:
+                            remaining_running = [item for item in timeline_live if "กำลังผลิต" in safe_str(item.get("status"), "")]
+                            running_finishes = [item.get("finish") for item in remaining_running if item.get("finish") is not None]
+                            auto_urgent_start = get_next_valid_work_time(max([get_bangkok_now().replace(tzinfo=None)] + running_finishes))
+                            st.info("งานที่พักจะรอ Resume หลังงานด่วน โดยเก็บเวลาเริ่มจริงและ Step เดิมไว้ งานที่กำลังรันจะไม่ถูกหยุด")
                         urgent_time_mode = st.radio(
                             "การกำหนดเวลาเริ่มงานด่วน",
                             ["ต่อเวลาตามตำแหน่งคิวอัตโนมัติ", "กำหนดวันและเวลาเริ่มเอง"],
@@ -8691,7 +8736,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 if item["id"] == safe_int(target_id)
                             ), len(preview_rows))
                         else:
-                            preview_insert_index = len(timeline_live)
+                            preview_insert_index = (
+                                next((index for index, item in enumerate(preview_rows) if "พักงาน" in item["status"]), len(timeline_live))
+                                if before_paused_selected else len(timeline_live)
+                            )
                         urgent_preview_item = {
                             "id": -1,
                             "plan": urgent_plan.strip() or "ยังไม่ระบุแผน",
@@ -8767,7 +8815,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 st.error("กรุณากำหนดเวลางานด่วนอย่างน้อย 1 นาที")
                             else:
                                 urgent_saved, urgent_error, urgent_changed_rows = insert_urgent_job_into_waiting_queue(
-                                    urgent_machine, target_id, payload, urgent_requested_start
+                                    urgent_machine, target_id, payload, urgent_requested_start,
+                                    before_paused=before_paused_selected
                                 )
                                 if urgent_saved:
                                     st.session_state["reset_urgent_confirmation_after_save"] = True
