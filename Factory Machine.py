@@ -6179,12 +6179,24 @@ def render_outsource_management(df_all):
                     )
 
 def build_work_order_print_document(source_df, filters, printed_at):
-    """Print the already filtered queue in its displayed order; escape user-entered fields."""
+    """Print filtered jobs grouped by factory machine order, then numeric queue order."""
     columns = ["เครื่องจักร / แผนก", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.",
                "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", "เริ่มขึ้นงานตามแผน",
                "จบงานตามแผน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)"]
     selected_columns = [column for column in columns if column in source_df.columns]
     printable = source_df[selected_columns].copy()
+    if "เครื่องจักร / แผนก" in printable.columns:
+        machine_rank = {normalize_filter_key(name): rank for rank, name in enumerate(MACHINE_LIST)}
+        printable["_print_machine_rank"] = printable["เครื่องจักร / แผนก"].map(
+            lambda value: machine_rank.get(normalize_filter_key(value), len(machine_rank)))
+        printable["_print_machine_name"] = printable["เครื่องจักร / แผนก"].map(
+            lambda value: tuple((0, int(part)) if part.isdigit() else (1, part.casefold())
+                                for part in re.split(r"(\d+)", str(value))))
+        printable["_print_queue"] = pd.to_numeric(printable.get("ลำดับคิว", pd.Series(index=printable.index, dtype="float64")), errors="coerce")
+        printable = printable.sort_values(
+            ["_print_machine_rank", "_print_machine_name", "_print_queue"],
+            kind="stable", na_position="last").drop(
+                columns=["_print_machine_rank", "_print_machine_name", "_print_queue"])
     table = printable.to_html(index=False, escape=True, na_rep="", border=0)
     filter_text = " | ".join(f"{html.escape(str(label))}: {html.escape(str(value))}" for label, value in filters.items())
     return f"""<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">
