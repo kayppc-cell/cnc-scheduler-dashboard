@@ -5905,11 +5905,103 @@ def render_people_work_center(department):
     if is_qc:
         render_qc_time_cost_table(tasks, now)
 
-def render_department_operator_mode():
+TRAINING_OPERATOR_NAMES = [f"ผู้ฝึก-{number:02d}" for number in range(1, 16)]
+
+
+def seed_training_operator_tasks(operator_name):
+    person_index = TRAINING_OPERATOR_NAMES.index(operator_name)
+    department = "QC" if person_index < 8 else "AUTOMATION"
+    start = get_next_valid_work_time(get_bangkok_now().replace(tzinfo=None))
+    rows = []
+    for index in range(4):
+        _, finish = add_work_time_with_shift(start, (30 + index * 15) / 60.0)
+        rows.append({"id": 8000000 + person_index * 100 + index,
+                     "department": department, "assignee": operator_name,
+                     "plan_code": f"TRAIN-OP-{index % 2 + 1:02d}",
+                     "drawing_name": f"DEMO-OP-{person_index + 1:02d}-{index + 1:02d}",
+                     "task_type": "ตรวจสอบชิ้นงาน" if department == "QC" else "ทดสอบระบบ Automation",
+                     "details": f"ใบงานฝึกคิวที่ {index + 1}: ฝึก Start / พัก / Resume / Finish",
+                     "priority": "ปกติ", "status": "🟧 รอรับงาน",
+                     "planned_start_at": start.strftime("%Y-%m-%d %H:%M:%S"),
+                     "due_at": finish.strftime("%Y-%m-%d %H:%M:%S"),
+                     "planned_hours": (30 + index * 15) / 60.0,
+                     "actual_start": None, "actual_finish": None, "hold_started_at": None,
+                     "paused_seconds": 0.0, "pause_reason": None, "pause_note": None,
+                     "result_note": None, "created_at": get_bangkok_str()})
+        start = finish
+    return rows
+
+
+def initialize_operator_training():
+    if "training_operator_tasks" not in st.session_state:
+        st.session_state["training_operator_tasks"] = [
+            row for name in TRAINING_OPERATOR_NAMES for row in seed_training_operator_tasks(name)]
+
+
+def fetch_training_operator_tasks(department):
+    initialize_operator_training()
+    rows = [row for row in st.session_state["training_operator_tasks"] if row.get("department") == department]
+    return pd.DataFrame(json.loads(json.dumps(rows, default=str)))
+
+
+def update_training_operator_task(task_id, payload):
+    initialize_operator_training()
+    allowed_fields = {"status", "actual_start", "actual_finish", "hold_started_at", "paused_seconds",
+                      "pause_reason", "pause_note", "result_note"}
+    if not isinstance(payload, dict) or set(payload) - allowed_fields:
+        return False
+    rows = st.session_state["training_operator_tasks"]
+    matched = [row for row in rows if safe_int(row.get("id")) == safe_int(task_id)]
+    if len(matched) != 1 or matched[0].get("assignee") not in TRAINING_OPERATOR_NAMES:
+        return False
+    row = matched[0]
+    transitions = {"🟧 รอรับงาน": {"🟦 กำลังทำ"}, "🟦 กำลังทำ": {"🟨 พักงาน", "✅ เสร็จแล้ว"},
+                   "🟨 พักงาน": {"🟦 กำลังทำ"}}
+    if payload.get("status") not in transitions.get(row.get("status"), set()):
+        return False
+    active = [item for item in rows if item.get("assignee") == row.get("assignee")
+              and not any(word in str(item.get("status", "")) for word in ("เสร็จ", "ยกเลิก"))]
+    active.sort(key=lambda item: (
+        0 if "กำลังทำ" in item["status"] else (1 if "พักงาน" in item["status"] else 2),
+        item.get("planned_start_at") or "9999", item.get("due_at") or "9999", item["id"]))
+    if not active or active[0]["id"] != row["id"]:
+        return False
+    row.update(json.loads(json.dumps(payload, default=str)))
+    row["updated_at"] = get_bangkok_str()
+    return True
+
+
+def render_operator_training_mode():
+    initialize_operator_training()
+    st.warning("🎓 โหมดฝึกผู้ปฏิบัติงาน QC / Automation — ใช้ข้อมูลจำลอง ไม่บันทึกลง Supabase")
+    st.caption("ผู้ฝึก 15 ชื่อ คนละ 4 คิว • ข้อมูลแยกใน session นี้ • ใช้หน้าจอและปฏิทินเวลาชุดเดียวกับโหมดจริง")
+    feedback = st.session_state.pop("training_operator_reset_feedback", None)
+    if feedback:
+        st.success(feedback)
+    with st.expander("🔄 รีเซ็ตใบงานของผู้ฝึก"):
+        with st.form("training_operator_reset", clear_on_submit=True):
+            person = st.selectbox("ผู้ฝึกที่จะรีเซ็ต", TRAINING_OPERATOR_NAMES)
+            confirmed = st.checkbox("ยืนยันล้างใบงานฝึกและสร้างตัวอย่างใหม่ให้ผู้ฝึกคนนี้")
+            submitted = st.form_submit_button("รีเซ็ตใบงานฝึก")
+        if submitted:
+            if not confirmed:
+                st.warning("กรุณาติ๊กยืนยันก่อนรีเซ็ต")
+            else:
+                st.session_state["training_operator_tasks"] = [
+                    row for row in st.session_state["training_operator_tasks"] if row.get("assignee") != person
+                ] + seed_training_operator_tasks(person)
+                st.session_state["training_operator_reset_feedback"] = f"รีเซ็ตใบงานฝึกของ {person} สำเร็จแล้ว"
+                st.rerun()
+    render_department_operator_mode(training=True)
+
+
+def render_department_operator_mode(training=False):
     """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
-    st.subheader("👤 โหมดผู้ปฏิบัติงาน")
+    fetch_department_work_orders = fetch_training_operator_tasks if training else globals()["fetch_department_work_orders"]
+    update_department_work_order = update_training_operator_task if training else globals()["update_department_work_order"]
+    st.subheader("🎓 โหมดฝึกผู้ปฏิบัติงาน" if training else "👤 โหมดผู้ปฏิบัติงาน")
     st.caption("หน้าปฏิบัติการสำหรับ Start / พัก / Resume / Finish — ทำงานตามลำดับคิว")
-    if not operator_only_mode:
+    if not training and not operator_only_mode:
         st.markdown("[🔗 เปิดลิงก์เฉพาะโหมดผู้ปฏิบัติงาน](?view=operator)")
 
     qc_tasks = fetch_department_work_orders("QC")
@@ -5922,7 +6014,7 @@ def render_department_operator_mode():
     task_frames = [frame for frame in [qc_tasks, automation_tasks] if isinstance(frame, pd.DataFrame) and not frame.empty]
     all_tasks = pd.concat(task_frames, ignore_index=True) if task_frames else pd.DataFrame()
 
-    operator_names = list(dict.fromkeys(QC_ASSIGNEES[1:] + AUTOMATION_ASSIGNEES[1:]))
+    operator_names = list(TRAINING_OPERATOR_NAMES) if training else list(dict.fromkeys(QC_ASSIGNEES[1:] + AUTOMATION_ASSIGNEES[1:]))
     if not all_tasks.empty and "assignee" in all_tasks.columns:
         existing_operator_names = all_tasks["assignee"].dropna().astype(str).str.strip().tolist()
         operator_names = list(dict.fromkeys(operator_names + [name for name in existing_operator_names if name]))
@@ -5941,7 +6033,7 @@ def render_department_operator_mode():
         "เลือกชื่อผู้ปฏิบัติงาน",
         operator_names,
         format_func=lambda name: f"{name} — มี {active_counts.get(name, 0)} คิว",
-        key="department_operator_name"
+        key="training_department_operator_name" if training else "department_operator_name"
     )
     if all_tasks.empty:
         st.info("ยังไม่มีคิวงานที่ได้รับมอบหมาย")
@@ -6421,6 +6513,7 @@ nav_options = [
     "👷 โหมดหน้าเครื่อง",
     "🎓 โหมดฝึกหน้าเครื่อง", 
     "👤 โหมดผู้ปฏิบัติงาน",
+    "🎓 โหมดฝึกผู้ปฏิบัติงาน",
     "🧪 งานตรวจสอบ QC",
     "🤖 ใบสั่งงาน Automation",
     "📊 แดชบอร์ดภาพรวมโรงงาน", 
@@ -6465,6 +6558,9 @@ elif st.session_state.current_view == "🤖 ใบสั่งงาน Automati
 
 elif st.session_state.current_view == "👤 โหมดผู้ปฏิบัติงาน":
     render_department_operator_mode()
+
+elif st.session_state.current_view == "🎓 โหมดฝึกผู้ปฏิบัติงาน":
+    render_operator_training_mode()
 
 elif st.session_state.current_view in ("👷 โหมดหน้าเครื่อง", "🎓 โหมดฝึกหน้าเครื่อง"):
     training_active = st.session_state.current_view == "🎓 โหมดฝึกหน้าเครื่อง"
