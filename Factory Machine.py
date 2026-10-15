@@ -6178,6 +6178,42 @@ def render_outsource_management(df_all):
                         f"วันที่ส่ง **{sent_text}** | หมายเหตุ **{note}**"
                     )
 
+def history_archive_password():
+    try:
+        return str(st.secrets.get("TPC_HISTORY_ARCHIVE_PASSWORD", "")).strip()
+    except Exception:
+        return ""
+
+
+def history_archive_is_unlocked():
+    password = history_archive_password()
+    grant = st.session_state.get("history_archive_access", {})
+    if not password or not isinstance(grant, dict):
+        return False
+    digest = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    age = tpc_auth_time.time() - safe_float(grant.get("granted_at"), 0.0)
+    return 0 <= age < 1800 and hmac.compare_digest(str(grant.get("digest", "")), digest)
+
+
+def summarize_finished_history_months(source_df, today):
+    month_keys = source_df["เสร็จจริง"].map(
+        lambda value: (lambda dt: dt.strftime("%Y-%m") if dt is not None and pd.notna(dt) else "ไม่ระบุเดือน")(
+            parse_flexible_datetime(value)))
+    rows = []
+    for key in sorted(month_keys.unique()):
+        group = source_df.loc[month_keys.eq(key)]
+        dates = [parse_flexible_datetime(value) for value in group["เสร็จจริง"]]
+        dates = [dt for dt in dates if dt is not None and pd.notna(dt)]
+        elapsed = ((today.year - int(key[:4])) * 12 + today.month - int(key[5:])) if key != "ไม่ระบุเดือน" else None
+        rows.append({"เดือนที่เสร็จ": key, "จำนวนใบงาน": len(group),
+                     "จำนวนแผน": group["แผนงาน"].nunique(),
+                     "Drawing ไม่ซ้ำในแผน": len(group[["แผนงาน", "ชื่อ Drawing."]].drop_duplicates()),
+                     "เสร็จเร็วสุด": min(dates).strftime("%d/%m/%Y") if dates else "-",
+                     "เสร็จล่าสุด": max(dates).strftime("%d/%m/%Y") if dates else "-",
+                     "ผ่านมากี่เดือน": elapsed})
+    return pd.DataFrame(rows), month_keys
+
+
 def build_work_order_print_document(source_df, filters, printed_at):
     """Print filtered jobs grouped by factory machine order, then numeric queue order."""
     columns = ["เครื่องจักร / แผนก", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.",
@@ -10052,6 +10088,72 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 fin_display_df["พักสะสม (ชม.)"] = pause_hrs_list
                 fin_display_df["เวลาจริงสุทธิ (ชม.)"] = act_hrs_list
                 fin_display_df["ผลเทียบแผน"] = plan_result_list
+                selected_history_month = "ทุกเดือน"
+                history_archive_access = bool(is_admin and history_archive_is_unlocked())
+                with st.expander("🔒 ประวัติงานแยกรายเดือน / เตรียมสำรองก่อนลบ", expanded=False):
+                    if not is_admin:
+                        st.info("เฉพาะผู้ดูแลระบบที่ปลดล็อกรหัสจึงใช้ส่วนนี้ได้")
+                    elif not history_archive_access:
+                        if not history_archive_password():
+                            st.info("ตั้งค่า TPC_HISTORY_ARCHIVE_PASSWORD ใน Streamlit Secrets ก่อนใช้งาน")
+                        else:
+                            with st.form("history_archive_unlock", clear_on_submit=True):
+                                archive_password_attempt = st.text_input("รหัสเข้าใช้งานประวัติรายเดือนและลบประวัติ", type="password")
+                                archive_unlock_submit = st.form_submit_button("🔓 ปลดล็อก")
+                            if archive_unlock_submit:
+                                if hmac.compare_digest(archive_password_attempt.encode("utf-8"), history_archive_password().encode("utf-8")):
+                                    st.session_state["history_archive_access"] = {
+                                        "granted_at": tpc_auth_time.time(),
+                                        "digest": hashlib.sha256(history_archive_password().encode("utf-8")).hexdigest(),
+                                    }
+                                    st.session_state.finish_select_all = False
+                                    st.session_state.pop("editor_finished_jobs_history", None)
+                                    st.rerun()
+                                else:
+                                    st.error("รหัสไม่ถูกต้อง")
+                    else:
+                        st.success("ปลดล็อกแล้ว ใช้งานได้ 30 นาที")
+                        if st.button("🔒 ล็อกกลับ", key="history_archive_lock"):
+                            st.session_state.pop("history_archive_access", None)
+                            st.session_state.finish_select_all = False
+                            st.session_state.pop("editor_finished_jobs_history", None)
+                            st.rerun()
+                        history_month_summary, history_month_keys = summarize_finished_history_months(
+                            fin_display_df, get_bangkok_now().date())
+                        st.caption("จัดเดือนตามวันเสร็จจริง • จำนวนใบงานคือจำนวนแถวในฐานข้อมูล • ยังไม่มีการลบอัตโนมัติ")
+                        st.dataframe(history_month_summary, hide_index=True, use_container_width=True)
+                        history_month_options = ["ทุกเดือน"] + sorted(history_month_keys.unique(), reverse=True)
+                        if st.session_state.get("finished_history_month_select", "ทุกเดือน") not in history_month_options:
+                            st.session_state["finished_history_month_select"] = "ทุกเดือน"
+                        selected_history_month = st.selectbox(
+                            "เดือนประวัติที่ต้องการตรวจ / สำรอง / เลือกลบ", history_month_options,
+                            key="finished_history_month_select",
+                            format_func=lambda key: f"{key[5:]}/{key[:4]}" if key not in ("ทุกเดือน", "ไม่ระบุเดือน") else key)
+                        if st.session_state.get("finished_history_previous_month", "ทุกเดือน") != selected_history_month:
+                            st.session_state.finish_select_all = False
+                            st.session_state.pop("editor_finished_jobs_history", None)
+                            for filter_key in ("finished_history_machine_select", "finished_history_plan_select", "finished_history_drawing_select_v2"):
+                                st.session_state.pop(filter_key, None)
+                            st.session_state["finished_history_quick_filter"] = "ALL"
+                            st.session_state["finished_history_custom_date_enabled"] = False
+                        st.session_state["finished_history_previous_month"] = selected_history_month
+                        if selected_history_month != "ทุกเดือน":
+                            fin_display_df = fin_display_df.loc[history_month_keys.eq(selected_history_month)].copy()
+                        export_history = fin_display_df.drop(columns=["ลบประวัติ"], errors="ignore").copy()
+                        for export_column in export_history.columns:
+                            export_history[export_column] = export_history[export_column].map(
+                                lambda value: json.dumps(value, ensure_ascii=False, default=str) if isinstance(value, (dict, list)) else value)
+                        st.download_button(
+                            "📥 สำรองข้อมูลเดือนที่เลือก (CSV)",
+                            export_history.to_csv(index=False).encode("utf-8-sig"),
+                            file_name=f"TPC_Finished_History_{selected_history_month if selected_history_month != 'ทุกเดือน' else 'ALL'}.csv",
+                            mime="text/csv", key="download_finished_history_month")
+                        st.info("ตรวจไฟล์สำรองก่อนลบ จากนั้นใช้ปุ่มเลือกทั้งหมดและยืนยันลบด้านล่าง เฉพาะรายการที่กำลังแสดง การลบจะทำให้รายงานย้อนหลังและต้นทุนที่อิงใบงานเหล่านี้เปลี่ยนไป")
+                if not history_archive_access:
+                    st.session_state.finish_select_all = False
+                    st.session_state.pop("editor_finished_jobs_history", None)
+                if selected_history_month != "ทุกเดือน":
+                    st.caption(f"📦 กำลังดูประวัติเดือน {selected_history_month} จำนวน {len(fin_display_df):,} ใบงาน ก่อนกรองเพิ่มเติม")
                 fin_display_df["ลบประวัติ"] = st.session_state.finish_select_all
 
                 st.markdown("**🔎 ค้นหาด่วนด้วยปุ่ม:**")
@@ -10194,7 +10296,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 drawing_options = ["🌐 ทุก Drawing"] + sorted(drawing_scope["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
                 drawing_key = "finished_history_drawing_select_v2"
                 previous_plan_key = "finished_history_drawing_filter_scope"
-                current_drawing_scope = (selected_fin_machine, selected_fin_plan, quick_filter,
+                current_drawing_scope = (selected_history_month, selected_fin_machine, selected_fin_plan, quick_filter,
                                          custom_date_enabled, selected_history_day, selected_history_range)
                 if (st.session_state.get(previous_plan_key) != current_drawing_scope
                         or st.session_state.get(drawing_key, "🌐 ทุก Drawing") not in drawing_options):
@@ -10211,6 +10313,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     performance_scope_df = performance_scope_df[
                         performance_scope_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_fin_drawing)
                     ]
+
+                deletion_scope = (selected_history_month, selected_fin_machine, selected_fin_plan,
+                                  selected_fin_drawing, quick_filter, custom_date_enabled,
+                                  selected_history_day, selected_history_range)
+                if st.session_state.get("finished_history_deletion_scope") != deletion_scope:
+                    st.session_state.finish_select_all = False
+                    fin_display_df["ลบประวัติ"] = False
+                    st.session_state.pop("editor_finished_jobs_history", None)
+                st.session_state["finished_history_deletion_scope"] = deletion_scope
 
                 # เมื่อดูทุกเครื่อง ให้เรียงเป็นกลุ่มตามลำดับเครื่องมาตรฐานของโรงงาน
                 # และเรียงงานล่าสุดไว้บนสุดภายในเครื่องเดียวกัน
@@ -10325,7 +10436,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 # จองตำแหน่งปุ่มก่อนตาราง เพื่อให้มองเห็นแน่นอนทั้งโหมด Admin และ Viewer
                 finished_pdf_slot = st.empty()
 
-                if is_admin:
+                if is_admin and history_archive_access:
                     st.caption("ℹ️ ปุ่มด้านล่างใช้เลือกช่อง ‘เลือกลบ’ ของรายการที่กำลังแสดงในตารางเท่านั้น")
                     fb_c1, fb_c2, _ = st.columns([1.5, 1.5, 4])
                     with fb_c1:
@@ -10337,7 +10448,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             st.session_state.finish_select_all = False
                             st.rerun()
 
-                if is_admin:
+                if is_admin and history_archive_access:
                     edited_fin = st.data_editor(
                         fin_display_df,
                         key="editor_finished_jobs_history",
@@ -10380,6 +10491,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     fin_to_del = edited_fin[edited_fin["ลบประวัติ"] == True]
                     del_fin_count = len(fin_to_del)
                     if st.button(f"🗑️ ยืนยันลบรายการที่เลือก ({del_fin_count} รายการ)", key="btn_del_finished_records", type="secondary", disabled=(del_fin_count == 0)):
+                        if not history_archive_is_unlocked():
+                            st.error("รหัสหมดอายุ กรุณาปลดล็อกใหม่ก่อนลบประวัติ")
+                            st.stop()
                         for _, r in fin_to_del.iterrows():
                             if pd.notna(r.get("ID")):
                                 delete_supabase_job(int(float(r["ID"])))
