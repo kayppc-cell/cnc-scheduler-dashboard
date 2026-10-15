@@ -8841,27 +8841,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             # selectbox ครบ มิฉะนั้น widget state ของเครื่อง/แผนงานจะถูกล้าง
                             active_quick_filter = filter_key
 
-                active_machine_options = ["🌐 ทุกเครื่อง"] + sorted(active_jobs_editor_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
-                active_plan_options = ["🌐 ทุกแผนงาน"] + sorted(active_jobs_editor_df["แผนงาน"].dropna().astype(str).unique().tolist())
-                active_drawing_options = ["🌐 ทุก Drawing"] + sorted(active_jobs_editor_df["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
-                active_material_options = ["🌐 ทุกวัสดุ"] + sorted(active_jobs_editor_df["วัสดุ"].dropna().astype(str).unique().tolist())
-
-                a_sel1, a_sel2, a_sel3, a_sel4 = st.columns([1.2, 1, 1.5, 0.9])
-                with a_sel1:
-                    selected_active_machine = st.selectbox("🏭 เครื่องจักร:", active_machine_options, key="active_jobs_machine_select")
-                with a_sel2:
-                    selected_active_plan = st.selectbox("📌 แผนงาน:", active_plan_options, key="active_jobs_plan_select")
-                with a_sel3:
-                    selected_active_drawing = st.selectbox("📄 Drawing:", active_drawing_options, key="active_jobs_drawing_select")
-                with a_sel4:
-                    selected_active_material = st.selectbox("🔩 วัสดุ:", active_material_options, key="active_jobs_material_select")
-
-                # อ่านค่าจริงจาก widget state ทุกครั้ง ป้องกันตัวแปรเดิมค้างหลังผู้ใช้เปลี่ยนตัวเลือก
-                selected_active_machine = st.session_state.get("active_jobs_machine_select", "🌐 ทุกเครื่อง")
-                selected_active_plan = st.session_state.get("active_jobs_plan_select", "🌐 ทุกแผนงาน")
-                selected_active_drawing = st.session_state.get("active_jobs_drawing_select", "🌐 ทุก Drawing")
-                selected_active_material = st.session_state.get("active_jobs_material_select", "🌐 ทุกวัสดุ")
-
                 display_editor_df = active_jobs_editor_df.copy()
                 active_status_text = display_editor_df["สถานะงาน"].astype(str)
                 if active_quick_filter == "RUNNING":
@@ -8880,22 +8859,34 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         )
                     ]
 
-                if normalize_filter_key(selected_active_machine) != normalize_filter_key("🌐 ทุกเครื่อง"):
-                    display_editor_df = display_editor_df[
-                        display_editor_df["เลือกเครื่องจักร"].map(normalize_filter_key) == normalize_filter_key(selected_active_machine)
-                    ]
-                if normalize_filter_key(selected_active_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
-                    display_editor_df = display_editor_df[
-                        display_editor_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_active_plan)
-                    ]
-                if normalize_filter_key(selected_active_drawing) != normalize_filter_key("🌐 ทุก Drawing"):
-                    display_editor_df = display_editor_df[
-                        display_editor_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_active_drawing)
-                    ]
-                if normalize_filter_key(selected_active_material) != normalize_filter_key("🌐 ทุกวัสดุ"):
-                    display_editor_df = display_editor_df[
-                        display_editor_df["วัสดุ"].map(normalize_filter_key) == normalize_filter_key(selected_active_material)
-                    ]
+                # Cascade options from the same filtered rows as the editable table.
+                a_sel1, a_sel2, a_sel3, a_sel4 = st.columns([1.2, 1, 1.5, 0.9])
+                def select_active_table_filter(source, column, label, all_label, key, parents, container):
+                    options = [all_label] + sorted(source[column].dropna().astype(str).unique().tolist())
+                    scope_key = key + "_filter_scope"
+                    scope = (active_quick_filter,) + tuple(parents)
+                    if (st.session_state.get(scope_key) != scope
+                            or st.session_state.get(key, all_label) not in options):
+                        st.session_state[key] = all_label
+                    st.session_state[scope_key] = scope
+                    with container:
+                        selected = st.selectbox(label, options, key=key)
+                    if normalize_filter_key(selected) == normalize_filter_key(all_label):
+                        return selected, source
+                    return selected, source[source[column].map(normalize_filter_key) == normalize_filter_key(selected)]
+
+                selected_active_machine, display_editor_df = select_active_table_filter(
+                    display_editor_df, "เลือกเครื่องจักร", "🏭 เครื่องจักร:", "🌐 ทุกเครื่อง",
+                    "active_jobs_machine_select", (), a_sel1)
+                selected_active_plan, display_editor_df = select_active_table_filter(
+                    display_editor_df, "แผนงาน", "📌 แผนงาน:", "🌐 ทุกแผนงาน",
+                    "active_jobs_plan_select", (selected_active_machine,), a_sel2)
+                selected_active_material, display_editor_df = select_active_table_filter(
+                    display_editor_df, "วัสดุ", "🔩 วัสดุ:", "🌐 ทุกวัสดุ",
+                    "active_jobs_material_select", (selected_active_machine, selected_active_plan), a_sel4)
+                selected_active_drawing, display_editor_df = select_active_table_filter(
+                    display_editor_df, "ชื่อ Drawing.", "📄 Drawing:", "🌐 ทุก Drawing",
+                    "active_jobs_drawing_select", (selected_active_machine, selected_active_plan, selected_active_material), a_sel3)
 
                 display_editor_df = display_editor_df.reset_index(drop=True)
                 st.caption(f"แสดงผล {len(display_editor_df):,} จากทั้งหมด {len(active_jobs_editor_df):,} รายการ")
@@ -9533,26 +9524,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         # คงค่าตัวกรอง dropdown ไว้ และนำปุ่มสถานะมากรองร่วมกันในรอบนี้
                         selected_wo_filter = filter_key
 
-            wo_machine_options = ["🌐 ทุกเครื่อง"] + sorted(df_wo_direct["เครื่องจักร / แผนก"].dropna().astype(str).unique().tolist())
-            wo_plan_options = ["🌐 ทุกแผนงาน"] + sorted(df_wo_direct["แผนงาน"].dropna().astype(str).unique().tolist())
-            wo_drawing_options = ["🌐 ทุก Drawing"] + sorted(df_wo_direct["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
-            wo_material_options = ["🌐 ทุกวัสดุ"] + sorted(df_wo_direct["วัสดุ"].dropna().astype(str).unique().tolist())
-
-            wo_sel1, wo_sel2, wo_sel3, wo_sel4 = st.columns([1.2, 1, 1.5, 0.9])
-            with wo_sel1:
-                selected_wo_machine = st.selectbox("🏭 เครื่องจักร:", wo_machine_options, key="wo_machine_select")
-            with wo_sel2:
-                selected_wo_plan = st.selectbox("📌 แผนงาน:", wo_plan_options, key="wo_plan_select")
-            with wo_sel3:
-                selected_wo_drawing = st.selectbox("📄 Drawing:", wo_drawing_options, key="wo_drawing_select")
-            with wo_sel4:
-                selected_wo_material = st.selectbox("🔩 วัสดุ:", wo_material_options, key="wo_material_select")
-
-            selected_wo_machine = st.session_state.get("wo_machine_select", "🌐 ทุกเครื่อง")
-            selected_wo_plan = st.session_state.get("wo_plan_select", "🌐 ทุกแผนงาน")
-            selected_wo_drawing = st.session_state.get("wo_drawing_select", "🌐 ทุก Drawing")
-            selected_wo_material = st.session_state.get("wo_material_select", "🌐 ทุกวัสดุ")
-
             df_display = df_wo_direct.copy()
             wo_status_text = df_display["สถานะ"].astype(str)
 
@@ -9582,22 +9553,33 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     return False
                 df_display = df_display[df_display.apply(is_late_row, axis=1)]
 
-            if normalize_filter_key(selected_wo_machine) != normalize_filter_key("🌐 ทุกเครื่อง"):
-                df_display = df_display[
-                    df_display["เครื่องจักร / แผนก"].map(normalize_filter_key) == normalize_filter_key(selected_wo_machine)
-                ]
-            if normalize_filter_key(selected_wo_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
-                df_display = df_display[
-                    df_display["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_wo_plan)
-                ]
-            if normalize_filter_key(selected_wo_drawing) != normalize_filter_key("🌐 ทุก Drawing"):
-                df_display = df_display[
-                    df_display["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_wo_drawing)
-                ]
-            if normalize_filter_key(selected_wo_material) != normalize_filter_key("🌐 ทุกวัสดุ"):
-                df_display = df_display[
-                    df_display["วัสดุ"].map(normalize_filter_key) == normalize_filter_key(selected_wo_material)
-                ]
+            wo_sel1, wo_sel2, wo_sel3, wo_sel4 = st.columns([1.2, 1, 1.5, 0.9])
+            def select_wo_table_filter(source, column, label, all_label, key, parents, container):
+                options = [all_label] + sorted(source[column].dropna().astype(str).unique().tolist())
+                scope_key = key + "_filter_scope"
+                scope = (selected_wo_filter,) + tuple(parents)
+                if (st.session_state.get(scope_key) != scope
+                        or st.session_state.get(key, all_label) not in options):
+                    st.session_state[key] = all_label
+                st.session_state[scope_key] = scope
+                with container:
+                    selected = st.selectbox(label, options, key=key)
+                if normalize_filter_key(selected) == normalize_filter_key(all_label):
+                    return selected, source
+                return selected, source[source[column].map(normalize_filter_key) == normalize_filter_key(selected)]
+
+            selected_wo_machine, df_display = select_wo_table_filter(
+                df_display, "เครื่องจักร / แผนก", "🏭 เครื่องจักร:", "🌐 ทุกเครื่อง",
+                "wo_machine_select", (), wo_sel1)
+            selected_wo_plan, df_display = select_wo_table_filter(
+                df_display, "แผนงาน", "📌 แผนงาน:", "🌐 ทุกแผนงาน",
+                "wo_plan_select", (selected_wo_machine,), wo_sel2)
+            selected_wo_material, df_display = select_wo_table_filter(
+                df_display, "วัสดุ", "🔩 วัสดุ:", "🌐 ทุกวัสดุ",
+                "wo_material_select", (selected_wo_machine, selected_wo_plan), wo_sel4)
+            selected_wo_drawing, df_display = select_wo_table_filter(
+                df_display, "ชื่อ Drawing.", "📄 Drawing:", "🌐 ทุก Drawing",
+                "wo_drawing_select", (selected_wo_machine, selected_wo_plan, selected_wo_material), wo_sel3)
 
             st.caption(f"แสดงผล {len(df_display):,} จากทั้งหมด {len(df_wo_direct):,} รายการ")
 
@@ -10086,25 +10068,9 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     selected_fin_machine = st.selectbox("🏭 เลือกเครื่องจักร:", machine_options, key="finished_history_machine_select")
                 with sel_c2:
                     selected_fin_plan = st.selectbox("📌 เลือกแผนงาน:", plan_options, key="finished_history_plan_select")
-                # Build Drawing options after the plan selector, before rendering its widget.
-                drawing_scope = fin_display_df
-                if normalize_filter_key(selected_fin_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
-                    drawing_scope = drawing_scope[
-                        drawing_scope["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_fin_plan)
-                    ]
-                drawing_options = ["🌐 ทุก Drawing"] + sorted(drawing_scope["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
-                drawing_key = "finished_history_drawing_select"
-                previous_plan_key = "finished_history_drawing_plan_scope"
-                if (st.session_state.get(previous_plan_key) != selected_fin_plan
-                        or st.session_state.get(drawing_key, "🌐 ทุก Drawing") not in drawing_options):
-                    st.session_state[drawing_key] = "🌐 ทุก Drawing"
-                st.session_state[previous_plan_key] = selected_fin_plan
-                with sel_c3:
-                    selected_fin_drawing = st.selectbox("📄 เลือก Drawing:", drawing_options, key=drawing_key)
 
                 selected_fin_machine = st.session_state.get("finished_history_machine_select", "🌐 ทุกเครื่อง")
                 selected_fin_plan = st.session_state.get("finished_history_plan_select", "🌐 ทุกแผนงาน")
-                selected_fin_drawing = st.session_state.get("finished_history_drawing_select", "🌐 ทุก Drawing")
 
                 total_finished_before_filter = len(fin_display_df)
                 finish_dates = fin_display_df["เสร็จจริง"].apply(parse_flexible_datetime)
@@ -10155,6 +10121,25 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     performance_scope_df = performance_scope_df[
                         performance_scope_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_fin_plan)
                     ]
+                # Drawing options use exactly the rows matching all other active table filters.
+                drawing_scope = fin_display_df
+                if normalize_filter_key(selected_fin_plan) != normalize_filter_key("🌐 ทุกแผนงาน"):
+                    drawing_scope = drawing_scope[
+                        drawing_scope["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(selected_fin_plan)
+                    ]
+                drawing_options = ["🌐 ทุก Drawing"] + sorted(drawing_scope["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
+                drawing_key = "finished_history_drawing_select_v2"
+                previous_plan_key = "finished_history_drawing_filter_scope"
+                current_drawing_scope = (selected_fin_machine, selected_fin_plan, quick_filter,
+                                         custom_date_enabled, selected_history_day, selected_history_range)
+                if (st.session_state.get(previous_plan_key) != current_drawing_scope
+                        or st.session_state.get(drawing_key, "🌐 ทุก Drawing") not in drawing_options):
+                    st.session_state[drawing_key] = "🌐 ทุก Drawing"
+                st.session_state[previous_plan_key] = current_drawing_scope
+                with sel_c3:
+                    selected_fin_drawing = st.selectbox("📄 เลือก Drawing:", drawing_options, key=drawing_key)
+
+
                 if normalize_filter_key(selected_fin_drawing) != normalize_filter_key("🌐 ทุก Drawing"):
                     fin_display_df = fin_display_df[
                         fin_display_df["ชื่อ Drawing."].map(normalize_filter_key) == normalize_filter_key(selected_fin_drawing)
