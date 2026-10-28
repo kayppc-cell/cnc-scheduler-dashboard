@@ -6123,17 +6123,175 @@ def render_operator_training_mode():
     render_department_operator_mode(training=True)
 
 
+def fetch_operator_live_tasks(department):
+    """Complete fresh snapshot for operator controls; never convert a failed read to empty."""
+    endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
+    rows, last_id = [], None
+    while True:
+        params = {"select": "*", "department": f"eq.{department}", "order": "id.asc", "limit": "500"}
+        if last_id is not None:
+            params["id"] = f"gt.{last_id}"
+        response = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        if response.status_code != 200:
+            raise RuntimeError("โหลดคิวผู้ปฏิบัติงานไม่สำเร็จ กรุณารีเฟรชแล้วลองใหม่")
+        batch = response.json()
+        if not isinstance(batch, list):
+            raise RuntimeError("ข้อมูลคิวไม่ถูกต้อง")
+        if not batch:
+            return pd.DataFrame(rows)
+        for row in batch:
+            current_id = safe_int(row.get("id"), 0)
+            if current_id <= (last_id or 0):
+                raise RuntimeError("ลำดับข้อมูลคิวไม่ถูกต้อง")
+            rows.append(row)
+            last_id = current_id
+
+
+def operator_supervisor_is_unlocked():
+    if st.session_state.get("user_role") == "admin":
+        return True
+    grant = st.session_state.get("operator_supervisor_grant", {})
+    digest = hashlib.sha256(ADMIN_PASSWORD.encode("utf-8")).hexdigest()
+    return (isinstance(grant, dict) and 0 <= tpc_auth_time.time() - safe_float(grant.get("at"), 0) < 1800
+            and hmac.compare_digest(str(grant.get("digest", "")), digest))
+
+
+def operator_live_rpc(person, action, task=None, payload=None, target_id=None):
+    if action == "urgent" and not operator_supervisor_is_unlocked():
+        st.error("ต้องปลดล็อกสิทธิ์ผู้ดูแลก่อนสร้างงานด่วน")
+        return False
+    raw = dict(task) if task is not None else {}
+    expected = {}
+    for key in ("status", "actual_start", "hold_started_at", "paused_seconds", "updated_at"):
+        if key in raw:
+            value = raw[key]
+            expected[key] = None if value is None or pd.isna(value) else value
+    body = {"p_person": person, "p_action": action,
+            "p_task_id": safe_int(raw.get("id"), 0) or None,
+            "p_target_id": target_id, "p_expected": expected, "p_payload": payload or {}}
+    try:
+        response = requests.post(
+            f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/rpc/tpc_operator_queue_action",
+            headers=get_supabase_headers(), json=body, timeout=12)
+        if response.status_code == 404:
+            st.error("กรุณารันไฟล์ TPC_Operator_Queues_Setup_20261028.sql ใน Supabase SQL Editor ก่อนใช้เครื่องมือคิวรุ่นนี้")
+            return False
+        if response.status_code not in (200, 201):
+            try:
+                message = response.json().get("message", "บันทึกไม่สำเร็จ")
+            except Exception:
+                message = "บันทึกไม่สำเร็จ"
+            st.error(message)
+            return False
+        result = response.json()
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            st.error("ยังยืนยันผลบันทึกไม่ได้ กรุณารีเฟรชตรวจคิวก่อนทำรายการซ้ำ")
+            return False
+        fetch_department_work_orders.clear()
+        return True
+    except Exception:
+        st.error("การเชื่อมต่อขัดข้อง ผลบันทึกยังไม่แน่นอน กรุณารีเฟรชตรวจคิวก่อนทำรายการซ้ำ")
+        return False
+
+
+def render_operator_live_queue_tools(person, tasks):
+    feedback = st.session_state.pop("operator_live_queue_feedback", None)
+    if feedback:
+        st.success(feedback)
+    with st.expander("🚨 เพิ่มงานด่วนแทรก — ผู้ดูแล"):
+        if not operator_supervisor_is_unlocked():
+            st.caption("ใช้รหัสผู้ดูแลระบบชุดเดียวกับแดชบอร์ด")
+            with st.form("operator_supervisor_unlock", clear_on_submit=True):
+                password = st.text_input("รหัสผู้ดูแล", type="password")
+                unlock = st.form_submit_button("ปลดล็อกสร้างงานด่วน")
+            if unlock:
+                if hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")):
+                    st.session_state["operator_supervisor_grant"] = {
+                        "digest": hashlib.sha256(ADMIN_PASSWORD.encode("utf-8")).hexdigest(), "at": tpc_auth_time.time()}
+                    st.rerun()
+                else:
+                    st.error("รหัสไม่ถูกต้อง")
+        else:
+            if st.session_state.get("user_role") != "admin" and st.button("ล็อกการสร้างงานด่วน", key="operator_supervisor_lock"):
+                st.session_state.pop("operator_supervisor_grant", None)
+                st.rerun()
+            st.caption(f"ผู้รับผิดชอบ: {person} • เพิ่มเป็นคิวรอด้านหน้า • ต้องกด Start เอง")
+            with st.form(f"operator_live_urgent_{person}", clear_on_submit=True):
+                department = st.selectbox("แผนกงานด่วน", ["QC", "AUTOMATION"])
+                work_type = st.selectbox("ประเภทงานด่วน", list(dict.fromkeys(QC_WORK_TYPES + AUTO_WORK_TYPES)))
+                title = st.text_input("ชื่อบริษัทลูกค้า / ชื่องาน *")
+                plan = st.text_input("รหัสแผนงาน")
+                drawing = st.text_input("Drawing")
+                details = st.text_area("รายละเอียดงานด่วน *")
+                minutes = st.number_input("เวลาแผนงานด่วน (นาที)", min_value=1, value=30, step=1)
+                submitted = st.form_submit_button("ยืนยันสร้างงานด่วนจริง", type="primary")
+            if submitted:
+                if not title.strip() or not details.strip():
+                    st.warning("กรุณากรอกชื่อและรายละเอียดงาน")
+                elif work_type not in (QC_WORK_TYPES if department == "QC" else AUTO_WORK_TYPES):
+                    st.warning("กรุณาเลือกประเภทงานให้ตรงกับแผนก")
+                else:
+                    start = get_next_valid_work_time(get_bangkok_now().replace(tzinfo=None))
+                    _, finish = add_work_time_with_shift(start, minutes / 60.0)
+                    payload = {"department": department, "work_type": work_type, "title": title.strip(),
+                               "plan_code": plan.strip(), "drawing_name": drawing.strip(), "details": details.strip(),
+                               "planned_start_at": start.strftime("%Y-%m-%d %H:%M:%S"),
+                               "due_at": finish.strftime("%Y-%m-%d %H:%M:%S"), "estimated_hours": minutes / 60.0}
+                    if operator_live_rpc(person, "urgent", payload=payload):
+                        st.session_state["operator_live_queue_feedback"] = "สร้างงานด่วนแล้ว — พักหรือจบงานที่กำลังทำก่อน Start งานด่วน"
+                        st.session_state["operator_live_clear_control"] = True
+                        st.rerun()
+    with st.expander("🔀 สลับคิวงาน"):
+        movable = tasks[~tasks["status"].astype(str).str.contains("เสร็จ|ยกเลิก|กำลังทำ", regex=True)].copy() if not tasks.empty else tasks
+        if "operator_queue_position" in movable:
+            movable = movable.sort_values(["operator_queue_position", "planned_start_at", "due_at", "id"], na_position="last")
+        elif not movable.empty:
+            movable = movable.sort_values(["planned_start_at", "due_at", "id"], na_position="last")
+        options = [safe_int(value) for value in movable.get("id", [])]
+        labels = {safe_int(row["id"]): f"{i + 1}. {safe_str(row.get('drawing_name'))} | {safe_str(row.get('title'))} | {safe_str(row.get('status'))}"
+                  for i, (_, row) in enumerate(movable.iterrows())}
+        st.caption("ย้ายงานรอหรืองานพักไปก่อนคิวที่เลือก • ไม่เปลี่ยนกำหนดเวลาและเวลาจริง")
+        if len(options) < 2:
+            st.info("ต้องมีงานรอหรืองานพักอย่างน้อย 2 คิว")
+        else:
+            with st.form(f"operator_live_reorder_{person}", clear_on_submit=True):
+                source = st.selectbox("คิวต้นทาง", options, format_func=lambda value: labels[value])
+                target = st.selectbox("ย้ายไปก่อนคิว", options, index=1, format_func=lambda value: labels[value])
+                submitted = st.form_submit_button("บันทึกสลับคิว", type="primary")
+            if submitted:
+                if source == target:
+                    st.warning("กรุณาเลือกคิวต้นทางและปลายทางให้ต่างกัน")
+                elif operator_live_rpc(person, "reorder", task=movable[movable["id"].apply(safe_int).eq(source)].iloc[0], target_id=target):
+                    st.session_state["operator_live_queue_feedback"] = "สลับคิวสำเร็จแล้ว"
+                    st.session_state["operator_live_clear_control"] = True
+                    st.rerun()
+
+
 def render_department_operator_mode(training=False):
     """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
-    fetch_department_work_orders = fetch_training_operator_tasks if training else globals()["fetch_department_work_orders"]
-    update_department_work_order = update_training_operator_task if training else globals()["update_department_work_order"]
+    fetch_department_work_orders = fetch_training_operator_tasks if training else fetch_operator_live_tasks
+    live_snapshots = {}
+    def update_department_work_order(task_id, payload):
+        if training:
+            return update_training_operator_task(task_id, payload)
+        snapshot = live_snapshots.get(task_id)
+        if snapshot is None:
+            st.error("ไม่พบข้อมูลคิว กรุณารีเฟรช")
+            return False
+        action = {"🟦 กำลังทำ": "resume" if "พักงาน" in str(snapshot.get("status", "")) else "start",
+                  "🟨 พักงาน": "pause", "✅ เสร็จแล้ว": "finish"}.get(payload.get("status"))
+        return operator_live_rpc(selected_operator, action, task=snapshot, payload=payload)
     st.subheader("🎓 โหมดฝึกผู้ปฏิบัติงาน" if training else "👤 โหมดผู้ปฏิบัติงาน")
-    st.caption("ฝึก Start / พัก / เปลี่ยนคิว / Resume / Finish และงานด่วนแทรก" if training else "หน้าปฏิบัติการสำหรับ Start / พัก / Resume / Finish — ทำงานตามลำดับคิว")
+    st.caption("ฝึก Start / พัก / เปลี่ยนคิว / Resume / Finish และงานด่วนแทรก" if training else "Start / พัก / เลือกคิวอื่น / Resume / Finish และสลับคิว")
     if not training and not operator_only_mode:
         st.markdown("[🔗 เปิดลิงก์เฉพาะโหมดผู้ปฏิบัติงาน](?view=operator)")
 
-    qc_tasks = fetch_department_work_orders("QC")
-    automation_tasks = fetch_department_work_orders("AUTOMATION")
+    try:
+        qc_tasks = fetch_department_work_orders("QC")
+        automation_tasks = fetch_department_work_orders("AUTOMATION")
+    except Exception as exc:
+        st.error(str(exc))
+        return
     if qc_tasks is None or automation_tasks is None:
         st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL สำหรับโหมด QC/Automation ก่อน")
         return
@@ -6165,9 +6323,16 @@ def render_department_operator_mode(training=False):
     )
     if all_tasks.empty:
         st.info("ยังไม่มีคิวงานที่ได้รับมอบหมาย")
+        if not training:
+            render_operator_live_queue_tools(selected_operator, all_tasks)
         return
 
     person_tasks = all_tasks[all_tasks.get("assignee", pd.Series(index=all_tasks.index, dtype=str)).fillna("").astype(str) == selected_operator].copy()
+    live_snapshots.update({safe_int(row["id"]): row.to_dict() for _, row in person_tasks.iterrows()})
+    if not training:
+        if st.session_state.pop("operator_live_clear_control", False):
+            st.session_state.pop(f"operator_live_control_{selected_operator}", None)
+        render_operator_live_queue_tools(selected_operator, person_tasks)
     if training:
         if st.session_state.pop("training_operator_clear_control", False):
             st.session_state.pop(f"training_operator_control_{selected_operator}", None)
@@ -6194,27 +6359,27 @@ def render_department_operator_mode(training=False):
         na_position="last"
     ).reset_index(drop=True)
 
-    if training:
-        if "training_queue_position" not in active_tasks:
-            active_tasks["training_queue_position"] = range(len(active_tasks))
-        active_tasks = active_tasks.sort_values(
-            ["training_queue_position", "_queue_plan", "id"], na_position="last").reset_index(drop=True)
-        running = active_tasks[active_tasks["status"].astype(str).str.contains("กำลังทำ", na=False)]
-        if running.empty:
-            choices = active_tasks["id"].apply(safe_int).tolist()
-            labels = {safe_int(row["id"]): f"{i + 1}. {safe_str(row.get('drawing_name'))} | {safe_str(row.get('status'))}"
-                      for i, (_, row) in enumerate(active_tasks.iterrows())}
-            selection_key = f"training_operator_control_{selected_operator}"
-            if st.session_state.get(selection_key) not in choices:
-                st.session_state.pop(selection_key, None)
-            selected_id = st.selectbox("เลือกคิวที่จะ Start / Resume", choices,
-                                       format_func=lambda value: labels[value], key=selection_key)
-            current_task = active_tasks[active_tasks["id"].apply(safe_int).eq(selected_id)].iloc[0]
-            st.caption("พักงานแล้วเลือกคิวอื่นได้ • Resume งานเดิมเมื่อไม่มีงานอื่นกำลังทำ • ไม่เริ่มงานอัตโนมัติ")
-        else:
-            current_task = running.iloc[0]
+    order_column = "training_queue_position" if training else "operator_queue_position"
+    if order_column not in active_tasks:
+        active_tasks[order_column] = pd.NA
+    if "training_queue_position" not in active_tasks:
+        active_tasks["training_queue_position"] = range(len(active_tasks))
+    active_tasks = active_tasks.sort_values(
+        [order_column, "_queue_plan", "_queue_due", "id"], na_position="last").reset_index(drop=True)
+    running = active_tasks[active_tasks["status"].astype(str).str.contains("กำลังทำ", na=False)]
+    if running.empty:
+        choices = active_tasks["id"].apply(safe_int).tolist()
+        labels = {safe_int(row["id"]): f"{i + 1}. {safe_str(row.get('drawing_name'))} | {safe_str(row.get('status'))}"
+                  for i, (_, row) in enumerate(active_tasks.iterrows())}
+        selection_key = f"training_operator_control_{selected_operator}" if training else f"operator_live_control_{selected_operator}"
+        if st.session_state.get(selection_key) not in choices:
+            st.session_state.pop(selection_key, None)
+        selected_id = st.selectbox("เลือกคิวที่จะ Start / Resume", choices,
+                                   format_func=lambda value: labels[value], key=selection_key)
+        current_task = active_tasks[active_tasks["id"].apply(safe_int).eq(selected_id)].iloc[0]
+        st.caption("พักงานแล้วเลือกคิวอื่นได้ • Resume งานเดิมเมื่อไม่มีงานอื่นกำลังทำ • ไม่เริ่มงานอัตโนมัติ")
     else:
-        current_task = active_tasks.iloc[0]
+        current_task = running.iloc[0]
     current_task_id = safe_int(current_task.get("id"), 0)
     current_status = safe_str(current_task.get("status"), "🟧 รอรับงาน")
     if "กำลังทำ" in current_status:
@@ -6243,7 +6408,7 @@ def render_department_operator_mode(training=False):
         border_color = "#DC2626" if is_overdue else ("#16A34A" if is_current else "#CBD5E1")
         background = "#FFF1F2" if is_overdue else ("#ECFDF5" if is_current else "#F8FAFC")
         lock_text = "🎯 คิวปัจจุบัน — พร้อมควบคุมงาน" if is_current else (
-            "เลือกควบคุมได้เมื่อพักหรือจบงานที่กำลังทำ" if training else f"🔒 รอคิวก่อนหน้าเสร็จ — คิวที่ {queue_index}")
+            "เลือกควบคุมได้เมื่อพักหรือจบงานที่กำลังทำ")
         card_class = "step-card-overdue" if is_overdue else ""
         st.markdown(f"""
         <div class="step-card {card_class}" style="border:2px solid {border_color};background:{background};">
@@ -6266,6 +6431,8 @@ def render_department_operator_mode(training=False):
                 if update_department_work_order(task_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
                     if training:
                         st.session_state["training_operator_clear_control"] = True
+                    else:
+                        st.session_state["operator_live_clear_control"] = True
                     st.rerun()
         elif "กำลังทำ" in task_status:
             op_a1, op_a2 = st.columns(2)
@@ -6278,6 +6445,8 @@ def render_department_operator_mode(training=False):
                     if update_department_work_order(task_id, {"status": "🟨 พักงาน", "hold_started_at": get_bangkok_str(), "pause_reason": operator_pause_reason, "pause_note": operator_pause_note or None}):
                         if training:
                             st.session_state["training_operator_clear_control"] = True
+                        else:
+                            st.session_state["operator_live_clear_control"] = True
                         st.rerun()
             with op_a2:
                 with st.form(f"operator_finish_{task_id}"):
@@ -6287,6 +6456,8 @@ def render_department_operator_mode(training=False):
                     if update_department_work_order(task_id, {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": operator_finish_note or None}):
                         if training:
                             st.session_state["training_operator_clear_control"] = True
+                        else:
+                            st.session_state["operator_live_clear_control"] = True
                         st.rerun()
         elif "พักงาน" in task_status:
             if st.button("▶️ Resume งานคิวปัจจุบัน", type="primary", use_container_width=True, key=f"operator_resume_{task_id}"):
@@ -6297,6 +6468,8 @@ def render_department_operator_mode(training=False):
                 if update_department_work_order(task_id, {"status": "🟦 กำลังทำ", "hold_started_at": None, "paused_seconds": operator_pause_total}):
                     if training:
                         st.session_state["training_operator_clear_control"] = True
+                    else:
+                        st.session_state["operator_live_clear_control"] = True
                     st.rerun()
 
 def render_outsource_management(df_all):
