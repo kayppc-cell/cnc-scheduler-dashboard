@@ -5461,6 +5461,9 @@ def render_people_work_center(department):
                         else:
                             st.error(f"สร้างใบงานไม่สำเร็จ: {message}")
 
+    # Reserve the QC edit section immediately after creation; render with filtered data below.
+    qc_edit_panel = st.container() if is_qc else None
+
     if tasks.empty:
         st.info("ยังไม่มีใบงานในแผนกนี้")
         return
@@ -5865,107 +5868,108 @@ def render_people_work_center(department):
         if is_qc:
             render_qc_time_cost_table(tasks, now)
         return
-    if not qc_creation_allowed:
-        st.info("🔒 กรุณาปลดล็อกด้วยรหัสผู้ดูแลด้านบนก่อนแก้ไขใบงาน QC")
-    else:
-        task_lookup = shown.set_index("id")
-        selected_id = st.selectbox(
-            "เลือกใบงานเพื่อแก้ไขข้อมูล",
-            option_ids,
-            format_func=lambda task_id: f"#{task_id} | {safe_str(task_lookup.loc[task_id].get('title'), '-')} | {safe_str(task_lookup.loc[task_id].get('assignee'), '-')}",
-            key=f"{department}_selected_task"
-        )
-        task = task_lookup.loc[selected_id]
-        task_status = safe_str(task.get("status"), "🟧 รอรับงาน")
-        st.info(
-            f"**บริษัทลูกค้า: {safe_str(task.get('title'), '-')}**  \n"
-            f"ผู้รับผิดชอบ: {safe_str(task.get('assignee'), '-')} | แผน: {safe_str(task.get('plan_code'), '-')} | Drawing: {safe_str(task.get('drawing_name'), '-')}  \n"
-            f"กำหนดเริ่ม: {parse_flexible_datetime(task.get('planned_start_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('planned_start_at')) else '-'} | "
-            f"กำหนดเสร็จ: {parse_flexible_datetime(task.get('due_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('due_at')) else '-'} | "
-            f"ประมาณ: {safe_float(task.get('estimated_hours'), 0.0):.2f} ชม.  \n"
-            f"รายละเอียด: {safe_str(task.get('details'), '-')}"
-        )
+    with qc_edit_panel if is_qc else st.container():
+        if not qc_creation_allowed:
+            st.info("🔒 กรุณาปลดล็อกด้วยรหัสผู้ดูแลด้านบนก่อนแก้ไขใบงาน QC")
+        else:
+            task_lookup = shown.set_index("id")
+            selected_id = st.selectbox(
+                "เลือกใบงานเพื่อแก้ไขข้อมูล",
+                option_ids,
+                format_func=lambda task_id: f"#{task_id} | {safe_str(task_lookup.loc[task_id].get('title'), '-')} | {safe_str(task_lookup.loc[task_id].get('assignee'), '-')}",
+                key=f"{department}_selected_task"
+            )
+            task = task_lookup.loc[selected_id]
+            task_status = safe_str(task.get("status"), "🟧 รอรับงาน")
+            st.info(
+                f"**บริษัทลูกค้า: {safe_str(task.get('title'), '-')}**  \n"
+                f"ผู้รับผิดชอบ: {safe_str(task.get('assignee'), '-')} | แผน: {safe_str(task.get('plan_code'), '-')} | Drawing: {safe_str(task.get('drawing_name'), '-')}  \n"
+                f"กำหนดเริ่ม: {parse_flexible_datetime(task.get('planned_start_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('planned_start_at')) else '-'} | "
+                f"กำหนดเสร็จ: {parse_flexible_datetime(task.get('due_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('due_at')) else '-'} | "
+                f"ประมาณ: {safe_float(task.get('estimated_hours'), 0.0):.2f} ชม.  \n"
+                f"รายละเอียด: {safe_str(task.get('details'), '-')}"
+            )
 
-        edit_start_dt = parse_flexible_datetime(task.get("planned_start_at")) or now
-        edit_due_dt = parse_flexible_datetime(task.get("due_at")) or (edit_start_dt + timedelta(hours=1))
-        current_work_type = safe_str(task.get("work_type"), work_types[0])
-        edit_work_types = work_types if current_work_type in work_types else [current_work_type] + work_types
-        current_assignee = safe_str(task.get("assignee"), department_assignees[0])
-        if current_assignee not in department_assignees:
-            current_assignee = department_assignees[0]
-        edit_assignees = department_assignees
-        current_priority = safe_str(task.get("priority"), DEPT_PRIORITIES[0])
-        edit_priorities = DEPT_PRIORITIES if current_priority in DEPT_PRIORITIES else [current_priority] + DEPT_PRIORITIES
-        relationship_options = [
-            "งานทั่วไป",
-            "ตรวจเช็ค โครงสร้าง Base Fram",
-            "ตรวจเช็ค Part ชิ้น",
-            "ทำต่อจาก Production",
-            "ทำคู่ขนานกับ Production"
-        ]
-        current_relationship = safe_str(task.get("relationship_type"), relationship_options[0])
-        if current_relationship not in relationship_options:
-            relationship_options = [current_relationship] + relationship_options
+            edit_start_dt = parse_flexible_datetime(task.get("planned_start_at")) or now
+            edit_due_dt = parse_flexible_datetime(task.get("due_at")) or (edit_start_dt + timedelta(hours=1))
+            current_work_type = safe_str(task.get("work_type"), work_types[0])
+            edit_work_types = work_types if current_work_type in work_types else [current_work_type] + work_types
+            current_assignee = safe_str(task.get("assignee"), department_assignees[0])
+            if current_assignee not in department_assignees:
+                current_assignee = department_assignees[0]
+            edit_assignees = department_assignees
+            current_priority = safe_str(task.get("priority"), DEPT_PRIORITIES[0])
+            edit_priorities = DEPT_PRIORITIES if current_priority in DEPT_PRIORITIES else [current_priority] + DEPT_PRIORITIES
+            relationship_options = [
+                "งานทั่วไป",
+                "ตรวจเช็ค โครงสร้าง Base Fram",
+                "ตรวจเช็ค Part ชิ้น",
+                "ทำต่อจาก Production",
+                "ทำคู่ขนานกับ Production"
+            ]
+            current_relationship = safe_str(task.get("relationship_type"), relationship_options[0])
+            if current_relationship not in relationship_options:
+                relationship_options = [current_relationship] + relationship_options
 
-        with st.expander("✏️ แก้ไขใบงานที่เลือก", expanded=False):
-            st.caption("แก้ไขข้อมูลใบงานที่เลือก ส่วนการลบให้ติ๊กจากตารางคิวงานปัจจุบันด้านบน")
-            with st.form(f"{department}_edit_task_{selected_id}"):
-                ec1, ec2, ec3 = st.columns(3)
-                with ec1:
-                    edit_work_type = st.selectbox("ประเภทงาน", edit_work_types, index=edit_work_types.index(current_work_type))
-                    edit_plan_code = st.text_input("แผนงาน", value=safe_str(task.get("plan_code"), ""))
-                    edit_drawing = st.text_input("Drawing (ถ้ามี)", value=safe_str(task.get("drawing_name"), ""))
-                with ec2:
-                    edit_title = st.text_input("ชื่อบริษัทลูกค้า *", value=safe_str(task.get("title"), ""))
-                    edit_assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", edit_assignees, index=edit_assignees.index(current_assignee))
-                with ec3:
-                    edit_priority = st.selectbox("ความเร่งด่วน", edit_priorities, index=edit_priorities.index(current_priority))
-                    edit_relationship = st.selectbox("ลักษณะงานที่ทำ", relationship_options, index=relationship_options.index(current_relationship))
-                et1, et2, et3, et4 = st.columns(4)
-                with et1:
-                    edit_start_date = st.date_input("วันที่กำหนดเริ่มงาน", value=edit_start_dt.date(), format="DD/MM/YYYY")
-                with et2:
-                    edit_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=edit_start_dt.time().replace(microsecond=0))
-                with et3:
-                    edit_due_date = st.date_input("วันที่กำหนดเสร็จงาน", value=edit_due_dt.date(), format="DD/MM/YYYY")
-                with et4:
-                    edit_due_time = st.time_input("เวลากำหนดเสร็จงาน", value=edit_due_dt.time().replace(microsecond=0))
-                edit_details = st.text_area("รายละเอียดงาน *", value=safe_str(task.get("details"), ""))
-                edit_checklist = ""
-                edit_submit = st.form_submit_button("💾 บันทึกการแก้ไข", type="primary", use_container_width=True)
+            with st.expander("✏️ แก้ไขใบงานที่เลือก", expanded=False):
+                st.caption("แก้ไขข้อมูลใบงานที่เลือก ส่วนการลบให้ติ๊กจากตารางคิวงานปัจจุบันด้านบน")
+                with st.form(f"{department}_edit_task_{selected_id}"):
+                    ec1, ec2, ec3 = st.columns(3)
+                    with ec1:
+                        edit_work_type = st.selectbox("ประเภทงาน", edit_work_types, index=edit_work_types.index(current_work_type))
+                        edit_plan_code = st.text_input("แผนงาน", value=safe_str(task.get("plan_code"), ""))
+                        edit_drawing = st.text_input("Drawing (ถ้ามี)", value=safe_str(task.get("drawing_name"), ""))
+                    with ec2:
+                        edit_title = st.text_input("ชื่อบริษัทลูกค้า *", value=safe_str(task.get("title"), ""))
+                        edit_assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", edit_assignees, index=edit_assignees.index(current_assignee))
+                    with ec3:
+                        edit_priority = st.selectbox("ความเร่งด่วน", edit_priorities, index=edit_priorities.index(current_priority))
+                        edit_relationship = st.selectbox("ลักษณะงานที่ทำ", relationship_options, index=relationship_options.index(current_relationship))
+                    et1, et2, et3, et4 = st.columns(4)
+                    with et1:
+                        edit_start_date = st.date_input("วันที่กำหนดเริ่มงาน", value=edit_start_dt.date(), format="DD/MM/YYYY")
+                    with et2:
+                        edit_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=edit_start_dt.time().replace(microsecond=0))
+                    with et3:
+                        edit_due_date = st.date_input("วันที่กำหนดเสร็จงาน", value=edit_due_dt.date(), format="DD/MM/YYYY")
+                    with et4:
+                        edit_due_time = st.time_input("เวลากำหนดเสร็จงาน", value=edit_due_dt.time().replace(microsecond=0))
+                    edit_details = st.text_area("รายละเอียดงาน *", value=safe_str(task.get("details"), ""))
+                    edit_checklist = ""
+                    edit_submit = st.form_submit_button("💾 บันทึกการแก้ไข", type="primary", use_container_width=True)
 
-            if edit_submit:
-                edit_start_at = datetime.combine(edit_start_date, edit_start_time)
-                edit_due_at = datetime.combine(edit_due_date, edit_due_time)
-                edit_estimated_hours = round(get_work_capacity_between(edit_start_at, edit_due_at), 2) if edit_due_at > edit_start_at else 0.0
-                if not edit_title.strip() or edit_assignee == "— เลือกผู้รับผิดชอบ —" or not edit_details.strip():
-                    st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
-                elif edit_due_at <= edit_start_at or edit_estimated_hours <= 0:
-                    st.warning("กำหนดเสร็จต้องอยู่หลังเวลาเริ่มและต้องมีเวลาทำงานตามกะ")
-                else:
-                    edit_payload = {
-                        "work_type": edit_work_type,
-                        "title": edit_title.strip(),
-                        "plan_code": edit_plan_code.strip() or None,
-                        "drawing_name": edit_drawing.strip() or None,
-                        "assignee": edit_assignee,
-                        "priority": edit_priority,
-                        "relationship_type": edit_relationship,
-                        "planned_start_at": edit_start_at.strftime("%Y-%m-%d %H:%M:%S"),
-                        "due_at": edit_due_at.strftime("%Y-%m-%d %H:%M:%S"),
-                        "estimated_hours": edit_estimated_hours,
-                        "details": edit_details.strip(),
-                        "checklist": edit_checklist.strip() or None,
-                    }
-                    other_tasks = tasks[tasks.get("id", pd.Series(index=tasks.index)).apply(safe_int) != safe_int(selected_id)].copy()
-                    duplicate_payload = {**edit_payload, "department": department}
-                    if department_work_order_duplicate_exists(other_tasks, duplicate_payload):
-                        st.warning("⚠️ บันทึกไม่ได้ เพราะพบใบงานอื่นที่มีข้อมูลตรงกันอยู่แล้ว")
-                    elif update_department_work_order(selected_id, edit_payload):
-                        st.success("บันทึกการแก้ไขเรียบร้อย")
-                        st.rerun()
+                if edit_submit:
+                    edit_start_at = datetime.combine(edit_start_date, edit_start_time)
+                    edit_due_at = datetime.combine(edit_due_date, edit_due_time)
+                    edit_estimated_hours = round(get_work_capacity_between(edit_start_at, edit_due_at), 2) if edit_due_at > edit_start_at else 0.0
+                    if not edit_title.strip() or edit_assignee == "— เลือกผู้รับผิดชอบ —" or not edit_details.strip():
+                        st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
+                    elif edit_due_at <= edit_start_at or edit_estimated_hours <= 0:
+                        st.warning("กำหนดเสร็จต้องอยู่หลังเวลาเริ่มและต้องมีเวลาทำงานตามกะ")
                     else:
-                        st.error("บันทึกการแก้ไขไม่สำเร็จ")
+                        edit_payload = {
+                            "work_type": edit_work_type,
+                            "title": edit_title.strip(),
+                            "plan_code": edit_plan_code.strip() or None,
+                            "drawing_name": edit_drawing.strip() or None,
+                            "assignee": edit_assignee,
+                            "priority": edit_priority,
+                            "relationship_type": edit_relationship,
+                            "planned_start_at": edit_start_at.strftime("%Y-%m-%d %H:%M:%S"),
+                            "due_at": edit_due_at.strftime("%Y-%m-%d %H:%M:%S"),
+                            "estimated_hours": edit_estimated_hours,
+                            "details": edit_details.strip(),
+                            "checklist": edit_checklist.strip() or None,
+                        }
+                        other_tasks = tasks[tasks.get("id", pd.Series(index=tasks.index)).apply(safe_int) != safe_int(selected_id)].copy()
+                        duplicate_payload = {**edit_payload, "department": department}
+                        if department_work_order_duplicate_exists(other_tasks, duplicate_payload):
+                            st.warning("⚠️ บันทึกไม่ได้ เพราะพบใบงานอื่นที่มีข้อมูลตรงกันอยู่แล้ว")
+                        elif update_department_work_order(selected_id, edit_payload):
+                            st.success("บันทึกการแก้ไขเรียบร้อย")
+                            st.rerun()
+                        else:
+                            st.error("บันทึกการแก้ไขไม่สำเร็จ")
 
     render_department_finished_history(finished_tasks, department, now)
     if is_qc:
