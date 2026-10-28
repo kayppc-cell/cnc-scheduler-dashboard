@@ -5083,12 +5083,37 @@ def render_qc_time_cost_table(qc_tasks, now):
         </script>
         """, height=52)
 
+def render_qc_creation_access():
+    """QC creation shares the dashboard admin password and supervisor grant."""
+    if operator_supervisor_is_unlocked():
+        st.caption("🔓 ปลดล็อกสร้างและแก้ไขใบงาน QC แล้ว")
+        if st.session_state.get("user_role") != "admin" and st.button(
+                "🔒 ล็อกการสร้างและแก้ไขใบงาน QC", key="qc_creation_lock"):
+            st.session_state.pop("operator_supervisor_grant", None)
+            st.rerun()
+        return True
+    st.info("🔒 สร้าง / แก้ไขใบงาน QC / เพิ่มงานด่วน — ใช้รหัสผู้ดูแลชุดเดียวกับแดชบอร์ด")
+    with st.form("qc_creation_unlock", clear_on_submit=True):
+        password = st.text_input("รหัสผู้ดูแลสำหรับจัดการใบงาน QC", type="password")
+        submitted = st.form_submit_button("ปลดล็อกจัดการใบงาน QC")
+    if submitted:
+        if hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")):
+            st.session_state["operator_supervisor_grant"] = {
+                "digest": hashlib.sha256(ADMIN_PASSWORD.encode("utf-8")).hexdigest(),
+                "at": tpc_auth_time.time()}
+            st.rerun()
+        else:
+            st.error("รหัสผู้ดูแลไม่ถูกต้อง")
+    return False
+
+
 def render_people_work_center(department):
     is_qc = department == "QC"
     icon = "🧪" if is_qc else "🤖"
     title = "Admin QC" if is_qc else "ใบสั่งงาน Automation"
     work_types = QC_WORK_TYPES if is_qc else AUTO_WORK_TYPES
     department_assignees = get_department_assignees(department)
+    create_assignees = [name for name in department_assignees if not (is_qc and name == "ปวีณ์กร ลิอุบล")]
     st.subheader(f"{icon} {title}")
     st.caption("คิวงานบุคคล/ทีม — แยกจากเวลาลูกโซ่เครื่องจักร Production")
 
@@ -5097,7 +5122,8 @@ def render_people_work_center(department):
         st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL ที่แนบมาก่อนใช้งานโหมดนี้")
         return
     tasks, templates = split_department_work_order_templates(tasks)
-    if is_qc:
+    qc_creation_allowed = render_qc_creation_access() if is_qc else True
+    if is_qc and qc_creation_allowed:
         render_qc_urgent_work_order(tasks)
 
     # เปลี่ยนรุ่น key ของแบบฟอร์มหลังบันทึกสำเร็จ เพื่อบังคับให้ Streamlit
@@ -5109,198 +5135,41 @@ def render_people_work_center(department):
     def create_widget_key(field_name):
         return f"{department}_create_{field_name}_v{create_form_version}"
 
-    with st.expander("➕ สร้างใบงาน", expanded=False):
-        template_defaults_key = f"{department}_pending_template_defaults"
-        template_defaults = st.session_state.pop(template_defaults_key, {})
-        template_rows = {}
-        if isinstance(templates, pd.DataFrame) and not templates.empty:
-            template_rows = {
-                safe_int(row.get("id")): row
-                for _, row in templates.iterrows()
-                if safe_int(row.get("id")) > 0
-            }
-        template_ids = [0] + list(template_rows.keys())
-
-        st.markdown("##### 📝 สร้างใบงาน")
-        create_template_selector_key = f"{department}_create_template_selector_{'_'.join(map(str, template_ids))}"
-        selected_create_template_id = st.selectbox(
-            "เลือก Template เพื่อเติมข้อมูลอัตโนมัติ (ไม่เลือกก็กรอกเองได้)",
-            template_ids,
-            format_func=lambda template_id: (
-                "— ไม่ใช้ Template / กรอกข้อมูลใหม่ —" if template_id == 0 else
-                safe_str(template_rows[template_id].get("requester"), f"Template #{template_id}")
-            ),
-            key=create_template_selector_key,
-        )
-        last_create_template_key = f"{department}_last_create_template_id"
-        if last_create_template_key not in st.session_state:
-            st.session_state[last_create_template_key] = 0
-        last_create_template_id = safe_int(
-            st.session_state.get(last_create_template_key), 0
-        )
-        if selected_create_template_id != last_create_template_id:
-            st.session_state[last_create_template_key] = selected_create_template_id
-            st.session_state.pop(f"{department}_editing_template_id", None)
-            if selected_create_template_id in template_rows:
-                selected_template = template_rows[selected_create_template_id]
-                st.session_state[template_defaults_key] = {
-                    "work_type": safe_str(selected_template.get("work_type")),
-                    "task_title": safe_str(selected_template.get("title")),
-                    "assignee": safe_str(selected_template.get("assignee")),
-                    "priority": safe_str(selected_template.get("priority")),
-                    "relationship": safe_str(selected_template.get("relationship_type")),
-                    "details": safe_str(selected_template.get("details")),
+    if qc_creation_allowed:
+        with st.expander("➕ สร้างใบงาน", expanded=False):
+            template_defaults_key = f"{department}_pending_template_defaults"
+            template_defaults = st.session_state.pop(template_defaults_key, {})
+            template_rows = {}
+            if isinstance(templates, pd.DataFrame) and not templates.empty:
+                template_rows = {
+                    safe_int(row.get("id")): row
+                    for _, row in templates.iterrows()
+                    if safe_int(row.get("id")) > 0
                 }
-            else:
-                st.session_state[template_defaults_key] = {}
-            st.session_state[create_form_version_key] = create_form_version + 1
-            st.rerun()
-        if selected_create_template_id > 0:
-            st.success(
-                f"✅ ใช้ Template: {safe_str(template_rows[selected_create_template_id].get('requester'), f'Template #{selected_create_template_id}')} — เติมข้อมูลให้แล้ว สามารถแก้ไขก่อนสร้างใบงานได้"
-            )
+            template_ids = [0] + list(template_rows.keys())
 
-        def default_index(options, default_value, fallback=0):
-            try:
-                return options.index(default_value)
-            except (ValueError, AttributeError):
-                return fallback
-
-        # ใช้ widget ปกติแทน st.form เพื่อคำนวณชั่วโมงใหม่ทันทีเมื่อเปลี่ยนวัน/เวลา
-        with st.container():
-            editing_template_id = safe_int(
-                st.session_state.get(f"{department}_editing_template_id"), 0
+            st.markdown("##### 📝 สร้างใบงาน")
+            create_template_selector_key = f"{department}_create_template_selector_{'_'.join(map(str, template_ids))}"
+            selected_create_template_id = st.selectbox(
+                "เลือก Template เพื่อเติมข้อมูลอัตโนมัติ (ไม่เลือกก็กรอกเองได้)",
+                template_ids,
+                format_func=lambda template_id: (
+                    "— ไม่ใช้ Template / กรอกข้อมูลใหม่ —" if template_id == 0 else
+                    safe_str(template_rows[template_id].get("requester"), f"Template #{template_id}")
+                ),
+                key=create_template_selector_key,
             )
-            if editing_template_id > 0:
-                editing_template_name = safe_str(
-                    template_rows.get(editing_template_id, {}).get("requester"),
-                    f"Template #{editing_template_id}"
-                )
-                st.info(f"✏️ กำลังแก้ไข Template: {editing_template_name}")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                work_type = st.selectbox(
-                    "ประเภทงาน", work_types,
-                    index=default_index(work_types, template_defaults.get("work_type")),
-                    key=create_widget_key("work_type")
-                )
-                plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ", key=create_widget_key("plan_code"))
-                drawing_name = st.text_input("Drawing (ถ้ามี)", key=create_widget_key("drawing_name"))
-            with c2:
-                task_title = st.text_input(
-                    "ชื่อบริษัทลูกค้า *", value=template_defaults.get("task_title", ""),
-                    key=create_widget_key("task_title")
-                )
-                assignee = st.selectbox(
-                    "ผู้รับผิดชอบ/ทีม *", department_assignees,
-                    index=default_index(department_assignees, template_defaults.get("assignee")),
-                    key=create_widget_key("assignee")
-                )
-            with c3:
-                priority = st.selectbox(
-                    "ความเร่งด่วน", DEPT_PRIORITIES,
-                    index=default_index(DEPT_PRIORITIES, template_defaults.get("priority")),
-                    key=create_widget_key("priority")
-                )
-                relationship_options = [
-                    "งานทั่วไป",
-                    "ตรวจเช็ค โครงสร้าง Base Fram",
-                    "ตรวจเช็ค Part ชิ้น",
-                    "ทำต่อจาก Production",
-                    "ทำคู่ขนานกับ Production"
-                ]
-                if is_qc:
-                    relationship_options.insert(3, "เช็คงานตาม Cad 3D")
-                relationship = st.selectbox(
-                    "ลักษณะงานที่ทำ",
-                    relationship_options,
-                    index=default_index(relationship_options, template_defaults.get("relationship")),
-                    key=create_widget_key("relationship")
-                )
-            t1, t2, t3, t4 = st.columns(4)
-            with t1:
-                planned_start_date = st.date_input(
-                    "วันที่กำหนดเริ่มงาน",
-                    value=get_bangkok_now().date(),
-                    format="DD/MM/YYYY",
-                    key=create_widget_key("planned_start_date")
-                )
-            with t2:
-                planned_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=dtime(8, 30), key=create_widget_key("planned_start_time"))
-            with t3:
-                due_date = st.date_input(
-                    "วันที่กำหนดเสร็จงาน",
-                    value=get_bangkok_now().date(),
-                    format="DD/MM/YYYY",
-                    key=create_widget_key("due_date")
-                )
-            with t4:
-                due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30), key=create_widget_key("due_time"))
-            details = st.text_area(
-                "รายละเอียดงาน *", value=template_defaults.get("details", ""),
-                key=create_widget_key("details")
+            last_create_template_key = f"{department}_last_create_template_id"
+            if last_create_template_key not in st.session_state:
+                st.session_state[last_create_template_key] = 0
+            last_create_template_id = safe_int(
+                st.session_state.get(last_create_template_key), 0
             )
-            checklist = ""
-            planned_start_preview = datetime.combine(planned_start_date, planned_start_time)
-            due_at_preview = datetime.combine(due_date, due_time)
-            estimated_hours = round(
-                get_work_capacity_between(planned_start_preview, due_at_preview), 2
-            ) if due_at_preview > planned_start_preview else 0.0
-            st.number_input(
-                "เวลาประมาณรวม (ช.ม) — คำนวณอัตโนมัติ",
-                min_value=0.0,
-                value=float(estimated_hours),
-                step=0.01,
-                disabled=True,
-                key=(
-                    f"{department}_auto_estimated_hours_v{create_form_version}_"
-                    f"{planned_start_preview.isoformat()}_{due_at_preview.isoformat()}"
-                )
-            )
-            st.caption("คำนวณเฉพาะเวลาทำงานตามกะ โดยหักเบรกเช้า พักเที่ยง เบรกบ่าย พักเย็น เวลานอกกะ และวันอาทิตย์แล้ว")
-            if due_at_preview <= planned_start_preview:
-                st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
-            elif estimated_hours <= 0:
-                st.warning("ช่วงเวลาที่เลือกไม่มีเวลาทำงานตามกะ กรุณาปรับวันหรือเวลา")
-            submitted = st.button(
-                "💾 สร้างใบงานและส่งเข้าคิวงาน",
-                type="primary",
-                use_container_width=True,
-                disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
-                key=create_widget_key("work_order_submit")
-            )
-            st.caption("ปุ่มนี้จะสร้างคิวงานจริง ส่วนการบันทึก/แก้ไข Template อยู่ในหัวข้อจัดการ Template ด้านล่าง")
-
-            save_template = False
-            with st.expander("🧩 จัดการ Template (บันทึก / แก้ไข / ลบ)", expanded=(editing_template_id > 0)):
-                manage_template_id = st.selectbox(
-                    "เลือก Template ที่ต้องการแก้ไขหรือลบ",
-                    template_ids,
-                    format_func=lambda template_id: (
-                        "— สร้าง Template ใหม่จากข้อมูลที่กรอกด้านบน —" if template_id == 0 else
-                        safe_str(template_rows[template_id].get("requester"), f"Template #{template_id}")
-                    ),
-                    key=f"{department}_manage_template_selector_{'_'.join(map(str, template_ids))}",
-                )
-                manage_action_cols = st.columns(2)
-                with manage_action_cols[0]:
-                    edit_template = st.button(
-                        "✏️ โหลดมาแก้ไข",
-                        use_container_width=True,
-                        disabled=(manage_template_id == 0),
-                        key=f"{department}_edit_template",
-                    )
-                with manage_action_cols[1]:
-                    delete_template = st.button(
-                        "🗑️ ลบ Template",
-                        use_container_width=True,
-                        disabled=(manage_template_id == 0),
-                        key=f"{department}_delete_template",
-                    )
-
-                if edit_template and manage_template_id in template_rows:
-                    selected_template = template_rows[manage_template_id]
-                    st.session_state[f"{department}_editing_template_id"] = manage_template_id
+            if selected_create_template_id != last_create_template_id:
+                st.session_state[last_create_template_key] = selected_create_template_id
+                st.session_state.pop(f"{department}_editing_template_id", None)
+                if selected_create_template_id in template_rows:
+                    selected_template = template_rows[selected_create_template_id]
                     st.session_state[template_defaults_key] = {
                         "work_type": safe_str(selected_template.get("work_type")),
                         "task_title": safe_str(selected_template.get("title")),
@@ -5308,129 +5177,289 @@ def render_people_work_center(department):
                         "priority": safe_str(selected_template.get("priority")),
                         "relationship": safe_str(selected_template.get("relationship_type")),
                         "details": safe_str(selected_template.get("details")),
-                        "template_name": safe_str(selected_template.get("requester")),
                     }
-                    st.session_state[create_form_version_key] = create_form_version + 1
-                    st.rerun()
+                else:
+                    st.session_state[template_defaults_key] = {}
+                st.session_state[create_form_version_key] = create_form_version + 1
+                st.rerun()
+            if selected_create_template_id > 0:
+                st.success(
+                    f"✅ ใช้ Template: {safe_str(template_rows[selected_create_template_id].get('requester'), f'Template #{selected_create_template_id}')} — เติมข้อมูลให้แล้ว สามารถแก้ไขก่อนสร้างใบงานได้"
+                )
 
-                if delete_template and manage_template_id in template_rows:
-                    ok, message = delete_waiting_department_work_order(manage_template_id)
-                    if ok:
-                        if editing_template_id == manage_template_id:
-                            st.session_state.pop(f"{department}_editing_template_id", None)
-                        st.success("ลบ Template เรียบร้อย")
-                        st.rerun()
-                    else:
-                        st.error(f"ลบ Template ไม่สำเร็จ: {message}")
+            def default_index(options, default_value, fallback=0):
+                try:
+                    return options.index(default_value)
+                except (ValueError, AttributeError):
+                    return fallback
 
-                template_name = st.text_input(
-                    "ชื่อ Template",
-                    value=template_defaults.get("template_name", ""),
-                    placeholder="เช่น ตรวจรับชิ้นงานลูกค้า A",
-                    key=create_widget_key("template_name"),
+            # ใช้ widget ปกติแทน st.form เพื่อคำนวณชั่วโมงใหม่ทันทีเมื่อเปลี่ยนวัน/เวลา
+            with st.container():
+                editing_template_id = safe_int(
+                    st.session_state.get(f"{department}_editing_template_id"), 0
                 )
                 if editing_template_id > 0:
-                    st.info("แก้ข้อมูลในแบบฟอร์มด้านบน แล้วกดบันทึกการแก้ไข Template")
-                    edit_save_cols = st.columns([3, 1])
-                    with edit_save_cols[0]:
+                    editing_template_name = safe_str(
+                        template_rows.get(editing_template_id, {}).get("requester"),
+                        f"Template #{editing_template_id}"
+                    )
+                    st.info(f"✏️ กำลังแก้ไข Template: {editing_template_name}")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    work_type = st.selectbox(
+                        "ประเภทงาน", work_types,
+                        index=default_index(work_types, template_defaults.get("work_type")),
+                        key=create_widget_key("work_type")
+                    )
+                    plan_code = st.text_input("แผนงาน", placeholder="เช่น 26-146 หรือระบุ งานอิสระ", key=create_widget_key("plan_code"))
+                    drawing_name = st.text_input("Drawing (ถ้ามี)", key=create_widget_key("drawing_name"))
+                with c2:
+                    task_title = st.text_input(
+                        "ชื่อบริษัทลูกค้า *", value=template_defaults.get("task_title", ""),
+                        key=create_widget_key("task_title")
+                    )
+                    if st.session_state.get(create_widget_key("assignee")) not in create_assignees:
+                        st.session_state.pop(create_widget_key("assignee"), None)
+                    assignee = st.selectbox(
+                        "ผู้รับผิดชอบ/ทีม *", create_assignees,
+                        index=default_index(create_assignees, template_defaults.get("assignee")),
+                        key=create_widget_key("assignee")
+                    )
+                with c3:
+                    priority = st.selectbox(
+                        "ความเร่งด่วน", DEPT_PRIORITIES,
+                        index=default_index(DEPT_PRIORITIES, template_defaults.get("priority")),
+                        key=create_widget_key("priority")
+                    )
+                    relationship_options = [
+                        "งานทั่วไป",
+                        "ตรวจเช็ค โครงสร้าง Base Fram",
+                        "ตรวจเช็ค Part ชิ้น",
+                        "ทำต่อจาก Production",
+                        "ทำคู่ขนานกับ Production"
+                    ]
+                    if is_qc:
+                        relationship_options.insert(3, "เช็คงานตาม Cad 3D")
+                    relationship = st.selectbox(
+                        "ลักษณะงานที่ทำ",
+                        relationship_options,
+                        index=default_index(relationship_options, template_defaults.get("relationship")),
+                        key=create_widget_key("relationship")
+                    )
+                t1, t2, t3, t4 = st.columns(4)
+                with t1:
+                    planned_start_date = st.date_input(
+                        "วันที่กำหนดเริ่มงาน",
+                        value=get_bangkok_now().date(),
+                        format="DD/MM/YYYY",
+                        key=create_widget_key("planned_start_date")
+                    )
+                with t2:
+                    planned_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=dtime(8, 30), key=create_widget_key("planned_start_time"))
+                with t3:
+                    due_date = st.date_input(
+                        "วันที่กำหนดเสร็จงาน",
+                        value=get_bangkok_now().date(),
+                        format="DD/MM/YYYY",
+                        key=create_widget_key("due_date")
+                    )
+                with t4:
+                    due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30), key=create_widget_key("due_time"))
+                details = st.text_area(
+                    "รายละเอียดงาน *", value=template_defaults.get("details", ""),
+                    key=create_widget_key("details")
+                )
+                checklist = ""
+                planned_start_preview = datetime.combine(planned_start_date, planned_start_time)
+                due_at_preview = datetime.combine(due_date, due_time)
+                estimated_hours = round(
+                    get_work_capacity_between(planned_start_preview, due_at_preview), 2
+                ) if due_at_preview > planned_start_preview else 0.0
+                st.number_input(
+                    "เวลาประมาณรวม (ช.ม) — คำนวณอัตโนมัติ",
+                    min_value=0.0,
+                    value=float(estimated_hours),
+                    step=0.01,
+                    disabled=True,
+                    key=(
+                        f"{department}_auto_estimated_hours_v{create_form_version}_"
+                        f"{planned_start_preview.isoformat()}_{due_at_preview.isoformat()}"
+                    )
+                )
+                st.caption("คำนวณเฉพาะเวลาทำงานตามกะ โดยหักเบรกเช้า พักเที่ยง เบรกบ่าย พักเย็น เวลานอกกะ และวันอาทิตย์แล้ว")
+                if due_at_preview <= planned_start_preview:
+                    st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
+                elif estimated_hours <= 0:
+                    st.warning("ช่วงเวลาที่เลือกไม่มีเวลาทำงานตามกะ กรุณาปรับวันหรือเวลา")
+                submitted = st.button(
+                    "💾 สร้างใบงานและส่งเข้าคิวงาน",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
+                    key=create_widget_key("work_order_submit")
+                )
+                st.caption("ปุ่มนี้จะสร้างคิวงานจริง ส่วนการบันทึก/แก้ไข Template อยู่ในหัวข้อจัดการ Template ด้านล่าง")
+
+                save_template = False
+                with st.expander("🧩 จัดการ Template (บันทึก / แก้ไข / ลบ)", expanded=(editing_template_id > 0)):
+                    manage_template_id = st.selectbox(
+                        "เลือก Template ที่ต้องการแก้ไขหรือลบ",
+                        template_ids,
+                        format_func=lambda template_id: (
+                            "— สร้าง Template ใหม่จากข้อมูลที่กรอกด้านบน —" if template_id == 0 else
+                            safe_str(template_rows[template_id].get("requester"), f"Template #{template_id}")
+                        ),
+                        key=f"{department}_manage_template_selector_{'_'.join(map(str, template_ids))}",
+                    )
+                    manage_action_cols = st.columns(2)
+                    with manage_action_cols[0]:
+                        edit_template = st.button(
+                            "✏️ โหลดมาแก้ไข",
+                            use_container_width=True,
+                            disabled=(manage_template_id == 0),
+                            key=f"{department}_edit_template",
+                        )
+                    with manage_action_cols[1]:
+                        delete_template = st.button(
+                            "🗑️ ลบ Template",
+                            use_container_width=True,
+                            disabled=(manage_template_id == 0),
+                            key=f"{department}_delete_template",
+                        )
+
+                    if edit_template and manage_template_id in template_rows:
+                        selected_template = template_rows[manage_template_id]
+                        st.session_state[f"{department}_editing_template_id"] = manage_template_id
+                        st.session_state[template_defaults_key] = {
+                            "work_type": safe_str(selected_template.get("work_type")),
+                            "task_title": safe_str(selected_template.get("title")),
+                            "assignee": safe_str(selected_template.get("assignee")),
+                            "priority": safe_str(selected_template.get("priority")),
+                            "relationship": safe_str(selected_template.get("relationship_type")),
+                            "details": safe_str(selected_template.get("details")),
+                            "template_name": safe_str(selected_template.get("requester")),
+                        }
+                        st.session_state[create_form_version_key] = create_form_version + 1
+                        st.rerun()
+
+                    if delete_template and manage_template_id in template_rows:
+                        ok, message = delete_waiting_department_work_order(manage_template_id)
+                        if ok:
+                            if editing_template_id == manage_template_id:
+                                st.session_state.pop(f"{department}_editing_template_id", None)
+                            st.success("ลบ Template เรียบร้อย")
+                            st.rerun()
+                        else:
+                            st.error(f"ลบ Template ไม่สำเร็จ: {message}")
+
+                    template_name = st.text_input(
+                        "ชื่อ Template",
+                        value=template_defaults.get("template_name", ""),
+                        placeholder="เช่น ตรวจรับชิ้นงานลูกค้า A",
+                        key=create_widget_key("template_name"),
+                    )
+                    if editing_template_id > 0:
+                        st.info("แก้ข้อมูลในแบบฟอร์มด้านบน แล้วกดบันทึกการแก้ไข Template")
+                        edit_save_cols = st.columns([3, 1])
+                        with edit_save_cols[0]:
+                            save_template = st.button(
+                                "💾 บันทึกการแก้ไข Template",
+                                type="primary",
+                                use_container_width=True,
+                                key=create_widget_key("save_template"),
+                            )
+                        with edit_save_cols[1]:
+                            cancel_template_edit = st.button(
+                                "ยกเลิกแก้ไข",
+                                use_container_width=True,
+                                key=create_widget_key("cancel_template_edit"),
+                            )
+                        if cancel_template_edit:
+                            st.session_state.pop(f"{department}_editing_template_id", None)
+                            st.session_state[create_form_version_key] = create_form_version + 1
+                            st.rerun()
+                    else:
                         save_template = st.button(
-                            "💾 บันทึกการแก้ไข Template",
-                            type="primary",
+                            "🧩 บันทึกข้อมูลด้านบนเป็น Template ใหม่",
                             use_container_width=True,
                             key=create_widget_key("save_template"),
                         )
-                    with edit_save_cols[1]:
-                        cancel_template_edit = st.button(
-                            "ยกเลิกแก้ไข",
-                            use_container_width=True,
-                            key=create_widget_key("cancel_template_edit"),
-                        )
-                    if cancel_template_edit:
-                        st.session_state.pop(f"{department}_editing_template_id", None)
-                        st.session_state[create_form_version_key] = create_form_version + 1
-                        st.rerun()
-                else:
-                    save_template = st.button(
-                        "🧩 บันทึกข้อมูลด้านบนเป็น Template ใหม่",
-                        use_container_width=True,
-                        key=create_widget_key("save_template"),
-                    )
 
-        if save_template:
-            existing_template_names = {
-                normalize_filter_key(row.get("requester"))
-                for template_id, row in template_rows.items()
-                if template_id != editing_template_id
-            }
-            if not template_name.strip():
-                st.warning("กรุณาตั้งชื่อ Template")
-            elif normalize_filter_key(template_name) in existing_template_names:
-                st.warning("มีชื่อ Template นี้อยู่แล้ว กรุณาใช้ชื่ออื่นหรือลบ Template เดิมก่อน")
-            elif not task_title.strip() or assignee == "— เลือกผู้รับผิดชอบ —" or not details.strip():
-                st.warning("ก่อนบันทึก Template กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
-            else:
-                template_payload = {
-                    "department": department,
-                    "work_type": work_type,
-                    "title": task_title.strip(),
-                    "plan_code": None,
-                    "drawing_name": None,
-                    "assignee": assignee.strip(),
-                    "priority": priority,
-                    "relationship_type": relationship,
-                    "planned_start_at": None,
-                    "due_at": None,
-                    "estimated_hours": 0,
-                    "details": details.strip(),
-                    "checklist": None,
-                    "requester": template_name.strip(),
-                    "result_note": DEPARTMENT_TEMPLATE_MARKER,
-                    "status": "🟧 รอรับงาน"
+            if save_template:
+                existing_template_names = {
+                    normalize_filter_key(row.get("requester"))
+                    for template_id, row in template_rows.items()
+                    if template_id != editing_template_id
                 }
-                if editing_template_id > 0:
-                    ok = update_department_work_order(editing_template_id, template_payload)
-                    message = "" if ok else "อัปเดต Template ไม่สำเร็จ"
+                if not template_name.strip():
+                    st.warning("กรุณาตั้งชื่อ Template")
+                elif normalize_filter_key(template_name) in existing_template_names:
+                    st.warning("มีชื่อ Template นี้อยู่แล้ว กรุณาใช้ชื่ออื่นหรือลบ Template เดิมก่อน")
+                elif not task_title.strip() or assignee == "— เลือกผู้รับผิดชอบ —" or not details.strip():
+                    st.warning("ก่อนบันทึก Template กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
                 else:
-                    ok, message = insert_department_work_order(template_payload)
-                if ok:
-                    st.session_state.pop(f"{department}_editing_template_id", None)
-                    st.session_state[create_form_version_key] = create_form_version + 1
-                    st.success("บันทึกการแก้ไข Template เรียบร้อย" if editing_template_id > 0 else "บันทึก Template เรียบร้อย")
-                    st.rerun()
-                else:
-                    st.error(f"บันทึก Template ไม่สำเร็จ: {message}")
-        if submitted:
-            planned_start_at = datetime.combine(planned_start_date, planned_start_time)
-            due_at_dt = datetime.combine(due_date, due_time)
-            if not task_title.strip() or assignee == "— เลือกผู้รับผิดชอบ —" or not details.strip():
-                st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
-            elif due_at_dt <= planned_start_at:
-                st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
-            else:
-                planned_start_at_text = planned_start_at.strftime("%Y-%m-%d %H:%M:%S")
-                due_at = due_at_dt.strftime("%Y-%m-%d %H:%M:%S")
-                create_payload = {
-                    "department": department, "work_type": work_type, "title": task_title.strip(),
-                    "plan_code": plan_code.strip() or None, "drawing_name": drawing_name.strip() or None,
-                    "assignee": assignee.strip(),
-                    "priority": priority, "relationship_type": relationship,
-                    "planned_start_at": planned_start_at_text, "due_at": due_at,
-                    "estimated_hours": estimated_hours, "details": details.strip(),
-                    "checklist": checklist.strip() or None, "status": "🟧 รอรับงาน"
-                }
-                if department_work_order_duplicate_exists(tasks, create_payload):
-                    st.warning("⚠️ ไม่ได้สร้างใบงาน เนื่องจากพบคิวงานเดิมที่มีข้อมูลตรงกันอยู่แล้ว กรุณาตรวจสอบตารางคิวงานปัจจุบัน")
-                else:
-                    ok, message = insert_department_work_order(create_payload)
+                    template_payload = {
+                        "department": department,
+                        "work_type": work_type,
+                        "title": task_title.strip(),
+                        "plan_code": None,
+                        "drawing_name": None,
+                        "assignee": assignee.strip(),
+                        "priority": priority,
+                        "relationship_type": relationship,
+                        "planned_start_at": None,
+                        "due_at": None,
+                        "estimated_hours": 0,
+                        "details": details.strip(),
+                        "checklist": None,
+                        "requester": template_name.strip(),
+                        "result_note": DEPARTMENT_TEMPLATE_MARKER,
+                        "status": "🟧 รอรับงาน"
+                    }
+                    if editing_template_id > 0:
+                        ok = update_department_work_order(editing_template_id, template_payload)
+                        message = "" if ok else "อัปเดต Template ไม่สำเร็จ"
+                    else:
+                        ok, message = insert_department_work_order(template_payload)
                     if ok:
-                        st.session_state[create_template_selector_key] = 0
-                        st.session_state[last_create_template_key] = 0
                         st.session_state.pop(f"{department}_editing_template_id", None)
                         st.session_state[create_form_version_key] = create_form_version + 1
-                        st.success("สร้างใบงานเรียบร้อย")
+                        st.success("บันทึกการแก้ไข Template เรียบร้อย" if editing_template_id > 0 else "บันทึก Template เรียบร้อย")
                         st.rerun()
                     else:
-                        st.error(f"สร้างใบงานไม่สำเร็จ: {message}")
+                        st.error(f"บันทึก Template ไม่สำเร็จ: {message}")
+            if submitted:
+                planned_start_at = datetime.combine(planned_start_date, planned_start_time)
+                due_at_dt = datetime.combine(due_date, due_time)
+                if not task_title.strip() or assignee == "— เลือกผู้รับผิดชอบ —" or not details.strip():
+                    st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
+                elif due_at_dt <= planned_start_at:
+                    st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
+                else:
+                    planned_start_at_text = planned_start_at.strftime("%Y-%m-%d %H:%M:%S")
+                    due_at = due_at_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    create_payload = {
+                        "department": department, "work_type": work_type, "title": task_title.strip(),
+                        "plan_code": plan_code.strip() or None, "drawing_name": drawing_name.strip() or None,
+                        "assignee": assignee.strip(),
+                        "priority": priority, "relationship_type": relationship,
+                        "planned_start_at": planned_start_at_text, "due_at": due_at,
+                        "estimated_hours": estimated_hours, "details": details.strip(),
+                        "checklist": checklist.strip() or None, "status": "🟧 รอรับงาน"
+                    }
+                    if department_work_order_duplicate_exists(tasks, create_payload):
+                        st.warning("⚠️ ไม่ได้สร้างใบงาน เนื่องจากพบคิวงานเดิมที่มีข้อมูลตรงกันอยู่แล้ว กรุณาตรวจสอบตารางคิวงานปัจจุบัน")
+                    else:
+                        ok, message = insert_department_work_order(create_payload)
+                        if ok:
+                            st.session_state[create_template_selector_key] = 0
+                            st.session_state[last_create_template_key] = 0
+                            st.session_state.pop(f"{department}_editing_template_id", None)
+                            st.session_state[create_form_version_key] = create_form_version + 1
+                            st.success("สร้างใบงานเรียบร้อย")
+                            st.rerun()
+                        else:
+                            st.error(f"สร้างใบงานไม่สำเร็จ: {message}")
 
     if tasks.empty:
         st.info("ยังไม่มีใบงานในแผนกนี้")
@@ -5836,104 +5865,107 @@ def render_people_work_center(department):
         if is_qc:
             render_qc_time_cost_table(tasks, now)
         return
-    task_lookup = shown.set_index("id")
-    selected_id = st.selectbox(
-        "เลือกใบงานเพื่อแก้ไขข้อมูล",
-        option_ids,
-        format_func=lambda task_id: f"#{task_id} | {safe_str(task_lookup.loc[task_id].get('title'), '-')} | {safe_str(task_lookup.loc[task_id].get('assignee'), '-')}",
-        key=f"{department}_selected_task"
-    )
-    task = task_lookup.loc[selected_id]
-    task_status = safe_str(task.get("status"), "🟧 รอรับงาน")
-    st.info(
-        f"**บริษัทลูกค้า: {safe_str(task.get('title'), '-')}**  \n"
-        f"ผู้รับผิดชอบ: {safe_str(task.get('assignee'), '-')} | แผน: {safe_str(task.get('plan_code'), '-')} | Drawing: {safe_str(task.get('drawing_name'), '-')}  \n"
-        f"กำหนดเริ่ม: {parse_flexible_datetime(task.get('planned_start_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('planned_start_at')) else '-'} | "
-        f"กำหนดเสร็จ: {parse_flexible_datetime(task.get('due_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('due_at')) else '-'} | "
-        f"ประมาณ: {safe_float(task.get('estimated_hours'), 0.0):.2f} ชม.  \n"
-        f"รายละเอียด: {safe_str(task.get('details'), '-')}"
-    )
+    if not qc_creation_allowed:
+        st.info("🔒 กรุณาปลดล็อกด้วยรหัสผู้ดูแลด้านบนก่อนแก้ไขใบงาน QC")
+    else:
+        task_lookup = shown.set_index("id")
+        selected_id = st.selectbox(
+            "เลือกใบงานเพื่อแก้ไขข้อมูล",
+            option_ids,
+            format_func=lambda task_id: f"#{task_id} | {safe_str(task_lookup.loc[task_id].get('title'), '-')} | {safe_str(task_lookup.loc[task_id].get('assignee'), '-')}",
+            key=f"{department}_selected_task"
+        )
+        task = task_lookup.loc[selected_id]
+        task_status = safe_str(task.get("status"), "🟧 รอรับงาน")
+        st.info(
+            f"**บริษัทลูกค้า: {safe_str(task.get('title'), '-')}**  \n"
+            f"ผู้รับผิดชอบ: {safe_str(task.get('assignee'), '-')} | แผน: {safe_str(task.get('plan_code'), '-')} | Drawing: {safe_str(task.get('drawing_name'), '-')}  \n"
+            f"กำหนดเริ่ม: {parse_flexible_datetime(task.get('planned_start_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('planned_start_at')) else '-'} | "
+            f"กำหนดเสร็จ: {parse_flexible_datetime(task.get('due_at')).strftime('%d/%m/%Y %H:%M') if parse_flexible_datetime(task.get('due_at')) else '-'} | "
+            f"ประมาณ: {safe_float(task.get('estimated_hours'), 0.0):.2f} ชม.  \n"
+            f"รายละเอียด: {safe_str(task.get('details'), '-')}"
+        )
 
-    edit_start_dt = parse_flexible_datetime(task.get("planned_start_at")) or now
-    edit_due_dt = parse_flexible_datetime(task.get("due_at")) or (edit_start_dt + timedelta(hours=1))
-    current_work_type = safe_str(task.get("work_type"), work_types[0])
-    edit_work_types = work_types if current_work_type in work_types else [current_work_type] + work_types
-    current_assignee = safe_str(task.get("assignee"), department_assignees[0])
-    if current_assignee not in department_assignees:
-        current_assignee = department_assignees[0]
-    edit_assignees = department_assignees
-    current_priority = safe_str(task.get("priority"), DEPT_PRIORITIES[0])
-    edit_priorities = DEPT_PRIORITIES if current_priority in DEPT_PRIORITIES else [current_priority] + DEPT_PRIORITIES
-    relationship_options = [
-        "งานทั่วไป",
-        "ตรวจเช็ค โครงสร้าง Base Fram",
-        "ตรวจเช็ค Part ชิ้น",
-        "ทำต่อจาก Production",
-        "ทำคู่ขนานกับ Production"
-    ]
-    current_relationship = safe_str(task.get("relationship_type"), relationship_options[0])
-    if current_relationship not in relationship_options:
-        relationship_options = [current_relationship] + relationship_options
+        edit_start_dt = parse_flexible_datetime(task.get("planned_start_at")) or now
+        edit_due_dt = parse_flexible_datetime(task.get("due_at")) or (edit_start_dt + timedelta(hours=1))
+        current_work_type = safe_str(task.get("work_type"), work_types[0])
+        edit_work_types = work_types if current_work_type in work_types else [current_work_type] + work_types
+        current_assignee = safe_str(task.get("assignee"), department_assignees[0])
+        if current_assignee not in department_assignees:
+            current_assignee = department_assignees[0]
+        edit_assignees = department_assignees
+        current_priority = safe_str(task.get("priority"), DEPT_PRIORITIES[0])
+        edit_priorities = DEPT_PRIORITIES if current_priority in DEPT_PRIORITIES else [current_priority] + DEPT_PRIORITIES
+        relationship_options = [
+            "งานทั่วไป",
+            "ตรวจเช็ค โครงสร้าง Base Fram",
+            "ตรวจเช็ค Part ชิ้น",
+            "ทำต่อจาก Production",
+            "ทำคู่ขนานกับ Production"
+        ]
+        current_relationship = safe_str(task.get("relationship_type"), relationship_options[0])
+        if current_relationship not in relationship_options:
+            relationship_options = [current_relationship] + relationship_options
 
-    with st.expander("✏️ แก้ไขใบงานที่เลือก", expanded=False):
-        st.caption("แก้ไขข้อมูลใบงานที่เลือก ส่วนการลบให้ติ๊กจากตารางคิวงานปัจจุบันด้านบน")
-        with st.form(f"{department}_edit_task_{selected_id}"):
-            ec1, ec2, ec3 = st.columns(3)
-            with ec1:
-                edit_work_type = st.selectbox("ประเภทงาน", edit_work_types, index=edit_work_types.index(current_work_type))
-                edit_plan_code = st.text_input("แผนงาน", value=safe_str(task.get("plan_code"), ""))
-                edit_drawing = st.text_input("Drawing (ถ้ามี)", value=safe_str(task.get("drawing_name"), ""))
-            with ec2:
-                edit_title = st.text_input("ชื่อบริษัทลูกค้า *", value=safe_str(task.get("title"), ""))
-                edit_assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", edit_assignees, index=edit_assignees.index(current_assignee))
-            with ec3:
-                edit_priority = st.selectbox("ความเร่งด่วน", edit_priorities, index=edit_priorities.index(current_priority))
-                edit_relationship = st.selectbox("ลักษณะงานที่ทำ", relationship_options, index=relationship_options.index(current_relationship))
-            et1, et2, et3, et4 = st.columns(4)
-            with et1:
-                edit_start_date = st.date_input("วันที่กำหนดเริ่มงาน", value=edit_start_dt.date(), format="DD/MM/YYYY")
-            with et2:
-                edit_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=edit_start_dt.time().replace(microsecond=0))
-            with et3:
-                edit_due_date = st.date_input("วันที่กำหนดเสร็จงาน", value=edit_due_dt.date(), format="DD/MM/YYYY")
-            with et4:
-                edit_due_time = st.time_input("เวลากำหนดเสร็จงาน", value=edit_due_dt.time().replace(microsecond=0))
-            edit_details = st.text_area("รายละเอียดงาน *", value=safe_str(task.get("details"), ""))
-            edit_checklist = ""
-            edit_submit = st.form_submit_button("💾 บันทึกการแก้ไข", type="primary", use_container_width=True)
+        with st.expander("✏️ แก้ไขใบงานที่เลือก", expanded=False):
+            st.caption("แก้ไขข้อมูลใบงานที่เลือก ส่วนการลบให้ติ๊กจากตารางคิวงานปัจจุบันด้านบน")
+            with st.form(f"{department}_edit_task_{selected_id}"):
+                ec1, ec2, ec3 = st.columns(3)
+                with ec1:
+                    edit_work_type = st.selectbox("ประเภทงาน", edit_work_types, index=edit_work_types.index(current_work_type))
+                    edit_plan_code = st.text_input("แผนงาน", value=safe_str(task.get("plan_code"), ""))
+                    edit_drawing = st.text_input("Drawing (ถ้ามี)", value=safe_str(task.get("drawing_name"), ""))
+                with ec2:
+                    edit_title = st.text_input("ชื่อบริษัทลูกค้า *", value=safe_str(task.get("title"), ""))
+                    edit_assignee = st.selectbox("ผู้รับผิดชอบ/ทีม *", edit_assignees, index=edit_assignees.index(current_assignee))
+                with ec3:
+                    edit_priority = st.selectbox("ความเร่งด่วน", edit_priorities, index=edit_priorities.index(current_priority))
+                    edit_relationship = st.selectbox("ลักษณะงานที่ทำ", relationship_options, index=relationship_options.index(current_relationship))
+                et1, et2, et3, et4 = st.columns(4)
+                with et1:
+                    edit_start_date = st.date_input("วันที่กำหนดเริ่มงาน", value=edit_start_dt.date(), format="DD/MM/YYYY")
+                with et2:
+                    edit_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=edit_start_dt.time().replace(microsecond=0))
+                with et3:
+                    edit_due_date = st.date_input("วันที่กำหนดเสร็จงาน", value=edit_due_dt.date(), format="DD/MM/YYYY")
+                with et4:
+                    edit_due_time = st.time_input("เวลากำหนดเสร็จงาน", value=edit_due_dt.time().replace(microsecond=0))
+                edit_details = st.text_area("รายละเอียดงาน *", value=safe_str(task.get("details"), ""))
+                edit_checklist = ""
+                edit_submit = st.form_submit_button("💾 บันทึกการแก้ไข", type="primary", use_container_width=True)
 
-        if edit_submit:
-            edit_start_at = datetime.combine(edit_start_date, edit_start_time)
-            edit_due_at = datetime.combine(edit_due_date, edit_due_time)
-            edit_estimated_hours = round(get_work_capacity_between(edit_start_at, edit_due_at), 2) if edit_due_at > edit_start_at else 0.0
-            if not edit_title.strip() or edit_assignee == "— เลือกผู้รับผิดชอบ —" or not edit_details.strip():
-                st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
-            elif edit_due_at <= edit_start_at or edit_estimated_hours <= 0:
-                st.warning("กำหนดเสร็จต้องอยู่หลังเวลาเริ่มและต้องมีเวลาทำงานตามกะ")
-            else:
-                edit_payload = {
-                    "work_type": edit_work_type,
-                    "title": edit_title.strip(),
-                    "plan_code": edit_plan_code.strip() or None,
-                    "drawing_name": edit_drawing.strip() or None,
-                    "assignee": edit_assignee,
-                    "priority": edit_priority,
-                    "relationship_type": edit_relationship,
-                    "planned_start_at": edit_start_at.strftime("%Y-%m-%d %H:%M:%S"),
-                    "due_at": edit_due_at.strftime("%Y-%m-%d %H:%M:%S"),
-                    "estimated_hours": edit_estimated_hours,
-                    "details": edit_details.strip(),
-                    "checklist": edit_checklist.strip() or None,
-                }
-                other_tasks = tasks[tasks.get("id", pd.Series(index=tasks.index)).apply(safe_int) != safe_int(selected_id)].copy()
-                duplicate_payload = {**edit_payload, "department": department}
-                if department_work_order_duplicate_exists(other_tasks, duplicate_payload):
-                    st.warning("⚠️ บันทึกไม่ได้ เพราะพบใบงานอื่นที่มีข้อมูลตรงกันอยู่แล้ว")
-                elif update_department_work_order(selected_id, edit_payload):
-                    st.success("บันทึกการแก้ไขเรียบร้อย")
-                    st.rerun()
+            if edit_submit:
+                edit_start_at = datetime.combine(edit_start_date, edit_start_time)
+                edit_due_at = datetime.combine(edit_due_date, edit_due_time)
+                edit_estimated_hours = round(get_work_capacity_between(edit_start_at, edit_due_at), 2) if edit_due_at > edit_start_at else 0.0
+                if not edit_title.strip() or edit_assignee == "— เลือกผู้รับผิดชอบ —" or not edit_details.strip():
+                    st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
+                elif edit_due_at <= edit_start_at or edit_estimated_hours <= 0:
+                    st.warning("กำหนดเสร็จต้องอยู่หลังเวลาเริ่มและต้องมีเวลาทำงานตามกะ")
                 else:
-                    st.error("บันทึกการแก้ไขไม่สำเร็จ")
+                    edit_payload = {
+                        "work_type": edit_work_type,
+                        "title": edit_title.strip(),
+                        "plan_code": edit_plan_code.strip() or None,
+                        "drawing_name": edit_drawing.strip() or None,
+                        "assignee": edit_assignee,
+                        "priority": edit_priority,
+                        "relationship_type": edit_relationship,
+                        "planned_start_at": edit_start_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        "due_at": edit_due_at.strftime("%Y-%m-%d %H:%M:%S"),
+                        "estimated_hours": edit_estimated_hours,
+                        "details": edit_details.strip(),
+                        "checklist": edit_checklist.strip() or None,
+                    }
+                    other_tasks = tasks[tasks.get("id", pd.Series(index=tasks.index)).apply(safe_int) != safe_int(selected_id)].copy()
+                    duplicate_payload = {**edit_payload, "department": department}
+                    if department_work_order_duplicate_exists(other_tasks, duplicate_payload):
+                        st.warning("⚠️ บันทึกไม่ได้ เพราะพบใบงานอื่นที่มีข้อมูลตรงกันอยู่แล้ว")
+                    elif update_department_work_order(selected_id, edit_payload):
+                        st.success("บันทึกการแก้ไขเรียบร้อย")
+                        st.rerun()
+                    else:
+                        st.error("บันทึกการแก้ไขไม่สำเร็จ")
 
     render_department_finished_history(finished_tasks, department, now)
     if is_qc:
@@ -6173,7 +6205,7 @@ def operator_supervisor_is_unlocked():
         return True
     grant = st.session_state.get("operator_supervisor_grant", {})
     digest = hashlib.sha256(ADMIN_PASSWORD.encode("utf-8")).hexdigest()
-    return (isinstance(grant, dict) and 0 <= tpc_auth_time.time() - safe_float(grant.get("at"), 0) < 1800
+    return (isinstance(grant, dict)
             and hmac.compare_digest(str(grant.get("digest", "")), digest))
 
 
@@ -6237,7 +6269,7 @@ def render_qc_urgent_work_order(tasks):
             names = list(dict.fromkeys(QC_ASSIGNEES[1:] + (
                 tasks["assignee"].dropna().astype(str).str.strip().tolist()
                 if not tasks.empty and "assignee" in tasks else [])))
-            names = [name for name in names if name]
+            names = [name for name in names if name and name != "ปวีณ์กร ลิอุบล"]
             if not names:
                 st.info("ยังไม่มีรายชื่อผู้รับผิดชอบ QC")
                 return
