@@ -5951,7 +5951,9 @@ def seed_training_operator_tasks(operator_name):
                      "department": department, "assignee": operator_name,
                      "plan_code": f"TRAIN-OP-{index % 2 + 1:02d}",
                      "drawing_name": f"DEMO-OP-{person_index + 1:02d}-{index + 1:02d}",
-                     "task_type": "ตรวจสอบชิ้นงาน" if department == "QC" else "ทดสอบระบบ Automation",
+                     "title": f"ใบงานฝึกคิวที่ {index + 1}",
+                     "training_queue_position": index,
+                     "work_type": "ตรวจสอบชิ้นงาน" if department == "QC" else "ทดสอบระบบ Automation",
                      "details": f"ใบงานฝึกคิวที่ {index + 1}: ฝึก Start / พัก / Resume / Finish",
                      "priority": "ปกติ", "status": "🟧 รอรับงาน",
                      "planned_start_at": start.strftime("%Y-%m-%d %H:%M:%S"),
@@ -5968,6 +5970,14 @@ def initialize_operator_training():
     if "training_operator_tasks" not in st.session_state:
         st.session_state["training_operator_tasks"] = [
             row for name in TRAINING_OPERATOR_NAMES for row in seed_training_operator_tasks(name)]
+    counts = {}
+    for row in st.session_state["training_operator_tasks"]:
+        person = row.get("assignee")
+        index = counts.get(person, 0)
+        row.setdefault("training_queue_position", index)
+        row.setdefault("title", f"ใบงานฝึกคิวที่ {index + 1}")
+        row.setdefault("work_type", row.get("task_type", "งานฝึก"))
+        counts[person] = index + 1
 
 
 def fetch_training_operator_tasks(department):
@@ -5991,16 +6001,102 @@ def update_training_operator_task(task_id, payload):
                    "🟨 พักงาน": {"🟦 กำลังทำ"}}
     if payload.get("status") not in transitions.get(row.get("status"), set()):
         return False
-    active = [item for item in rows if item.get("assignee") == row.get("assignee")
-              and not any(word in str(item.get("status", "")) for word in ("เสร็จ", "ยกเลิก"))]
-    active.sort(key=lambda item: (
-        0 if "กำลังทำ" in item["status"] else (1 if "พักงาน" in item["status"] else 2),
-        item.get("planned_start_at") or "9999", item.get("due_at") or "9999", item["id"]))
-    if not active or active[0]["id"] != row["id"]:
+    # Paused jobs yield to other work; one running task per trainee.
+    if payload.get("status") == "🟦 กำลังทำ" and any(
+        item.get("assignee") == row.get("assignee") and item["id"] != row["id"]
+        and "กำลังทำ" in str(item.get("status", "")) for item in rows
+    ):
         return False
     row.update(json.loads(json.dumps(payload, default=str)))
     row["updated_at"] = get_bangkok_str()
     return True
+
+
+def add_operator_training_urgent(person, title, plan, drawing, minutes):
+    initialize_operator_training()
+    if person not in TRAINING_OPERATOR_NAMES or not str(title).strip():
+        return False
+    duration = safe_float(minutes, 0.0)
+    if duration <= 0:
+        return False
+    rows = st.session_state["training_operator_tasks"]
+    person_rows = [row for row in rows if row.get("assignee") == person]
+    start = get_next_valid_work_time(get_bangkok_now().replace(tzinfo=None))
+    _, finish = add_work_time_with_shift(start, duration / 60.0)
+    rows.append({"id": max([safe_int(row.get("id")) for row in rows] + [8000000]) + 1,
+                 "department": "QC" if TRAINING_OPERATOR_NAMES.index(person) < 8 else "AUTOMATION",
+                 "assignee": person, "title": str(title).strip(), "work_type": "งานด่วนจำลอง",
+                 "plan_code": str(plan).strip(), "drawing_name": str(drawing).strip(),
+                 "details": "งานด่วนสำหรับฝึกแทรกคิว — ต้องกด Start เอง",
+                 "priority": "ด่วน", "status": "🟧 รอรับงาน",
+                 "training_queue_position": min([safe_float(row.get("training_queue_position"), i)
+                     for i, row in enumerate(person_rows)] + [0]) - 1,
+                 "planned_start_at": start.strftime("%Y-%m-%d %H:%M:%S"),
+                 "due_at": finish.strftime("%Y-%m-%d %H:%M:%S"), "planned_hours": duration / 60.0,
+                 "actual_start": None, "actual_finish": None, "hold_started_at": None,
+                 "paused_seconds": 0.0, "created_at": get_bangkok_str()})
+    return True
+
+
+def reorder_operator_training_tasks(person, source_id, target_id):
+    initialize_operator_training()
+    rows = st.session_state["training_operator_tasks"]
+    active = [row for row in rows if row.get("assignee") == person
+              and not any(word in str(row.get("status", "")) for word in ("เสร็จ", "ยกเลิก"))]
+    active.sort(key=lambda row: (safe_float(row.get("training_queue_position"), 0), row["id"]))
+    lookup = {row["id"]: row for row in active}
+    if source_id == target_id or source_id not in lookup or target_id not in lookup:
+        return False
+    if any("กำลังทำ" in str(lookup[item].get("status", "")) for item in (source_id, target_id)):
+        return False
+    source = lookup[source_id]
+    active.remove(source)
+    active.insert(next(i for i, row in enumerate(active) if row["id"] == target_id), source)
+    for i, row in enumerate(active):
+        row["training_queue_position"] = i
+    return True
+
+
+def render_operator_training_queue_tools(person, tasks):
+    feedback = st.session_state.pop("training_operator_queue_feedback", None)
+    if feedback:
+        st.success(feedback)
+    with st.expander("🚨 จำลองงานด่วนแทรก"):
+        with st.form(f"training_operator_urgent_{person}", clear_on_submit=True):
+            title = st.text_input("ชื่องานด่วน *")
+            plan = st.text_input("รหัสแผนงาน", value="TRAIN-URGENT")
+            drawing = st.text_input("Drawing", value="DEMO-URGENT")
+            minutes = st.number_input("เวลาแผน (นาที)", min_value=1, value=30, step=1)
+            submitted = st.form_submit_button("เพิ่มงานด่วนจำลอง", type="primary")
+        if submitted:
+            if add_operator_training_urgent(person, title, plan, drawing, minutes):
+                st.session_state["training_operator_queue_feedback"] = "เพิ่มงานด่วนจำลองแล้ว — พักงานที่กำลังทำก่อน แล้วกด Start งานด่วน"
+                st.session_state["training_operator_clear_control"] = True
+                st.rerun()
+            else:
+                st.warning("กรุณาระบุชื่องานด่วนและเวลาแผน")
+    with st.expander("🔀 สลับคิวงานฝึก"):
+        movable = tasks[~tasks["status"].astype(str).str.contains("เสร็จ|ยกเลิก|กำลังทำ", regex=True)].copy()
+        if "training_queue_position" in movable:
+            movable = movable.sort_values(["training_queue_position", "id"])
+        options = [safe_int(value) for value in movable.get("id", [])]
+        labels = {safe_int(row["id"]): f"{i + 1}. {safe_str(row.get('drawing_name'))} | {safe_str(row.get('status'))}"
+                  for i, (_, row) in enumerate(movable.iterrows())}
+        st.caption("ย้ายงานรอหรืองานพักไปก่อนคิวที่เลือก • งานกำลังทำต้องพักก่อน • ไม่เปลี่ยนเวลาเริ่มจริงหรือเวลาพัก")
+        if len(options) < 2:
+            st.info("ต้องมีงานรอหรืองานพักอย่างน้อย 2 คิว")
+        else:
+            with st.form(f"training_operator_reorder_{person}", clear_on_submit=True):
+                source = st.selectbox("คิวต้นทาง", options, format_func=lambda value: labels[value])
+                target = st.selectbox("ย้ายไปก่อนคิว", options, index=1, format_func=lambda value: labels[value])
+                submitted = st.form_submit_button("บันทึกสลับคิวฝึก", type="primary")
+            if submitted:
+                if reorder_operator_training_tasks(person, source, target):
+                    st.session_state["training_operator_queue_feedback"] = "สลับคิวฝึกสำเร็จแล้ว"
+                    st.session_state["training_operator_clear_control"] = True
+                    st.rerun()
+                else:
+                    st.warning("เลือกคิวต้นทางและคิวปลายทางให้ต่างกัน และต้องไม่ใช่งานที่กำลังทำ")
 
 
 def render_operator_training_mode():
@@ -6032,7 +6128,7 @@ def render_department_operator_mode(training=False):
     fetch_department_work_orders = fetch_training_operator_tasks if training else globals()["fetch_department_work_orders"]
     update_department_work_order = update_training_operator_task if training else globals()["update_department_work_order"]
     st.subheader("🎓 โหมดฝึกผู้ปฏิบัติงาน" if training else "👤 โหมดผู้ปฏิบัติงาน")
-    st.caption("หน้าปฏิบัติการสำหรับ Start / พัก / Resume / Finish — ทำงานตามลำดับคิว")
+    st.caption("ฝึก Start / พัก / เปลี่ยนคิว / Resume / Finish และงานด่วนแทรก" if training else "หน้าปฏิบัติการสำหรับ Start / พัก / Resume / Finish — ทำงานตามลำดับคิว")
     if not training and not operator_only_mode:
         st.markdown("[🔗 เปิดลิงก์เฉพาะโหมดผู้ปฏิบัติงาน](?view=operator)")
 
@@ -6072,6 +6168,10 @@ def render_department_operator_mode(training=False):
         return
 
     person_tasks = all_tasks[all_tasks.get("assignee", pd.Series(index=all_tasks.index, dtype=str)).fillna("").astype(str) == selected_operator].copy()
+    if training:
+        if st.session_state.pop("training_operator_clear_control", False):
+            st.session_state.pop(f"training_operator_control_{selected_operator}", None)
+        render_operator_training_queue_tools(selected_operator, person_tasks)
     for date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish", "hold_started_at", "created_at"]:
         if date_col in person_tasks.columns:
             person_tasks[date_col] = pd.to_datetime(person_tasks[date_col].apply(parse_flexible_datetime), errors="coerce")
@@ -6094,7 +6194,27 @@ def render_department_operator_mode(training=False):
         na_position="last"
     ).reset_index(drop=True)
 
-    current_task = active_tasks.iloc[0]
+    if training:
+        if "training_queue_position" not in active_tasks:
+            active_tasks["training_queue_position"] = range(len(active_tasks))
+        active_tasks = active_tasks.sort_values(
+            ["training_queue_position", "_queue_plan", "id"], na_position="last").reset_index(drop=True)
+        running = active_tasks[active_tasks["status"].astype(str).str.contains("กำลังทำ", na=False)]
+        if running.empty:
+            choices = active_tasks["id"].apply(safe_int).tolist()
+            labels = {safe_int(row["id"]): f"{i + 1}. {safe_str(row.get('drawing_name'))} | {safe_str(row.get('status'))}"
+                      for i, (_, row) in enumerate(active_tasks.iterrows())}
+            selection_key = f"training_operator_control_{selected_operator}"
+            if st.session_state.get(selection_key) not in choices:
+                st.session_state.pop(selection_key, None)
+            selected_id = st.selectbox("เลือกคิวที่จะ Start / Resume", choices,
+                                       format_func=lambda value: labels[value], key=selection_key)
+            current_task = active_tasks[active_tasks["id"].apply(safe_int).eq(selected_id)].iloc[0]
+            st.caption("พักงานแล้วเลือกคิวอื่นได้ • Resume งานเดิมเมื่อไม่มีงานอื่นกำลังทำ • ไม่เริ่มงานอัตโนมัติ")
+        else:
+            current_task = running.iloc[0]
+    else:
+        current_task = active_tasks.iloc[0]
     current_task_id = safe_int(current_task.get("id"), 0)
     current_status = safe_str(current_task.get("status"), "🟧 รอรับงาน")
     if "กำลังทำ" in current_status:
@@ -6122,7 +6242,8 @@ def render_department_operator_mode(training=False):
         status_label = "🚨 เกินกำหนด" if is_overdue else task_status
         border_color = "#DC2626" if is_overdue else ("#16A34A" if is_current else "#CBD5E1")
         background = "#FFF1F2" if is_overdue else ("#ECFDF5" if is_current else "#F8FAFC")
-        lock_text = "🎯 คิวปัจจุบัน — พร้อมควบคุมงาน" if is_current else f"🔒 รอคิวก่อนหน้าเสร็จ — คิวที่ {queue_index}"
+        lock_text = "🎯 คิวปัจจุบัน — พร้อมควบคุมงาน" if is_current else (
+            "เลือกควบคุมได้เมื่อพักหรือจบงานที่กำลังทำ" if training else f"🔒 รอคิวก่อนหน้าเสร็จ — คิวที่ {queue_index}")
         card_class = "step-card-overdue" if is_overdue else ""
         st.markdown(f"""
         <div class="step-card {card_class}" style="border:2px solid {border_color};background:{background};">
@@ -6143,6 +6264,8 @@ def render_department_operator_mode(training=False):
         if "รอรับงาน" in task_status:
             if st.button("▶️ Start งานคิวปัจจุบัน", type="primary", use_container_width=True, key=f"operator_start_{task_id}"):
                 if update_department_work_order(task_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
+                    if training:
+                        st.session_state["training_operator_clear_control"] = True
                     st.rerun()
         elif "กำลังทำ" in task_status:
             op_a1, op_a2 = st.columns(2)
@@ -6153,6 +6276,8 @@ def render_department_operator_mode(training=False):
                     operator_pause_submit = st.form_submit_button("⏸️ พักงาน", use_container_width=True)
                 if operator_pause_submit:
                     if update_department_work_order(task_id, {"status": "🟨 พักงาน", "hold_started_at": get_bangkok_str(), "pause_reason": operator_pause_reason, "pause_note": operator_pause_note or None}):
+                        if training:
+                            st.session_state["training_operator_clear_control"] = True
                         st.rerun()
             with op_a2:
                 with st.form(f"operator_finish_{task_id}"):
@@ -6160,6 +6285,8 @@ def render_department_operator_mode(training=False):
                     operator_finish_submit = st.form_submit_button("✅ Finish งาน", type="primary", use_container_width=True)
                 if operator_finish_submit:
                     if update_department_work_order(task_id, {"status": "✅ เสร็จแล้ว", "actual_finish": get_bangkok_str(), "result_note": operator_finish_note or None}):
+                        if training:
+                            st.session_state["training_operator_clear_control"] = True
                         st.rerun()
         elif "พักงาน" in task_status:
             if st.button("▶️ Resume งานคิวปัจจุบัน", type="primary", use_container_width=True, key=f"operator_resume_{task_id}"):
@@ -6168,6 +6295,8 @@ def render_department_operator_mode(training=False):
                 if operator_hold_start is not None:
                     operator_pause_total += get_work_seconds_between(operator_hold_start, operator_now)
                 if update_department_work_order(task_id, {"status": "🟦 กำลังทำ", "hold_started_at": None, "paused_seconds": operator_pause_total}):
+                    if training:
+                        st.session_state["training_operator_clear_control"] = True
                     st.rerun()
 
 def render_outsource_management(df_all):
