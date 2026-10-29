@@ -7185,7 +7185,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 guard_expired = False
                 if batch_guard:
                     armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
-                    guard_expired = armed_at is None or (guard_now - armed_at).total_seconds() > 15
+                    guard_expired = armed_at is None or (guard_now - armed_at).total_seconds() > 60
                     if guard_expired or batch_guard.get("machine") != selected_m:
                         st.session_state.pop("batch_bulk_guard", None)
                         batch_guard = None
@@ -7198,7 +7198,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     <div class="batch-toolbar">
                         <div>
                             <b style="color:#1E3A8A; font-size:14.5px;">📦 แผงควบคุมการรันงานแบบกลุ่ม (Batch Processing Mode)</b><br>
-                            <span style="font-size:12px; color:#64748B;">คำสั่งรวมต้องตรวจรายการและยืนยัน 2 ชั้นก่อนบันทึกทุกครั้ง</span>
+                            <span style="font-size:12px; color:#64748B;">คำสั่งรวมต้องตรวจรายการและยืนยัน 2 ชั้นภายใน 60 วินาทีก่อนบันทึกทุกครั้ง</span>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -7410,7 +7410,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                             ):
                                 confirm_now = get_bangkok_now().replace(tzinfo=None)
                                 armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
-                                if armed_at is None or (confirm_now - armed_at).total_seconds() > 15:
+                                if armed_at is None or (confirm_now - armed_at).total_seconds() > 60:
                                     st.session_state.pop("batch_bulk_guard", None)
                                     st.error("⌛ การยืนยันหมดอายุแล้ว กรุณาเปิดตรวจรายการใหม่")
                                     st.rerun()
