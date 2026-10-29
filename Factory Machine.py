@@ -6049,13 +6049,68 @@ def fetch_training_operator_tasks(department):
     return pd.DataFrame(json.loads(json.dumps(rows, default=str)))
 
 
+def operator_person_active(row, person):
+    return (row.get("assignee") == person and row.get("status") in ("🟧 รอรับงาน", "🟦 กำลังทำ", "🟨 พักงาน")
+            and row.get("result_note") != DEPARTMENT_TEMPLATE_MARKER)
+
+
+def calculate_operator_person_chain(rows, person, now, position_field="operator_queue_position"):
+    """Reforecast one person's active queue using the shared factory calendar.
+
+    Plans are forecasts; actual timestamps and pause totals are never overwritten.
+    """
+    active = [dict(row) for row in rows if operator_person_active(row, person)]
+    def order(row):
+        position = row.get(position_field)
+        position = safe_float(position, float("inf")) if position is not None and not pd.isna(position) else float("inf")
+        planned = parse_flexible_datetime(row.get("planned_start_at")) or datetime.max
+        due = parse_flexible_datetime(row.get("due_at")) or datetime.max
+        return (0 if row.get("status") == "🟦 กำลังทำ" else 1, position, planned, due, safe_int(row.get("id"), 0))
+    active.sort(key=order)
+    if sum(row.get("status") == "🟦 กำลังทำ" for row in active) > 1:
+        raise ValueError("พบผู้ปฏิบัติงานมีงานกำลังทำมากกว่า 1 คิว กรุณาตรวจสถานะก่อนจัดเวลาใหม่")
+    cursor = get_next_valid_work_time(now)
+    updates = []
+    for rank, row in enumerate(active):
+        hours = safe_float(row.get("estimated_hours"), safe_float(row.get("planned_hours"), 0.0))
+        if hours <= 0:
+            start = parse_flexible_datetime(row.get("planned_start_at"))
+            finish = parse_flexible_datetime(row.get("due_at"))
+            hours = get_work_seconds_between(start, finish) / 3600.0
+        if hours <= 0:
+            raise ValueError(f"ใบงาน #{safe_int(row.get('id'), 0)} ไม่มีเวลาแผน กรุณากำหนดก่อนจัดคิว")
+        started = parse_flexible_datetime(row.get("actual_start"))
+        spent = 0.0
+        if started is not None:
+            hold = parse_flexible_datetime(row.get("hold_started_at"))
+            stop = min(hold, now) if row.get("status") == "🟨 พักงาน" and hold is not None else now
+            spent = max(0.0, get_work_seconds_between(started, stop) - safe_float(row.get("paused_seconds"), 0.0))
+        remaining = max(0.0, hours - spent / 3600.0)
+        forecast_start = cursor
+        _, forecast_finish = add_work_time_with_shift(forecast_start, remaining)
+        # Anchor running work to its real start, including work started ahead of the old plan.
+        plan_start = (started or forecast_start) if row.get("status") == "🟦 กำลังทำ" else forecast_start
+        updates.append({"id": safe_int(row.get("id"), 0), position_field: rank, "estimated_hours": hours,
+                        "planned_start_at": plan_start.strftime("%Y-%m-%d %H:%M:%S"),
+                        "due_at": forecast_finish.strftime("%Y-%m-%d %H:%M:%S")})
+        cursor = forecast_finish
+    return updates
+
+
+def apply_training_operator_chain(rows, person, now):
+    updates = calculate_operator_person_chain(rows, person, now, "training_queue_position")
+    by_id = {row["id"]: row for row in rows}
+    for update in updates:
+        by_id[update["id"]].update(update)
+
+
 def update_training_operator_task(task_id, payload):
     initialize_operator_training()
     allowed_fields = {"status", "actual_start", "actual_finish", "hold_started_at", "paused_seconds",
                       "pause_reason", "pause_note", "result_note"}
     if not isinstance(payload, dict) or set(payload) - allowed_fields:
         return False
-    rows = st.session_state["training_operator_tasks"]
+    rows = json.loads(json.dumps(st.session_state["training_operator_tasks"], default=str))
     matched = [row for row in rows if safe_int(row.get("id")) == safe_int(task_id)]
     if len(matched) != 1 or matched[0].get("assignee") not in TRAINING_OPERATOR_NAMES:
         return False
@@ -6072,6 +6127,12 @@ def update_training_operator_task(task_id, payload):
         return False
     row.update(json.loads(json.dumps(payload, default=str)))
     row["updated_at"] = get_bangkok_str()
+    try:
+        apply_training_operator_chain(rows, row["assignee"], get_bangkok_now().replace(tzinfo=None))
+    except ValueError as exc:
+        st.error(str(exc))
+        return False
+    st.session_state["training_operator_tasks"] = rows
     return True
 
 
@@ -6082,7 +6143,7 @@ def add_operator_training_urgent(person, title, plan, drawing, minutes):
     duration = safe_float(minutes, 0.0)
     if duration <= 0:
         return False
-    rows = st.session_state["training_operator_tasks"]
+    rows = json.loads(json.dumps(st.session_state["training_operator_tasks"], default=str))
     person_rows = [row for row in rows if row.get("assignee") == person]
     start = get_next_valid_work_time(get_bangkok_now().replace(tzinfo=None))
     _, finish = add_work_time_with_shift(start, duration / 60.0)
@@ -6098,12 +6159,18 @@ def add_operator_training_urgent(person, title, plan, drawing, minutes):
                  "due_at": finish.strftime("%Y-%m-%d %H:%M:%S"), "planned_hours": duration / 60.0,
                  "actual_start": None, "actual_finish": None, "hold_started_at": None,
                  "paused_seconds": 0.0, "created_at": get_bangkok_str()})
+    try:
+        apply_training_operator_chain(rows, person, get_bangkok_now().replace(tzinfo=None))
+    except ValueError as exc:
+        st.error(str(exc))
+        return False
+    st.session_state["training_operator_tasks"] = rows
     return True
 
 
 def reorder_operator_training_tasks(person, source_id, target_id):
     initialize_operator_training()
-    rows = st.session_state["training_operator_tasks"]
+    rows = json.loads(json.dumps(st.session_state["training_operator_tasks"], default=str))
     active = [row for row in rows if row.get("assignee") == person
               and not any(word in str(row.get("status", "")) for word in ("เสร็จ", "ยกเลิก"))]
     active.sort(key=lambda row: (safe_float(row.get("training_queue_position"), 0), row["id"]))
@@ -6117,6 +6184,12 @@ def reorder_operator_training_tasks(person, source_id, target_id):
     active.insert(next(i for i, row in enumerate(active) if row["id"] == target_id), source)
     for i, row in enumerate(active):
         row["training_queue_position"] = i
+    try:
+        apply_training_operator_chain(rows, person, get_bangkok_now().replace(tzinfo=None))
+    except ValueError as exc:
+        st.error(str(exc))
+        return False
+    st.session_state["training_operator_tasks"] = rows
     return True
 
 
@@ -6152,7 +6225,7 @@ def render_operator_training_queue_tools(person, tasks):
         options = [safe_int(value) for value in movable.get("id", [])]
         labels = {safe_int(row["id"]): f"{i + 1}. {get_department_urgency_label(row)} {safe_str(row.get('drawing_name'))} | {safe_str(row.get('status'))}"
                   for i, (_, row) in enumerate(movable.iterrows())}
-        st.caption("ย้ายงานรอหรืองานพักไปก่อนคิวที่เลือก • งานกำลังทำต้องพักก่อน • ไม่เปลี่ยนเวลาเริ่มจริงหรือเวลาพัก")
+        st.caption("ย้ายงานรอหรืองานพักไปก่อนคิวที่เลือก • คำนวณเวลาแผนใหม่ตามกะ • เก็บเวลาเริ่มจริงและเวลาพักเดิม")
         if len(options) < 2:
             st.info("ต้องมีงานรอหรืองานพักอย่างน้อย 2 คิว")
         else:
@@ -6162,7 +6235,7 @@ def render_operator_training_queue_tools(person, tasks):
                 submitted = st.form_submit_button("บันทึกสลับคิวฝึก", type="primary")
             if submitted:
                 if reorder_operator_training_tasks(person, source, target):
-                    st.session_state["training_operator_queue_feedback"] = "สลับคิวฝึกสำเร็จแล้ว"
+                    st.session_state["training_operator_queue_feedback"] = "สลับคิวฝึกและคำนวณเวลาแผนใหม่สำเร็จแล้ว"
                     st.session_state["training_operator_clear_control"] = True
                     st.rerun()
                 else:
@@ -6226,6 +6299,42 @@ def operator_supervisor_is_unlocked():
             and hmac.compare_digest(str(grant.get("digest", "")), digest))
 
 
+def prepare_operator_timing_command(person, action, raw, payload, target_id):
+    frames = [fetch_operator_live_tasks(department) for department in ("QC", "AUTOMATION")]
+    frames = [frame for frame in frames if not frame.empty]
+    frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    rows = [row for row in frame.to_dict("records") if operator_person_active(row, person)]
+    snapshot_fields = ("status", "assignee", "department", "actual_start", "actual_finish", "hold_started_at",
+                       "paused_seconds", "planned_start_at", "due_at", "estimated_hours", "operator_queue_position", "updated_at")
+    snapshots = [{"id": safe_int(row["id"], 0), "expected": {
+        key: (None if row[key] is None or pd.isna(row[key]) else row[key])
+        for key in snapshot_fields if key in row}} for row in rows]
+    ordered = sorted(rows, key=lambda row: (
+        safe_float(row.get("operator_queue_position"), float("inf")),
+        parse_flexible_datetime(row.get("planned_start_at")) or datetime.max,
+        parse_flexible_datetime(row.get("due_at")) or datetime.max, safe_int(row["id"], 0)))
+    if action == "urgent":
+        ordered.insert(0, {**payload, "id": -1, "assignee": person, "status": "🟧 รอรับงาน",
+                           "actual_start": None, "paused_seconds": 0})
+    else:
+        matches = [row for row in ordered if safe_int(row["id"], 0) == safe_int(raw.get("id"), 0)]
+        if len(matches) != 1:
+            raise ValueError("คิวงานเปลี่ยนแล้ว กรุณารีเฟรชก่อนทำรายการ")
+        selected = matches[0]
+        if action == "reorder":
+            targets = [row for row in ordered if safe_int(row["id"], 0) == target_id]
+            if len(targets) != 1 or targets[0]["id"] == selected["id"]:
+                raise ValueError("ไม่พบคิวปลายทาง หรือเลือกคิวซ้ำกัน")
+            ordered.remove(selected)
+            ordered.insert(ordered.index(targets[0]), selected)
+        else:
+            selected.update(payload)
+    for rank, row in enumerate(ordered):
+        row["operator_queue_position"] = rank
+    updates = calculate_operator_person_chain(ordered, person, get_bangkok_now().replace(tzinfo=None))
+    return {"snapshots": snapshots, "updates": updates}
+
+
 def operator_live_rpc(person, action, task=None, payload=None, target_id=None):
     if action == "urgent" and not operator_supervisor_is_unlocked():
         st.error("ต้องปลดล็อกสิทธิ์ผู้ดูแลก่อนสร้างงานด่วน")
@@ -6240,11 +6349,13 @@ def operator_live_rpc(person, action, task=None, payload=None, target_id=None):
             "p_task_id": safe_int(raw.get("id"), 0) or None,
             "p_target_id": target_id, "p_expected": expected, "p_payload": payload or {}}
     try:
+        timing = prepare_operator_timing_command(person, action, raw, payload or {}, target_id)
+        body["p_payload"] = {**(payload or {}), "_chain": timing}
         response = requests.post(
-            f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/rpc/tpc_operator_queue_action",
+            f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/rpc/tpc_operator_queue_action_v2",
             headers=get_supabase_headers(), json=body, timeout=12)
         if response.status_code == 404:
-            st.error("กรุณารันไฟล์ TPC_Operator_Queues_Setup_20261028.sql ใน Supabase SQL Editor ก่อนใช้เครื่องมือคิวรุ่นนี้")
+            st.error("กรุณารันไฟล์ TPC_Operator_Time_Chain_20261029.sql ใน Supabase SQL Editor ก่อนใช้เครื่องมือคิวรุ่นนี้")
             return False
         if response.status_code not in (200, 201):
             try:
@@ -6259,6 +6370,9 @@ def operator_live_rpc(person, action, task=None, payload=None, target_id=None):
             return False
         fetch_department_work_orders.clear()
         return True
+    except ValueError as exc:
+        st.error(str(exc))
+        return False
     except Exception:
         st.error("การเชื่อมต่อขัดข้อง ผลบันทึกยังไม่แน่นอน กรุณารีเฟรชตรวจคิวก่อนทำรายการซ้ำ")
         return False
@@ -6337,7 +6451,7 @@ def render_operator_live_queue_tools(person, tasks):
         options = [safe_int(value) for value in movable.get("id", [])]
         labels = {safe_int(row["id"]): f"{i + 1}. {get_department_urgency_label(row)} {safe_str(row.get('drawing_name'))} | {safe_str(row.get('title'))} | {safe_str(row.get('status'))}"
                   for i, (_, row) in enumerate(movable.iterrows())}
-        st.caption("ย้ายงานรอหรืองานพักไปก่อนคิวที่เลือก • ไม่เปลี่ยนกำหนดเวลาและเวลาจริง")
+        st.caption("ย้ายงานรอหรืองานพักไปก่อนคิวที่เลือก • คำนวณเวลาแผนใหม่ตามกะ • เก็บเวลาจริงเดิม")
         if len(options) < 2:
             st.info("ต้องมีงานรอหรืองานพักอย่างน้อย 2 คิว")
         else:
@@ -6349,7 +6463,7 @@ def render_operator_live_queue_tools(person, tasks):
                 if source == target:
                     st.warning("กรุณาเลือกคิวต้นทางและปลายทางให้ต่างกัน")
                 elif operator_live_rpc(person, "reorder", task=movable[movable["id"].apply(safe_int).eq(source)].iloc[0], target_id=target):
-                    st.session_state["operator_live_queue_feedback"] = "สลับคิวสำเร็จแล้ว"
+                    st.session_state["operator_live_queue_feedback"] = "สลับคิวและคำนวณเวลาแผนใหม่สำเร็จแล้ว"
                     st.session_state["operator_live_clear_control"] = True
                     st.rerun()
 
