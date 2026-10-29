@@ -5132,7 +5132,7 @@ def render_department_creation_access(department):
 
 def render_people_work_center(department):
     is_qc = department == "QC"
-    icon = "🧪" if is_qc else "🤖"
+    icon = "🧪" if is_qc else "⚙️"
     title = "Admin QC" if is_qc else "Admin Automation"
     work_types = QC_WORK_TYPES if is_qc else AUTO_WORK_TYPES
     department_assignees = get_department_assignees(department)
@@ -7114,7 +7114,10 @@ if st.session_state.current_view == "🧪 งานตรวจสอบ QC":
     st.session_state.current_view = "🧪 Admin QC"
 
 if st.session_state.current_view == "🤖 ใบสั่งงาน Automation":
-    st.session_state.current_view = "🤖 Admin Automation"
+    st.session_state.current_view = "⚙️ Admin Automation"
+
+if st.session_state.current_view == "🤖 Admin Automation":
+    st.session_state.current_view = "⚙️ Admin Automation"
 
 nav_options = [
     "👷 โหมดหน้าเครื่อง",
@@ -7122,7 +7125,7 @@ nav_options = [
     "👤 โหมดผู้ปฏิบัติงาน",
     "🎓 โหมดฝึกผู้ปฏิบัติงาน",
     "🧪 Admin QC",
-    "🤖 Admin Automation",
+    "⚙️ Admin Automation",
     "📊 แดชบอร์ดภาพรวมโรงงาน", 
     "📈 ติดตามสถานการณ์ฝ่ายผลิต", 
     "📑 รายงานสรุปประจำเดือน", 
@@ -7160,7 +7163,7 @@ else:
 if st.session_state.current_view == "🧪 Admin QC":
     render_people_work_center("QC")
 
-elif st.session_state.current_view == "🤖 Admin Automation":
+elif st.session_state.current_view == "⚙️ Admin Automation":
     render_people_work_center("AUTOMATION")
 
 elif st.session_state.current_view == "👤 โหมดผู้ปฏิบัติงาน":
