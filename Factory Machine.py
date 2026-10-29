@@ -6495,13 +6495,20 @@ def render_department_operator_mode(training=False):
         planned_text = planned_text.strftime("%d/%m/%Y %H:%M") if planned_text else "-"
         due_text = task_due.strftime("%d/%m/%Y %H:%M") if task_due else "-"
         status_label = "🚨 เกินกำหนด" if is_overdue else task_status
-        border_color = "#DC2626" if is_overdue else ("#16A34A" if is_current else "#CBD5E1")
-        background = "#FFF1F2" if is_overdue else ("#ECFDF5" if is_current else "#F8FAFC")
         lock_text = "🎯 คิวปัจจุบัน — พร้อมควบคุมงาน" if is_current else (
             "เลือกควบคุมได้เมื่อพักหรือจบงานที่กำลังทำ")
-        card_class = "step-card-overdue" if is_overdue else ""
+        card_class = "tpc-light-panel"
+        if is_overdue:
+            card_class += " step-card-overdue"
+        elif "กำลังทำ" in task_status:
+            card_class += " step-card-running"
+        elif "พักงาน" in task_status:
+            card_class += " step-card-hold"
+        elif is_current:
+            card_class += " step-card-ready"
+        card_background = ' style="background:#FFF1F2;"' if is_overdue else ""
         st.markdown(f"""
-        <div class="step-card {card_class}" style="border:2px solid {border_color};background:{background};">
+        <div class="step-card {card_class}"{card_background}>
           <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
             <b style="font-size:18px;">คิวที่ {queue_index} | {html.escape(safe_str(queue_task.get('title'), '-'))}</b>
             <b>{html.escape(status_label)}</b>
