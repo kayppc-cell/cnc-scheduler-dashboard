@@ -1275,6 +1275,12 @@ st.markdown("""
         color:#0F172A !important;
     }
 
+    .tpc-light-panel .tpc-person-urgent-badge {
+        display:inline-block; background:#991B1B; color:#FFFFFF !important;
+        border:2px solid #FECACA; border-radius:8px; padding:5px 10px;
+        font-size:16px; font-weight:800; line-height:1.4; white-space:nowrap;
+    }
+
     /* ตาราง Native: สีข้อความตามธีม; canvas ใช้ .streamlit/config.toml */
     div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
         border: 2px solid #64748B;
@@ -6114,6 +6120,13 @@ def reorder_operator_training_tasks(person, source_id, target_id):
     return True
 
 
+def get_department_urgency_label(row):
+    priority = safe_str(row.get("priority"), "").strip()
+    if priority == "วิกฤต":
+        return "🚨 งานด่วนวิกฤต"
+    return "🚨 งานด่วน" if priority in ("ด่วน", "เร่งด่วน") else ""
+
+
 def render_operator_training_queue_tools(person, tasks):
     feedback = st.session_state.pop("training_operator_queue_feedback", None)
     if feedback:
@@ -6137,7 +6150,7 @@ def render_operator_training_queue_tools(person, tasks):
         if "training_queue_position" in movable:
             movable = movable.sort_values(["training_queue_position", "id"])
         options = [safe_int(value) for value in movable.get("id", [])]
-        labels = {safe_int(row["id"]): f"{i + 1}. {safe_str(row.get('drawing_name'))} | {safe_str(row.get('status'))}"
+        labels = {safe_int(row["id"]): f"{i + 1}. {get_department_urgency_label(row)} {safe_str(row.get('drawing_name'))} | {safe_str(row.get('status'))}"
                   for i, (_, row) in enumerate(movable.iterrows())}
         st.caption("ย้ายงานรอหรืองานพักไปก่อนคิวที่เลือก • งานกำลังทำต้องพักก่อน • ไม่เปลี่ยนเวลาเริ่มจริงหรือเวลาพัก")
         if len(options) < 2:
@@ -6322,7 +6335,7 @@ def render_operator_live_queue_tools(person, tasks):
         elif not movable.empty:
             movable = movable.sort_values(["planned_start_at", "due_at", "id"], na_position="last")
         options = [safe_int(value) for value in movable.get("id", [])]
-        labels = {safe_int(row["id"]): f"{i + 1}. {safe_str(row.get('drawing_name'))} | {safe_str(row.get('title'))} | {safe_str(row.get('status'))}"
+        labels = {safe_int(row["id"]): f"{i + 1}. {get_department_urgency_label(row)} {safe_str(row.get('drawing_name'))} | {safe_str(row.get('title'))} | {safe_str(row.get('status'))}"
                   for i, (_, row) in enumerate(movable.iterrows())}
         st.caption("ย้ายงานรอหรืองานพักไปก่อนคิวที่เลือก • ไม่เปลี่ยนกำหนดเวลาและเวลาจริง")
         if len(options) < 2:
@@ -6374,10 +6387,16 @@ def render_department_operator_mode(training=False):
     task_frames = [frame for frame in [qc_tasks, automation_tasks] if isinstance(frame, pd.DataFrame) and not frame.empty]
     all_tasks = pd.concat(task_frames, ignore_index=True) if task_frames else pd.DataFrame()
 
+    if training:
+        saved_department = st.session_state.get("training_operator_saved_department", "QC")
+        if st.session_state.get("training_operator_department") not in ("QC", "AUTOMATION"):
+            st.session_state["training_operator_department"] = saved_department if saved_department in ("QC", "AUTOMATION") else "QC"
     training_department = st.selectbox(
         "เลือกแผนกฝึก", ["QC", "AUTOMATION"],
         format_func=lambda value: "QC" if value == "QC" else "Automation",
         key="training_operator_department") if training else None
+    if training:
+        st.session_state["training_operator_saved_department"] = training_department
     operator_names = [name for name in TRAINING_OPERATOR_NAMES
                       if TRAINING_OPERATOR_DEPARTMENTS[name] == training_department] if training else list(dict.fromkeys(QC_ASSIGNEES[1:] + AUTOMATION_ASSIGNEES[1:]))
     if not all_tasks.empty and "assignee" in all_tasks.columns:
@@ -6395,14 +6414,28 @@ def render_department_operator_mode(training=False):
             ((all_assignee == operator_name) & ~all_status.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)).sum()
         )
 
-    if training and st.session_state.get("training_department_operator_name") not in operator_names:
-        st.session_state.pop("training_department_operator_name", None)
+    if training:
+        remembered_names = st.session_state.get("training_operator_saved_names", {})
+        if st.session_state.get("training_department_operator_name") not in operator_names:
+            remembered_name = remembered_names.get(training_department)
+            st.session_state["training_department_operator_name"] = (
+                remembered_name if remembered_name in operator_names else operator_names[0])
+    elif st.session_state.get("department_operator_name") not in operator_names:
+        remembered_name = st.session_state.get("operator_live_saved_name")
+        st.session_state["department_operator_name"] = (
+            remembered_name if remembered_name in operator_names else operator_names[0])
     selected_operator = st.selectbox(
         "เลือกชื่อผู้ปฏิบัติงาน",
         operator_names,
-        format_func=lambda name: f"{name} — มี {active_counts.get(name, 0)} คิว",
+        format_func=lambda name: name,
         key="training_department_operator_name" if training else "department_operator_name"
     )
+    if training:
+        st.session_state["training_operator_saved_names"] = {
+            **st.session_state.get("training_operator_saved_names", {}), training_department: selected_operator}
+    else:
+        st.session_state["operator_live_saved_name"] = selected_operator
+    st.caption(f"{selected_operator} — มี {active_counts.get(selected_operator, 0)} คิว")
     if all_tasks.empty:
         st.info("ยังไม่มีคิวงานที่ได้รับมอบหมาย")
         if not training:
@@ -6451,7 +6484,7 @@ def render_department_operator_mode(training=False):
     running = active_tasks[active_tasks["status"].astype(str).str.contains("กำลังทำ", na=False)]
     if running.empty:
         choices = active_tasks["id"].apply(safe_int).tolist()
-        labels = {safe_int(row["id"]): f"{i + 1}. {safe_str(row.get('drawing_name'))} | {safe_str(row.get('status'))}"
+        labels = {safe_int(row["id"]): f"{i + 1}. {get_department_urgency_label(row)} {safe_str(row.get('drawing_name'))} | {safe_str(row.get('status'))}"
                   for i, (_, row) in enumerate(active_tasks.iterrows())}
         selection_key = f"training_operator_control_{selected_operator}" if training else f"operator_live_control_{selected_operator}"
         pending_choice = st.session_state.pop("operator_queue_pick", None)
@@ -6478,6 +6511,9 @@ def render_department_operator_mode(training=False):
         banner_class, banner_text = "shop-live-hold", "🟡 พักงาน — กด Resume เพื่อทำต่อ"
     else:
         banner_class, banner_text = "shop-live-idle", "🟠 พร้อม Start คิวที่เลือก"
+    current_urgency = get_department_urgency_label(current_task)
+    if current_urgency:
+        banner_text += f" | {current_urgency}"
     st.markdown(
         f'<div class="shop-live-banner {banner_class}"><span>👤 {html.escape(selected_operator)}</span><span>{banner_text} | คงเหลือ {len(active_tasks)} คิว</span></div>',
         unsafe_allow_html=True
@@ -6494,6 +6530,8 @@ def render_department_operator_mode(training=False):
         planned_text = parse_flexible_datetime(queue_task.get("planned_start_at"))
         planned_text = planned_text.strftime("%d/%m/%Y %H:%M") if planned_text else "-"
         due_text = task_due.strftime("%d/%m/%Y %H:%M") if task_due else "-"
+        urgency = get_department_urgency_label(queue_task)
+        urgency_badge = f'<span class="tpc-person-urgent-badge">{html.escape(urgency)}</span>' if urgency else ""
         status_label = "🚨 เกินกำหนด" if is_overdue else task_status
         lock_text = "🎯 คิวปัจจุบัน — พร้อมควบคุมงาน" if is_current else (
             "เลือกควบคุมได้เมื่อพักหรือจบงานที่กำลังทำ")
@@ -6510,7 +6548,7 @@ def render_department_operator_mode(training=False):
         st.markdown(f"""
         <div class="step-card {card_class}"{card_background}>
           <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
-            <b style="font-size:18px;">คิวที่ {queue_index} | {html.escape(safe_str(queue_task.get('title'), '-'))}</b>
+            <b style="font-size:18px;">คิวที่ {queue_index} | {html.escape(safe_str(queue_task.get('title'), '-'))}</b> {urgency_badge}
             <b>{html.escape(status_label)}</b>
           </div>
           <div style="margin-top:8px;"><b>🏢 แผนก:</b> {department_label} | <b>🧰 ประเภทงาน:</b> {html.escape(safe_str(queue_task.get('work_type'), '-'))}</div>
