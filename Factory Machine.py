@@ -4785,7 +4785,7 @@ def delete_waiting_department_work_order(task_id):
     except Exception as exc:
         return False, safe_str(exc)
 
-def render_department_finished_history(finished_tasks, department, now):
+def render_department_finished_history(finished_tasks, department, now, allow_write=False):
     """ตารางประวัติสำหรับผู้ควบคุม แสดงใต้ตารางคิวและเลือกลบจากแถวได้โดยตรง"""
     with st.expander(f"✅ ตารางประวัติงานที่เสร็จแล้ว ({len(finished_tasks)} รายการ)", expanded=False):
         history_quick = st.radio(
@@ -4850,7 +4850,7 @@ def render_department_finished_history(finished_tasks, department, now):
             hide_index=True,
             use_container_width=True,
             height=min(450, 80 + len(history_display) * 36),
-            disabled=[col for col in history_display.columns if col != "เลือก"],
+            disabled=[col for col in history_display.columns if col != "เลือก" or not allow_write],
             key=f"{department}_history_delete_editor_v2",
             column_config={
                 "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width=58),
@@ -4877,15 +4877,15 @@ def render_department_finished_history(finished_tasks, department, now):
         selected_history_ids = [task_id for task_id in selected_history_ids if task_id > 0]
         confirm_history_delete = st.checkbox(
             f"ยืนยันลบประวัติที่ติ๊กเลือก {len(selected_history_ids)} รายการ",
-            disabled=not selected_history_ids,
+            disabled=(not selected_history_ids or not allow_write),
             key=f"{department}_confirm_history_table_delete_v2"
         )
         if st.button(
             f"🗑️ ลบประวัติที่ติ๊กเลือก ({len(selected_history_ids)} รายการ)",
-            disabled=(not selected_history_ids or not confirm_history_delete),
+            disabled=(not selected_history_ids or not confirm_history_delete or not allow_write),
             use_container_width=True,
             key=f"{department}_delete_history_from_table_v2"
-        ):
+        ) and allow_write:
             delete_ok, delete_message = delete_department_work_orders(selected_history_ids)
             if delete_ok:
                 st.success(f"ลบประวัติที่เลือกเรียบร้อย {len(selected_history_ids)} รายการ")
@@ -4893,23 +4893,38 @@ def render_department_finished_history(finished_tasks, department, now):
             else:
                 st.error(f"ลบประวัติไม่สำเร็จ: {delete_message}")
 
-def render_qc_time_cost_table(qc_tasks, now):
+def get_department_hourly_rate(assignee, department):
+    if department == "QC":
+        return get_qc_hourly_rate(assignee)
+    try:
+        rates = st.secrets.get("AUTOMATION_HOURLY_RATES", {})
+        for name, value in rates.items():
+            if normalize_filter_key(name) == normalize_filter_key(assignee):
+                rate = safe_float(value, -1)
+                return rate if rate >= 0 else None
+    except Exception:
+        pass
+    return None
+
+
+def render_department_time_cost_table(qc_tasks, now, department):
+    label = "QC" if department == "QC" else "Automation"
     """สรุปเวลาและต้นทุนแรงงาน QC จากเวลาแผนและเวลาเดินจริงสุทธิ"""
-    with st.expander("💰 ตารางคำนวณเวลาและต้นทุน QC", expanded=False):
+    with st.expander(f"💰 ตารางคำนวณเวลาและต้นทุน {label}", expanded=False):
         if qc_tasks is None or qc_tasks.empty:
-            st.info("ยังไม่มีใบงาน QC สำหรับคำนวณเวลาและต้นทุน")
+            st.info(f"ยังไม่มีใบงาน {label} สำหรับคำนวณเวลาและต้นทุน")
             return
 
         finished_status = qc_tasks.get("status", pd.Series(index=qc_tasks.index, dtype=str)).fillna("").astype(str)
         filtered_tasks = qc_tasks[finished_status.str.contains("เสร็จ", na=False)].copy()
         if filtered_tasks.empty:
-            st.info("ยังไม่มีใบงาน QC ที่เสร็จแล้วสำหรับคำนวณเวลาและต้นทุน")
+            st.info(f"ยังไม่มีใบงาน {label} ที่เสร็จแล้วสำหรับคำนวณเวลาและต้นทุน")
             return
         quick_filter = st.radio(
             "⚡ ค้นหาเร็ว",
             ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้"],
             horizontal=True,
-            key="qc_cost_quick_filter"
+            key=f"{department}_cost_quick_filter"
         )
         filter_plan_options = sorted(
             value for value in filtered_tasks.get("plan_code", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
@@ -4921,11 +4936,11 @@ def render_qc_time_cost_table(qc_tasks, now):
         )
         qf1, qf2, qf3 = st.columns([1.4, 1.8, 3.0])
         with qf1:
-            selected_cost_plan = st.selectbox("📌 เลขแผน", ["ทุกแผนงาน"] + filter_plan_options, key="qc_cost_plan_filter")
+            selected_cost_plan = st.selectbox("📌 เลขแผน", ["ทุกแผนงาน"] + filter_plan_options, key=f"{department}_cost_plan_filter")
         with qf2:
-            selected_cost_assignee = st.selectbox("👤 ผู้รับผิดชอบ", ["ทุกคน"] + filter_assignee_options, key="qc_cost_assignee_filter")
+            selected_cost_assignee = st.selectbox("👤 ผู้รับผิดชอบ", ["ทุกคน"] + filter_assignee_options, key=f"{department}_cost_assignee_filter")
         with qf3:
-            cost_search = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, ประเภทงาน, บริษัทลูกค้า", key="qc_cost_search")
+            cost_search = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, ประเภทงาน, บริษัทลูกค้า", key=f"{department}_cost_search")
 
         reference_dates = filtered_tasks.apply(
             lambda row: (
@@ -4960,14 +4975,14 @@ def render_qc_time_cost_table(qc_tasks, now):
             filtered_tasks = filtered_tasks[search_mask]
 
         if filtered_tasks.empty:
-            st.info("ไม่พบข้อมูลเวลาและต้นทุน QC ตามตัวกรอง")
+            st.info(f"ไม่พบข้อมูลเวลาและต้นทุน {label} ตามตัวกรอง")
             return
 
         cost_rows = []
         missing_rate_names = set()
         for _, task_row in filtered_tasks.iterrows():
             assignee_name = safe_str(task_row.get("assignee"), "ไม่ระบุ")
-            hourly_rate = get_qc_hourly_rate(assignee_name)
+            hourly_rate = get_department_hourly_rate(assignee_name, department)
             if hourly_rate is None:
                 missing_rate_names.add(assignee_name)
 
@@ -5014,13 +5029,14 @@ def render_qc_time_cost_table(qc_tasks, now):
             (cost_difference / total_planned_cost) * 100.0
             if total_planned_cost > 0 else 0.0
         )
+        has_rates = cost_df["เรท (บาท/ช.ม)"].notna().any()
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("💰 ต้นทุนจริงสุทธิที่เลือก", f"{total_actual_cost:,.2f} บาท")
-        c2.metric("📋 ต้นทุนตามแผนที่เลือก", f"{total_planned_cost:,.2f} บาท")
+        c1.metric("💰 ต้นทุนจริงสุทธิที่เลือก", f"{total_actual_cost:,.2f} บาท" if has_rates else "ยังไม่กำหนดเรท")
+        c2.metric("📋 ต้นทุนตามแผนที่เลือก", f"{total_planned_cost:,.2f} บาท" if has_rates else "ยังไม่กำหนดเรท")
         c3.metric(
             "📊 ผลต่างต้นทุน",
-            f"{cost_difference:,.2f} บาท",
-            delta=f"{cost_difference_pct:+.2f}%",
+            f"{cost_difference:,.2f} บาท" if has_rates else "ยังไม่กำหนดเรท",
+            delta=f"{cost_difference_pct:+.2f}%" if has_rates else None,
             delta_color="inverse"
         )
         c4.metric("⏱️ เวลาเดินจริงสุทธิที่เลือก", f"{total_actual_hours:,.2f} ชม.")
@@ -5056,9 +5072,9 @@ def render_qc_time_cost_table(qc_tasks, now):
             f"<td>{html.escape(safe_str(row.get('เสร็จจริง'), '-'))}</td>"
             f"<td class='num'>{safe_float(row.get('เวลาประมาณรวม (ช.ม)'), 0.0):,.2f}</td>"
             f"<td class='num'>{safe_float(row.get('เวลาจริงสุทธิ (ช.ม)'), 0.0):,.2f}</td>"
-            f"<td class='num'>{safe_float(row.get('เรท (บาท/ช.ม)'), 0.0):,.2f}</td>"
-            f"<td class='num'>{safe_float(row.get('ต้นทุนตามแผน (บาท)'), 0.0):,.2f}</td>"
-            f"<td class='num'>{safe_float(row.get('ต้นทุนจริง (บาท)'), 0.0):,.2f}</td>"
+            f"<td class='num'>{format_verified_cost(row.get('เรท (บาท/ช.ม)'))}</td>"
+            f"<td class='num'>{format_verified_cost(row.get('ต้นทุนตามแผน (บาท)'))}</td>"
+            f"<td class='num'>{format_verified_cost(row.get('ต้นทุนจริง (บาท)'))}</td>"
             "</tr>"
             for _, row in cost_df.iterrows()
         )
@@ -5069,10 +5085,10 @@ def render_qc_time_cost_table(qc_tasks, now):
             "assignee_filter": selected_cost_assignee,
             "search": cost_search.strip() or "-",
             "count": len(cost_df),
-            "planned_total": f"{total_planned_cost:,.2f}",
-            "actual_total": f"{total_actual_cost:,.2f}",
-            "difference": f"{cost_difference:,.2f}",
-            "difference_pct": f"{cost_difference_pct:+.2f}%",
+            "planned_total": f"{total_planned_cost:,.2f}" if has_rates else "ยังไม่กำหนดเรท",
+            "actual_total": f"{total_actual_cost:,.2f}" if has_rates else "ยังไม่กำหนดเรท",
+            "difference": f"{cost_difference:,.2f}" if has_rates else "ยังไม่กำหนดเรท",
+            "difference_pct": f"{cost_difference_pct:+.2f}%" if has_rates else "-",
             "actual_hours": f"{total_actual_hours:,.2f}",
             "rows": pdf_rows
         }, ensure_ascii=False).replace("<", "\\u003c")
@@ -5083,25 +5099,26 @@ def render_qc_time_cost_table(qc_tasks, now):
           const d={pdf_payload};
           const w=window.open('','_blank');
           if(!w){{alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์รายงาน');return;}}
-          w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>TPC QC Time and Cost</title><style>@page{{size:A4 landscape;margin:9mm}}body{{font-family:Tahoma,Arial,sans-serif;color:#172033;font-size:10px}}h1{{font-size:20px;margin:0}}.head{{display:flex;justify-content:space-between;border-bottom:3px solid #1E3E62;padding-bottom:8px}}.sub{{color:#475569;line-height:1.6}}.kpi{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}}.kpi div{{border:1px solid #CBD5E1;border-radius:6px;padding:8px;text-align:center}}.kpi b{{display:block;font-size:15px;margin-top:4px}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #CBD5E1;padding:5px;vertical-align:top}}th{{background:#1E3E62;color:white}}.num{{text-align:right;white-space:nowrap}}</style></head><body><div class="head"><div><h1>ตารางคำนวณเวลาและต้นทุน QC</h1><div class="sub">เฉพาะใบงานที่เสร็จแล้ว<br>ช่วง: ${{d.quick_filter}} | แผน: ${{d.plan_filter}} | ผู้รับผิดชอบ: ${{d.assignee_filter}} | ค้นหา: ${{d.search}}</div></div><div>วันที่ออกรายงาน<br><b>${{d.print_date}}</b></div></div><div class="kpi"><div>ต้นทุนจริงสุทธิ<b>${{d.actual_total}} บาท</b></div><div>ต้นทุนตามแผน<b>${{d.planned_total}} บาท</b></div><div>ผลต่างต้นทุน<b>${{d.difference}} บาท (${{d.difference_pct}})</b></div><div>เวลาเดินจริงสุทธิ<b>${{d.actual_hours}} ชม.</b></div></div><table><thead><tr><th>แผนงาน</th><th>Drawing</th><th>ประเภทงาน</th><th>ผู้รับผิดชอบ</th><th>เสร็จจริง</th><th>เวลาแผน</th><th>เวลาจริง</th><th>เรท/ชม.</th><th>ต้นทุนแผน</th><th>ต้นทุนจริง</th></tr></thead><tbody>${{d.rows}}</tbody></table></body></html>`);
+          w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>TPC {label} Time and Cost</title><style>@page{{size:A4 landscape;margin:9mm}}body{{font-family:Tahoma,Arial,sans-serif;color:#172033;font-size:10px}}h1{{font-size:20px;margin:0}}.head{{display:flex;justify-content:space-between;border-bottom:3px solid #1E3E62;padding-bottom:8px}}.sub{{color:#475569;line-height:1.6}}.kpi{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}}.kpi div{{border:1px solid #CBD5E1;border-radius:6px;padding:8px;text-align:center}}.kpi b{{display:block;font-size:15px;margin-top:4px}}table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #CBD5E1;padding:5px;vertical-align:top}}th{{background:#1E3E62;color:white}}.num{{text-align:right;white-space:nowrap}}</style></head><body><div class="head"><div><h1>ตารางคำนวณเวลาและต้นทุน {label}</h1><div class="sub">เฉพาะใบงานที่เสร็จแล้ว<br>ช่วง: ${{d.quick_filter}} | แผน: ${{d.plan_filter}} | ผู้รับผิดชอบ: ${{d.assignee_filter}} | ค้นหา: ${{d.search}}</div></div><div>วันที่ออกรายงาน<br><b>${{d.print_date}}</b></div></div><div class="kpi"><div>ต้นทุนจริงสุทธิ<b>${{d.actual_total}} บาท</b></div><div>ต้นทุนตามแผน<b>${{d.planned_total}} บาท</b></div><div>ผลต่างต้นทุน<b>${{d.difference}} บาท (${{d.difference_pct}})</b></div><div>เวลาเดินจริงสุทธิ<b>${{d.actual_hours}} ชม.</b></div></div><table><thead><tr><th>แผนงาน</th><th>Drawing</th><th>ประเภทงาน</th><th>ผู้รับผิดชอบ</th><th>เสร็จจริง</th><th>เวลาแผน</th><th>เวลาจริง</th><th>เรท/ชม.</th><th>ต้นทุนแผน</th><th>ต้นทุนจริง</th></tr></thead><tbody>${{d.rows}}</tbody></table></body></html>`);
           w.document.close();w.focus();setTimeout(()=>w.print(),600);
         }}
         </script>
         """, height=52)
 
-def render_qc_creation_access():
-    """QC creation shares the dashboard admin password and supervisor grant."""
+def render_department_creation_access(department):
+    label = "QC" if department == "QC" else "Automation"
+    """Both admin centers share the dashboard password and session grant."""
     if operator_supervisor_is_unlocked():
-        st.caption("🔓 ปลดล็อกสร้างและแก้ไขใบงาน QC แล้ว")
+        st.caption(f"🔓 ปลดล็อกสร้างและแก้ไขใบงาน {label} แล้ว")
         if st.session_state.get("user_role") != "admin" and st.button(
-                "🔒 ล็อกการสร้างและแก้ไขใบงาน QC", key="qc_creation_lock"):
+                f"🔒 ล็อกการสร้างและแก้ไขใบงาน {label}", key=f"{department}_creation_lock"):
             st.session_state.pop("operator_supervisor_grant", None)
             st.rerun()
         return True
-    st.info("🔒 สร้าง / แก้ไขใบงาน QC / เพิ่มงานด่วน — ใช้รหัสผู้ดูแลชุดเดียวกับแดชบอร์ด")
-    with st.form("qc_creation_unlock", clear_on_submit=True):
-        password = st.text_input("รหัสผู้ดูแลสำหรับจัดการใบงาน QC", type="password")
-        submitted = st.form_submit_button("ปลดล็อกจัดการใบงาน QC")
+    st.info(f"🔒 สร้าง / แก้ไขใบงาน {label} / เพิ่มงานด่วน — ใช้รหัสผู้ดูแลชุดเดียวกับแดชบอร์ด")
+    with st.form(f"{department}_creation_unlock", clear_on_submit=True):
+        password = st.text_input(f"รหัสผู้ดูแลสำหรับจัดการใบงาน {label}", type="password")
+        submitted = st.form_submit_button(f"ปลดล็อกจัดการใบงาน {label}")
     if submitted:
         if hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")):
             st.session_state["operator_supervisor_grant"] = {
@@ -5128,9 +5145,9 @@ def render_people_work_center(department):
         st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL ที่แนบมาก่อนใช้งานโหมดนี้")
         return
     tasks, templates = split_department_work_order_templates(tasks)
-    qc_creation_allowed = render_qc_creation_access() if is_qc else True
-    if is_qc and qc_creation_allowed:
-        render_qc_urgent_work_order(tasks)
+    admin_write_allowed = render_department_creation_access(department)
+    if admin_write_allowed:
+        render_department_urgent_work_order(tasks, department)
 
     # เปลี่ยนรุ่น key ของแบบฟอร์มหลังบันทึกสำเร็จ เพื่อบังคับให้ Streamlit
     # สร้าง widget ชุดใหม่และไม่คืนค่าชุดเดิมจากฝั่งเบราว์เซอร์
@@ -5141,7 +5158,7 @@ def render_people_work_center(department):
     def create_widget_key(field_name):
         return f"{department}_create_{field_name}_v{create_form_version}"
 
-    if qc_creation_allowed:
+    if admin_write_allowed:
         with st.expander("➕ สร้างใบงาน", expanded=False):
             template_defaults_key = f"{department}_pending_template_defaults"
             template_defaults = st.session_state.pop(template_defaults_key, {})
@@ -5156,6 +5173,8 @@ def render_people_work_center(department):
 
             st.markdown("##### 📝 สร้างใบงาน")
             create_template_selector_key = f"{department}_create_template_selector_{'_'.join(map(str, template_ids))}"
+            if st.session_state.pop(f"{department}_reset_create_template", False):
+                st.session_state[create_template_selector_key] = 0
             selected_create_template_id = st.selectbox(
                 "เลือก Template เพื่อเติมข้อมูลอัตโนมัติ (ไม่เลือกก็กรอกเองได้)",
                 template_ids,
@@ -5458,7 +5477,7 @@ def render_people_work_center(department):
                     else:
                         ok, message = insert_department_work_order(create_payload)
                         if ok:
-                            st.session_state[create_template_selector_key] = 0
+                            st.session_state[f"{department}_reset_create_template"] = True
                             st.session_state[last_create_template_key] = 0
                             st.session_state.pop(f"{department}_editing_template_id", None)
                             st.session_state[create_form_version_key] = create_form_version + 1
@@ -5467,8 +5486,8 @@ def render_people_work_center(department):
                         else:
                             st.error(f"สร้างใบงานไม่สำเร็จ: {message}")
 
-    # Reserve the QC edit section immediately after creation; render with filtered data below.
-    qc_edit_panel = st.container() if is_qc else None
+    # Reserve the edit section immediately after creation in both admin centers.
+    edit_panel = st.container()
 
     if tasks.empty:
         st.info("ยังไม่มีใบงานในแผนกนี้")
@@ -5488,121 +5507,120 @@ def render_people_work_center(department):
     k3.metric("พัก/รอ", int(status_text.str.contains("พักงาน|รอรับงาน", regex=True, na=False).sum()))
     k4.metric("เกินกำหนด", int(overdue_mask.sum()))
 
-    if is_qc:
-        qc_timeline = tasks.copy()
-        qc_timeline_status = qc_timeline.get(
-            "status", pd.Series(index=qc_timeline.index, dtype=str)
-        ).fillna("").astype(str)
-        qc_timeline = qc_timeline[
-            ~qc_timeline_status.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)
-        ].copy()
-        qc_timeline = qc_timeline[
-            qc_timeline["planned_start_at"].notna() & qc_timeline["due_at"].notna()
-        ].copy()
-        if not qc_timeline.empty:
-            qc_timeline["เลขแผน"] = qc_timeline.get("plan_code", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่ระบุแผน").astype(str)
-            qc_timeline["ผู้ปฏิบัติงาน"] = qc_timeline.get("assignee", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่ระบุ").astype(str)
-            qc_timeline["Drawing"] = qc_timeline.get("drawing_name", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่มี Drawing").astype(str)
-            qc_timeline["สถานะ"] = qc_timeline.get("status", pd.Series(index=qc_timeline.index, dtype=str)).fillna("🟧 รอรับงาน").astype(str)
-            qc_alert_now = get_bangkok_now().replace(tzinfo=None)
-            qc_minutes_to_due = (qc_timeline["due_at"] - qc_alert_now).dt.total_seconds() / 60.0
-            # ใช้สีเตือนบนกราฟเท่านั้น โดยไม่แก้สถานะงานจริงในฐานข้อมูล
-            qc_timeline["สถานะกราฟ"] = qc_timeline["สถานะ"]
-            qc_timeline.loc[
-                (qc_minutes_to_due >= 0) & (qc_minutes_to_due <= 30), "สถานะกราฟ"
-            ] = "🟡 ใกล้ครบกำหนด (ไม่เกิน 30 นาที)"
-            qc_timeline.loc[
-                qc_minutes_to_due < 0, "สถานะกราฟ"
-            ] = "🔴 เลยกำหนดเสร็จ"
-            qc_timeline["เลขที่ใบงาน"] = qc_timeline.get("id", pd.Series(index=qc_timeline.index, dtype=int)).apply(
-                lambda value: safe_int(value, 0)
-            )
-            qc_timeline["ข้อความบนแท่ง"] = qc_timeline.apply(
-                lambda row: (
-                    f"{safe_str(row.get('เลขแผน'), '-')} | "
-                    f"{safe_str(row.get('Drawing'), '-')}"
-                ),
-                axis=1
-            )
-            qc_timeline["กำหนดเริ่ม"] = qc_timeline["planned_start_at"].dt.strftime("%d/%m/%Y %H:%M")
-            qc_timeline["กำหนดเสร็จ"] = qc_timeline["due_at"].dt.strftime("%d/%m/%Y %H:%M")
-            qc_timeline["เริ่มจริง"] = qc_timeline.get("actual_start", pd.Series(pd.NaT, index=qc_timeline.index)).apply(
-                lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) else "ยังไม่ Start"
-            )
-            qc_timeline["เสร็จจริง"] = qc_timeline.get("actual_finish", pd.Series(pd.NaT, index=qc_timeline.index)).apply(
-                lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) else "-"
-            )
-            qc_status_fig = px.timeline(
-                qc_timeline,
-                x_start="planned_start_at",
-                x_end="due_at",
-                y="ผู้ปฏิบัติงาน",
-                color="สถานะกราฟ",
-                text="ข้อความบนแท่ง",
-                hover_data={
-                    "เลขที่ใบงาน": True,
-                    "เลขแผน": True,
-                    "ผู้ปฏิบัติงาน": True,
-                    "Drawing": True,
-                    "กำหนดเริ่ม": True,
-                    "กำหนดเสร็จ": True,
-                    "เริ่มจริง": True,
-                    "เสร็จจริง": True,
-                    "สถานะกราฟ": False,
-                    "planned_start_at": False,
-                    "due_at": False,
-                    "ข้อความบนแท่ง": False
-                },
-                title="📊 แผนภูมิช่วงเวลาใบงาน QC รายผู้ปฏิบัติงาน",
-            color_discrete_map={
-                "🟧 รอรับงาน": "#F97316",
-                "🟦 กำลังทำ": "#2563EB",
-                "🟨 พักงาน": "#EAB308",
-                "✅ เสร็จแล้ว": "#16A34A",
-                "🟡 ใกล้ครบกำหนด (ไม่เกิน 30 นาที)": "#FACC15",
-                "🔴 เลยกำหนดเสร็จ": "#DC2626"
-            }
-            )
-            qc_status_fig.update_traces(textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=11))
-            qc_status_fig.update_yaxes(
-                autorange="reversed",
-                title="ผู้ปฏิบัติงาน",
-                fixedrange=True,
-                showline=True,
-                linewidth=1.5,
-                linecolor="#64748B",
-                showgrid=True,
-                gridcolor="#D7DEE8",
-                gridwidth=1,
-                ticks="outside"
-            )
-            qc_status_fig.update_xaxes(
-                title="วัน/เดือน เวลา",
-                tickformat="%d/%m<br>%H:%M",
-                fixedrange=True,
-                showline=True,
-                linewidth=1.5,
-                linecolor="#64748B",
-                showgrid=True,
-                gridcolor="#D7DEE8",
-                gridwidth=1,
-                ticks="outside",
-                zeroline=False
-            )
-            qc_operator_count = max(1, qc_timeline["ผู้ปฏิบัติงาน"].nunique())
-            qc_status_fig.update_layout(
-                height=max(360, min(700, 160 + qc_operator_count * 62)),
-                legend_title_text="สถานะ/การแจ้งเตือน",
-                margin=dict(l=10, r=15, t=65, b=20),
-                dragmode=False
-            )
-            render_touch_safe_chart("tpc_chart_2", 
-                qc_status_fig,
-                use_container_width=True,
-                config={"displayModeBar": False, "scrollZoom": False, "doubleClick": False}
-            )
-        else:
-            st.info("ยังไม่มีใบงาน QC ปัจจุบันที่มีกำหนดเริ่มและกำหนดเสร็จสำหรับแสดงแผนภูมิ")
+    qc_timeline = tasks.copy()
+    qc_timeline_status = qc_timeline.get(
+        "status", pd.Series(index=qc_timeline.index, dtype=str)
+    ).fillna("").astype(str)
+    qc_timeline = qc_timeline[
+        ~qc_timeline_status.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)
+    ].copy()
+    qc_timeline = qc_timeline[
+        qc_timeline["planned_start_at"].notna() & qc_timeline["due_at"].notna()
+    ].copy()
+    if not qc_timeline.empty:
+        qc_timeline["เลขแผน"] = qc_timeline.get("plan_code", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่ระบุแผน").astype(str)
+        qc_timeline["ผู้ปฏิบัติงาน"] = qc_timeline.get("assignee", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่ระบุ").astype(str)
+        qc_timeline["Drawing"] = qc_timeline.get("drawing_name", pd.Series(index=qc_timeline.index, dtype=str)).fillna("ไม่มี Drawing").astype(str)
+        qc_timeline["สถานะ"] = qc_timeline.get("status", pd.Series(index=qc_timeline.index, dtype=str)).fillna("🟧 รอรับงาน").astype(str)
+        qc_alert_now = get_bangkok_now().replace(tzinfo=None)
+        qc_minutes_to_due = (qc_timeline["due_at"] - qc_alert_now).dt.total_seconds() / 60.0
+        # ใช้สีเตือนบนกราฟเท่านั้น โดยไม่แก้สถานะงานจริงในฐานข้อมูล
+        qc_timeline["สถานะกราฟ"] = qc_timeline["สถานะ"]
+        qc_timeline.loc[
+            (qc_minutes_to_due >= 0) & (qc_minutes_to_due <= 30), "สถานะกราฟ"
+        ] = "🟡 ใกล้ครบกำหนด (ไม่เกิน 30 นาที)"
+        qc_timeline.loc[
+            qc_minutes_to_due < 0, "สถานะกราฟ"
+        ] = "🔴 เลยกำหนดเสร็จ"
+        qc_timeline["เลขที่ใบงาน"] = qc_timeline.get("id", pd.Series(index=qc_timeline.index, dtype=int)).apply(
+            lambda value: safe_int(value, 0)
+        )
+        qc_timeline["ข้อความบนแท่ง"] = qc_timeline.apply(
+            lambda row: (
+                f"{safe_str(row.get('เลขแผน'), '-')} | "
+                f"{safe_str(row.get('Drawing'), '-')}"
+            ),
+            axis=1
+        )
+        qc_timeline["กำหนดเริ่ม"] = qc_timeline["planned_start_at"].dt.strftime("%d/%m/%Y %H:%M")
+        qc_timeline["กำหนดเสร็จ"] = qc_timeline["due_at"].dt.strftime("%d/%m/%Y %H:%M")
+        qc_timeline["เริ่มจริง"] = qc_timeline.get("actual_start", pd.Series(pd.NaT, index=qc_timeline.index)).apply(
+            lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) else "ยังไม่ Start"
+        )
+        qc_timeline["เสร็จจริง"] = qc_timeline.get("actual_finish", pd.Series(pd.NaT, index=qc_timeline.index)).apply(
+            lambda value: value.strftime("%d/%m/%Y %H:%M") if pd.notna(value) else "-"
+        )
+        qc_status_fig = px.timeline(
+            qc_timeline,
+            x_start="planned_start_at",
+            x_end="due_at",
+            y="ผู้ปฏิบัติงาน",
+            color="สถานะกราฟ",
+            text="ข้อความบนแท่ง",
+            hover_data={
+                "เลขที่ใบงาน": True,
+                "เลขแผน": True,
+                "ผู้ปฏิบัติงาน": True,
+                "Drawing": True,
+                "กำหนดเริ่ม": True,
+                "กำหนดเสร็จ": True,
+                "เริ่มจริง": True,
+                "เสร็จจริง": True,
+                "สถานะกราฟ": False,
+                "planned_start_at": False,
+                "due_at": False,
+                "ข้อความบนแท่ง": False
+            },
+            title=f"📊 แผนภูมิช่วงเวลาใบงาน {title.removeprefix('Admin ')} รายผู้ปฏิบัติงาน",
+        color_discrete_map={
+            "🟧 รอรับงาน": "#F97316",
+            "🟦 กำลังทำ": "#2563EB",
+            "🟨 พักงาน": "#EAB308",
+            "✅ เสร็จแล้ว": "#16A34A",
+            "🟡 ใกล้ครบกำหนด (ไม่เกิน 30 นาที)": "#FACC15",
+            "🔴 เลยกำหนดเสร็จ": "#DC2626"
+        }
+        )
+        qc_status_fig.update_traces(textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=11))
+        qc_status_fig.update_yaxes(
+            autorange="reversed",
+            title="ผู้ปฏิบัติงาน",
+            fixedrange=True,
+            showline=True,
+            linewidth=1.5,
+            linecolor="#64748B",
+            showgrid=True,
+            gridcolor="#D7DEE8",
+            gridwidth=1,
+            ticks="outside"
+        )
+        qc_status_fig.update_xaxes(
+            title="วัน/เดือน เวลา",
+            tickformat="%d/%m<br>%H:%M",
+            fixedrange=True,
+            showline=True,
+            linewidth=1.5,
+            linecolor="#64748B",
+            showgrid=True,
+            gridcolor="#D7DEE8",
+            gridwidth=1,
+            ticks="outside",
+            zeroline=False
+        )
+        qc_operator_count = max(1, qc_timeline["ผู้ปฏิบัติงาน"].nunique())
+        qc_status_fig.update_layout(
+            height=max(360, min(700, 160 + qc_operator_count * 62)),
+            legend_title_text="สถานะ/การแจ้งเตือน",
+            margin=dict(l=10, r=15, t=65, b=20),
+            dragmode=False
+        )
+        render_touch_safe_chart(f"tpc_department_chart_{department}", 
+            qc_status_fig,
+            use_container_width=True,
+            config={"displayModeBar": False, "scrollZoom": False, "doubleClick": False}
+        )
+    else:
+        st.info(f"ยังไม่มีใบงาน {title.removeprefix('Admin ')} ปัจจุบันที่มีกำหนดเริ่มและกำหนดเสร็จสำหรับแสดงแผนภูมิ")
 
     finished_mask = status_text.str.contains("เสร็จ", na=False)
     active_tasks = tasks[~finished_mask].copy()
@@ -5733,30 +5751,23 @@ def render_people_work_center(department):
     )
     plan_filter = "ทุกแผนงาน"
     assignee_filter = "ทุกคน"
-    if is_qc:
-        plan_options = sorted(
-            value for value in active_tasks.get("plan_code", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
-            if value
-        )
-        assignee_options = sorted(
-            value for value in active_tasks.get("assignee", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
-            if value
-        )
-        f1, f2, f3, f4 = st.columns([1.3, 1.6, 2.0, 3.1])
-        with f1:
-            priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
-        with f2:
-            plan_filter = st.selectbox("📌 เลขแผน", ["ทุกแผนงาน"] + plan_options, key=f"{department}_plan_filter")
-        with f3:
-            assignee_filter = st.selectbox("👤 ผู้ปฏิบัติงาน", ["ทุกคน"] + assignee_options, key=f"{department}_assignee_filter")
-        with f4:
-            search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ", key=f"{department}_search")
-    else:
-        f1, f2 = st.columns([2, 4])
-        with f1:
-            priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
-        with f2:
-            search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ", key=f"{department}_search")
+    plan_options = sorted(
+        value for value in active_tasks.get("plan_code", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
+        if value
+    )
+    assignee_options = sorted(
+        value for value in active_tasks.get("assignee", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
+        if value
+    )
+    f1, f2, f3, f4 = st.columns([1.3, 1.6, 2.0, 3.1])
+    with f1:
+        priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
+    with f2:
+        plan_filter = st.selectbox("📌 เลขแผน", ["ทุกแผนงาน"] + plan_options, key=f"{department}_plan_filter")
+    with f3:
+        assignee_filter = st.selectbox("👤 ผู้ปฏิบัติงาน", ["ทุกคน"] + assignee_options, key=f"{department}_assignee_filter")
+    with f4:
+        search_text = st.text_input("🔍 ค้นหา", placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ", key=f"{department}_search")
     shown = active_tasks.copy()
     shown_status = shown.get("status", pd.Series(index=shown.index, dtype=str)).fillna("").astype(str)
     shown_due = shown.get("due_at", pd.Series(pd.NaT, index=shown.index))
@@ -5772,11 +5783,11 @@ def render_people_work_center(department):
         shown = shown[shown.get("priority", pd.Series(index=shown.index, dtype=str)).astype(str).isin(["เร่งด่วน", "วิกฤต"])]
     if priority_filter != "ทั้งหมด":
         shown = shown[shown["priority"].astype(str) == priority_filter]
-    if is_qc and plan_filter != "ทุกแผนงาน":
+    if plan_filter != "ทุกแผนงาน":
         shown = shown[
             shown.get("plan_code", pd.Series(index=shown.index, dtype=str)).fillna("").astype(str).str.strip() == plan_filter
         ]
-    if is_qc and assignee_filter != "ทุกคน":
+    if assignee_filter != "ทุกคน":
         shown = shown[
             shown.get("assignee", pd.Series(index=shown.index, dtype=str)).fillna("").astype(str).str.strip() == assignee_filter
         ]
@@ -5803,7 +5814,7 @@ def render_people_work_center(department):
         hide_index=True,
         use_container_width=True,
         height=min(520, 80 + len(shown_display) * 36),
-        disabled=[col for col in shown_display.columns if col != "เลือก"],
+        disabled=[col for col in shown_display.columns if col != "เลือก" or not admin_write_allowed],
         key=f"{department}_queue_delete_editor",
         column_config={
             "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width="small", help="ติ๊กได้เฉพาะคิวที่ยังรอรับงาน"),
@@ -5847,15 +5858,15 @@ def render_people_work_center(department):
         )
     confirm_queue_delete = st.checkbox(
         f"ยืนยันลบคิวที่เลือก {len(deletable_queue_ids)} รายการ",
-        disabled=(not deletable_queue_ids or bool(protected_queue_ids)),
+        disabled=(not deletable_queue_ids or bool(protected_queue_ids) or not admin_write_allowed),
         key=f"{department}_confirm_queue_table_delete"
     )
     if st.button(
         f"🗑️ ลบคิวที่ติ๊กเลือก ({len(deletable_queue_ids)} รายการ)",
-        disabled=(not confirm_queue_delete or not deletable_queue_ids or bool(protected_queue_ids)),
+        disabled=(not confirm_queue_delete or not deletable_queue_ids or bool(protected_queue_ids) or not admin_write_allowed),
         use_container_width=True,
         key=f"{department}_delete_queue_from_table"
-    ):
+    ) and admin_write_allowed:
         delete_failures = []
         for task_id in deletable_queue_ids:
             delete_ok, delete_message = delete_waiting_department_work_order(task_id)
@@ -5870,13 +5881,12 @@ def render_people_work_center(department):
     option_ids = shown["id"].tolist() if not shown.empty else []
     if not option_ids:
         st.info("ไม่พบใบงานตามตัวกรอง")
-        render_department_finished_history(finished_tasks, department, now)
-        if is_qc:
-            render_qc_time_cost_table(tasks, now)
+        render_department_finished_history(finished_tasks, department, now, allow_write=admin_write_allowed)
+        render_department_time_cost_table(tasks, now, department)
         return
-    with qc_edit_panel if is_qc else st.container():
-        if not qc_creation_allowed:
-            st.info("🔒 กรุณาปลดล็อกด้วยรหัสผู้ดูแลด้านบนก่อนแก้ไขใบงาน QC")
+    with edit_panel:
+        if not admin_write_allowed:
+            st.info(f"🔒 กรุณาปลดล็อกด้วยรหัสผู้ดูแลด้านบนก่อนแก้ไขใบงาน {title}")
         else:
             task_lookup = shown.set_index("id")
             selected_id = st.selectbox(
@@ -5977,9 +5987,8 @@ def render_people_work_center(department):
                         else:
                             st.error("บันทึกการแก้ไขไม่สำเร็จ")
 
-    render_department_finished_history(finished_tasks, department, now)
-    if is_qc:
-        render_qc_time_cost_table(tasks, now)
+    render_department_finished_history(finished_tasks, department, now, allow_write=admin_write_allowed)
+    render_department_time_cost_table(tasks, now, department)
 
 TRAINING_OPERATOR_DEPARTMENTS = {
     f"{department} ผู้ฝึก-{number:02d}": department
@@ -6378,15 +6387,17 @@ def operator_live_rpc(person, action, task=None, payload=None, target_id=None):
         return False
 
 
-def render_qc_urgent_work_order(tasks):
-    """Supervisor-only urgent creation, owned by the Admin QC page."""
-    feedback = st.session_state.pop("qc_urgent_feedback", None)
+def render_department_urgent_work_order(tasks, department):
+    label = "QC" if department == "QC" else "Automation"
+    work_types = QC_WORK_TYPES if department == "QC" else AUTO_WORK_TYPES
+    """Create urgent work for the selected department only."""
+    feedback = st.session_state.pop(f"{department}_urgent_feedback", None)
     if feedback:
         st.success(feedback)
     with st.expander("🚨 เพิ่มงานด่วนแทรก — ผู้ดูแล"):
         if not operator_supervisor_is_unlocked():
             st.caption("ใช้รหัสผู้ดูแลระบบชุดเดียวกับแดชบอร์ด")
-            with st.form("operator_supervisor_unlock", clear_on_submit=True):
+            with st.form(f"{department}_operator_supervisor_unlock", clear_on_submit=True):
                 password = st.text_input("รหัสผู้ดูแล", type="password")
                 unlock = st.form_submit_button("ปลดล็อกสร้างงานด่วน")
             if unlock:
@@ -6397,23 +6408,22 @@ def render_qc_urgent_work_order(tasks):
                 else:
                     st.error("รหัสไม่ถูกต้อง")
         else:
-            names = list(dict.fromkeys(QC_ASSIGNEES[1:] + (
+            names = list(dict.fromkeys(get_department_assignees(department)[1:] + (
                 tasks["assignee"].dropna().astype(str).str.strip().tolist()
                 if not tasks.empty and "assignee" in tasks else [])))
-            names = [name for name in names if name and name != "ปวีณ์กร ลิอุบล"]
+            names = [name for name in names if name and not (department == "QC" and name == "ปวีณ์กร ลิอุบล")]
             if not names:
-                st.info("ยังไม่มีรายชื่อผู้รับผิดชอบ QC")
+                st.info(f"ยังไม่มีรายชื่อผู้รับผิดชอบ {label}")
                 return
-            if st.session_state.get("qc_urgent_assignee") not in names:
-                st.session_state.pop("qc_urgent_assignee", None)
-            person = st.selectbox("ผู้รับผิดชอบงานด่วน QC", names, key="qc_urgent_assignee")
-            if st.session_state.get("user_role") != "admin" and st.button("ล็อกการสร้างงานด่วน", key="operator_supervisor_lock"):
+            if st.session_state.get(f"{department}_urgent_assignee") not in names:
+                st.session_state.pop(f"{department}_urgent_assignee", None)
+            person = st.selectbox(f"ผู้รับผิดชอบงานด่วน {label}", names, key=f"{department}_urgent_assignee")
+            if st.session_state.get("user_role") != "admin" and st.button("ล็อกการสร้างงานด่วน", key=f"{department}_operator_supervisor_lock"):
                 st.session_state.pop("operator_supervisor_grant", None)
                 st.rerun()
             st.caption(f"ผู้รับผิดชอบ: {person} • เพิ่มเป็นคิวรอด้านหน้า • ต้องกด Start เอง")
-            with st.form(f"operator_live_urgent_{person}", clear_on_submit=True):
-                department = "QC"
-                work_type = st.selectbox("ประเภทงานด่วน", QC_WORK_TYPES)
+            with st.form(f"{department}_operator_live_urgent_{person}", clear_on_submit=True):
+                work_type = st.selectbox("ประเภทงานด่วน", work_types)
                 title = st.text_input("ชื่อบริษัทลูกค้า / ชื่องาน *")
                 plan = st.text_input("รหัสแผนงาน")
                 drawing = st.text_input("Drawing")
@@ -6433,7 +6443,7 @@ def render_qc_urgent_work_order(tasks):
                                "planned_start_at": start.strftime("%Y-%m-%d %H:%M:%S"),
                                "due_at": finish.strftime("%Y-%m-%d %H:%M:%S"), "estimated_hours": minutes / 60.0}
                     if operator_live_rpc(person, "urgent", payload=payload):
-                        st.session_state["qc_urgent_feedback"] = "สร้างงานด่วนแล้ว — พักหรือจบงานที่กำลังทำก่อน Start งานด่วน"
+                        st.session_state[f"{department}_urgent_feedback"] = "สร้างงานด่วนแล้ว — พักหรือจบงานที่กำลังทำก่อน Start งานด่วน"
                         st.session_state["operator_live_clear_control"] = True
                         st.rerun()
 
