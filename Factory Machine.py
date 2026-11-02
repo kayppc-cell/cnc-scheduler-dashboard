@@ -4610,7 +4610,8 @@ QC_WORK_TYPES = [
     "Laser Mark text",
     "ตรวจ Check งานตาม Drawing 2D",
     "ตรวจเช็คหลังเชื่อม Tack",
-    "ตรวจ Ckeck หลังเดินแนวเชื่อม"
+    "ตรวจ Ckeck หลังเดินแนวเชื่อม",
+    "แยกงานทำสีและงานชุบ"
 ]
 AUTO_WORK_TYPES = ["ออกแบบระบบ/เขียนแบบ", "ประกอบตู้ Control", "Wiring", "เขียนโปรแกรม PLC/HMI", "ติดตั้งหน้างาน", "Commissioning/Test Run", "แก้ไข Breakdown", "ปรับปรุงเครื่องจักร", "อื่น ๆ"]
 QC_ASSIGNEES = [
