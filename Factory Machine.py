@@ -13256,6 +13256,21 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           .dept-tv-due {{ background:rgba(15,23,42,.48); border-radius:7px; padding:5px 7px; font-size:12.5px; font-weight:800; margin-top:6px; }}
           .dept-tv-next {{ margin-top:6px; font-size:12px; color:#E2E8F0; }}
           .dept-tv-empty {{ display:flex; align-items:center; justify-content:center; height:80px; font-size:20px; color:#CBD5E1; }}
+          /* Compact, equal-size cards across the full display width. */
+          .dept-tv-wrap {{ padding:4px; width:100%; --dept-font:11px; }}
+          .dept-tv-grid {{ gap:7px; }}
+          .dept-tv-card {{ padding:7px 9px; border-width:2px; border-radius:10px; line-height:1.2; }}
+          .dept-tv-top {{ padding:0 26px 3px 0; margin:0 0 3px; gap:4px; align-items:center; }}
+          .dept-tv-name {{ font-size:calc(var(--dept-font) * 1.15); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }}
+          .dept-tv-status {{ font-size:var(--dept-font); flex-shrink:0; }}
+          .dept-tv-dept,.dept-tv-company,.dept-tv-line,.dept-tv-time-row,.dept-tv-next {{ font-size:var(--dept-font); line-height:1.2; margin:2px 0; }}
+          .dept-tv-company {{ font-weight:900; }}
+          .dept-tv-live-timer {{ font-size:calc(var(--dept-font) * 1.1); }}
+          .dept-tv-due {{ font-size:var(--dept-font); line-height:1.2; margin-top:3px; padding:3px 5px; }}
+          .dept-tv-empty {{ height:auto; min-height:45px; font-size:calc(var(--dept-font) * 1.1); }}
+          .dept-tv-mascot {{ top:7px; right:6px; transform:none; width:22px; height:22px; border-width:1px; }}
+          .dept-tv-mascot-main {{ font-size:15px; }}
+          .dept-tv-mascot-mini {{ font-size:10px; right:-3px; bottom:-3px; }}
           @media(max-width:1000px) {{ .dept-tv-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
           @media(max-width:650px) {{ .dept-tv-grid {{ grid-template-columns:1fr; }} .dept-tv-header {{ align-items:flex-start; }} .dept-tv-title {{font-size:18px}} .dept-tv-clock {{font-size:20px}} }}
         </style>
@@ -13275,32 +13290,26 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
               const stage = doc.querySelector('.dept-tv-stage');
               const wrap = stage && stage.querySelector('.dept-tv-wrap');
               const grid = wrap && wrap.querySelector('.dept-tv-grid');
-              if (!grid) return;
-              const width = stage.clientWidth;
-              if (width <= 0) return;
-              // Phones retain readable cards and normal vertical scrolling.
+              if (!grid || stage.clientWidth <= 0) return;
+              wrap.style.width = '100%'; wrap.style.transform = 'none';
               if (window.parent.innerWidth < 700) {
-                wrap.style.width = '100%'; wrap.style.transform = '';
-                grid.style.gridTemplateColumns = '1fr'; stage.style.height = 'auto';
+                grid.style.gridTemplateColumns = '1fr';
+                grid.style.gridTemplateRows = ''; grid.style.height = 'auto';
+                stage.style.height = 'auto'; wrap.style.setProperty('--dept-font', '12px');
                 return;
               }
-              const height = Math.max(1, window.parent.innerHeight - Math.max(0, stage.getBoundingClientRect().top) - 12);
-              let best = null;
-              const count = grid.children.length;
-              for (let columns = 2; columns <= Math.min(6, Math.max(2, count)); columns++) {
-                const canvasWidth = columns * 360 + 20;
-                wrap.style.width = canvasWidth + 'px';
-                grid.style.gridTemplateColumns = 'repeat(' + columns + ',minmax(0,1fr))';
-                const canvasHeight = wrap.scrollHeight;
-                const scale = Math.min(1, width / canvasWidth, height / canvasHeight);
-                if (!best || scale > best.scale) best = {columns, canvasWidth, canvasHeight, scale};
-              }
-              if (!best) return;
-              wrap.style.width = best.canvasWidth + 'px';
-              grid.style.gridTemplateColumns = 'repeat(' + best.columns + ',minmax(0,1fr))';
-              const left = Math.max(0, (width - best.canvasWidth * best.scale) / 2);
-              wrap.style.transform = 'translateX(' + left + 'px) scale(' + best.scale + ')';
-              stage.style.height = Math.ceil(best.canvasHeight * best.scale) + 'px';
+              const width = stage.clientWidth;
+              const columns = width >= 1450 ? 6 : (width >= 1000 ? 5 : 4);
+              const rows = Math.max(1, Math.ceil(grid.children.length / columns));
+              const available = Math.max(200, window.parent.innerHeight - Math.max(0, stage.getBoundingClientRect().top) - 12);
+              const header = wrap.querySelector('.dept-tv-header');
+              const gridHeight = Math.max(rows * 80, available - header.offsetHeight - 18);
+              const cardHeight = (gridHeight - (rows - 1) * 7) / rows;
+              wrap.style.setProperty('--dept-font', Math.max(7, Math.min(12, (cardHeight - 22) / 14)) + 'px');
+              grid.style.gridTemplateColumns = 'repeat(' + columns + ',minmax(0,1fr))';
+              grid.style.gridTemplateRows = 'repeat(' + rows + ',minmax(0,1fr))';
+              grid.style.height = gridHeight + 'px';
+              stage.style.height = 'auto';
             } catch(e) {}
           }
           setInterval(fitDeptTvScreen, 1000);
