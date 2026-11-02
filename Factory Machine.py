@@ -4769,24 +4769,42 @@ def delete_department_work_orders(task_ids):
         return False, safe_str(exc)
 
 def delete_waiting_department_work_order(task_id):
-    """ลบได้เฉพาะใบงานที่ยังรอรับงาน เพื่อป้องกันการลบเวลาจริงที่เริ่มบันทึกแล้ว"""
+    """ตรวจสถานะสดและใบตอบรับจริงก่อนยืนยันการลบคิวที่ยังไม่เริ่มงาน"""
     clean_id = safe_int(task_id, 0)
     if clean_id <= 0:
         return False, "ไม่พบเลขที่ใบงาน"
     try:
         endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
+        headers = {**get_supabase_headers(), "Prefer": "return=representation"}
+        fresh = requests.get(endpoint, headers=headers,
+                             params={"id": f"eq.{clean_id}", "select": "id,status,actual_start"}, timeout=8)
+        if fresh.status_code != 200:
+            return False, f"ตรวจสอบใบงานก่อนลบไม่สำเร็จ (HTTP {fresh.status_code})"
+        rows = fresh.json()
+        if not isinstance(rows, list) or len(rows) != 1:
+            return False, "ไม่พบใบงานหรือไม่มีสิทธิ์อ่าน กรุณารีเฟรชแล้วตรวจสอบอีกครั้ง"
+        row = rows[0]
+        status = safe_str(row.get("status"), "")
+        if "รอรับงาน" not in status or row.get("actual_start") is not None:
+            return False, "ใบงานเริ่มทำแล้วหรือสถานะเปลี่ยน จึงไม่อนุญาตให้ลบ"
         res = requests.delete(
-            endpoint,
-            headers=get_supabase_headers(),
-            params={"id": f"eq.{clean_id}", "status": "eq.🟧 รอรับงาน"},
-            timeout=8
+            endpoint, headers=headers,
+            params={"id": f"eq.{clean_id}", "status": f"eq.{status}",
+                    "actual_start": "is.null", "select": "id"}, timeout=8
         )
-        if res.status_code in [200, 204]:
-            fetch_department_work_orders.clear()
-            return True, ""
-        return False, safe_str(res.text, "ลบคิวไม่สำเร็จ")
+        if res.status_code not in [200, 204]:
+            return False, f"ลบคิวไม่สำเร็จ (HTTP {res.status_code}): " + safe_str(res.text, "")
+        deleted = res.json() if res.status_code == 200 else []
+        fetch_department_work_orders.clear()
+        if not isinstance(deleted, list) or not any(safe_int(item.get("id"), 0) == clean_id for item in deleted):
+            return False, "ฐานข้อมูลไม่ได้ส่งใบตอบรับว่าลบรายการนี้ อาจติดสิทธิ์ DELETE/RLS หรือมีผู้ใช้อื่นเปลี่ยนสถานะ กรุณาให้ผู้ดูแลตรวจสอบสิทธิ์ตาราง tpc_department_work_orders"
+        check = requests.get(endpoint, headers=headers,
+                             params={"id": f"eq.{clean_id}", "select": "id"}, timeout=8)
+        if check.status_code != 200 or check.json() != []:
+            return False, "ส่งคำสั่งลบแล้ว แต่ตรวจยืนยันผลไม่สำเร็จ กรุณารีเฟรชตรวจรายการก่อนลองอีกครั้ง"
+        return True, ""
     except Exception as exc:
-        return False, safe_str(exc)
+        return False, "ตรวจยืนยันการลบไม่สำเร็จ: " + safe_str(exc)
 
 def render_department_finished_history(finished_tasks, department, now, allow_write=False):
     """ตารางประวัติสำหรับผู้ควบคุม แสดงใต้ตารางคิวและเลือกลบจากแถวได้โดยตรง"""
@@ -5141,6 +5159,9 @@ def render_people_work_center(department):
     department_assignees = get_department_assignees(department)
     create_assignees = [name for name in department_assignees if not (is_qc and name == "ปวีณ์กร ลิอุบล")]
     st.subheader(f"{icon} {title}")
+    queue_delete_notice = st.session_state.pop(f"{department}_queue_delete_notice", None)
+    if queue_delete_notice:
+        st.success(queue_delete_notice)
     st.caption("คิวงานบุคคล/ทีม — แยกจากเวลาลูกโซ่เครื่องจักร Production")
 
     tasks = fetch_department_work_orders(department)
@@ -5878,7 +5899,7 @@ def render_people_work_center(department):
         if delete_failures:
             st.error("ลบบางรายการไม่สำเร็จ — " + " | ".join(delete_failures))
         else:
-            st.success(f"ลบคิวที่เลือกเรียบร้อย {len(deletable_queue_ids)} รายการ")
+            st.session_state[f"{department}_queue_delete_notice"] = f"ลบคิวที่เลือกเรียบร้อย {len(deletable_queue_ids)} รายการ (ตรวจยืนยันจากฐานข้อมูลแล้ว)"
             st.rerun()
 
     option_ids = shown["id"].tolist() if not shown.empty else []
