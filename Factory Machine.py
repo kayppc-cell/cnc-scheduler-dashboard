@@ -13284,6 +13284,8 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         """, unsafe_allow_html=True)
         components.html("""
         <script>
+          // Change iframe content each server refresh so its timers restart.
+          const deptTvRenderToken = "__TPC_DEPT_RENDER_TOKEN__";
           function fitDeptTvScreen() {
             try {
               const doc = window.parent.document;
@@ -13367,20 +13369,20 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
               });
             } catch(e) {}
           }
-          let deptTvRefreshRemaining = 30;
+          const deptTvRefreshAnchor = performance.now();
           function updateDeptTvRefreshCount() {
             try {
-              deptTvRefreshRemaining = Math.max(0, deptTvRefreshRemaining - 1);
+              const deptTvRefreshRemaining = Math.max(0, 30 - Math.floor((performance.now() - deptTvRefreshAnchor) / 1000));
               const el = window.parent.document.getElementById('dept-tv-refresh-count');
               if (el) el.innerText = String(deptTvRefreshRemaining);
             } catch(e) {}
           }
           setInterval(updateDeptTvClock, 1000); updateDeptTvClock();
           setInterval(updateDeptTvTimers, 1000); updateDeptTvTimers();
-          setInterval(updateDeptTvRefreshCount, 1000);
+          setInterval(updateDeptTvRefreshCount, 250); updateDeptTvRefreshCount();
 
         </script>
-        """, height=0)
+        """.replace("__TPC_DEPT_RENDER_TOKEN__", tv_dept_now.isoformat(timespec="microseconds")), height=0)
 
 
     render_department_tv_auto_refresh()
