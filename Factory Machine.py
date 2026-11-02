@@ -1388,7 +1388,7 @@ default_states = {
     "user_role": None,
     # tv-qc-menu ใช้สำหรับ Auto Refresh จากเมนูปกติ โดยยังคงแถบเมนูไว้
     "current_view": (
-        "📺 จอทีวีแสดงงานแผนก QC&Automatin"
+        "📺 จอทีวีแสดงงานแผนก QC&Automation"
         if tv_department_menu_refresh_mode else "👷 โหมดหน้าเครื่อง"
     ),
     "active_select_all": False,
@@ -7144,6 +7144,9 @@ if st.session_state.current_view == "🤖 ใบสั่งงาน Automation
 if st.session_state.current_view == "🤖 Admin Automation":
     st.session_state.current_view = "⚙️ Admin Automation"
 
+if st.session_state.current_view == "📺 จอทีวีแสดงงานแผนก QC&Automatin":
+    st.session_state.current_view = "📺 จอทีวีแสดงงานแผนก QC&Automation"
+
 nav_options = [
     "👷 โหมดหน้าเครื่อง",
     "🎓 โหมดฝึกหน้าเครื่อง", 
@@ -7155,7 +7158,7 @@ nav_options = [
     "📈 ติดตามสถานการณ์ฝ่ายผลิต", 
     "📑 รายงานสรุปประจำเดือน", 
     "📺 จอทีวีแสดงงานแผนกผลิต",
-    "📺 จอทีวีแสดงงานแผนก QC&Automatin",
+    "📺 จอทีวีแสดงงานแผนก QC&Automation",
     "🛒 จัดซื้อและต้นทุนแผนงาน"
 ]
 
@@ -7165,7 +7168,7 @@ if standalone_only_mode:
         st.session_state.current_view = "👤 โหมดผู้ปฏิบัติงาน"
     else:
         st.session_state.current_view = (
-            "📺 จอทีวีแสดงงานแผนก QC&Automatin"
+            "📺 จอทีวีแสดงงานแผนก QC&Automation"
             if tv_department_only_mode else "📺 จอทีวีแสดงงานแผนกผลิต"
         )
 else:
@@ -13010,15 +13013,15 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.info(f"ℹ️ ยังไม่มีประวัติงานที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' ในเดือน {month_names[selected_month_idx-1]} {selected_year}")
 
 # ---------------------------------------------------------
-# VIEW 5: จอทีวีแสดงงานแผนกผลิต และจอทีวีแสดงงานแผนก QC&Automatin
+# VIEW 5: จอทีวีแสดงงานแผนกผลิต และจอทีวีแสดงงานแผนก QC&Automation
 # ---------------------------------------------------------
 elif st.session_state.current_view == "🛒 จัดซื้อและต้นทุนแผนงาน":
     render_purchase_cost_module()
 
-elif st.session_state.current_view == "📺 จอทีวีแสดงงานแผนก QC&Automatin":
+elif st.session_state.current_view == "📺 จอทีวีแสดงงานแผนก QC&Automation":
     @st.fragment(run_every=30)
     def render_department_tv_auto_refresh():
-        if st.session_state.current_view != "📺 จอทีวีแสดงงานแผนก QC&Automatin":
+        if st.session_state.current_view != "📺 จอทีวีแสดงงานแผนก QC&Automation":
             return
         fetch_department_work_orders.clear()
         qc_tv_tasks = fetch_department_work_orders("QC")
@@ -13051,6 +13054,10 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         if not tv_dept_tasks.empty and "assignee" in tv_dept_tasks.columns:
             existing_tv_names = tv_dept_tasks["assignee"].dropna().astype(str).str.strip().tolist()
             tv_operator_names = list(dict.fromkeys(tv_operator_names + [name for name in existing_tv_names if name]))
+
+        # Retired staff must not reappear via historical work orders.
+        tv_operator_names = [name for name in tv_operator_names
+                             if normalize_filter_key(name) != normalize_filter_key("ปวีณ์กร ลิอุบล")]
 
         for tv_operator in tv_operator_names:
             if tv_dept_tasks.empty:
@@ -13149,6 +13156,8 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             mascot_html = f'<div class="dept-tv-mascot {mascot_class}" title="{mascot_title}"><span class="dept-tv-mascot-main">{mascot_main}</span><span class="dept-tv-mascot-mini">{mascot_mini}</span></div>'
 
             current_department = "QC" if safe_str(current_task.get("department")) == "QC" else "Automation"
+            if normalize_filter_key(tv_operator) == normalize_filter_key("ภูเบศร์ กรานเคารพ"):
+                current_department = "QC"
             planned_start = parse_flexible_datetime(current_task.get("planned_start_at"))
             planned_start_text = planned_start.strftime("%d/%m/%Y %H:%M") if planned_start is not None else "-"
             due_text = current_due.strftime("%d/%m/%Y %H:%M") if current_due is not None else "-"
@@ -13202,14 +13211,15 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
 
         st.markdown(f"""
         <style>
-          .dept-tv-wrap {{ background:#071124; min-height:100vh; padding:10px; color:#F8FAFC; font-family:Tahoma,Arial,sans-serif; }}
+          .dept-tv-stage {{ width:100%; position:relative; overflow:hidden; }}
+          .dept-tv-wrap {{ box-sizing:border-box; transform-origin:top left; background:#071124; padding:10px; color:#F8FAFC; font-family:Tahoma,Arial,sans-serif; }}
           .dept-tv-header {{ display:flex; justify-content:space-between; align-items:center; gap:15px; background:#0F172A; border:2px solid #1D4ED8; border-radius:14px; padding:12px 18px; margin-bottom:10px; }}
           .dept-tv-title {{ color:#38BDF8; font-size:25px; font-weight:900; }}
           .dept-tv-sub {{ color:#CBD5E1; font-size:13px; margin-top:3px; }}
           .dept-tv-clock {{ font-size:28px; font-weight:900; color:#FFFFFF; text-align:right; }}
           .dept-tv-summary {{ font-size:13px; text-align:right; color:#E2E8F0; margin-top:4px; }}
           .dept-tv-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }}
-          .dept-tv-card {{ position:relative; min-height:205px; border-radius:13px; padding:12px 76px 12px 14px; border:3px solid transparent; box-shadow:0 4px 12px rgba(0,0,0,.3); overflow:hidden; }}
+          .dept-tv-card {{ box-sizing:border-box; position:relative; min-width:0; min-height:0; border-radius:13px; padding:12px 76px 12px 14px; border:3px solid transparent; box-shadow:0 4px 12px rgba(0,0,0,.3); overflow:hidden; }}
           .dept-tv-running {{ background:linear-gradient(145deg,#065F46,#047857); border-color:#34D399; }}
           .dept-tv-hold {{ background:linear-gradient(145deg,#92400E,#B45309); border-color:#FBBF24; }}
           .dept-tv-waiting {{ background:linear-gradient(145deg,#1E3A8A,#1D4ED8); border-color:#60A5FA; }}
@@ -13245,20 +13255,56 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           .dept-tv-live-timer {{ font-family:Consolas,monospace; font-size:14px; font-weight:900; color:#FDE047; letter-spacing:.4px; }}
           .dept-tv-due {{ background:rgba(15,23,42,.48); border-radius:7px; padding:5px 7px; font-size:12.5px; font-weight:800; margin-top:6px; }}
           .dept-tv-next {{ margin-top:6px; font-size:12px; color:#E2E8F0; }}
-          .dept-tv-empty {{ display:flex; align-items:center; justify-content:center; height:125px; font-size:20px; color:#CBD5E1; }}
+          .dept-tv-empty {{ display:flex; align-items:center; justify-content:center; height:80px; font-size:20px; color:#CBD5E1; }}
           @media(max-width:1000px) {{ .dept-tv-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
           @media(max-width:650px) {{ .dept-tv-grid {{ grid-template-columns:1fr; }} .dept-tv-header {{ align-items:flex-start; }} .dept-tv-title {{font-size:18px}} .dept-tv-clock {{font-size:20px}} }}
         </style>
-        <div class="dept-tv-wrap">
+        <div class="dept-tv-stage"><div class="dept-tv-wrap">
           <div class="dept-tv-header">
-            <div><div class="dept-tv-title">📺 จอทีวีแสดงงานแผนก QC&Automatin</div><div class="dept-tv-sub">สถานะใบงานแบบ Real-time | ผู้ปฏิบัติงาน 9 คน | รีเฟรชใน <span id="dept-tv-refresh-count">30</span> ว.</div></div>
+            <div><div class="dept-tv-title">📺 จอทีวีแสดงงานแผนก QC&Automation</div><div class="dept-tv-sub">สถานะใบงานแบบ Real-time | ผู้ปฏิบัติงาน {len(tv_operator_names)} คน | รีเฟรชใน <span id="dept-tv-refresh-count">30</span> ว.</div></div>
             <div><div id="dept-tv-clock" class="dept-tv-clock">{tv_dept_now.strftime('%H:%M:%S')} น.</div><div class="dept-tv-summary">🟢 ทำ {dept_tv_running} | 🟡 พัก {dept_tv_hold} | 🟠 รอ {dept_tv_waiting} | 🔴 เกิน {dept_tv_overdue} | ✅ เสร็จ {dept_tv_done} | ⚪ ว่าง {dept_tv_idle}</div></div>
           </div>
           <div class="dept-tv-grid">{dept_tv_cards_html}</div>
-        </div>
+        </div></div>
         """, unsafe_allow_html=True)
         components.html("""
         <script>
+          function fitDeptTvScreen() {
+            try {
+              const doc = window.parent.document;
+              const stage = doc.querySelector('.dept-tv-stage');
+              const wrap = stage && stage.querySelector('.dept-tv-wrap');
+              const grid = wrap && wrap.querySelector('.dept-tv-grid');
+              if (!grid) return;
+              const width = stage.clientWidth;
+              if (width <= 0) return;
+              // Phones retain readable cards and normal vertical scrolling.
+              if (window.parent.innerWidth < 700) {
+                wrap.style.width = '100%'; wrap.style.transform = '';
+                grid.style.gridTemplateColumns = '1fr'; stage.style.height = 'auto';
+                return;
+              }
+              const height = Math.max(1, window.parent.innerHeight - Math.max(0, stage.getBoundingClientRect().top) - 12);
+              let best = null;
+              const count = grid.children.length;
+              for (let columns = 2; columns <= Math.min(6, Math.max(2, count)); columns++) {
+                const canvasWidth = columns * 360 + 20;
+                wrap.style.width = canvasWidth + 'px';
+                grid.style.gridTemplateColumns = 'repeat(' + columns + ',minmax(0,1fr))';
+                const canvasHeight = wrap.scrollHeight;
+                const scale = Math.min(1, width / canvasWidth, height / canvasHeight);
+                if (!best || scale > best.scale) best = {columns, canvasWidth, canvasHeight, scale};
+              }
+              if (!best) return;
+              wrap.style.width = best.canvasWidth + 'px';
+              grid.style.gridTemplateColumns = 'repeat(' + best.columns + ',minmax(0,1fr))';
+              const left = Math.max(0, (width - best.canvasWidth * best.scale) / 2);
+              wrap.style.transform = 'translateX(' + left + 'px) scale(' + best.scale + ')';
+              stage.style.height = Math.ceil(best.canvasHeight * best.scale) + 'px';
+            } catch(e) {}
+          }
+          setInterval(fitDeptTvScreen, 1000);
+          fitDeptTvScreen();
           function updateDeptTvClock() {
             try {
               const el = window.parent.document.getElementById('dept-tv-clock');
