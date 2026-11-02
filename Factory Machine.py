@@ -13291,6 +13291,10 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
               const wrap = stage && stage.querySelector('.dept-tv-wrap');
               const grid = wrap && wrap.querySelector('.dept-tv-grid');
               if (!grid || stage.clientWidth <= 0) return;
+              const layoutKey = [stage.clientWidth, window.parent.innerWidth, window.parent.innerHeight,
+                                 grid.children.length, wrap.querySelector('.dept-tv-header').offsetHeight].join(':');
+              if (stage._deptLayoutKey === layoutKey) return;
+              stage._deptLayoutKey = layoutKey;
               wrap.style.width = '100%'; wrap.style.transform = 'none';
               if (window.parent.innerWidth < 700) {
                 grid.style.gridTemplateColumns = '1fr';
@@ -13301,7 +13305,12 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
               const width = stage.clientWidth;
               const columns = width >= 1450 ? 6 : (width >= 1000 ? 5 : 4);
               const rows = Math.max(1, Math.ceil(grid.children.length / columns));
-              const available = Math.max(200, window.parent.innerHeight - Math.max(0, stage.getBoundingClientRect().top) - 12);
+              // Use the document position: viewport-relative top changes while scrolling.
+              const scroller = doc.querySelector('[data-testid="stMain"]') || doc.querySelector('[data-testid="stAppViewContainer"]');
+              const scrollTop = Math.max(window.parent.scrollY || 0, doc.scrollingElement ? doc.scrollingElement.scrollTop : 0,
+                                         scroller ? scroller.scrollTop : 0);
+              const documentTop = stage.getBoundingClientRect().top + scrollTop;
+              const available = Math.max(200, window.parent.innerHeight - Math.max(0, documentTop) - 12);
               const header = wrap.querySelector('.dept-tv-header');
               const gridHeight = Math.max(rows * 80, available - header.offsetHeight - 18);
               const cardHeight = (gridHeight - (rows - 1) * 7) / rows;
