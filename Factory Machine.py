@@ -13019,9 +13019,15 @@ elif st.session_state.current_view == "🛒 จัดซื้อและต้
     render_purchase_cost_module()
 
 elif st.session_state.current_view == "📺 จอทีวีแสดงงานแผนก QC&Automation":
-    @st.fragment(run_every=30)
+    @st.fragment(run_every=1)
     def render_department_tv_auto_refresh():
         if st.session_state.current_view != "📺 จอทีวีแสดงงานแผนก QC&Automation":
+            return
+        refresh_cycle_started = tpc_auth_time.monotonic()
+        cached_screen = st.session_state.get("_dept_tv_cached_screen_v1")
+        if cached_screen and refresh_cycle_started < cached_screen["next_refresh"]:
+            st.markdown(cached_screen["html"], unsafe_allow_html=True)
+            components.html(cached_screen["script"], height=0)
             return
         fetch_department_work_orders.clear()
         qc_tv_tasks = fetch_department_work_orders("QC")
@@ -13209,7 +13215,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         # การ์ดลำดับที่ 2 เป็นต้นไปเป็น code block แล้วแสดงแท็ก HTML ออกมาตรง ๆ
         dept_tv_cards_html = "".join(card.strip() for card in dept_tv_cards)
 
-        st.markdown(f"""
+        dept_screen_html = f"""
         <style>
           .dept-tv-stage {{ width:100%; position:relative; overflow:hidden; }}
           .dept-tv-wrap {{ box-sizing:border-box; transform-origin:top left; background:#071124; padding:10px; color:#F8FAFC; font-family:Tahoma,Arial,sans-serif; }}
@@ -13276,13 +13282,13 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         </style>
         <div class="dept-tv-stage"><div class="dept-tv-wrap">
           <div class="dept-tv-header">
-            <div><div class="dept-tv-title">📺 จอทีวีแสดงงานแผนก QC&Automation</div><div class="dept-tv-sub">สถานะใบงานแบบ Real-time | ผู้ปฏิบัติงาน {len(tv_operator_names)} คน | รีเฟรชใน <span id="dept-tv-refresh-count">30</span> ว.</div></div>
+            <div><div class="dept-tv-title">📺 จอทีวีแสดงงานแผนก QC&Automation</div><div class="dept-tv-sub">สถานะใบงานแบบ Real-time | ผู้ปฏิบัติงาน {len(tv_operator_names)} คน | อัปเดตล่าสุด {tv_dept_now.strftime('%H:%M:%S')} | รีเฟรชใน <span id="dept-tv-refresh-count">30</span> ว.</div></div>
             <div><div id="dept-tv-clock" class="dept-tv-clock">{tv_dept_now.strftime('%H:%M:%S')} น.</div><div class="dept-tv-summary">🟢 ทำ {dept_tv_running} | 🟡 พัก {dept_tv_hold} | 🟠 รอ {dept_tv_waiting} | 🔴 เกิน {dept_tv_overdue} | ✅ เสร็จ {dept_tv_done} | ⚪ ว่าง {dept_tv_idle}</div></div>
           </div>
           <div class="dept-tv-grid">{dept_tv_cards_html}</div>
         </div></div>
-        """, unsafe_allow_html=True)
-        components.html("""
+        """
+        dept_screen_script = """
         <script>
           // Change iframe content each server refresh so its timers restart.
           const deptTvRenderToken = "__TPC_DEPT_RENDER_TOKEN__";
@@ -13369,10 +13375,10 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
               });
             } catch(e) {}
           }
-          const deptTvRefreshAnchor = performance.now();
+          const deptTvRefreshDeadline = Number("__TPC_DEPT_DEADLINE__");
           function updateDeptTvRefreshCount() {
             try {
-              const deptTvRefreshRemaining = Math.max(0, 30 - Math.floor((performance.now() - deptTvRefreshAnchor) / 1000));
+              const deptTvRefreshRemaining = Math.max(0, Math.ceil((deptTvRefreshDeadline - Date.now()) / 1000));
               const el = window.parent.document.getElementById('dept-tv-refresh-count');
               if (el) el.innerText = String(deptTvRefreshRemaining);
             } catch(e) {}
@@ -13382,7 +13388,14 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           setInterval(updateDeptTvRefreshCount, 250); updateDeptTvRefreshCount();
 
         </script>
-        """.replace("__TPC_DEPT_RENDER_TOKEN__", tv_dept_now.isoformat(timespec="microseconds")), height=0)
+        """.replace("__TPC_DEPT_RENDER_TOKEN__", tv_dept_now.isoformat(timespec="microseconds"))
+        next_refresh = refresh_cycle_started + 30
+        deadline_ms = int((tpc_auth_time.time() + max(0, next_refresh - tpc_auth_time.monotonic())) * 1000)
+        dept_screen_script = dept_screen_script.replace("__TPC_DEPT_DEADLINE__", str(deadline_ms))
+        st.session_state["_dept_tv_cached_screen_v1"] = {
+            "next_refresh": next_refresh, "html": dept_screen_html, "script": dept_screen_script}
+        st.markdown(dept_screen_html, unsafe_allow_html=True)
+        components.html(dept_screen_script, height=0)
 
 
     render_department_tv_auto_refresh()
