@@ -13194,6 +13194,13 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                 elapsed_display_html = html.escape(elapsed_text)
             remaining_count = max(0, len(operator_active) - 1)
             extra_queue_html = f'<div class="dept-tv-next">📚 มีคิวถัดไปอีก {remaining_count} งาน</div>' if remaining_count else '<div class="dept-tv-next">📚 ไม่มีคิวถัดไป</div>'
+            if "พักงาน" in current_status:
+                reason_text = html.escape(pause_reason.strip() or "ไม่ได้ระบุ", quote=True)
+                extra_queue_html = (
+                    f'<div class="dept-tv-next dept-tv-pause-row">'
+                    f'<span class="dept-tv-pause-reason" title="{reason_text}">⏸ เหตุผลพัก: {reason_text}</span>'
+                    f'<span>📚 คิวถัดไป {remaining_count}</span></div>'
+                )
             dept_tv_cards.append(f"""
             <div class="dept-tv-card {card_class}">
                 {mascot_html}
@@ -13265,6 +13272,8 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
           /* Compact, equal-size cards across the full display width. */
           .dept-tv-wrap {{ padding:4px; width:100%; --dept-font:11px; }}
           .dept-tv-grid {{ gap:7px; }}
+          .dept-tv-pause-row {{ display:flex; gap:6px; justify-content:space-between; white-space:nowrap; }}
+          .dept-tv-pause-reason {{ min-width:0; overflow:hidden; text-overflow:ellipsis; color:#FEF3C7; font-weight:800; }}
           .dept-tv-card {{ padding:7px 9px; border-width:2px; border-radius:10px; line-height:1.2; }}
           .dept-tv-top {{ padding:0 26px 3px 0; margin:0 0 3px; gap:4px; align-items:center; }}
           .dept-tv-name {{ font-size:calc(var(--dept-font) * 1.15); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }}
