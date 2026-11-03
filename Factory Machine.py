@@ -4812,7 +4812,7 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
     with st.expander(f"✅ ตารางประวัติงานที่เสร็จแล้ว ({len(finished_tasks)} รายการ)", expanded=False):
         history_quick = st.radio(
             "⚡ ตัวกรองเร็วประวัติงาน",
-            ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้"],
+            ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"],
             horizontal=True,
             key=f"{department}_history_quick_v2"
         )
@@ -4823,7 +4823,22 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
         )
         history_shown = finished_tasks.copy()
         history_finish = history_shown.get("actual_finish", pd.Series(pd.NaT, index=history_shown.index))
-        if history_quick == "วันนี้":
+        history_period = history_quick
+        if history_quick == "เลือกช่วงวันที่":
+            c1, c2 = st.columns(2)
+            with c1:
+                start_date = st.date_input("ตั้งแต่วันที่เสร็จจริง", value=now.date(),
+                                           format="DD/MM/YYYY", key=f"{department}_finished_history_start")
+            with c2:
+                end_date = st.date_input("ถึงวันที่เสร็จจริง", value=now.date(),
+                                         format="DD/MM/YYYY", key=f"{department}_finished_history_end")
+            if start_date > end_date:
+                st.warning("วันที่เริ่มต้นต้องไม่อยู่หลังวันที่สิ้นสุด")
+                return
+            finish_days = pd.to_datetime(history_finish, errors="coerce").dt.normalize()
+            history_shown = history_shown[finish_days.between(pd.Timestamp(start_date), pd.Timestamp(end_date))]
+            history_period = f"{start_date:%d/%m/%Y} ถึง {end_date:%d/%m/%Y}"
+        elif history_quick == "วันนี้":
             history_shown = history_shown[history_finish.dt.date == now.date()]
         elif history_quick == "7 วันล่าสุด":
             history_shown = history_shown[history_finish >= now - timedelta(days=7)]
@@ -4859,6 +4874,20 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
         )
         if "actual_finish" in history_display.columns:
             history_display.insert(history_display.columns.get_loc("actual_finish") + 1, "actual_work_hours", actual_work_hours)
+        def finish_plan_status(row):
+            due = parse_flexible_datetime(row.get("due_at"))
+            finished = parse_flexible_datetime(row.get("actual_finish"))
+            if due is None or finished is None:
+                return "— ไม่มีข้อมูลเวลา"
+            return "🔴 ดีเลย์" if finished > due else "✅ ตามแผน"
+
+        status_position = (
+            history_display.columns.get_loc("actual_finish") + 1
+            if "actual_finish" in history_display.columns else len(history_display.columns)
+        )
+        history_display.insert(status_position, "finish_plan_status", [
+            finish_plan_status(row) for _, row in history_shown.iterrows()
+        ])
         history_display.insert(0, "เลือก", False)
         for date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish"]:
             if date_col in history_display.columns:
@@ -4867,16 +4896,20 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
                     if pd.notna(value) and hasattr(value, "strftime") else "-"
                 )
 
+        history_selection_scope = hashlib.sha256(
+            repr((history_period, history_search, history_shown.get("id", pd.Series(dtype=int)).tolist())).encode()
+        ).hexdigest()[:16]
         history_editor = st.data_editor(
             history_display,
             hide_index=True,
             use_container_width=True,
             height=min(450, 80 + len(history_display) * 36),
             disabled=[col for col in history_display.columns if col != "เลือก" or not allow_write],
-            key=f"{department}_history_delete_editor_v2",
+            key=f"{department}_history_delete_editor_v2_{history_selection_scope}",
             column_config={
                 "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width=58),
                 "id": None,
+                "finish_plan_status": st.column_config.TextColumn("ผลเทียบแผน", width=125),
                 "priority": st.column_config.TextColumn("เร่งด่วน", width=72),
                 "work_type": st.column_config.TextColumn("ประเภทงาน", width=135),
                 "plan_code": st.column_config.TextColumn("แผน", width=68),
@@ -4899,7 +4932,7 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
             labels = {
                 "priority": "เร่งด่วน", "plan_code": "แผน", "drawing_name": "Drawing",
                 "title": "บริษัทลูกค้า", "planned_start_at": "กำหนดเริ่ม", "due_at": "กำหนดเสร็จ",
-                "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง", "actual_work_hours": "เวลาจริง (ชม.)",
+                "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง", "finish_plan_status": "ผลเทียบแผน", "actual_work_hours": "เวลาจริง (ชม.)",
                 "estimated_hours": "เวลาประมาณ (ชม.)", "result_note": "หมายเหตุ"
             }
             cols = [col for col in labels if col in print_frame.columns]
@@ -4924,7 +4957,7 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
             th,td {{border:1px solid #aab8c8;padding:4px;text-align:left;overflow-wrap:anywhere}}
             th {{background:#e8eff8}}
             </style><h1>ประวัติงานที่เสร็จแล้ว | {html.escape(department)}</h1>
-            <p>ช่วง: {html.escape(history_quick)} | ค้นหา: {html.escape(history_search.strip() or "-")}
+            <p>ช่วง: {html.escape(history_period)} | ค้นหา: {html.escape(history_search.strip() or "-")}
             | {len(print_frame)} รายการ | พิมพ์: {now:%d/%m/%Y %H:%M}</p>
             {''.join(sections)}</html>"""
             report_json = json.dumps(report, ensure_ascii=False).replace("<", "\\u003c")
@@ -4949,13 +4982,13 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
         confirm_history_delete = st.checkbox(
             f"ยืนยันลบประวัติที่ติ๊กเลือก {len(selected_history_ids)} รายการ",
             disabled=(not selected_history_ids or not allow_write),
-            key=f"{department}_confirm_history_table_delete_v2"
+            key=f"{department}_confirm_history_table_delete_v2_{history_selection_scope}"
         )
         if st.button(
             f"🗑️ ลบประวัติที่ติ๊กเลือก ({len(selected_history_ids)} รายการ)",
             disabled=(not selected_history_ids or not confirm_history_delete or not allow_write),
             use_container_width=True,
-            key=f"{department}_delete_history_from_table_v2"
+            key=f"{department}_delete_history_from_table_v2_{history_selection_scope}"
         ) and allow_write:
             delete_ok, delete_message = delete_department_work_orders(selected_history_ids)
             if delete_ok:
@@ -4993,10 +5026,31 @@ def render_department_time_cost_table(qc_tasks, now, department):
             return
         quick_filter = st.radio(
             "⚡ ค้นหาเร็ว",
-            ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้"],
+            ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"],
             horizontal=True,
             key=f"{department}_cost_quick_filter"
         )
+        cost_period = quick_filter
+        if quick_filter == "เลือกช่วงวันที่":
+            date_left, date_right = st.columns(2)
+            with date_left:
+                start_date = st.date_input("ตั้งแต่วันที่เสร็จจริง", value=now.date(),
+                                           format="DD/MM/YYYY", key=f"{department}_cost_finished_start")
+            with date_right:
+                end_date = st.date_input("ถึงวันที่เสร็จจริง", value=now.date(),
+                                         format="DD/MM/YYYY", key=f"{department}_cost_finished_end")
+            if start_date > end_date:
+                st.warning("วันที่เริ่มต้นต้องไม่อยู่หลังวันที่สิ้นสุด")
+                return
+            finish_days = pd.to_datetime(
+                filtered_tasks.get("actual_finish", pd.Series(pd.NaT, index=filtered_tasks.index))
+                .map(parse_flexible_datetime), errors="coerce"
+            ).dt.normalize()
+            filtered_tasks = filtered_tasks[finish_days.between(pd.Timestamp(start_date), pd.Timestamp(end_date))]
+            cost_period = f"{start_date:%d/%m/%Y} ถึง {end_date:%d/%m/%Y}"
+            if filtered_tasks.empty:
+                st.info(f"ไม่พบใบงาน {label} ที่เสร็จจริงในช่วง {cost_period}")
+                return
         filter_plan_options = sorted(
             value for value in filtered_tasks.get("plan_code", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
             if value
@@ -5151,7 +5205,7 @@ def render_department_time_cost_table(qc_tasks, now, department):
         )
         pdf_payload = json.dumps({
             "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
-            "quick_filter": quick_filter,
+            "quick_filter": cost_period,
             "plan_filter": selected_cost_plan,
             "assignee_filter": selected_cost_assignee,
             "search": cost_search.strip() or "-",
