@@ -4876,7 +4876,7 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
             key=f"{department}_history_delete_editor_v2",
             column_config={
                 "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width=58),
-                "id": st.column_config.NumberColumn("เลขที่", width=58, format="%d"),
+                "id": None,
                 "priority": st.column_config.TextColumn("เร่งด่วน", width=72),
                 "work_type": st.column_config.TextColumn("ประเภทงาน", width=135),
                 "plan_code": st.column_config.TextColumn("แผน", width=68),
@@ -4892,6 +4892,55 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
                 "result_note": st.column_config.TextColumn("หมายเหตุ", width=120)
             }
         )
+        if not history_display.empty:
+            print_frame = history_display.drop(columns=["id", "เลือก"], errors="ignore").copy()
+            for field, fallback in [("assignee", "ไม่ระบุผู้รับผิดชอบ"), ("work_type", "ไม่ระบุประเภทงาน")]:
+                print_frame[field] = print_frame.get(field, pd.Series("", index=print_frame.index)).fillna("").astype(str).str.strip().replace("", fallback)
+            labels = {
+                "priority": "เร่งด่วน", "plan_code": "แผน", "drawing_name": "Drawing",
+                "title": "บริษัทลูกค้า", "planned_start_at": "กำหนดเริ่ม", "due_at": "กำหนดเสร็จ",
+                "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง", "actual_work_hours": "เวลาจริง (ชม.)",
+                "estimated_hours": "เวลาประมาณ (ชม.)", "result_note": "หมายเหตุ"
+            }
+            cols = [col for col in labels if col in print_frame.columns]
+            sections = []
+            for person, person_rows in print_frame.groupby("assignee", sort=True):
+                sections.append(f"<h2>{html.escape(person)} · {len(person_rows)} รายการ</h2>")
+                for work, work_rows in person_rows.groupby("work_type", sort=True):
+                    sections.append(f"<h3>{html.escape(work)} · {len(work_rows)} รายการ</h3>")
+                    sections.append(work_rows[cols].rename(columns=labels).to_html(
+                        index=False, escape=True, na_rep="-", float_format=lambda value: f"{value:.2f}"
+                    ))
+            report = f"""<!doctype html><html lang="th"><meta charset="utf-8">
+            <title>ประวัติงานที่เสร็จแล้ว</title><style>
+            @page {{size:A4 landscape;margin:10mm}}
+            body {{font-family:Tahoma,sans-serif;font-size:10px;color:#172033}}
+            h1 {{font-size:19px}} h2 {{font-size:14px;margin:14px 0 5px}}
+            h3 {{font-size:12px;margin:8px 0 4px}}
+            h2,h3 {{break-after:avoid}}
+            table {{width:100%;border-collapse:collapse;margin-bottom:8px}}
+            thead {{display:table-header-group}}
+            tr {{break-inside:avoid}}
+            th,td {{border:1px solid #aab8c8;padding:4px;text-align:left;overflow-wrap:anywhere}}
+            th {{background:#e8eff8}}
+            </style><h1>ประวัติงานที่เสร็จแล้ว | {html.escape(department)}</h1>
+            <p>ช่วง: {html.escape(history_quick)} | ค้นหา: {html.escape(history_search.strip() or "-")}
+            | {len(print_frame)} รายการ | พิมพ์: {now:%d/%m/%Y %H:%M}</p>
+            {''.join(sections)}</html>"""
+            report_json = json.dumps(report, ensure_ascii=False).replace("<", "\\u003c")
+            components.html(f"""
+                <button id="department-history-print" style="background:#dc2626;color:white;border:0;padding:9px 16px;border-radius:8px;cursor:pointer;font-weight:700">🖨️ พิมพ์ประวัติ / บันทึก PDF</button>
+                <script>
+                document.getElementById('department-history-print').onclick = () => {{
+                    const w = window.open('', '_blank');
+                    if (!w) {{ alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์ประวัติงาน'); return; }}
+                    w.document.open();
+                    w.document.write({report_json});
+                    w.document.close();
+                    w.document.fonts.ready.then(() => {{ w.focus(); w.print(); }});
+                }};
+                </script>
+            """, height=46)
         selected_history_rows = history_editor[
             history_editor.get("เลือก", pd.Series(False, index=history_editor.index)).fillna(False).astype(bool)
         ]
