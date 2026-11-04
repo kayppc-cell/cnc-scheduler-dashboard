@@ -24,14 +24,14 @@ DEFAULT_SETUP_MINUTES = 10.0
 DEFAULT_BASIC_MINUTES = 0.0
 DEFAULT_PROGRAM_MINUTES = 120.0
 
-def render_touch_safe_chart(tpc_chart_key, figure, **kwargs):
+def render_touch_safe_chart(tpc_chart_key, figure, show_controls=True, **kwargs):
     """กราฟทุกหน้าปัดเลื่อนเว็บได้โดยไม่ลากแกนกราฟโดยไม่ตั้งใจ"""
     interactive = st.checkbox(
         "🔍 เปิดการลาก/ซูมกราฟนี้",
         value=False,
         key=f"{tpc_chart_key}_interactive",
         help="เปิดเมื่อต้องการดูรายละเอียด ปิดเพื่อปัดเลื่อนหน้าเว็บได้สะดวกบนมือถือ",
-    )
+    ) if show_controls else False
     chart = go.Figure(figure)
     # กราฟพื้นขาวต้องใช้ตัวอักษรเข้มทั้งใน Light/Dark โดยไม่รับ Streamlit theme ทับ
     chart.update_layout(
@@ -59,7 +59,7 @@ def render_touch_safe_chart(tpc_chart_key, figure, **kwargs):
         "scrollZoom": False,
         "doubleClick": "reset" if interactive else False,
     })
-    if not interactive:
+    if show_controls and not interactive:
         st.caption("ปัดเลื่อนหน้าได้ตามปกติ • เปิดการลาก/ซูมด้านบนเพื่อดูรายละเอียดกราฟ")
     return st.plotly_chart(chart, config=config, **kwargs)
 
@@ -7311,6 +7311,400 @@ else:
 # ---------------------------------------------------------
 # VIEW 1: โหมดหน้าเครื่อง
 # ---------------------------------------------------------
+def prepare_production_chart_queue(calc_df):
+    column_order = [
+        "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+        "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
+        "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน",
+        # ต้องเก็บเวลาเริ่มจริงไว้เป็นจุดตั้งต้นของงานที่กด Start แล้ว
+        # มิฉะนั้นการรันลูกโซ่ใหม่จะย้อนกลับไปใช้ ready_at เก่าและลากทั้งเครื่องไปวันเดิม
+        "เริ่มจริง", "เสร็จจริง", "เริ่มพักจริง", "เวลาพักสะสม (วินาที)", "ติดตาม Step",
+    ]
+    calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
+    active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
+
+    if active_jobs_editor_df.empty:
+        return calc_df, active_jobs_editor_df
+
+    # ต้องเปลี่ยน dtype จาก datetime64 เป็น string ก่อนรับค่าจาก data_editor
+    # ไม่เช่นนั้น pandas อาจแปลง 03/09/2026 เป็น 9 มีนาคมแบบ month-first ทันทีที่แก้เซลล์
+    active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(format_thai_datetime).astype("object")
+
+    # Baseline ต้องอ่านจากฐานข้อมูลและห้ามสร้างทับทุกครั้งที่ rerun
+    if "กำหนดพร้อมขึ้นงาน (Baseline)" not in active_jobs_editor_df.columns:
+        active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"]
+    else:
+        missing_baseline = active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"].apply(parse_flexible_datetime).isna()
+        active_jobs_editor_df.loc[missing_baseline, "กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df.loc[missing_baseline, "วัน-เวลาขึ้นงาน"]
+    if "เวลาจบ Baseline" not in active_jobs_editor_df.columns:
+        active_jobs_editor_df["เวลาจบ Baseline"] = None
+
+    # จัดลำดับความสำคัญ: กำลังผลิต (0) -> พักงาน (1) -> รอคิว (2) ตามเวลาขึ้นงานเดิม
+    def get_queue_priority(r):
+        return (str(r.get("เลือกเครื่องจักร")),) + get_production_queue_sort_key(r)
+
+    active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
+    active_jobs_editor_df = active_jobs_editor_df.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
+
+    # ทุกหน้าของ Production ต้องใช้เครื่องคำนวณลูกโซ่กลางชุดเดียวกัน
+    active_jobs_editor_df = calculate_production_chain(active_jobs_editor_df, active_only=True)
+    active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["_chain_start"].apply(format_thai_datetime)
+    active_jobs_editor_df["วัน-เวลาจบงาน"] = active_jobs_editor_df["_chain_finish"].apply(format_thai_datetime)
+    active_jobs_editor_df = active_jobs_editor_df.drop(columns=["_chain_start", "_chain_finish"], errors="ignore")
+    active_jobs_editor_df["รวม (ชม.)"] = ((active_jobs_editor_df["Setup (น.)"] + active_jobs_editor_df["Basic (น.)"] + active_jobs_editor_df["โปรแกรม (น.)"]) / 60.0).round(2)
+
+    # ลำดับคำนวณด้านบนต้องแยกตามเครื่องเพื่อให้ลูกโซ่ของแต่ละเครื่องถูกต้อง
+    # แต่ลำดับแสดงผลควรเรียงตามเวลาเริ่มจริง เพื่อให้มองภาพรวมเป็นขั้นบันไดจากเก่าไปใหม่
+    active_jobs_editor_df["_display_start"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
+        lambda value: parse_flexible_datetime(value) or pd.Timestamp.max
+    )
+    active_jobs_editor_df["_display_machine"] = active_jobs_editor_df["เลือกเครื่องจักร"].map(
+        lambda value: normalize_filter_key(value)
+    )
+    active_jobs_editor_df = active_jobs_editor_df.sort_values(
+        by=["_display_start", "_display_machine", "ID"],
+        ascending=[True, True, True],
+        kind="stable",
+        na_position="last"
+    ).drop(columns=["_display_start", "_display_machine"]).reset_index(drop=True)
+    return calc_df, active_jobs_editor_df
+
+
+def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_gantt=True, show_util=True):
+    today_date = get_bangkok_now().date()
+    today_dt = get_bangkok_now().replace(tzinfo=None)
+    util_period_start = datetime.combine(today_date, dtime(0, 0))
+    util_period_end = datetime.combine(today_date, dtime(23, 59, 59))
+
+    gantt_records = []
+    valid_start_dates = []
+    valid_end_dates = []
+
+    for _, r_g in active_jobs_editor_df.iterrows():
+        st_raw = r_g.get("วัน-เวลาขึ้นงาน")
+        fn_raw = r_g.get("วัน-เวลาจบงาน")
+
+        st_dt = parse_flexible_datetime(st_raw)
+        fn_dt = parse_flexible_datetime(fn_raw)
+
+        # ไม่มีเวลาเริ่มจริงให้ข้าม ห้ามสร้างแท่งงานโดยใช้เวลาปัจจุบัน
+        if st_dt is None or pd.isna(st_dt):
+            continue
+        if fn_dt is None or pd.isna(fn_dt) or fn_dt <= st_dt:
+            tot_mins = (
+                safe_float(r_g.get("Setup (น.)"), 10.0)
+                + safe_float(r_g.get("Basic (น.)"), 0.0)
+                + safe_float(r_g.get("โปรแกรม (น.)"), 120.0)
+            )
+            _, fn_dt = add_work_time_with_shift(st_dt, max(tot_mins, 0.0) / 60.0)
+
+        p_name = str(r_g.get("แผนงาน", "-"))
+        dw_name = str(r_g.get("ชื่อ Drawing.", "-"))
+        step_name = str(r_g.get("ขั้นตอน (Step)", "-"))
+        m_name = str(r_g.get("เลือกเครื่องจักร", "-"))
+        mat_name = str(r_g.get("วัสดุ", "-"))
+        qty_val = str(r_g.get("จำนวน", 1))
+        tot_hrs = safe_float(r_g.get("รวม (ชม.)"), 0.0)
+
+        valid_start_dates.append(st_dt.date())
+        valid_end_dates.append(fn_dt.date())
+
+        gantt_records.append({
+            "ข้อความบนแท่งกราฟ": f"{p_name}",
+            "แผนงาน": p_name,
+            "ชื่อ Drawing.": dw_name,
+            "จำนวน": qty_val,
+            "ขั้นตอน (Step)": step_name,
+            "เครื่องจักร": m_name,
+            "วัสดุ": mat_name,
+            "เวลาเริ่ม": st_dt,
+            "เวลาเสร็จ": fn_dt,
+            "ระยะเวลา": f"{tot_hrs:.2f} ชม.",
+            "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
+        })
+
+    df_gantt = pd.DataFrame(gantt_records)
+
+    if not df_gantt.empty:
+        if show_gantt:
+            st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
+
+        gantt_min_date = min(valid_start_dates) if valid_start_dates else today_date
+        gantt_max_date = max(valid_end_dates) if valid_end_dates else (today_date + timedelta(days=14))
+
+        if tv:
+            m_filter_mode = st.query_params.get("station", "")
+            color_by_option = st.query_params.get("color", "แผนงาน (Plan Code)")
+            selected_date_range = (gantt_min_date, gantt_max_date)
+            try:
+                start_date = datetime.strptime(st.query_params.get("from", ""), "%Y-%m-%d").date()
+                end_date = datetime.strptime(st.query_params.get("to", ""), "%Y-%m-%d").date()
+                if start_date <= end_date:
+                    selected_date_range = (start_date, end_date)
+            except ValueError:
+                pass
+        else:
+            gantt_f1, gantt_f2, gantt_f3 = st.columns([2.2, 3.2, 1.8])
+            with gantt_f1:
+                m_filter_mode = st.radio(
+                    "🔍 กรองกลุ่มสถานีงาน:",
+                    ["🌐 ทุกสถานี (22 เครื่อง)", "⚙️ CNC (No.1 - No.9)", "🔧 เจียร/มิลลิ่ง/กลึง (No.10 - No.16)", "🔥 แผนกเชื่อม (6 เครื่อง)"],
+                    horizontal=True
+                )
+
+            with gantt_f2:
+                st.markdown("**📅 ช่วงวันที่ต้องการดูผังงาน:**")
+                btn_q1, btn_q2, btn_q3, btn_q4 = st.columns(4)
+                with btn_q1:
+                    if st.button("🔍 วันนี้", key="btn_gantt_today", use_container_width=True):
+                        st.session_state.gantt_date_range = (today_date, today_date)
+                        st.rerun()
+                with btn_q2:
+                    if st.button("📅 3 วัน", key="btn_gantt_3d", use_container_width=True):
+                        st.session_state.gantt_date_range = (today_date, today_date + timedelta(days=2))
+                        st.rerun()
+                with btn_q3:
+                    if st.button("📆 7 วัน", key="btn_gantt_7d", use_container_width=True):
+                        st.session_state.gantt_date_range = (today_date, today_date + timedelta(days=6))
+                        st.rerun()
+                with btn_q4:
+                    if st.button("🌐 ทั้งหมด", key="btn_gantt_all", use_container_width=True):
+                        st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
+                        st.rerun()
+
+            min_cal = min(gantt_min_date, today_date) - timedelta(days=15)
+            max_cal = max(gantt_max_date, today_date) + timedelta(days=60)
+
+            if st.session_state.gantt_date_range is None or not isinstance(st.session_state.gantt_date_range, (list, tuple)):
+                st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
+
+            selected_date_range = st.date_input(
+                "เลือกช่วงวันที่กำหนดเอง:",
+                value=st.session_state.gantt_date_range,
+                min_value=min_cal,
+                max_value=max_cal,
+                label_visibility="collapsed"
+            )
+            st.session_state.gantt_date_range = selected_date_range
+
+            with gantt_f3:
+                color_by_option = st.selectbox("🎨 แยกสีตาม:", ["แผนงาน (Plan Code)", "กิจกรรม (Setup/ตัดเฉือน)"])
+
+            if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
+                from urllib.parse import urlencode
+                query = urlencode({"view": "tv-rotation", "from": selected_date_range[0].isoformat(),
+                                   "to": selected_date_range[1].isoformat(),
+                                   "station": m_filter_mode, "color": color_by_option})
+                st.markdown(f"[เปิดจอทีวีตามช่วงและตัวกรองนี้](?{query})")
+
+        if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
+            util_period_start = datetime.combine(selected_date_range[0], dtime(0, 0))
+            util_period_end = datetime.combine(selected_date_range[1], dtime(23, 59, 59))
+        elif isinstance(selected_date_range, (datetime, pd.Timestamp)):
+            one_date = selected_date_range.date()
+            util_period_start = datetime.combine(one_date, dtime(0, 0))
+            util_period_end = datetime.combine(one_date, dtime(23, 59, 59))
+        else:
+            util_period_start = datetime.combine(gantt_min_date, dtime(0, 0))
+            util_period_end = datetime.combine(gantt_max_date, dtime(23, 59, 59))
+
+        if show_gantt:
+            if "CNC" in m_filter_mode:
+                display_machines = MACHINE_LIST[:9]
+            elif "เจียร" in m_filter_mode:
+                display_machines = MACHINE_LIST[9:16]
+            elif "เชื่อม" in m_filter_mode:
+                display_machines = MACHINE_LIST[16:]
+            else:
+                display_machines = MACHINE_LIST
+
+            plot_gantt_df = df_gantt[df_gantt["เครื่องจักร"].isin(display_machines)].copy()
+
+            if not plot_gantt_df.empty:
+                plot_gantt_df["เริ่มแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเริ่ม"]).dt.strftime("%d/%m/%Y %H:%M น.")
+                plot_gantt_df["เสร็จแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเสร็จ"]).dt.strftime("%d/%m/%Y %H:%M น.")
+
+                color_target = "แผนงาน" if color_by_option == "แผนงาน (Plan Code)" else "กิจกรรม"
+                distinct_plans = list(plot_gantt_df["แผนงาน"].unique())
+                palette = px.colors.qualitative.Bold
+                plan_color_map = {p_name: palette[i % len(palette)] for i, p_name in enumerate(distinct_plans)}
+
+                fig = px.timeline(
+                    plot_gantt_df,
+                    x_start="เวลาเริ่ม",
+                    x_end="เวลาเสร็จ",
+                    y="เครื่องจักร",
+                    color=color_target,
+                    text="ข้อความบนแท่งกราฟ",
+                    custom_data=["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "วัสดุ", "เริ่มแสดง", "เสร็จแสดง", "ระยะเวลา"],
+                    category_orders={"เครื่องจักร": display_machines},
+                    color_discrete_map=plan_color_map if color_target == "แผนงาน" else {
+                        "⚙️ งานปกติ": "#0284C7",
+                        "🔴 งานด่วน": "#EF4444"
+                    }
+                )
+
+                fig.update_traces(
+                    textposition="inside",
+                    insidetextanchor="middle",
+                    marker_line_color="#FFFFFF",
+                    marker_line_width=1.2,
+                    hovertemplate="""
+                    <b>📌 แผนงาน: %{customdata[0]}</b> | %{customdata[1]}<br>
+                    ⚙️ <b>ขั้นตอน:</b> %{customdata[3]} | 🔢 <b>จำนวน:</b> %{customdata[2]} ชิ้น (%{customdata[4]})<br>
+                    ⏱️ <b>เริ่ม:</b> %{customdata[5]}<br>
+                    🏁 <b>เสร็จ:</b> %{customdata[6]} (รวม %{customdata[7]})
+                    <extra></extra>
+                    """
+                )
+
+                fig.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=display_machines, showgrid=True, gridcolor="#E2E8F0")
+
+                if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
+                    start_view = datetime.combine(selected_date_range[0], dtime(0, 0))
+                    end_view = datetime.combine(selected_date_range[1], dtime(23, 59))
+                else:
+                    start_view = datetime.combine(gantt_min_date, dtime(0, 0))
+                    end_view = datetime.combine(gantt_max_date, dtime(23, 59))
+
+                # แบ่งเส้นตารางแนวตั้งทุก 1 วัน เพื่ออ่านตำแหน่งงานเทียบวันที่ได้ชัดเจน
+                fig.update_xaxes(
+                    range=[start_view, end_view],
+                    type="date",
+                    tickmode="linear",
+                    tick0=start_view,
+                    dtick=24 * 60 * 60 * 1000,
+                    tickformat="%d/%m<br>%Y",
+                    showgrid=True,
+                    gridcolor="#CBD5E1",
+                    gridwidth=1,
+                    showline=True,
+                    linecolor="#94A3B8",
+                    ticks="outside",
+                    ticklen=5,
+                    tickfont=dict(size=10)
+                )
+
+                fig.update_layout(
+                    height=max(450, len(display_machines) * 35),
+                    xaxis_title="วันและเวลาทำงาน",
+                    yaxis_title="เครื่องจักร / แผนก",
+                    uniformtext_minsize=8,
+                    uniformtext_mode='hide',
+                    plot_bgcolor="#FFFFFF",
+                    paper_bgcolor="#FFFFFF",
+                    margin=dict(l=40, r=40, t=30, b=30),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                render_touch_safe_chart("tpc_chart_4", fig, use_container_width=True, show_controls=not tv)
+            else:
+                st.warning("⚠️ ไม่มีคิวงานในกลุ่มสถานีที่เลือกนี้")
+
+            st.markdown("""
+            <div class="schedule-info-box">
+                <div class="schedule-pill">
+                    <span style="font-size:16px;">⏱️</span>
+                    <span><b>จันทร์ – ศุกร์:</b> 08:30 – 12:00 น. และ 13:00 – 20:00 น. (พักเย็น 17:00 – 17:30 น.)</span>
+                </div>
+                <div class="schedule-pill">
+                    <span style="font-size:16px;">⏱️</span>
+                    <span><b>วันเสาร์:</b> 08:30 – 12:00 น. และ 13:00 – 17:00 น. (7.17 ชม./วัน)</span>
+                </div>
+                <div class="schedule-pill">
+                    <span style="font-size:16px;">☕</span>
+                    <span style="color:#D97706;"><b>เบรกเช้า/บ่าย (จ.-ส.):</b> 10:00 – 10:10 น. และ 15:00 – 15:10 น.</span>
+                </div>
+                <div class="schedule-pill">
+                    <span style="font-size:16px;">🍱</span>
+                    <span style="color:#D97706;"><b>พักเที่ยง:</b> 12:00 – 13:00 น.</span>
+                </div>
+                <div class="schedule-pill">
+                    <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.divider()
+    elif show_gantt:
+        st.info("ℹ️ ยังไม่มีข้อมูลคิวงานสำหรับแสดงผังเวลา Gantt Chart")
+
+    # =====================================================
+    # 4. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
+    # =====================================================
+    if not show_util:
+        return
+    st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
+
+    # ใช้ช่วงวันที่เดียวกับ Gantt และนับเฉพาะเวลาทำงานจริงในกะ
+    m_busy_map = {m: 0.0 for m in MACHINE_LIST}
+    for _, r_u in active_jobs_editor_df.iterrows():
+        m_name = str(r_u.get("เลือกเครื่องจักร", ""))
+        start_dt_u = parse_flexible_datetime(r_u.get("วัน-เวลาขึ้นงาน"))
+        total_minutes_u = (
+            safe_float(r_u.get("Setup (น.)"), 10.0)
+            + safe_float(r_u.get("Basic (น.)"), 0.0)
+            + safe_float(r_u.get("โปรแกรม (น.)"), 120.0)
+        )
+        if m_name in m_busy_map and start_dt_u is not None and pd.notna(start_dt_u):
+            m_busy_map[m_name] += get_planned_busy_hours_in_range(
+                start_dt_u,
+                total_minutes_u / 60.0,
+                util_period_start,
+                util_period_end
+            )
+
+    total_horizon_work_hrs = get_work_capacity_between(util_period_start, util_period_end)
+    util_period_txt = f"{util_period_start.strftime('%d/%m/%Y')} – {util_period_end.strftime('%d/%m/%Y')}"
+    st.caption(
+        f"ช่วงคำนวณเดียวกับ Gantt: {util_period_txt} | "
+        f"เวลาที่เครื่องพร้อมทำงานตามกะ: {total_horizon_work_hrs:.2f} ชม./เครื่อง "
+        "(หักเบรก พักเที่ยง และวันอาทิตย์แล้ว)"
+    )
+
+    util_list = []
+    for m in MACHINE_LIST:
+        busy = m_busy_map[m]
+        # ไม่ตัดที่ 100% เพื่อให้เห็นข้อมูลคิวซ้อนหรือโหลดเกินกำลังจริง
+        util_pct = (busy / total_horizon_work_hrs) * 100.0 if total_horizon_work_hrs > 0 else 0.0
+        util_list.append({
+            "เครื่องจักร": m,
+            "ชั่วโมงทำงาน (ชม.)": round(busy, 2),
+            "อัตราการใช้งาน (%)": round(util_pct, 1),
+            "ข้อความแสดง": f"{util_pct:.1f}% ({busy:.2f} ชม.)"
+        })
+    df_util = pd.DataFrame(util_list)
+    util_axis_max = max(105.0, float(df_util["อัตราการใช้งาน (%)"].max()) + 10.0)
+
+    fig_bar = px.bar(
+        df_util,
+        x="อัตราการใช้งาน (%)",
+        y="เครื่องจักร",
+        orientation="h",
+        color="อัตราการใช้งาน (%)",
+        color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
+        text="ข้อความแสดง",
+        range_x=[0, util_axis_max],
+        category_orders={"เครื่องจักร": MACHINE_LIST}
+    )
+    fig_bar.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=MACHINE_LIST)
+    fig_bar.update_traces(marker_line_color="#0F172A", marker_line_width=1.2, textposition="outside", cliponaxis=False)
+    fig_bar.update_layout(
+        height=max(600, len(MACHINE_LIST) * 30),
+        margin=dict(l=40, r=40, t=10, b=30),
+        xaxis_title="อัตราการใช้งาน (%)",
+        yaxis_title="เครื่องจักร / แผนก",
+        xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
+        coloraxis_showscale=False,
+        plot_bgcolor="#FFFFFF",
+        paper_bgcolor="#FFFFFF"
+    )
+    fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
+    render_touch_safe_chart("tpc_chart_5", fig_bar, use_container_width=True, show_controls=not tv)
+
+    st.divider()
+
+
+
 if tv_rotation_mode:
     @st.fragment(run_every=1)
     def advance_tv_rotation():
@@ -7323,60 +7717,27 @@ if tv_rotation_mode:
     advance_tv_rotation()
 
 if tv_rotation_mode and tv_rotation_index == 4:
-    render_project_master_dashboard(fetch_jobs_from_supabase(), is_admin=False, read_only=True, chart_only=True)
+    @st.fragment(run_every=10)
+    def render_tv_master_chart():
+        render_project_master_dashboard(fetch_jobs_from_supabase(), is_admin=False, read_only=True, chart_only=True)
+
+    render_tv_master_chart()
 
 elif tv_rotation_mode and tv_rotation_index in (2, 3):
-    tv_chart_now = get_bangkok_now()
-    tv_day_start = datetime.combine(tv_chart_now.date(), dtime.min)
-    tv_day_end = tv_day_start + timedelta(days=1)
-    tv_jobs = calculate_production_chain(fetch_jobs_from_supabase(), active_only=True)
-    tv_records = []
-    tv_busy = dict.fromkeys(MACHINE_LIST, 0.0)
-    for _, job in tv_jobs.iterrows():
-        machine = safe_str(job.get("เลือกเครื่องจักร"), "")
-        start = parse_flexible_datetime(job.get("_chain_start"))
-        finish = parse_flexible_datetime(job.get("_chain_finish"))
-        if start is None or finish is None or finish <= start:
-            continue
-        if machine in tv_busy:
-            tv_busy[machine] += get_planned_busy_hours_in_range(
-                start, get_planned_minutes(job) / 60, tv_day_start, tv_day_end
-            )
-        if start < tv_day_end and finish > tv_day_start:
-            tv_records.append({
-                "เครื่องจักร": machine, "เริ่ม": max(start, tv_day_start),
-                "เสร็จ": min(finish, tv_day_end), "แผน": safe_str(job.get("แผนงาน"), "-"),
-                "Drawing": safe_str(job.get("ชื่อ Drawing."), "-"),
-                "สถานะ": safe_str(job.get("สถานะงาน"), "-"),
-            })
-    if tv_rotation_index == 2:
-        st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
-        st.caption(f"ผังงานวันนี้ · {tv_chart_now:%d/%m/%Y}")
-        if tv_records:
-            tv_fig = px.timeline(pd.DataFrame(tv_records), x_start="เริ่ม", x_end="เสร็จ",
-                                 y="เครื่องจักร", color="สถานะ", text="แผน",
-                                 hover_data=["Drawing"], category_orders={"เครื่องจักร": MACHINE_LIST})
-            tv_fig.update_xaxes(range=[tv_day_start, tv_day_end], tickformat="%H:%M")
-            tv_fig.update_yaxes(autorange="reversed")
-        else:
-            tv_fig = None
-            st.info("ไม่มีงานกำลังผลิตหรือรอคิวที่อยู่ในช่วงวันนี้")
-    else:
-        st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
-        capacity = get_work_capacity_between(tv_day_start, tv_day_end)
-        st.caption(f"โหลดตามแผนวันนี้ · {tv_chart_now:%d/%m/%Y} · เวลาตามกะ {capacity:.2f} ชม./เครื่อง")
-        tv_util = pd.DataFrame([
-            {"เครื่องจักร": machine, "อัตราการใช้งาน (%)": round(hours / capacity * 100, 1) if capacity else 0.0}
-            for machine, hours in tv_busy.items()
-        ])
-        tv_fig = px.bar(tv_util, x="อัตราการใช้งาน (%)", y="เครื่องจักร", orientation="h",
-                        text="อัตราการใช้งาน (%)", category_orders={"เครื่องจักร": MACHINE_LIST})
-        tv_fig.update_traces(texttemplate="%{text:.1f}%", textposition="auto")
-        tv_fig.update_yaxes(autorange="reversed")
-        tv_fig.add_vline(x=85, line_dash="dash", line_color="#EF4444")
-    if tv_fig is not None:
-        tv_fig.update_layout(height=610, margin=dict(l=20, r=20, t=10, b=25))
-        st.plotly_chart(tv_fig, use_container_width=True, config={"displayModeBar": False})
+    @st.fragment(run_every=10)
+    def render_tv_production_charts():
+        jobs = fetch_jobs_from_supabase()
+        if jobs.empty:
+            st.info("ยังไม่มีข้อมูลคิวงานสำหรับแสดงกราฟ")
+            return
+        jobs = jobs.copy()
+        for col, fallback in [("Setup (น.)", 10.0), ("Basic (น.)", 0.0), ("โปรแกรม (น.)", DEFAULT_PROGRAM_MINUTES)]:
+            jobs[col] = pd.to_numeric(jobs[col], errors="coerce").fillna(fallback)
+        _, queue = prepare_production_chart_queue(jobs)
+        render_production_schedule_charts(queue, tv=True, show_gantt=tv_rotation_index == 2,
+                                          show_util=tv_rotation_index == 3)
+
+    render_tv_production_charts()
 
 elif st.session_state.current_view == "🧪 Admin QC":
     render_people_work_center("QC")
@@ -9762,62 +10123,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =========================================================================
             # 🔗 ระบบลูกโซ่สมบูรณ์: ล็อก Baseline ตั้งต้น + ส่งต่อเวลาคิวงาน (Auto-Chain)
             # =========================================================================
-            column_order = [
-                "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
-                "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
-                "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน",
-                # ต้องเก็บเวลาเริ่มจริงไว้เป็นจุดตั้งต้นของงานที่กด Start แล้ว
-                # มิฉะนั้นการรันลูกโซ่ใหม่จะย้อนกลับไปใช้ ready_at เก่าและลากทั้งเครื่องไปวันเดิม
-                "เริ่มจริง", "เสร็จจริง", "เริ่มพักจริง", "เวลาพักสะสม (วินาที)", "ติดตาม Step",
-            ]
-            calc_df = calc_df[[c for c in column_order if c in calc_df.columns]]
-            active_jobs_editor_df = calc_df[calc_df["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])].copy()
-
-            # ต้องเปลี่ยน dtype จาก datetime64 เป็น string ก่อนรับค่าจาก data_editor
-            # ไม่เช่นนั้น pandas อาจแปลง 03/09/2026 เป็น 9 มีนาคมแบบ month-first ทันทีที่แก้เซลล์
-            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(format_thai_datetime).astype("object")
-
-            # Baseline ต้องอ่านจากฐานข้อมูลและห้ามสร้างทับทุกครั้งที่ rerun
-            if "กำหนดพร้อมขึ้นงาน (Baseline)" not in active_jobs_editor_df.columns:
-                active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"]
-            else:
-                missing_baseline = active_jobs_editor_df["กำหนดพร้อมขึ้นงาน (Baseline)"].apply(parse_flexible_datetime).isna()
-                active_jobs_editor_df.loc[missing_baseline, "กำหนดพร้อมขึ้นงาน (Baseline)"] = active_jobs_editor_df.loc[missing_baseline, "วัน-เวลาขึ้นงาน"]
-            if "เวลาจบ Baseline" not in active_jobs_editor_df.columns:
-                active_jobs_editor_df["เวลาจบ Baseline"] = None
-
-            # จัดลำดับความสำคัญ: กำลังผลิต (0) -> พักงาน (1) -> รอคิว (2) ตามเวลาขึ้นงานเดิม
-            def get_queue_priority(r):
-                return (str(r.get("เลือกเครื่องจักร")),) + get_production_queue_sort_key(r)
-
-            active_jobs_editor_df["_sort_key"] = active_jobs_editor_df.apply(get_queue_priority, axis=1)
-            active_jobs_editor_df = active_jobs_editor_df.sort_values(by="_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
-
             # ล้างสถานะ editor หลังผู้ใช้กดบันทึกสำเร็จ เพื่อโหลดค่าที่คำนวณแล้วกลับจากฐานข้อมูล
             if st.session_state.pop("reset_cnc_editor_after_manual_save", False):
                 st.session_state.pop("editor_cnc_jobs_grid_main", None)
 
-            # ทุกหน้าของ Production ต้องใช้เครื่องคำนวณลูกโซ่กลางชุดเดียวกัน
-            active_jobs_editor_df = calculate_production_chain(active_jobs_editor_df, active_only=True)
-            active_jobs_editor_df["วัน-เวลาขึ้นงาน"] = active_jobs_editor_df["_chain_start"].apply(format_thai_datetime)
-            active_jobs_editor_df["วัน-เวลาจบงาน"] = active_jobs_editor_df["_chain_finish"].apply(format_thai_datetime)
-            active_jobs_editor_df = active_jobs_editor_df.drop(columns=["_chain_start", "_chain_finish"], errors="ignore")
-            active_jobs_editor_df["รวม (ชม.)"] = ((active_jobs_editor_df["Setup (น.)"] + active_jobs_editor_df["Basic (น.)"] + active_jobs_editor_df["โปรแกรม (น.)"]) / 60.0).round(2)
-
-            # ลำดับคำนวณด้านบนต้องแยกตามเครื่องเพื่อให้ลูกโซ่ของแต่ละเครื่องถูกต้อง
-            # แต่ลำดับแสดงผลควรเรียงตามเวลาเริ่มจริง เพื่อให้มองภาพรวมเป็นขั้นบันไดจากเก่าไปใหม่
-            active_jobs_editor_df["_display_start"] = active_jobs_editor_df["วัน-เวลาขึ้นงาน"].apply(
-                lambda value: parse_flexible_datetime(value) or pd.Timestamp.max
-            )
-            active_jobs_editor_df["_display_machine"] = active_jobs_editor_df["เลือกเครื่องจักร"].map(
-                lambda value: normalize_filter_key(value)
-            )
-            active_jobs_editor_df = active_jobs_editor_df.sort_values(
-                by=["_display_start", "_display_machine", "ID"],
-                ascending=[True, True, True],
-                kind="stable",
-                na_position="last"
-            ).drop(columns=["_display_start", "_display_machine"]).reset_index(drop=True)
+            calc_df, active_jobs_editor_df = prepare_production_chart_queue(calc_df)
             active_jobs_editor_df["ลบ"] = st.session_state.active_select_all
 
             with st.expander("📝 รายการสั่งผลิตในระบบ (ตารางสั่งการผลิต - ลิงก์เวลาลูกโซ่อัตโนมัติ)", expanded=True):
@@ -10668,314 +10978,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =====================================================
             # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline)
             # =====================================================
-            today_date = get_bangkok_now().date()
-            today_dt = get_bangkok_now().replace(tzinfo=None)
-            util_period_start = datetime.combine(today_date, dtime(0, 0))
-            util_period_end = datetime.combine(today_date, dtime(23, 59, 59))
-
-            gantt_records = []
-            valid_start_dates = []
-            valid_end_dates = []
-
-            for _, r_g in active_jobs_editor_df.iterrows():
-                st_raw = r_g.get("วัน-เวลาขึ้นงาน")
-                fn_raw = r_g.get("วัน-เวลาจบงาน")
-                
-                st_dt = parse_flexible_datetime(st_raw)
-                fn_dt = parse_flexible_datetime(fn_raw)
-
-                # ไม่มีเวลาเริ่มจริงให้ข้าม ห้ามสร้างแท่งงานโดยใช้เวลาปัจจุบัน
-                if st_dt is None or pd.isna(st_dt):
-                    continue
-                if fn_dt is None or pd.isna(fn_dt) or fn_dt <= st_dt:
-                    tot_mins = (
-                        safe_float(r_g.get("Setup (น.)"), 10.0)
-                        + safe_float(r_g.get("Basic (น.)"), 0.0)
-                        + safe_float(r_g.get("โปรแกรม (น.)"), 120.0)
-                    )
-                    _, fn_dt = add_work_time_with_shift(st_dt, max(tot_mins, 0.0) / 60.0)
-
-                p_name = str(r_g.get("แผนงาน", "-"))
-                dw_name = str(r_g.get("ชื่อ Drawing.", "-"))
-                step_name = str(r_g.get("ขั้นตอน (Step)", "-"))
-                m_name = str(r_g.get("เลือกเครื่องจักร", "-"))
-                mat_name = str(r_g.get("วัสดุ", "-"))
-                qty_val = str(r_g.get("จำนวน", 1))
-                tot_hrs = safe_float(r_g.get("รวม (ชม.)"), 0.0)
-
-                valid_start_dates.append(st_dt.date())
-                valid_end_dates.append(fn_dt.date())
-
-                gantt_records.append({
-                    "ข้อความบนแท่งกราฟ": f"{p_name}",
-                    "แผนงาน": p_name,
-                    "ชื่อ Drawing.": dw_name,
-                    "จำนวน": qty_val,
-                    "ขั้นตอน (Step)": step_name,
-                    "เครื่องจักร": m_name,
-                    "วัสดุ": mat_name,
-                    "เวลาเริ่ม": st_dt,
-                    "เวลาเสร็จ": fn_dt,
-                    "ระยะเวลา": f"{tot_hrs:.2f} ชม.",
-                    "กิจกรรม": "⚙️ งานปกติ" if "ปกติ" in str(r_g.get("ประเภทงาน", "")) else "🔴 งานด่วน"
-                })
-
-            df_gantt = pd.DataFrame(gantt_records)
-
-            if not df_gantt.empty:
-                st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
-
-                gantt_min_date = min(valid_start_dates) if valid_start_dates else today_date
-                gantt_max_date = max(valid_end_dates) if valid_end_dates else (today_date + timedelta(days=14))
-
-                gantt_f1, gantt_f2, gantt_f3 = st.columns([2.2, 3.2, 1.8])
-                with gantt_f1:
-                    m_filter_mode = st.radio(
-                        "🔍 กรองกลุ่มสถานีงาน:",
-                        ["🌐 ทุกสถานี (22 เครื่อง)", "⚙️ CNC (No.1 - No.9)", "🔧 เจียร/มิลลิ่ง/กลึง (No.10 - No.16)", "🔥 แผนกเชื่อม (6 เครื่อง)"],
-                        horizontal=True
-                    )
-
-                with gantt_f2:
-                    st.markdown("**📅 ช่วงวันที่ต้องการดูผังงาน:**")
-                    btn_q1, btn_q2, btn_q3, btn_q4 = st.columns(4)
-                    with btn_q1:
-                        if st.button("🔍 วันนี้", key="btn_gantt_today", use_container_width=True):
-                            st.session_state.gantt_date_range = (today_date, today_date)
-                            st.rerun()
-                    with btn_q2:
-                        if st.button("📅 3 วัน", key="btn_gantt_3d", use_container_width=True):
-                            st.session_state.gantt_date_range = (today_date, today_date + timedelta(days=2))
-                            st.rerun()
-                    with btn_q3:
-                        if st.button("📆 7 วัน", key="btn_gantt_7d", use_container_width=True):
-                            st.session_state.gantt_date_range = (today_date, today_date + timedelta(days=6))
-                            st.rerun()
-                    with btn_q4:
-                        if st.button("🌐 ทั้งหมด", key="btn_gantt_all", use_container_width=True):
-                            st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
-                            st.rerun()
-
-                min_cal = min(gantt_min_date, today_date) - timedelta(days=15)
-                max_cal = max(gantt_max_date, today_date) + timedelta(days=60)
-
-                if st.session_state.gantt_date_range is None or not isinstance(st.session_state.gantt_date_range, (list, tuple)):
-                    st.session_state.gantt_date_range = (gantt_min_date, gantt_max_date)
-
-                selected_date_range = st.date_input(
-                    "เลือกช่วงวันที่กำหนดเอง:",
-                    value=st.session_state.gantt_date_range,
-                    min_value=min_cal,
-                    max_value=max_cal,
-                    label_visibility="collapsed"
-                )
-                st.session_state.gantt_date_range = selected_date_range
-
-                if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
-                    util_period_start = datetime.combine(selected_date_range[0], dtime(0, 0))
-                    util_period_end = datetime.combine(selected_date_range[1], dtime(23, 59, 59))
-                elif isinstance(selected_date_range, (datetime, pd.Timestamp)):
-                    one_date = selected_date_range.date()
-                    util_period_start = datetime.combine(one_date, dtime(0, 0))
-                    util_period_end = datetime.combine(one_date, dtime(23, 59, 59))
-                else:
-                    util_period_start = datetime.combine(gantt_min_date, dtime(0, 0))
-                    util_period_end = datetime.combine(gantt_max_date, dtime(23, 59, 59))
-
-                with gantt_f3:
-                    color_by_option = st.selectbox("🎨 แยกสีตาม:", ["แผนงาน (Plan Code)", "กิจกรรม (Setup/ตัดเฉือน)"])
-
-                if "CNC" in m_filter_mode:
-                    display_machines = MACHINE_LIST[:9]
-                elif "เจียร" in m_filter_mode:
-                    display_machines = MACHINE_LIST[9:16]
-                elif "เชื่อม" in m_filter_mode:
-                    display_machines = MACHINE_LIST[16:]
-                else:
-                    display_machines = MACHINE_LIST
-
-                plot_gantt_df = df_gantt[df_gantt["เครื่องจักร"].isin(display_machines)].copy()
-
-                if not plot_gantt_df.empty:
-                    plot_gantt_df["เริ่มแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเริ่ม"]).dt.strftime("%d/%m/%Y %H:%M น.")
-                    plot_gantt_df["เสร็จแสดง"] = pd.to_datetime(plot_gantt_df["เวลาเสร็จ"]).dt.strftime("%d/%m/%Y %H:%M น.")
-
-                    color_target = "แผนงาน" if color_by_option == "แผนงาน (Plan Code)" else "กิจกรรม"
-                    distinct_plans = list(plot_gantt_df["แผนงาน"].unique())
-                    palette = px.colors.qualitative.Bold
-                    plan_color_map = {p_name: palette[i % len(palette)] for i, p_name in enumerate(distinct_plans)}
-
-                    fig = px.timeline(
-                        plot_gantt_df,
-                        x_start="เวลาเริ่ม",
-                        x_end="เวลาเสร็จ",
-                        y="เครื่องจักร",
-                        color=color_target,
-                        text="ข้อความบนแท่งกราฟ",
-                        custom_data=["แผนงาน", "ชื่อ Drawing.", "จำนวน", "ขั้นตอน (Step)", "วัสดุ", "เริ่มแสดง", "เสร็จแสดง", "ระยะเวลา"],
-                        category_orders={"เครื่องจักร": display_machines},
-                        color_discrete_map=plan_color_map if color_target == "แผนงาน" else {
-                            "⚙️ งานปกติ": "#0284C7",
-                            "🔴 งานด่วน": "#EF4444"
-                        }
-                    )
-                    
-                    fig.update_traces(
-                        textposition="inside",
-                        insidetextanchor="middle",
-                        marker_line_color="#FFFFFF",
-                        marker_line_width=1.2,
-                        hovertemplate="""
-                        <b>📌 แผนงาน: %{customdata[0]}</b> | %{customdata[1]}<br>
-                        ⚙️ <b>ขั้นตอน:</b> %{customdata[3]} | 🔢 <b>จำนวน:</b> %{customdata[2]} ชิ้น (%{customdata[4]})<br>
-                        ⏱️ <b>เริ่ม:</b> %{customdata[5]}<br>
-                        🏁 <b>เสร็จ:</b> %{customdata[6]} (รวม %{customdata[7]})
-                        <extra></extra>
-                        """
-                    )
-                    
-                    fig.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=display_machines, showgrid=True, gridcolor="#E2E8F0")
-
-                    if isinstance(selected_date_range, (list, tuple)) and len(selected_date_range) == 2:
-                        start_view = datetime.combine(selected_date_range[0], dtime(0, 0))
-                        end_view = datetime.combine(selected_date_range[1], dtime(23, 59))
-                    else:
-                        start_view = datetime.combine(gantt_min_date, dtime(0, 0))
-                        end_view = datetime.combine(gantt_max_date, dtime(23, 59))
-
-                    # แบ่งเส้นตารางแนวตั้งทุก 1 วัน เพื่ออ่านตำแหน่งงานเทียบวันที่ได้ชัดเจน
-                    fig.update_xaxes(
-                        range=[start_view, end_view],
-                        type="date",
-                        tickmode="linear",
-                        tick0=start_view,
-                        dtick=24 * 60 * 60 * 1000,
-                        tickformat="%d/%m<br>%Y",
-                        showgrid=True,
-                        gridcolor="#CBD5E1",
-                        gridwidth=1,
-                        showline=True,
-                        linecolor="#94A3B8",
-                        ticks="outside",
-                        ticklen=5,
-                        tickfont=dict(size=10)
-                    )
-
-                    fig.update_layout(
-                        height=max(450, len(display_machines) * 35),
-                        xaxis_title="วันและเวลาทำงาน",
-                        yaxis_title="เครื่องจักร / แผนก",
-                        uniformtext_minsize=8,
-                        uniformtext_mode='hide',
-                        plot_bgcolor="#FFFFFF",
-                        paper_bgcolor="#FFFFFF",
-                        margin=dict(l=40, r=40, t=30, b=30),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                    )
-                    render_touch_safe_chart("tpc_chart_4", fig, use_container_width=True)
-                else:
-                    st.warning("⚠️ ไม่มีคิวงานในกลุ่มสถานีที่เลือกนี้")
-
-                st.markdown("""
-                <div class="schedule-info-box">
-                    <div class="schedule-pill">
-                        <span style="font-size:16px;">⏱️</span>
-                        <span><b>จันทร์ – ศุกร์:</b> 08:30 – 12:00 น. และ 13:00 – 20:00 น. (พักเย็น 17:00 – 17:30 น.)</span>
-                    </div>
-                    <div class="schedule-pill">
-                        <span style="font-size:16px;">⏱️</span>
-                        <span><b>วันเสาร์:</b> 08:30 – 12:00 น. และ 13:00 – 17:00 น. (7.17 ชม./วัน)</span>
-                    </div>
-                    <div class="schedule-pill">
-                        <span style="font-size:16px;">☕</span>
-                        <span style="color:#D97706;"><b>เบรกเช้า/บ่าย (จ.-ส.):</b> 10:00 – 10:10 น. และ 15:00 – 15:10 น.</span>
-                    </div>
-                    <div class="schedule-pill">
-                        <span style="font-size:16px;">🍱</span>
-                        <span style="color:#D97706;"><b>พักเที่ยง:</b> 12:00 – 13:00 น.</span>
-                    </div>
-                    <div class="schedule-pill">
-                        <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                st.divider()
-            else:
-                st.info("ℹ️ ยังไม่มีข้อมูลคิวงานสำหรับแสดงผังเวลา Gantt Chart")
-
-            # =====================================================
-            # 4. อัตราการใช้งานเครื่องจักร (% Machine Utilization)
-            # =====================================================
-            st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
-
-            # ใช้ช่วงวันที่เดียวกับ Gantt และนับเฉพาะเวลาทำงานจริงในกะ
-            m_busy_map = {m: 0.0 for m in MACHINE_LIST}
-            for _, r_u in active_jobs_editor_df.iterrows():
-                m_name = str(r_u.get("เลือกเครื่องจักร", ""))
-                start_dt_u = parse_flexible_datetime(r_u.get("วัน-เวลาขึ้นงาน"))
-                total_minutes_u = (
-                    safe_float(r_u.get("Setup (น.)"), 10.0)
-                    + safe_float(r_u.get("Basic (น.)"), 0.0)
-                    + safe_float(r_u.get("โปรแกรม (น.)"), 120.0)
-                )
-                if m_name in m_busy_map and start_dt_u is not None and pd.notna(start_dt_u):
-                    m_busy_map[m_name] += get_planned_busy_hours_in_range(
-                        start_dt_u,
-                        total_minutes_u / 60.0,
-                        util_period_start,
-                        util_period_end
-                    )
-
-            total_horizon_work_hrs = get_work_capacity_between(util_period_start, util_period_end)
-            util_period_txt = f"{util_period_start.strftime('%d/%m/%Y')} – {util_period_end.strftime('%d/%m/%Y')}"
-            st.caption(
-                f"ช่วงคำนวณเดียวกับ Gantt: {util_period_txt} | "
-                f"เวลาที่เครื่องพร้อมทำงานตามกะ: {total_horizon_work_hrs:.2f} ชม./เครื่อง "
-                "(หักเบรก พักเที่ยง และวันอาทิตย์แล้ว)"
-            )
-
-            util_list = []
-            for m in MACHINE_LIST:
-                busy = m_busy_map[m]
-                # ไม่ตัดที่ 100% เพื่อให้เห็นข้อมูลคิวซ้อนหรือโหลดเกินกำลังจริง
-                util_pct = (busy / total_horizon_work_hrs) * 100.0 if total_horizon_work_hrs > 0 else 0.0
-                util_list.append({
-                    "เครื่องจักร": m,
-                    "ชั่วโมงทำงาน (ชม.)": round(busy, 2),
-                    "อัตราการใช้งาน (%)": round(util_pct, 1),
-                    "ข้อความแสดง": f"{util_pct:.1f}% ({busy:.2f} ชม.)"
-                })
-            df_util = pd.DataFrame(util_list)
-            util_axis_max = max(105.0, float(df_util["อัตราการใช้งาน (%)"].max()) + 10.0)
-
-            fig_bar = px.bar(
-                df_util,
-                x="อัตราการใช้งาน (%)",
-                y="เครื่องจักร",
-                orientation="h",
-                color="อัตราการใช้งาน (%)",
-                color_continuous_scale=[[0, "#E0F2FE"], [0.4, "#38BDF8"], [0.8, "#0284C7"], [1, "#0369A1"]],
-                text="ข้อความแสดง",
-                range_x=[0, util_axis_max],
-                category_orders={"เครื่องจักร": MACHINE_LIST}
-            )
-            fig_bar.update_yaxes(autorange="reversed", type="category", categoryorder="array", categoryarray=MACHINE_LIST)
-            fig_bar.update_traces(marker_line_color="#0F172A", marker_line_width=1.2, textposition="outside", cliponaxis=False)
-            fig_bar.update_layout(
-                height=max(600, len(MACHINE_LIST) * 30),
-                margin=dict(l=40, r=40, t=10, b=30),
-                xaxis_title="อัตราการใช้งาน (%)",
-                yaxis_title="เครื่องจักร / แผนก",
-                xaxis=dict(showgrid=True, gridcolor="#F1F5F9"),
-                coloraxis_showscale=False,
-                plot_bgcolor="#FFFFFF",
-                paper_bgcolor="#FFFFFF"
-            )
-            fig_bar.add_vline(x=85, line_dash="dash", line_color="#EF4444", line_width=2, annotation_text="เป้าหมาย (85%)", annotation_position="top right", annotation_font_color="#EF4444")
-            render_touch_safe_chart("tpc_chart_5", fig_bar, use_container_width=True)
-
-            st.divider()
+            render_production_schedule_charts(active_jobs_editor_df)
 
             # =====================================================
             # 5. ตารางสรุปประวัติงานที่เสร็จสิ้น (Finished Production History)
