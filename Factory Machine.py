@@ -9463,6 +9463,40 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         normal_last_machine_key = "normal_template_last_machine"
                         normal_last_drawing_key = "normal_template_last_drawing"
                         normal_form_version = safe_int(st.session_state.get(normal_form_version_key), 0)
+                        with st.form("normal_template_qr_import", clear_on_submit=True):
+                            drawing_qr = st.text_input(
+                                "สแกน QR ใบแบบ หรือวางข้อความที่สแกนได้",
+                                placeholder="TPC1|รหัสแผน|เลข Drawing|จำนวน|วัสดุ",
+                                max_chars=350,
+                            )
+                            apply_drawing_qr = st.form_submit_button("เติมข้อมูลจาก QR")
+                        if apply_drawing_qr:
+                            qr_fields = [field.strip() for field in drawing_qr.strip().split("|")]
+                            if len(qr_fields) != 5 or qr_fields[0] != "TPC1":
+                                st.error("รูปแบบ QR ไม่ถูกต้อง กรุณาใช้ QR ใบแบบสำหรับ TPC")
+                            else:
+                                _, qr_plan, qr_drawing, qr_qty_text, qr_material = qr_fields
+                                qr_qty = int(qr_qty_text) if re.fullmatch(r"[0-9]{1,5}", qr_qty_text) else 0
+                                matches = [item for item in templates
+                                           if safe_str(item.get("drawing_name")).casefold() == qr_drawing.casefold()]
+                                if not qr_plan or not qr_material or not 1 <= qr_qty <= 10000:
+                                    st.error("QR ต้องมีรหัสแผน วัสดุ และจำนวน 1–10,000 ชิ้น")
+                                elif len(matches) != 1:
+                                    st.error("ไม่พบ Drawing Template ที่ตรงกัน หรือมีชื่อซ้ำ กรุณาตรวจรายการ Template")
+                                else:
+                                    qr_name = safe_str(matches[0].get("drawing_name"))
+                                    qr_id = safe_int(matches[0].get("id"), 0)
+                                    qr_key = f"{normal_form_version}_{qr_id}_{qr_name}"
+                                    qr_other = "อื่น ๆ (พิมพ์เอง)"
+                                    qr_preset = next((item for item in MATERIAL_OPTIONS
+                                                      if item != qr_other and item.casefold() == qr_material.casefold()), qr_other)
+                                    st.session_state[f"normal_template_plan_{normal_form_version}"] = qr_plan
+                                    st.session_state[f"normal_template_drawing_{normal_form_version}"] = qr_name
+                                    st.session_state[f"normal_template_qty_{normal_form_version}_{qr_id}"] = qr_qty
+                                    st.session_state[f"normal_drawing_edit_{qr_key}"] = qr_drawing
+                                    st.session_state[f"normal_material_select_{qr_key}"] = qr_preset
+                                    st.session_state[f"normal_material_custom_{qr_key}"] = qr_material if qr_preset == qr_other else ""
+                                    st.success("เติมข้อมูลจาก QR แล้ว ตรวจข้อมูลและเครื่องจักรก่อนบันทึกใบงาน")
                         n1, n2, n3 = st.columns([1.2, 2, 1])
                         with n1:
                             normal_plan = st.text_input(
