@@ -1370,7 +1370,15 @@ except Exception:
 tv_production_only_mode = tv_link_view in {"tv", "tv-live", "tvlive", "tv-production"}
 tv_department_only_mode = tv_link_view in {"tv-qc", "tv-qc-auto", "tv-department", "tv-automation"}
 tv_department_menu_refresh_mode = tv_link_view == "tv-qc-menu"
-tv_only_mode = tv_production_only_mode or tv_department_only_mode
+tv_rotation_mode = tv_link_view == "tv-rotation"
+tv_rotation_views = (
+    ("📺 จอทีวีแสดงงานแผนกผลิต", 60),
+    ("📺 จอทีวีแสดงงานแผนก QC&Automation", 60),
+    ("📊 ผังเวลาขึ้นงานสำหรับจอทีวี", 30),
+    ("📈 อัตราการใช้งานเครื่องจักรสำหรับจอทีวี", 30),
+    ("📊 ช่วงเวลาแผนหลักเทียบแผนผลิต", 30),
+)
+tv_only_mode = tv_production_only_mode or tv_department_only_mode or tv_rotation_mode
 operator_only_mode = tv_link_view in {"operator", "operator-mode", "worker", "work-operator"}
 standalone_only_mode = tv_only_mode or operator_only_mode
 
@@ -2978,21 +2986,24 @@ def calculate_plan_drawing_progress(plan_jobs):
     }
 
 
-def render_project_master_dashboard(calc_df, is_admin, read_only=False):
+def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_only=False):
+    if chart_only:
+        read_only = True
     device_mode = get_device_mode()
     mobile_view = device_mode == "mobile"
     tablet_view = device_mode == "tablet"
-    if isinstance(calc_df, pd.DataFrame) and not calc_df.empty:
-        bad_finish_count = sum("เสร็จสิ้น" in safe_str(row.get("สถานะงาน")) and first_valid_datetime(row.get("เสร็จจริง")) is None for _, row in calc_df.iterrows())
-        if bad_finish_count:
-            st.warning(f"งานระบุว่าเสร็จแต่ไม่มีเวลา Finish {bad_finish_count} รายการ ยังไม่นับว่า Drawing เสร็จครบ")
-    st.caption("ความคืบหน้าเฉพาะงานผลิตภายใน ไม่รวมงานส่งจ้าง; แผนคิวปัจจุบันและแผนอ้างอิงเป็นคนละฐาน")
-    if read_only:
-        st.markdown("### 🗓️ แผนงาน Production")
-        st.caption("แสดงกรอบเวลา Production และแผนผลิตล่าสุดสำหรับตรวจสอบเท่านั้น — ไม่สามารถเพิ่ม แก้ไข ลบ หรือพิมพ์จากหน้านี้")
-    else:
-        st.markdown("### 🗓️ แผนงาน Production และ Project Master Gantt")
-        st.caption("กรอบเวลา Production เป็น Baseline หลัก ส่วนแท่งแผนผลิตรวมคำนวณจาก Drawing และ Step ในตารางสั่งผลิต")
+    if not chart_only:
+        if isinstance(calc_df, pd.DataFrame) and not calc_df.empty:
+            bad_finish_count = sum("เสร็จสิ้น" in safe_str(row.get("สถานะงาน")) and first_valid_datetime(row.get("เสร็จจริง")) is None for _, row in calc_df.iterrows())
+            if bad_finish_count:
+                st.warning(f"งานระบุว่าเสร็จแต่ไม่มีเวลา Finish {bad_finish_count} รายการ ยังไม่นับว่า Drawing เสร็จครบ")
+        st.caption("ความคืบหน้าเฉพาะงานผลิตภายใน ไม่รวมงานส่งจ้าง; แผนคิวปัจจุบันและแผนอ้างอิงเป็นคนละฐาน")
+        if read_only:
+            st.markdown("### 🗓️ แผนงาน Production")
+            st.caption("แสดงกรอบเวลา Production และแผนผลิตล่าสุดสำหรับตรวจสอบเท่านั้น — ไม่สามารถเพิ่ม แก้ไข ลบ หรือพิมพ์จากหน้านี้")
+        else:
+            st.markdown("### 🗓️ แผนงาน Production และ Project Master Gantt")
+            st.caption("กรอบเวลา Production เป็น Baseline หลัก ส่วนแท่งแผนผลิตรวมคำนวณจาก Drawing และ Step ในตารางสั่งผลิต")
     master_df, table_ready = fetch_plan_masters()
     if not table_ready:
         st.error("ยังไม่พบตาราง cnc_plan_master กรุณารันไฟล์ create_cnc_plan_master.sql ใน Supabase SQL Editor ก่อนใช้งานครั้งแรก")
@@ -3317,7 +3328,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
 
     gantt_df = pd.DataFrame(gantt_rows).dropna(subset=["เริ่ม", "จบ"])
     project_options = ["ทุกแผนงาน"] + summary["แผนงาน"].astype(str).tolist()
-    project_filter = st.selectbox(
+    project_filter = "ทุกแผนงาน" if chart_only else st.selectbox(
         "🔎 แสดงแผนงาน",
         project_options,
         index=(1 if mobile_view and len(project_options) > 1 else 0),
@@ -3330,135 +3341,136 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
         summary_view = summary[summary["แผนงาน"].astype(str) == project_filter].copy()
         gantt_view = gantt_df[gantt_df["แผนงาน"].astype(str).str.startswith(f"{project_filter} |")].copy()
 
-    exec_total_plans = len(summary_view)
-    exec_on_plan = int(summary_view["สถานะ"].str.contains("อยู่ในแผน", na=False).sum())
-    exec_late = int((summary_view["เกินกำหนด (ชม.)"] > 0).sum())
-    exec_near_risk = int(((summary_view["คิวดีเลย์"] > 0) & (summary_view["เกินกำหนด (ชม.)"] <= 0)).sum())
-    exec_unplanned = int(summary_view["สถานะ"].str.contains("ยังวางงานไม่ครบ", na=False).sum())
-    exec_decision_count = int(
-        summary_view["สถานะ"].str.contains(
-            "มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False
-        ).sum()
-    )
-    exec_remaining_drawings = int(summary_view["Drawing คงเหลือ"].fillna(0).sum())
-    exec_remaining_hours = float(summary_view["ชั่วโมงแผน"].fillna(0).sum())
-    exec_capacity_shortfall = float(summary_view["เกินกำหนด (ชม.)"].fillna(0).sum())
-    exec_overlap_count = int((summary_view["แผนซ้อนกัน"] > 0).sum())
+    if not chart_only:
+        exec_total_plans = len(summary_view)
+        exec_on_plan = int(summary_view["สถานะ"].str.contains("อยู่ในแผน", na=False).sum())
+        exec_late = int((summary_view["เกินกำหนด (ชม.)"] > 0).sum())
+        exec_near_risk = int(((summary_view["คิวดีเลย์"] > 0) & (summary_view["เกินกำหนด (ชม.)"] <= 0)).sum())
+        exec_unplanned = int(summary_view["สถานะ"].str.contains("ยังวางงานไม่ครบ", na=False).sum())
+        exec_decision_count = int(
+            summary_view["สถานะ"].str.contains(
+                "มีคิวดีเลย์|เกินแผน Production|ยังวางงานไม่ครบ", regex=True, na=False
+            ).sum()
+        )
+        exec_remaining_drawings = int(summary_view["Drawing คงเหลือ"].fillna(0).sum())
+        exec_remaining_hours = float(summary_view["ชั่วโมงแผน"].fillna(0).sum())
+        exec_capacity_shortfall = float(summary_view["เกินกำหนด (ชม.)"].fillna(0).sum())
+        exec_overlap_count = int((summary_view["แผนซ้อนกัน"] > 0).sum())
 
-    metric_values = [
-        ("แผนงานทั้งหมด", exec_total_plans, "จำนวนแผนงานในมุมมองที่เลือก"),
-        ("อยู่ในแผน", exec_on_plan, None),
-        ("คิวดีเลย์/เสี่ยง (สีส้ม)", exec_near_risk, "มีคิวดีเลย์ แต่วันจบรวมยังไม่เกินกรอบ Production"),
-        ("เกิน Production", exec_late, None),
-        ("Dwg คงเหลือ", exec_remaining_drawings, None),
-        ("ชั่วโมงงานคงเหลือ", f"{exec_remaining_hours:,.1f}", None),
-        ("กำลังการผลิตที่ขาด", f"{exec_capacity_shortfall:,.1f} ชม.", "ชั่วโมงทำงานที่เกินกรอบ Production รวม"),
-        ("แผนที่ต้องตัดสินใจ", exec_decision_count, None),
-    ]
-    if mobile_view:
-        for row_start in range(0, len(metric_values), 2):
-            metric_row = metric_values[row_start:row_start + 2]
-            metric_cols = st.columns(2)
-            for metric_col, (label, value, help_text) in zip(metric_cols, metric_row):
-                metric_col.metric(label, value, help=help_text)
-    elif tablet_view:
-        tablet_metric_cards = "".join(
-            f'<div class="tablet-kpi"><span>{html.escape(label)}</span><b>{safe_int(value)}</b></div>'
-            for label, value, _ in metric_values
+        metric_values = [
+            ("แผนงานทั้งหมด", exec_total_plans, "จำนวนแผนงานในมุมมองที่เลือก"),
+            ("อยู่ในแผน", exec_on_plan, None),
+            ("คิวดีเลย์/เสี่ยง (สีส้ม)", exec_near_risk, "มีคิวดีเลย์ แต่วันจบรวมยังไม่เกินกรอบ Production"),
+            ("เกิน Production", exec_late, None),
+            ("Dwg คงเหลือ", exec_remaining_drawings, None),
+            ("ชั่วโมงงานคงเหลือ", f"{exec_remaining_hours:,.1f}", None),
+            ("กำลังการผลิตที่ขาด", f"{exec_capacity_shortfall:,.1f} ชม.", "ชั่วโมงทำงานที่เกินกรอบ Production รวม"),
+            ("แผนที่ต้องตัดสินใจ", exec_decision_count, None),
+        ]
+        if mobile_view:
+            for row_start in range(0, len(metric_values), 2):
+                metric_row = metric_values[row_start:row_start + 2]
+                metric_cols = st.columns(2)
+                for metric_col, (label, value, help_text) in zip(metric_cols, metric_row):
+                    metric_col.metric(label, value, help=help_text)
+        elif tablet_view:
+            tablet_metric_cards = "".join(
+                f'<div class="tablet-kpi"><span>{html.escape(label)}</span><b>{safe_int(value)}</b></div>'
+                for label, value, _ in metric_values
+            )
+            st.markdown(
+                '<style>.tablet-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:8px 0 16px}'
+                '.tablet-kpi{border:1px solid #E2E8F0;border-radius:10px;padding:12px;background:#FFF}'
+                '.tablet-kpi span{display:block;color:#475569;font-size:14px}.tablet-kpi b{display:block;font-size:28px;color:#0F172A;margin-top:5px}'
+                '@media(max-width:820px){.tablet-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}</style>'
+                f'<div class="tablet-kpi-grid">{tablet_metric_cards}</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            for row_start in range(0, len(metric_values), 4):
+                metric_cols = st.columns(4)
+                for metric_col, (label, value, help_text) in zip(metric_cols, metric_values[row_start:row_start + 4]):
+                    metric_col.metric(label, value, help=help_text)
+
+        # บทสรุปสำหรับ MD ใช้กฎจากข้อมูลชุดเดียวกับกราฟและตาราง ไม่ใช้ข้อความคาดเดา
+        executive_issues = []
+        for _, item in summary_view.iterrows():
+            plan_code = safe_str(item.get("แผนงาน"), "-")
+            late_hours_item = safe_float(item.get("เกินกำหนด (ชม.)"), 0.0)
+            delayed_count_item = safe_int(item.get("คิวดีเลย์"), 0)
+            max_delay_item = safe_float(item.get("ดีเลย์สูงสุด (ชม.)"), 0.0)
+            remaining_item = safe_int(item.get("Drawing คงเหลือ"), 0)
+            remaining_pct_item = safe_float(item.get("งานคงเหลือ (%)"), 0.0)
+            risk_drawing_item = safe_str(item.get("Drawing เสี่ยง"), "-")
+            risk_machine_item = safe_str(item.get("เครื่องเสี่ยง"), "-")
+            status_item = safe_str(item.get("สถานะ"), "")
+            if late_hours_item > 0:
+                executive_issues.append({
+                    "score": 300000 + late_hours_item * 100 + delayed_count_item,
+                    "level": "critical",
+                    "problem": f"แผน {plan_code} คาดว่าจะเกินกรอบ Production {late_hours_item:,.1f} ชั่วโมงทำงาน",
+                    "cause": f"มี Dwg คงเหลือ {remaining_item} รายการ ({remaining_pct_item:,.1f}%) และคิว/เครื่องเสี่ยงอยู่ที่ {risk_machine_item}",
+                    "impact": f"หากไม่ปรับแผน กำหนดส่งของแผน {plan_code} จะล่าช้าตามเวลาที่เกินอย่างน้อย {late_hours_item:,.1f} ชั่วโมงทำงาน",
+                    "decision": f"เร่งตรวจ {risk_drawing_item}; พิจารณาย้ายเครื่อง ปรับลำดับคิว เพิ่ม OT หรือจ้างภายนอก",
+                })
+            elif delayed_count_item > 0:
+                executive_issues.append({
+                    "score": 200000 + max_delay_item * 100 + delayed_count_item,
+                    "level": "warning",
+                    "problem": f"แผน {plan_code} มีคิวดีเลย์ {delayed_count_item} คิว สูงสุด {max_delay_item:,.1f} ชั่วโมง",
+                    "cause": f"Drawing ที่ต้องติดตาม: {risk_drawing_item} | เครื่องที่เกี่ยวข้อง: {risk_machine_item}",
+                    "impact": "วันจบรวมยังไม่เกิน Production แต่เวลาสำรองกำลังถูกใช้และมีโอกาสเปลี่ยนเป็นแผนสีแดง",
+                    "decision": "จัดคิวดีเลย์ขึ้นก่อนและตรวจความพร้อมของเครื่อง วัสดุ Tool และคนก่อนเวลาสำรองหมด",
+                })
+            elif "ยังวางงานไม่ครบ" in status_item:
+                executive_issues.append({
+                    "score": 100000 + remaining_item,
+                    "level": "warning",
+                    "problem": f"แผน {plan_code} ยังวาง Drawing/Step ไม่ครบ จึงประเมินวันจบจริงไม่ได้",
+                    "cause": "ข้อมูลคิว เครื่องจักร หรือเวลาทำงานของ Drawing ยังไม่ครบถ้วน",
+                    "impact": "ผู้บริหารยังไม่สามารถยืนยันกำลังการผลิตและความสามารถส่งมอบของแผนนี้ได้",
+                    "decision": "ให้ผู้วางแผนเติม Drawing, Step, เครื่องจักร และเวลาให้ครบก่อนยืนยันกำหนดส่ง",
+                })
+        executive_issues = sorted(executive_issues, key=lambda value: value["score"], reverse=True)
+
+        if exec_late > 0 or (exec_total_plans > 0 and exec_decision_count / exec_total_plans >= 0.5):
+            exec_health, exec_health_icon, exec_health_color, exec_health_bg = "วิกฤต", "🔴", "#991B1B", "#FEF2F2"
+        elif exec_decision_count > 0 or exec_overlap_count > 0:
+            exec_health, exec_health_icon, exec_health_color, exec_health_bg = "ต้องเฝ้าระวัง", "🟡", "#92400E", "#FFFBEB"
+        else:
+            exec_health, exec_health_icon, exec_health_color, exec_health_bg = "ปกติ", "🟢", "#065F46", "#ECFDF5"
+
+        st.markdown("### 📋 บทสรุปสถานการณ์แผนงานสำหรับผู้บริหาร")
+        executive_health_reason = (
+            f"มีแผนเกิน Production แล้ว {exec_late} แผน"
+            if exec_late > 0 else
+            (f"มีแผนที่ต้องตัดสินใจ {exec_decision_count} แผน" if exec_decision_count > 0 else "ทุกแผนยังอยู่ในกรอบ Production")
         )
         st.markdown(
-            '<style>.tablet-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:8px 0 16px}'
-            '.tablet-kpi{border:1px solid #E2E8F0;border-radius:10px;padding:12px;background:#FFF}'
-            '.tablet-kpi span{display:block;color:#475569;font-size:14px}.tablet-kpi b{display:block;font-size:28px;color:#0F172A;margin-top:5px}'
-            '@media(max-width:820px){.tablet-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}</style>'
-            f'<div class="tablet-kpi-grid">{tablet_metric_cards}</div>',
-            unsafe_allow_html=True
+            f"<div class='tpc-light-panel' style='color:#0F172A;border:2px solid {exec_health_color};border-left:9px solid {exec_health_color};"
+            f"border-radius:12px;padding:14px 16px;background:{exec_health_bg};margin:5px 0 12px'>"
+            f"<div style='font-size:20px;font-weight:900;color:{exec_health_color}'>{exec_health_icon} สถานการณ์รวม: {exec_health} — {executive_health_reason}</div>"
+            f"<div style='margin-top:6px;font-size:15px'>มีแผนงาน {exec_total_plans} แผน — "
+            f"🟢 อยู่ในแผน {exec_on_plan} แผน, 🟠 คิวดีเลย์/เสี่ยงแต่ยังไม่เกิน Production {exec_near_risk} แผน, "
+            f"🔴 เกิน Production แล้ว {exec_late} แผน"
+            f"{f', และยังวางงานไม่ครบ {exec_unplanned} แผน' if exec_unplanned else ''}. "
+            f"เหลืองาน {exec_remaining_drawings} Drawing รวมประมาณ {exec_remaining_hours:,.1f} ชั่วโมง "
+            f"และมีกำลังการผลิตที่ขาดจากกรอบรวม {exec_capacity_shortfall:,.1f} ชั่วโมง</div></div>",
+            unsafe_allow_html=True,
         )
-    else:
-        for row_start in range(0, len(metric_values), 4):
-            metric_cols = st.columns(4)
-            for metric_col, (label, value, help_text) in zip(metric_cols, metric_values[row_start:row_start + 4]):
-                metric_col.metric(label, value, help=help_text)
 
-    # บทสรุปสำหรับ MD ใช้กฎจากข้อมูลชุดเดียวกับกราฟและตาราง ไม่ใช้ข้อความคาดเดา
-    executive_issues = []
-    for _, item in summary_view.iterrows():
-        plan_code = safe_str(item.get("แผนงาน"), "-")
-        late_hours_item = safe_float(item.get("เกินกำหนด (ชม.)"), 0.0)
-        delayed_count_item = safe_int(item.get("คิวดีเลย์"), 0)
-        max_delay_item = safe_float(item.get("ดีเลย์สูงสุด (ชม.)"), 0.0)
-        remaining_item = safe_int(item.get("Drawing คงเหลือ"), 0)
-        remaining_pct_item = safe_float(item.get("งานคงเหลือ (%)"), 0.0)
-        risk_drawing_item = safe_str(item.get("Drawing เสี่ยง"), "-")
-        risk_machine_item = safe_str(item.get("เครื่องเสี่ยง"), "-")
-        status_item = safe_str(item.get("สถานะ"), "")
-        if late_hours_item > 0:
-            executive_issues.append({
-                "score": 300000 + late_hours_item * 100 + delayed_count_item,
-                "level": "critical",
-                "problem": f"แผน {plan_code} คาดว่าจะเกินกรอบ Production {late_hours_item:,.1f} ชั่วโมงทำงาน",
-                "cause": f"มี Dwg คงเหลือ {remaining_item} รายการ ({remaining_pct_item:,.1f}%) และคิว/เครื่องเสี่ยงอยู่ที่ {risk_machine_item}",
-                "impact": f"หากไม่ปรับแผน กำหนดส่งของแผน {plan_code} จะล่าช้าตามเวลาที่เกินอย่างน้อย {late_hours_item:,.1f} ชั่วโมงทำงาน",
-                "decision": f"เร่งตรวจ {risk_drawing_item}; พิจารณาย้ายเครื่อง ปรับลำดับคิว เพิ่ม OT หรือจ้างภายนอก",
-            })
-        elif delayed_count_item > 0:
-            executive_issues.append({
-                "score": 200000 + max_delay_item * 100 + delayed_count_item,
-                "level": "warning",
-                "problem": f"แผน {plan_code} มีคิวดีเลย์ {delayed_count_item} คิว สูงสุด {max_delay_item:,.1f} ชั่วโมง",
-                "cause": f"Drawing ที่ต้องติดตาม: {risk_drawing_item} | เครื่องที่เกี่ยวข้อง: {risk_machine_item}",
-                "impact": "วันจบรวมยังไม่เกิน Production แต่เวลาสำรองกำลังถูกใช้และมีโอกาสเปลี่ยนเป็นแผนสีแดง",
-                "decision": "จัดคิวดีเลย์ขึ้นก่อนและตรวจความพร้อมของเครื่อง วัสดุ Tool และคนก่อนเวลาสำรองหมด",
-            })
-        elif "ยังวางงานไม่ครบ" in status_item:
-            executive_issues.append({
-                "score": 100000 + remaining_item,
-                "level": "warning",
-                "problem": f"แผน {plan_code} ยังวาง Drawing/Step ไม่ครบ จึงประเมินวันจบจริงไม่ได้",
-                "cause": "ข้อมูลคิว เครื่องจักร หรือเวลาทำงานของ Drawing ยังไม่ครบถ้วน",
-                "impact": "ผู้บริหารยังไม่สามารถยืนยันกำลังการผลิตและความสามารถส่งมอบของแผนนี้ได้",
-                "decision": "ให้ผู้วางแผนเติม Drawing, Step, เครื่องจักร และเวลาให้ครบก่อนยืนยันกำหนดส่ง",
-            })
-    executive_issues = sorted(executive_issues, key=lambda value: value["score"], reverse=True)
-
-    if exec_late > 0 or (exec_total_plans > 0 and exec_decision_count / exec_total_plans >= 0.5):
-        exec_health, exec_health_icon, exec_health_color, exec_health_bg = "วิกฤต", "🔴", "#991B1B", "#FEF2F2"
-    elif exec_decision_count > 0 or exec_overlap_count > 0:
-        exec_health, exec_health_icon, exec_health_color, exec_health_bg = "ต้องเฝ้าระวัง", "🟡", "#92400E", "#FFFBEB"
-    else:
-        exec_health, exec_health_icon, exec_health_color, exec_health_bg = "ปกติ", "🟢", "#065F46", "#ECFDF5"
-
-    st.markdown("### 📋 บทสรุปสถานการณ์แผนงานสำหรับผู้บริหาร")
-    executive_health_reason = (
-        f"มีแผนเกิน Production แล้ว {exec_late} แผน"
-        if exec_late > 0 else
-        (f"มีแผนที่ต้องตัดสินใจ {exec_decision_count} แผน" if exec_decision_count > 0 else "ทุกแผนยังอยู่ในกรอบ Production")
-    )
-    st.markdown(
-        f"<div class='tpc-light-panel' style='color:#0F172A;border:2px solid {exec_health_color};border-left:9px solid {exec_health_color};"
-        f"border-radius:12px;padding:14px 16px;background:{exec_health_bg};margin:5px 0 12px'>"
-        f"<div style='font-size:20px;font-weight:900;color:{exec_health_color}'>{exec_health_icon} สถานการณ์รวม: {exec_health} — {executive_health_reason}</div>"
-        f"<div style='margin-top:6px;font-size:15px'>มีแผนงาน {exec_total_plans} แผน — "
-        f"🟢 อยู่ในแผน {exec_on_plan} แผน, 🟠 คิวดีเลย์/เสี่ยงแต่ยังไม่เกิน Production {exec_near_risk} แผน, "
-        f"🔴 เกิน Production แล้ว {exec_late} แผน"
-        f"{f', และยังวางงานไม่ครบ {exec_unplanned} แผน' if exec_unplanned else ''}. "
-        f"เหลืองาน {exec_remaining_drawings} Drawing รวมประมาณ {exec_remaining_hours:,.1f} ชั่วโมง "
-        f"และมีกำลังการผลิตที่ขาดจากกรอบรวม {exec_capacity_shortfall:,.1f} ชั่วโมง</div></div>",
-        unsafe_allow_html=True,
-    )
-
-    if executive_issues:
-        st.markdown("#### 🚨 ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ")
-        for issue_no, issue in enumerate(executive_issues[:5], start=1):
-            issue_box = st.error if issue["level"] == "critical" else st.warning
-            issue_box(
-                f"**{issue_no}. {issue['problem']}**  \n"
-                f"**สาเหตุที่ระบบตรวจพบ:** {issue['cause']}  \n"
-                f"**ผลกระทบหากไม่แก้ไข:** {issue['impact']}  \n"
-                f"**ข้อเสนอเพื่อการตัดสินใจ:** {issue['decision']}"
-            )
-    else:
-        st.success("✅ ยังไม่พบปัญหาที่ต้องเร่งตัดสินใจ แผนงานในมุมมองนี้อยู่ในกรอบ Production")
+        if executive_issues:
+            st.markdown("#### 🚨 ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ")
+            for issue_no, issue in enumerate(executive_issues[:5], start=1):
+                issue_box = st.error if issue["level"] == "critical" else st.warning
+                issue_box(
+                    f"**{issue_no}. {issue['problem']}**  \n"
+                    f"**สาเหตุที่ระบบตรวจพบ:** {issue['cause']}  \n"
+                    f"**ผลกระทบหากไม่แก้ไข:** {issue['impact']}  \n"
+                    f"**ข้อเสนอเพื่อการตัดสินใจ:** {issue['decision']}"
+                )
+        else:
+            st.success("✅ ยังไม่พบปัญหาที่ต้องเร่งตัดสินใจ แผนงานในมุมมองนี้อยู่ในกรอบ Production")
 
     if not gantt_view.empty:
         st.markdown("#### ช่วงเวลาแผนหลักเทียบแผนผลิต")
@@ -3562,6 +3574,11 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False):
             use_container_width=True,
             config={"displayModeBar": device_mode == "desktop", "responsive": True, "scrollZoom": False}
         )
+
+    if chart_only:
+        if gantt_view.empty:
+            st.info("ไม่มีช่วงเวลาแผนหลักเทียบแผนผลิตให้แสดง")
+        return
 
     # กล่องสรุปงานที่ผู้วางแผนควรตัดสินใจและช่วงเวลาที่ซ้อนกัน
     decision_df = summary_view[
@@ -7267,7 +7284,10 @@ nav_options = [
 
 if standalone_only_mode:
     # URL เฉพาะหน้าต้องอยู่หน้าจอที่กำหนดเสมอ แม้ session เดิมเคยเปิดหน้าอื่น
-    if operator_only_mode:
+    if tv_rotation_mode:
+        tv_rotation_index = st.session_state.get("_tv_rotation_index", 0) % len(tv_rotation_views)
+        st.session_state.current_view = tv_rotation_views[tv_rotation_index][0]
+    elif operator_only_mode:
         st.session_state.current_view = "👤 โหมดผู้ปฏิบัติงาน"
     else:
         st.session_state.current_view = (
@@ -7291,7 +7311,74 @@ else:
 # ---------------------------------------------------------
 # VIEW 1: โหมดหน้าเครื่อง
 # ---------------------------------------------------------
-if st.session_state.current_view == "🧪 Admin QC":
+if tv_rotation_mode:
+    @st.fragment(run_every=1)
+    def advance_tv_rotation():
+        deadline = st.session_state.get("_tv_rotation_deadline")
+        if deadline is not None and tpc_auth_time.monotonic() >= deadline:
+            st.session_state.pop("_tv_rotation_deadline", None)
+            st.session_state["_tv_rotation_index"] = (tv_rotation_index + 1) % len(tv_rotation_views)
+            st.rerun(scope="app")
+
+    advance_tv_rotation()
+
+if tv_rotation_mode and tv_rotation_index == 4:
+    render_project_master_dashboard(fetch_jobs_from_supabase(), is_admin=False, read_only=True, chart_only=True)
+
+elif tv_rotation_mode and tv_rotation_index in (2, 3):
+    tv_chart_now = get_bangkok_now()
+    tv_day_start = datetime.combine(tv_chart_now.date(), dtime.min)
+    tv_day_end = tv_day_start + timedelta(days=1)
+    tv_jobs = calculate_production_chain(fetch_jobs_from_supabase(), active_only=True)
+    tv_records = []
+    tv_busy = dict.fromkeys(MACHINE_LIST, 0.0)
+    for _, job in tv_jobs.iterrows():
+        machine = safe_str(job.get("เลือกเครื่องจักร"), "")
+        start = parse_flexible_datetime(job.get("_chain_start"))
+        finish = parse_flexible_datetime(job.get("_chain_finish"))
+        if start is None or finish is None or finish <= start:
+            continue
+        if machine in tv_busy:
+            tv_busy[machine] += get_planned_busy_hours_in_range(
+                start, get_planned_minutes(job) / 60, tv_day_start, tv_day_end
+            )
+        if start < tv_day_end and finish > tv_day_start:
+            tv_records.append({
+                "เครื่องจักร": machine, "เริ่ม": max(start, tv_day_start),
+                "เสร็จ": min(finish, tv_day_end), "แผน": safe_str(job.get("แผนงาน"), "-"),
+                "Drawing": safe_str(job.get("ชื่อ Drawing."), "-"),
+                "สถานะ": safe_str(job.get("สถานะงาน"), "-"),
+            })
+    if tv_rotation_index == 2:
+        st.subheader("📊 ผังเวลาขึ้นงานที่กำลังผลิตและรอคิว (Gantt Chart Timeline)")
+        st.caption(f"ผังงานวันนี้ · {tv_chart_now:%d/%m/%Y}")
+        if tv_records:
+            tv_fig = px.timeline(pd.DataFrame(tv_records), x_start="เริ่ม", x_end="เสร็จ",
+                                 y="เครื่องจักร", color="สถานะ", text="แผน",
+                                 hover_data=["Drawing"], category_orders={"เครื่องจักร": MACHINE_LIST})
+            tv_fig.update_xaxes(range=[tv_day_start, tv_day_end], tickformat="%H:%M")
+            tv_fig.update_yaxes(autorange="reversed")
+        else:
+            tv_fig = None
+            st.info("ไม่มีงานกำลังผลิตหรือรอคิวที่อยู่ในช่วงวันนี้")
+    else:
+        st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
+        capacity = get_work_capacity_between(tv_day_start, tv_day_end)
+        st.caption(f"โหลดตามแผนวันนี้ · {tv_chart_now:%d/%m/%Y} · เวลาตามกะ {capacity:.2f} ชม./เครื่อง")
+        tv_util = pd.DataFrame([
+            {"เครื่องจักร": machine, "อัตราการใช้งาน (%)": round(hours / capacity * 100, 1) if capacity else 0.0}
+            for machine, hours in tv_busy.items()
+        ])
+        tv_fig = px.bar(tv_util, x="อัตราการใช้งาน (%)", y="เครื่องจักร", orientation="h",
+                        text="อัตราการใช้งาน (%)", category_orders={"เครื่องจักร": MACHINE_LIST})
+        tv_fig.update_traces(texttemplate="%{text:.1f}%", textposition="auto")
+        tv_fig.update_yaxes(autorange="reversed")
+        tv_fig.add_vline(x=85, line_dash="dash", line_color="#EF4444")
+    if tv_fig is not None:
+        tv_fig.update_layout(height=610, margin=dict(l=20, r=20, t=10, b=25))
+        st.plotly_chart(tv_fig, use_container_width=True, config={"displayModeBar": False})
+
+elif st.session_state.current_view == "🧪 Admin QC":
     render_people_work_center("QC")
 
 elif st.session_state.current_view == "⚙️ Admin Automation":
@@ -13973,3 +14060,11 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
     """, height=0)
 
     render_production_tv_auto_refresh()
+
+
+# Start the display interval after the selected view has rendered.
+if tv_rotation_mode and "_tv_rotation_deadline" not in st.session_state:
+    st.session_state["_tv_rotation_deadline"] = tpc_auth_time.monotonic() + tv_rotation_views[tv_rotation_index][1]
+elif not tv_rotation_mode:
+    st.session_state.pop("_tv_rotation_deadline", None)
+    st.session_state.pop("_tv_rotation_index", None)
