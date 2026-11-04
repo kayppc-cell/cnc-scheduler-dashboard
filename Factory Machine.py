@@ -7709,10 +7709,15 @@ if tv_rotation_mode:
     @st.fragment(run_every=1)
     def advance_tv_rotation():
         deadline = st.session_state.get("_tv_rotation_deadline")
-        if deadline is not None and tpc_auth_time.monotonic() >= deadline:
+        now = tpc_auth_time.monotonic()
+        if deadline is not None and now >= deadline:
             st.session_state.pop("_tv_rotation_deadline", None)
             st.session_state["_tv_rotation_index"] = (tv_rotation_index + 1) % len(tv_rotation_views)
             st.rerun(scope="app")
+
+        from math import ceil
+        remaining = tv_rotation_views[tv_rotation_index][1] if deadline is None else max(0, ceil(deadline - now))
+        st.markdown(f"**⏱️ หน้า {tv_rotation_index + 1}/{len(tv_rotation_views)} · เปลี่ยนหน้าถัดไปใน {remaining} วินาที**")
 
     advance_tv_rotation()
 
