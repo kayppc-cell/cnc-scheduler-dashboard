@@ -1672,6 +1672,77 @@ def delete_drawing_template(template_id: int) -> tuple[bool, str]:
     except Exception as exc:
         return False, str(exc)
 
+def delete_drawing_templates_bulk(template_ids):
+    """Only remove selected template IDs; report rows actually returned by DELETE."""
+    ids = sorted({int(value) for value in template_ids if int(value) > 0})
+    if not ids:
+        return [], "ไม่ได้เลือก Template"
+    if st.session_state.get("user_role") != "admin":
+        return [], "ต้องเข้าใช้งานด้วยสิทธิ์ Admin"
+    try:
+        headers = get_supabase_headers().copy()
+        headers["Prefer"] = "return=representation"
+        response = requests.delete(
+            st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_drawing_templates",
+            headers=headers, params={"id": "in.(" + ",".join(map(str, ids)) + ")", "select": "id"},
+            timeout=15)
+        fetch_drawing_templates.clear()
+        if response.status_code != 200:
+            return [], "ยังยืนยันผลการลบไม่ได้ กรุณารีเฟรชรายการก่อนลองใหม่"
+        returned = response.json()
+        if not isinstance(returned, list):
+            return [], "ยังยืนยันผลการลบไม่ได้ กรุณารีเฟรชรายการ"
+        removed = sorted({safe_int(row.get("id"), 0) for row in returned} & set(ids))
+        if len(removed) != len(ids):
+            return removed, "บางรายการยังยืนยันการลบไม่ได้ กรุณารีเฟรชและตรวจสิทธิ์ลบ Template ในฐานข้อมูล"
+        return removed, ""
+    except (requests.RequestException, ValueError):
+        fetch_drawing_templates.clear()
+        return [], "การเชื่อมต่อขัดข้อง ยังยืนยันผลการลบไม่ได้ กรุณารีเฟรชรายการก่อนลองใหม่"
+
+
+def render_bulk_drawing_template_delete(templates):
+    feedback = st.session_state.pop("_template_bulk_delete_feedback", None)
+    if feedback:
+        count, error = feedback
+        if count:
+            st.success(f"ลบ Drawing Template สำเร็จ {count} รายการ")
+        if error:
+            st.warning(error)
+    if not templates:
+        return
+    with st.expander("🗑️ เลือกลบ Drawing Template หลายรายการ"):
+        lookup = {safe_int(item.get("id"), 0): item for item in templates if safe_int(item.get("id"), 0) > 0}
+        generation = st.session_state.get("_template_bulk_delete_generation", 0)
+        selection_key = f"template_bulk_delete_selection_{generation}"
+        # Clear IDs removed in another session before creating the widget.
+        if selection_key in st.session_state:
+            st.session_state[selection_key] = [value for value in st.session_state[selection_key] if value in lookup]
+        selected = st.multiselect(
+            "เลือก Template ที่ต้องการลบ (พิมพ์ค้นหาชื่อ Drawing หรือแผนงานได้)",
+            list(lookup), format_func=lambda value: (
+                f"{safe_str(lookup[value].get('plan_code'), '–') or '–'} | "
+                f"{safe_str(lookup[value].get('drawing_name'))}"),
+            key=selection_key)
+        if selected:
+            st.dataframe(pd.DataFrame([{
+                "แผนงาน": lookup[value].get("plan_code"),
+                "Drawing": lookup[value].get("drawing_name"),
+            } for value in selected]), hide_index=True)
+        st.caption("ลบเฉพาะต้นแบบ ใบงานผลิตที่สร้างไว้แล้วจะไม่ถูกส่งคำสั่งลบ")
+        signature = hashlib.sha256(",".join(map(str, sorted(selected))).encode()).hexdigest()[:16]
+        confirm = st.checkbox(
+            f"ยืนยันลบ Template ที่เลือก {len(selected)} รายการ",
+            key=f"template_bulk_delete_confirm_{generation}_{signature}", disabled=not selected)
+        if st.button(f"🗑️ ลบ Template ที่เลือก ({len(selected)} รายการ)",
+                     disabled=not selected or not confirm, key=f"template_bulk_delete_submit_{generation}"):
+            removed, error = delete_drawing_templates_bulk(selected)
+            st.session_state["_template_bulk_delete_feedback"] = (len(removed), error)
+            st.session_state["_template_bulk_delete_generation"] = generation + 1
+            st.session_state.pop("drawing_template_select", None)
+            st.rerun()
+
+
 def template_step_names(template_row: dict) -> list[str]:
     raw_steps = template_row.get("steps", []) if isinstance(template_row, dict) else []
     if isinstance(raw_steps, str):
@@ -9559,6 +9630,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if templates is None:
                     st.warning("ยังไม่พบตาราง cnc_drawing_templates ใน Supabase กรุณารันไฟล์ SQL ที่แนบให้ก่อน")
                 else:
+                    render_bulk_drawing_template_delete(templates)
                     template_map = {safe_str(item.get("drawing_name")): item for item in templates}
                     template_options = ["➕ สร้าง Template ใหม่"] + list(template_map.keys())
                     selected_template_name = st.selectbox(
@@ -9766,6 +9838,16 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     st.session_state[f"normal_material_custom_{qr_key}"] = qr_material if qr_preset == qr_other else ""
                                     st.session_state[f"normal_template_confirm_{normal_form_version}_{qr_id}"] = False
                                     st.success("เติมข้อมูลจาก QR แล้ว ตรวจข้อมูลและเครื่องจักรก่อนบันทึกใบงาน")
+                        normal_plan_key = f"normal_template_plan_{normal_form_version}"
+                        normal_picker_key = f"normal_template_drawing_{normal_form_version}"
+                        def fill_normal_template_plan():
+                            selected = normal_template_map.get(st.session_state.get(normal_picker_key), {})
+                            st.session_state[normal_plan_key] = safe_str(selected.get("plan_code"))
+                        initial_normal_name = st.session_state.get(
+                            normal_picker_key, st.session_state.get(normal_last_drawing_key))
+                        initial_normal_tpl = normal_template_map.get(
+                            initial_normal_name, next(iter(normal_template_map.values()), {}))
+                        st.session_state.setdefault(normal_plan_key, safe_str(initial_normal_tpl.get("plan_code")))
                         n1, n2, n3 = st.columns([1.2, 2, 1])
                         with n1:
                             normal_plan = st.text_input(
@@ -9784,6 +9866,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     if normal_last_drawing in normal_drawing_options else 0
                                 ),
                                 key=f"normal_template_drawing_{normal_form_version}",
+                                on_change=fill_normal_template_plan,
                             )
                         normal_tpl = normal_template_map[normal_template_name]
                         normal_template_id = safe_int(normal_tpl.get("id"), 0)
@@ -10038,6 +10121,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         st.info("ยังไม่มี Drawing Template กรุณาสร้าง Template อย่างน้อย 1 รายการก่อน")
                     else:
                         urgent_template_map = {safe_str(item.get("drawing_name")): item for item in templates}
+                        def fill_urgent_template_plan():
+                            selected = urgent_template_map.get(st.session_state.get("urgent_template_name"), {})
+                            st.session_state["urgent_plan_code"] = safe_str(selected.get("plan_code"))
+                        initial_urgent_tpl = urgent_template_map.get(
+                            st.session_state.get("urgent_template_name"),
+                            next(iter(urgent_template_map.values()), {}))
+                        st.session_state.setdefault("urgent_plan_code", safe_str(initial_urgent_tpl.get("plan_code")))
                         u1, u2, u3 = st.columns([1.2, 2, 1])
                         with u1:
                             urgent_plan = st.text_input("รหัสแผนงาน", key="urgent_plan_code")
@@ -10045,7 +10135,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             urgent_template_name = st.selectbox(
                                 "Drawing Template (เลือกต้นแบบ)",
                                 list(urgent_template_map.keys()),
-                                key="urgent_template_name"
+                                key="urgent_template_name",
+                                on_change=fill_urgent_template_plan
                             )
                         urgent_tpl = urgent_template_map[urgent_template_name]
                         with u3:
