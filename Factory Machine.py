@@ -7770,7 +7770,34 @@ if tv_rotation_mode:
 
     advance_tv_rotation()
 
+def work_calendar_password():
+    try:
+        value = st.secrets.get("TPC_CALENDAR_EDIT_PASSWORD", "")
+        return value if isinstance(value, str) and value.strip() else ""
+    except Exception:
+        return ""
+
+
+def lock_work_calendar():
+    st.session_state.pop("_tpc_calendar_grant", None)
+    st.session_state.pop("_tpc_calendar_draft", None)
+
+
+def work_calendar_is_unlocked():
+    password = work_calendar_password()
+    grant = st.session_state.get("_tpc_calendar_grant")
+    if (st.session_state.get("user_role") == "admin" and password and grant
+            and tpc_auth_time.monotonic() < grant[0]
+            and hmac.compare_digest(grant[1], hashlib.sha256(password.encode()).digest())):
+        return True
+    lock_work_calendar()
+    return False
+
+
 def render_work_calendar_admin(jobs):
+    if st.session_state.get("user_role") != "admin":
+        lock_work_calendar()
+        return
     with st.expander("🗓️ ตั้งค่ากะโรงงานและดูผลกระทบต่อคิว"):
         if not refresh_work_calendar():
             st.info("ยังตั้งค่ากะไม่ได้ กรุณาติดตั้งตารางปฏิทินใน Supabase หรือตรวจการเชื่อมต่อ")
@@ -7788,6 +7815,26 @@ def render_work_calendar_admin(jobs):
         if existing:
             st.dataframe(pd.DataFrame([{"วันเริ่มใช้": f"{d:%d/%m/%Y}", "กะ": admin_labels[m]} for d, m in existing]),
                          hide_index=True)
+        if not work_calendar_is_unlocked():
+            password = work_calendar_password()
+            if not password:
+                st.info("เมนูแก้ไขกะถูกล็อก กรุณาตั้ง TPC_CALENDAR_EDIT_PASSWORD ใน Streamlit Secrets")
+                return
+            with st.form("tpc_calendar_unlock_form", clear_on_submit=True):
+                attempt = st.text_input("รหัสสำหรับแก้ไขกะโรงงาน", type="password")
+                unlock = st.form_submit_button("🔓 ปลดล็อกการตั้งค่ากะ")
+            if not unlock:
+                return
+            if not hmac.compare_digest(attempt.encode(), password.encode()):
+                st.error("รหัสไม่ถูกต้อง")
+                return
+            st.session_state["_tpc_calendar_grant"] = (
+                tpc_auth_time.monotonic() + 15 * 60, hashlib.sha256(password.encode()).digest(),
+            )
+        st.caption("สิทธิ์แก้ไขกะหมดอายุหลังปลดล็อก 15 นาที")
+        if st.button("🔒 ล็อกการตั้งค่ากะ", key="tpc_calendar_lock"):
+            lock_work_calendar()
+            st.rerun()
         with st.form("tpc_calendar_preview_form"):
             mode = st.selectbox("กะที่จะใช้", [m for m in CALENDAR_LABELS if m != previous],
                                 format_func=admin_labels.get)
@@ -7853,6 +7900,9 @@ def render_work_calendar_admin(jobs):
                 return
             try:
                 record = {"effective_date": day.isoformat(), "mode": mode}
+                if not work_calendar_is_unlocked():
+                    st.error("สิทธิ์แก้ไขกะหมดอายุ กรุณาปลดล็อกใหม่")
+                    return
                 response = calendar_request("POST", json=record)
                 response.raise_for_status()
                 if not any(all(row.get(k) == v for k, v in record.items()) for row in response.json()):
@@ -9341,6 +9391,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True):
                 lock_timing_editors()
+                lock_work_calendar()
                 st.session_state.user_role = None
                 st.rerun()
 
@@ -12727,6 +12778,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
         with c_logout:
             if st.button("🚪 ออกจากระบบ", use_container_width=True, key="btn_logout_monthly"):
                 lock_timing_editors()
+                lock_work_calendar()
                 st.session_state.user_role = None
                 st.rerun()
 
