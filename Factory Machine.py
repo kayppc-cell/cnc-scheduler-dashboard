@@ -6294,31 +6294,41 @@ def calculate_operator_person_chain(rows, person, now, position_field="operator_
     active.sort(key=order)
     if sum(row.get("status") == "🟦 กำลังทำ" for row in active) > 1:
         raise ValueError("พบผู้ปฏิบัติงานมีงานกำลังทำมากกว่า 1 คิว กรุณาตรวจสถานะก่อนจัดเวลาใหม่")
-    cursor = get_next_valid_work_time(now)
+    cursor = None
+    effective = next((day for day, _ in reversed(calendar_changes()) if day <= now.date()), None)
+    effective_at = datetime.combine(effective, dtime()) if effective else None
     updates = []
     for rank, row in enumerate(active):
+        planned = first_valid_datetime(row.get("planned_start_at"))
+        due = first_valid_datetime(row.get("due_at"))
         hours = safe_float(row.get("estimated_hours"), safe_float(row.get("planned_hours"), 0.0))
         if hours <= 0:
-            start = parse_flexible_datetime(row.get("planned_start_at"))
-            finish = parse_flexible_datetime(row.get("due_at"))
-            hours = get_work_seconds_between(start, finish) / 3600.0
+            hours = get_work_seconds_between(planned, due) / 3600.0
         if hours <= 0:
             raise ValueError(f"ใบงาน #{safe_int(row.get('id'), 0)} ไม่มีเวลาแผน กรุณากำหนดก่อนจัดคิว")
-        started = parse_flexible_datetime(row.get("actual_start"))
-        spent = 0.0
-        if started is not None:
-            hold = parse_flexible_datetime(row.get("hold_started_at"))
-            stop = min(hold, now) if row.get("status") == "🟨 พักงาน" and hold is not None else now
-            spent = max(0.0, get_work_seconds_between(started, stop) - safe_float(row.get("paused_seconds"), 0.0))
-        remaining = max(0.0, hours - spent / 3600.0)
-        forecast_start = cursor
-        _, forecast_finish = add_work_time_with_shift(forecast_start, remaining)
-        # Anchor running work to its real start, including work started ahead of the old plan.
-        plan_start = (started or forecast_start) if row.get("status") == "🟦 กำลังทำ" else forecast_start
+        started = first_valid_datetime(row.get("actual_start"))
+        hold = first_valid_datetime(row.get("hold_started_at"))
+        running = row.get("status") == "🟦 กำลังทำ"
+        paused = max(0.0, safe_float(row.get("paused_seconds"), 0.0))
+        if running and started is not None:
+            plan_start = started
+            _, forecast_finish = add_work_time_with_shift(started, hours + paused / 3600.0)
+        else:
+            anchor = cursor or planned or now
+            if effective_at is not None:
+                anchor = max(anchor, effective_at)
+            # คิวที่พักจะไม่นับช่วงรอ Resume เป็นเวลาทำงาน
+            if started is not None and hold is not None and row.get("status") == "🟨 พักงาน":
+                anchor = max(anchor, hold)
+                hours_done = get_net_actual_work_seconds(started, hold, paused) / 3600.0
+            else:
+                hours_done = 0.0
+            plan_start = get_next_valid_work_time(anchor)
+            _, forecast_finish = add_work_time_with_shift(plan_start, max(0.0, hours - hours_done))
         updates.append({"id": safe_int(row.get("id"), 0), position_field: rank, "estimated_hours": hours,
                         "planned_start_at": plan_start.strftime("%Y-%m-%d %H:%M:%S"),
                         "due_at": forecast_finish.strftime("%Y-%m-%d %H:%M:%S")})
-        cursor = forecast_finish
+        cursor = max(forecast_finish, now) if running else forecast_finish
     return updates
 
 
@@ -6821,6 +6831,19 @@ def render_department_operator_mode(training=False):
         active_tasks["training_queue_position"] = range(len(active_tasks))
     active_tasks = active_tasks.sort_values(
         [order_column, "_queue_plan", "_queue_due", "id"], na_position="last").reset_index(drop=True)
+    # คำนวณเฉพาะเวลาแสดงผล ไม่เขียนทับกำหนดเดิมหรือเวลาเริ่ม/จบจริง
+    try:
+        queue_forecasts = {
+            item["id"]: item for item in calculate_operator_person_chain(
+                active_tasks.to_dict("records"), selected_operator, operator_now, order_column)
+        }
+    except ValueError as exc:
+        st.warning(str(exc))
+        queue_forecasts = {}
+    if len(queue_forecasts) == len(active_tasks):
+        display_rank = {task_id: rank for rank, task_id in enumerate(queue_forecasts)}
+        active_tasks = active_tasks.assign(_display_rank=active_tasks["id"].map(lambda value: display_rank.get(safe_int(value))))
+        active_tasks = active_tasks.sort_values("_display_rank", kind="stable").reset_index(drop=True)
     running = active_tasks[active_tasks["status"].astype(str).str.contains("กำลังทำ", na=False)]
     if running.empty:
         choices = active_tasks["id"].apply(safe_int).tolist()
@@ -6863,11 +6886,12 @@ def render_department_operator_mode(training=False):
     for queue_index, (_, queue_task) in enumerate(active_tasks.iterrows(), start=1):
         task_id = safe_int(queue_task.get("id"), 0)
         task_status = safe_str(queue_task.get("status"), "🟧 รอรับงาน")
-        task_due = parse_flexible_datetime(queue_task.get("due_at"))
+        forecast = queue_forecasts.get(task_id, queue_task)
+        task_due = parse_flexible_datetime(forecast.get("due_at"))
         is_overdue = task_due is not None and task_due < operator_now
         is_current = task_id == current_task_id
         department_label = "QC" if safe_str(queue_task.get("department")) == "QC" else "Automation"
-        planned_text = parse_flexible_datetime(queue_task.get("planned_start_at"))
+        planned_text = parse_flexible_datetime(forecast.get("planned_start_at"))
         planned_text = planned_text.strftime("%d/%m/%Y %H:%M") if planned_text else "-"
         due_text = task_due.strftime("%d/%m/%Y %H:%M") if task_due else "-"
         urgency = get_department_urgency_label(queue_task)
@@ -6893,7 +6917,7 @@ def render_department_operator_mode(training=False):
           </div>
           <div style="margin-top:8px;"><b>🏢 แผนก:</b> {department_label} | <b>🧰 ประเภทงาน:</b> {html.escape(safe_str(queue_task.get('work_type'), '-'))}</div>
           <div><b>📌 แผน:</b> {html.escape(safe_str(queue_task.get('plan_code'), '-'))} | <b>📄 Drawing:</b> {html.escape(safe_str(queue_task.get('drawing_name'), '-'))}</div>
-          <div><b>🗓️ กำหนดเริ่ม:</b> {planned_text} | <b>🏁 กำหนดเสร็จ:</b> {due_text}</div>
+          <div><b>🗓️ เริ่มตามคิวปัจจุบัน:</b> {planned_text} | <b>🏁 จบตามคิวปัจจุบัน:</b> {due_text}</div>
           <div style="margin-top:6px;"><b>📝 รายละเอียด:</b> {html.escape(safe_str(queue_task.get('details'), '-'))}</div>
           <div style="margin-top:9px;font-weight:800;color:{'#047857' if is_current else '#64748B'};">{lock_text}</div>
         </div>
