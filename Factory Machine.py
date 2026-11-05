@@ -7779,13 +7779,18 @@ def render_work_calendar_admin(jobs):
         today = get_bangkok_now().date()
         first_day = max(today, existing[-1][0] if existing else today) + timedelta(days=1)
         previous = existing[-1][1] if existing else "busy"
-        st.caption(calendar_schedule_label())
+        admin_labels = {**CALENDAR_LABELS, "normal": "กะ 17:00 (ไม่มีโอที) หยุดเสาร์-อาทิตย์"}
+        st.markdown(f"**กะปัจจุบัน:** {admin_labels[calendar_mode_for_date(today)]}")
+        upcoming = next(((d, m) for d, m in existing if d > today), None)
+        if upcoming:
+            d, m = upcoming
+            st.caption(f"เปลี่ยนเป็น {admin_labels[m]} วันที่ {d:%d/%m/%Y}")
         if existing:
-            st.dataframe(pd.DataFrame([{"วันเริ่มใช้": f"{d:%d/%m/%Y}", "กะ": CALENDAR_LABELS[m]} for d, m in existing]),
+            st.dataframe(pd.DataFrame([{"วันเริ่มใช้": f"{d:%d/%m/%Y}", "กะ": admin_labels[m]} for d, m in existing]),
                          hide_index=True)
         with st.form("tpc_calendar_preview_form"):
             mode = st.selectbox("กะที่จะใช้", [m for m in CALENDAR_LABELS if m != previous],
-                                format_func=CALENDAR_LABELS.get)
+                                format_func=admin_labels.get)
             day = st.date_input("วันเริ่มใช้ (เวลาไทย 00:00 น.)", value=first_day, min_value=first_day,
                                 format="DD/MM/YYYY")
             preview = st.form_submit_button("ดูผลกระทบก่อนบันทึก")
@@ -7798,7 +7803,7 @@ def render_work_calendar_admin(jobs):
         if reviewed != existing or day < first_day:
             st.warning("ปฏิทินเปลี่ยนแล้ว กรุณาดูผลกระทบอีกครั้ง")
             return
-        st.write(f"**ตัวอย่าง: {CALENDAR_LABELS[mode]} เริ่ม {day:%d/%m/%Y}**")
+        st.write(f"**ตัวอย่าง: {admin_labels[mode]} เริ่ม {day:%d/%m/%Y}**")
         anchor = datetime.combine(day, dtime())
         before = calculate_production_chain(jobs, as_of=anchor)
         token = _calendar_preview.set(existing + ((day, mode),))
@@ -7863,7 +7868,7 @@ def render_work_calendar_admin(jobs):
                 return
             fetch_calendar_changes.clear()
             st.session_state.pop("_tpc_calendar_draft", None)
-            st.session_state["_tpc_calendar_saved"] = f"บันทึก {CALENDAR_LABELS[mode]} เริ่ม {day:%d/%m/%Y} แล้ว"
+            st.session_state["_tpc_calendar_saved"] = f"บันทึก {admin_labels[mode]} เริ่ม {day:%d/%m/%Y} แล้ว"
             st.rerun()
 
 
