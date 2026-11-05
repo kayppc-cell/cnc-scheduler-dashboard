@@ -2,7 +2,10 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta, time as dtime
+from datetime import date, datetime, timedelta, time as dtime
+from contextvars import ContextVar
+
+_calendar_preview = ContextVar("tpc_calendar_preview", default=None)
 import zoneinfo
 import os
 import base64
@@ -288,25 +291,80 @@ def to_bangkok_epoch_ms(dt_val):
     except Exception:
         return int((pd.to_datetime(dt_p) - pd.Timestamp("1970-01-01") - pd.Timedelta(hours=7)).total_seconds() * 1000)
 
+CALENDAR_LABELS = {"busy": "กะเดิม (มีโอที)", "normal": "กะ 17:00 (ไม่มีโอที)"}
+
+
+def calendar_changes():
+    override = _calendar_preview.get()
+    return override if override is not None else st.session_state.get("_tpc_calendar", ())
+
+
+def calendar_mode_for_date(day):
+    return next((mode for effective, mode in reversed(calendar_changes()) if effective <= day), "busy")
+
+
+def calendar_schedule_label():
+    today = get_bangkok_now().date()
+    current = calendar_mode_for_date(today)
+    hours = ("จ.–ศ. 08:30–17:00 | หยุดเสาร์–อาทิตย์" if current == "normal"
+             else "จ.–ศ. 08:30–20:00 (พักเย็น 17:00–17:30) | ส. 08:30–17:00 | หยุดอาทิตย์")
+    upcoming = next(((day, mode) for day, mode in calendar_changes() if day > today), None)
+    if upcoming:
+        hours += f" | เปลี่ยนเป็น {CALENDAR_LABELS[upcoming[1]]} วันที่ {upcoming[0]:%d/%m/%Y}"
+    return hours
+
+
+def calendar_timer_data():
+    epoch = date(1970, 1, 1)
+    return html.escape(json.dumps([[(day-epoch).days, mode] for day, mode in calendar_changes()]), quote=True)
+
+
+def calendar_request(method="GET", **kwargs):
+    read_key = st.secrets["SUPABASE_KEY"]
+    key = (st.secrets.get("TPC_CALENDAR_WRITE_KEY") or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY") or read_key) if method == "POST" else read_key
+    headers = {"apikey": key, "Content-Type": "application/json", "Prefer": "return=representation"}
+    if not key.startswith("sb_"):
+        headers["Authorization"] = f"Bearer {key}"
+    return requests.request(method, st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/tpc_work_calendar_changes",
+                            headers=headers, timeout=5, **kwargs)
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def fetch_calendar_changes():
+    response = calendar_request(params={"select": "effective_date,mode", "order": "effective_date.asc"})
+    if response.status_code == 404 and response.json().get("code") in {"PGRST205", "42P01"}:
+        return (), False
+    response.raise_for_status()
+    rows = tuple((date.fromisoformat(row["effective_date"]), row["mode"]) for row in response.json())
+    if any(mode not in CALENDAR_LABELS for _, mode in rows):
+        raise ValueError("Invalid calendar mode")
+    return rows, True
+
+
+def refresh_work_calendar():
+    try:
+        changes, installed = fetch_calendar_changes()
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        if "_tpc_calendar" not in st.session_state:
+            st.error("อ่านปฏิทินกะโรงงานไม่ได้ กรุณารีเฟรชก่อนใช้งาน")
+            st.stop()
+        st.warning("อ่านปฏิทินล่าสุดไม่ได้ กำลังใช้ค่าที่โหลดสำเร็จครั้งล่าสุด")
+        return False
+    st.session_state["_tpc_calendar"] = changes
+    return installed
+
+
 def get_day_working_windows(dt_date):
     weekday = dt_date.weekday()
-    if weekday == 6:
+    mode = calendar_mode_for_date(dt_date)
+    if weekday == 6 or (weekday == 5 and mode == "normal"):
         return []
-    elif weekday == 5:
-        return [
-            (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
-            (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
-            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(15, 0))),
-            (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0)))
-        ]
-    else:
-        return [
-            (datetime.combine(dt_date, dtime(8, 30)), datetime.combine(dt_date, dtime(10, 0))),
-            (datetime.combine(dt_date, dtime(10, 10)), datetime.combine(dt_date, dtime(12, 0))),
-            (datetime.combine(dt_date, dtime(13, 0)), datetime.combine(dt_date, dtime(15, 0))),
-            (datetime.combine(dt_date, dtime(15, 10)), datetime.combine(dt_date, dtime(17, 0))),
-            (datetime.combine(dt_date, dtime(17, 30)), datetime.combine(dt_date, dtime(20, 0)))
-        ]
+    times = [(510, 600), (610, 720), (780, 900), (910, 1020)]
+    if weekday < 5 and mode == "busy":
+        times.append((1050, 1200))
+    midnight = datetime.combine(dt_date, dtime())
+    return [(midnight + timedelta(minutes=a), midnight + timedelta(minutes=b)) for a, b in times]
+
 
 def get_next_valid_work_time(dt: datetime) -> datetime:
     cur_date = dt.date()
@@ -736,7 +794,7 @@ def production_not_before(row):
         return requested
     return None
 
-def calculate_production_chain(source_df, active_only=True, preserve_input_order=False):
+def calculate_production_chain(source_df, active_only=True, preserve_input_order=False, as_of=None):
     """คำนวณลูกโซ่ Production จากกฎกลางชุดเดียวของทั้งระบบ
 
     กฎหลัก:
@@ -790,7 +848,9 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
         sort_columns += ["_chain_order_time", "_chain_queue_rank", "ID"]
     jobs = jobs.sort_values(sort_columns, kind="stable", na_position="last").reset_index(drop=True)
 
-    now_dt = get_bangkok_now().replace(tzinfo=None)
+    now_dt = as_of or get_bangkok_now().replace(tzinfo=None)
+    effective = next((day for day, _ in reversed(calendar_changes()) if day <= now_dt.date()), None)
+    effective_at = datetime.combine(effective, dtime()) if effective else None
     machine_available = {}
     chain_starts, chain_finishes = [], []
     for _, row in jobs.iterrows():
@@ -815,11 +875,21 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
             machine_available.setdefault(machine_name, None)
             continue
 
+        if effective_at and "รอคิว" in status_value:
+            start_dt = get_next_valid_work_time(max(start_dt, effective_at))
         if not is_live:
             not_before = production_not_before(row)
             if not_before is not None:
                 start_dt = get_next_valid_work_time(max(start_dt, not_before))
         _, finish_dt = add_work_time_with_shift(start_dt, get_planned_minutes(row) / 60.0)
+        if effective_at and is_live and actual_start is not None and not pd.isna(actual_start):
+            paused = max(0.0, safe_float(row.get("เวลาพักสะสม (วินาที)"), 0.0))
+            hold = first_valid_datetime(row.get("เริ่มพักจริง"), row.get("hold_started_at"))
+            if hold is not None:
+                paused += get_work_seconds_between(max(hold, actual_start), now_dt)
+            remaining = max(0.0, get_planned_minutes(row) * 60 - get_net_actual_work_seconds(actual_start, now_dt, paused))
+            if remaining > 0:
+                _, finish_dt = add_work_time_with_shift(max(now_dt, start_dt), remaining / 3600)
         # แยก "เวลาจบตามแผนของแถว" ออกจาก "เวลาที่เครื่องพร้อมรับคิวถัดไป"
         # งานที่ยังรันและเลยแผนแล้วต้องไม่แสดงเวลาปัจจุบันเป็นเวลาจบตามแผน
         availability_finish = max(finish_dt, now_dt) if is_live else finish_dt
@@ -1382,7 +1452,8 @@ tv_only_mode = tv_production_only_mode or tv_department_only_mode or tv_rotation
 operator_only_mode = tv_link_view in {"operator", "operator-mode", "worker", "work-operator"}
 standalone_only_mode = tv_only_mode or operator_only_mode
 
-header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>Timing Process Control (TPC)</h1><p>จ.-ศ. (08:30-20:00 น.) | ส. (08:30-17:00 น.) | เบรกเช้า 10:00-10:10 น. | พักเที่ยง 12:00-13:00 น. | เบรกบ่าย 15:00-15:10 น. | หยุดวันอาทิตย์</p></div></div>'''
+refresh_work_calendar()
+header_content = f'''<div class="main-header">{logo_html}<div class="header-text"><h1>Timing Process Control (TPC)</h1><p>{calendar_schedule_label()} | เบรกเช้า 10:00-10:10 น. | พักเที่ยง 12:00-13:00 น. | เบรกบ่าย 15:00-15:10 น.</p></div></div>'''
 if not standalone_only_mode:
     st.markdown(header_content, unsafe_allow_html=True)
 
@@ -7600,29 +7671,7 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
             else:
                 st.warning("⚠️ ไม่มีคิวงานในกลุ่มสถานีที่เลือกนี้")
 
-            st.markdown("""
-            <div class="schedule-info-box">
-                <div class="schedule-pill">
-                    <span style="font-size:16px;">⏱️</span>
-                    <span><b>จันทร์ – ศุกร์:</b> 08:30 – 12:00 น. และ 13:00 – 20:00 น. (พักเย็น 17:00 – 17:30 น.)</span>
-                </div>
-                <div class="schedule-pill">
-                    <span style="font-size:16px;">⏱️</span>
-                    <span><b>วันเสาร์:</b> 08:30 – 12:00 น. และ 13:00 – 17:00 น. (7.17 ชม./วัน)</span>
-                </div>
-                <div class="schedule-pill">
-                    <span style="font-size:16px;">☕</span>
-                    <span style="color:#D97706;"><b>เบรกเช้า/บ่าย (จ.-ส.):</b> 10:00 – 10:10 น. และ 15:00 – 15:10 น.</span>
-                </div>
-                <div class="schedule-pill">
-                    <span style="font-size:16px;">🍱</span>
-                    <span style="color:#D97706;"><b>พักเที่ยง:</b> 12:00 – 13:00 น.</span>
-                </div>
-                <div class="schedule-pill">
-                    <span style="color:#DC2626;"><b>วันอาทิตย์:</b> หยุดทำการ</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.caption(calendar_schedule_label() + " | เบรก 10:00–10:10, 12:00–13:00 และ 15:00–15:10")
 
             st.divider()
     elif show_gantt:
@@ -7721,9 +7770,107 @@ if tv_rotation_mode:
 
     advance_tv_rotation()
 
+def render_work_calendar_admin(jobs):
+    with st.expander("🗓️ ตั้งค่ากะโรงงานและดูผลกระทบต่อคิว"):
+        if not refresh_work_calendar():
+            st.info("ยังตั้งค่ากะไม่ได้ กรุณาติดตั้งตารางปฏิทินใน Supabase หรือตรวจการเชื่อมต่อ")
+            return
+        existing = calendar_changes()
+        today = get_bangkok_now().date()
+        first_day = max(today, existing[-1][0] if existing else today) + timedelta(days=1)
+        previous = existing[-1][1] if existing else "busy"
+        st.caption(calendar_schedule_label())
+        if existing:
+            st.dataframe(pd.DataFrame([{"วันเริ่มใช้": f"{d:%d/%m/%Y}", "กะ": CALENDAR_LABELS[m]} for d, m in existing]),
+                         hide_index=True)
+        with st.form("tpc_calendar_preview_form"):
+            mode = st.selectbox("กะที่จะใช้", [m for m in CALENDAR_LABELS if m != previous],
+                                format_func=CALENDAR_LABELS.get)
+            day = st.date_input("วันเริ่มใช้ (เวลาไทย 00:00 น.)", value=first_day, min_value=first_day,
+                                format="DD/MM/YYYY")
+            preview = st.form_submit_button("ดูผลกระทบก่อนบันทึก")
+        if preview:
+            st.session_state["_tpc_calendar_draft"] = (day, mode, existing)
+        draft = st.session_state.get("_tpc_calendar_draft")
+        if not draft:
+            return
+        day, mode, reviewed = draft
+        if reviewed != existing or day < first_day:
+            st.warning("ปฏิทินเปลี่ยนแล้ว กรุณาดูผลกระทบอีกครั้ง")
+            return
+        st.write(f"**ตัวอย่าง: {CALENDAR_LABELS[mode]} เริ่ม {day:%d/%m/%Y}**")
+        anchor = datetime.combine(day, dtime())
+        before = calculate_production_chain(jobs, as_of=anchor)
+        token = _calendar_preview.set(existing + ((day, mode),))
+        try:
+            after = calculate_production_chain(jobs, as_of=anchor)
+        finally:
+            _calendar_preview.reset(token)
+
+        masters, masters_ready = fetch_plan_masters()
+        if not masters_ready:
+            st.warning("อ่านวันส่งลูกค้าไม่ได้ จึงยังประเมินความเสี่ยงเทียบวันส่งไม่ได้")
+        due_by_plan = {
+            safe_str(row.get("plan_code")): first_valid_datetime(row.get("customer_due"))
+            for _, row in masters.iterrows()
+        }
+        rows = []
+        if not after.empty:
+            old_by_id = before.set_index("ID")
+            for _, row in after.iterrows():
+                new_finish = first_valid_datetime(row.get("_chain_finish"))
+                old_finish = first_valid_datetime(old_by_id.at[row["ID"], "_chain_finish"])
+                new_start = first_valid_datetime(row.get("_chain_start"))
+                old_start = first_valid_datetime(old_by_id.at[row["ID"], "_chain_start"])
+                plan = safe_str(row.get("แผนงาน"))
+                due = due_by_plan.get(plan)
+                late = new_finish is not None and due is not None and new_finish > due
+                if old_finish != new_finish or old_start != new_start or late:
+                    def fmt(value):
+                        return value.strftime("%d/%m/%Y %H:%M") if value is not None else "–"
+                    rows.append({
+                        "เครื่อง": row.get("เลือกเครื่องจักร"), "แผน": plan, "Drawing": row.get("ชื่อ Drawing."),
+                        "เริ่มเดิม": fmt(old_start), "เริ่มใหม่": fmt(new_start),
+                        "จบเดิม": fmt(old_finish), "จบใหม่": fmt(new_finish), "วันส่งเดิม": fmt(due),
+                        "เทียบวันส่ง": "⚠️ เสี่ยงเลยวันส่ง" if late else ("อยู่ในกำหนด" if due and new_finish else "–"),
+                    })
+        if rows:
+            st.dataframe(pd.DataFrame(rows), hide_index=True)
+        else:
+            st.info("ไม่พบคิวที่เปลี่ยนเวลา หรือเสี่ยงเลยวันส่งจากข้อมูลปัจจุบัน")
+        st.caption("เวลาจบเป็นค่าคาดการณ์จากคิวปัจจุบัน วันส่งลูกค้าและประวัติงานที่เสร็จแล้วจะคงเดิม")
+        draft_key = f"{day}:{mode}:{len(existing)}"
+        confirmed = st.checkbox("ยืนยันใช้กะตามวันที่ในพรีวิว", key=f"tpc_cal_confirm:{draft_key}")
+        if st.button("บันทึกกะโรงงาน", disabled=not confirmed, key=f"tpc_cal_save:{draft_key}"):
+            fetch_calendar_changes.clear()
+            if not refresh_work_calendar() or calendar_changes() != reviewed:
+                st.warning("อ่านหรือยืนยันปฏิทินล่าสุดไม่ได้ กรุณาพรีวิวใหม่")
+                return
+            try:
+                record = {"effective_date": day.isoformat(), "mode": mode}
+                response = calendar_request("POST", json=record)
+                response.raise_for_status()
+                if not any(all(row.get(k) == v for k, v in record.items()) for row in response.json()):
+                    st.error("ยังยืนยันการบันทึกไม่ได้ กรุณารีเฟรชและตรวจประวัติกะก่อนกดอีกครั้ง")
+                    return
+            except requests.HTTPError as exc:
+                code = exc.response.status_code
+                st.error("บัญชีเชื่อมต่อไม่มีสิทธิ์บันทึกกะ กรุณาตรวจ Streamlit Secrets" if code in (401, 403)
+                         else "บันทึกกะไม่ได้ กรุณาตรวจวันที่และพรีวิวใหม่")
+                return
+            except (requests.RequestException, ValueError):
+                st.error("ยังยืนยันการบันทึกไม่ได้ กรุณารีเฟรชและตรวจประวัติกะก่อนกดอีกครั้ง")
+                return
+            fetch_calendar_changes.clear()
+            st.session_state.pop("_tpc_calendar_draft", None)
+            st.session_state["_tpc_calendar_saved"] = f"บันทึก {CALENDAR_LABELS[mode]} เริ่ม {day:%d/%m/%Y} แล้ว"
+            st.rerun()
+
+
 if tv_rotation_mode and tv_rotation_index == 4:
     @st.fragment(run_every=10)
     def render_tv_master_chart():
+        refresh_work_calendar()
         render_project_master_dashboard(fetch_jobs_from_supabase(), is_admin=False, read_only=True, chart_only=True)
 
     render_tv_master_chart()
@@ -7731,6 +7878,7 @@ if tv_rotation_mode and tv_rotation_index == 4:
 elif tv_rotation_mode and tv_rotation_index in (2, 3):
     @st.fragment(run_every=10)
     def render_tv_production_charts():
+        refresh_work_calendar()
         jobs = fetch_jobs_from_supabase()
         if jobs.empty:
             st.info("ยังไม่มีข้อมูลคิวงานสำหรับแสดงกราฟ")
@@ -7897,7 +8045,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 <div class="shop-live-banner shop-live-running">
                     <div style="display:flex; align-items:center; gap:10px;">
                         <span class="tv-pulse-dot"></span>
-                        <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ Step ปัจจุบัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
+                        <span>🟢 <b>{selected_m}: กำลังรันงานอยู่</b> (เริ่ม: {st_txt} | ⏱️ เดินสุทธิ Step ปัจจุบัน: <span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{banner_paused_seconds}" data-base-work-seconds="{banner_base_work_seconds}" data-render-epoch="{banner_render_epoch}" data-work-calendar="{calendar_timer_data()}" style="font-family:monospace; font-weight:900; font-size:15px; color:#065F46;">00:00:00</span>)</span>
                     </div>
                     <div style="font-size:12.5px; opacity:0.9;">
                         📌 <b>แผนงาน:</b> {r_cur.get('แผนงาน', '-')} | 📄 <b>Drawing:</b> {r_cur.get('ชื่อ Drawing.', '-')}
@@ -8473,7 +8621,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         step_render_now = get_bangkok_now().replace(tzinfo=None)
                         step_base_work_seconds = int(get_net_actual_work_seconds(st_parsed, step_render_now, current_step_paused)) if st_parsed is not None else 0
                         step_render_epoch = to_bangkok_epoch_ms(step_render_now)
-                        st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' data-base-work-seconds='{step_base_work_seconds}' data-render-epoch='{step_render_epoch}' style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
+                        st.caption(f"""**Step ปัจจุบัน {current_step_index + 1}/{len(tracked_steps)}:** <span style='color:#059669; font-weight:800; font-size:14px;'>{current_step_name} — เริ่ม: {start_txt} | ⏱️ เวลา Step: <span class='pes-live-timer' data-start-epoch='{step_start_epoch}' data-paused-seconds='{int(current_step_paused)}' data-base-work-seconds='{step_base_work_seconds}' data-render-epoch='{step_render_epoch}' data-work-calendar="{calendar_timer_data()}" style='font-family:monospace; font-size:16px; font-weight:900; color:#047857;'>00:00:00</span></span>""", unsafe_allow_html=True)
                         if is_running_overdue:
                             st.error(f"🚨 งานนี้กำลังผลิตและเกินเวลาจบตามแผนแล้ว {overdue_minutes // 60} ชม. {overdue_minutes % 60} นาที")
                     elif is_step_hold:
@@ -9110,9 +9258,16 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
             const dayMs = 86400000;
             let dayStart = Math.floor((startTs + offset) / dayMs) * dayMs - offset;
             let workMs = 0;
+            const calendar = JSON.parse(el.getAttribute('data-work-calendar') || '[]');
             for (; dayStart < endTs; dayStart += dayMs) {
                 const day = new Date(dayStart + offset).getUTCDay();
-                const windows = day === 0 ? [] : (day === 6
+                let mode = 'busy';
+                const dayNumber = (dayStart + offset) / dayMs;
+                for (const change of calendar) {
+                    if (change[0] > dayNumber) break;
+                    mode = change[1];
+                }
+                const windows = day === 0 || (day === 6 && mode === 'normal') ? [] : (day === 6 || mode === 'normal' 
                     ? [[510,600],[610,720],[780,900],[910,1020]]
                     : [[510,600],[610,720],[780,900],[910,1020],[1050,1200]]);
                 windows.forEach(w => {
@@ -9187,6 +9342,11 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
         df_db = fetch_jobs_from_supabase()
 
         if is_admin:
+            saved_calendar = st.session_state.pop("_tpc_calendar_saved", None)
+            if saved_calendar:
+                st.success(saved_calendar)
+            render_work_calendar_admin(df_db)
+
             @st.fragment
             def render_waiting_start_requirement():
                 if not timing_editors_are_unlocked():
@@ -9453,12 +9613,10 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     else:
                         st.warning(created_feedback["message"])
                 with st.expander("📝 สร้างใบงาน Production จาก Drawing Template", expanded=False):
-                    if templates is None:
-                        st.warning("กรุณาสร้างตาราง Template ใน Supabase ก่อน")
-                    elif not templates:
-                        st.info("ยังไม่มี Drawing Template กรุณาสร้าง Template อย่างน้อย 1 รายการก่อน")
-                    else:
-                        normal_template_map = {safe_str(item.get("drawing_name")): item for item in templates}
+                    with st.container():
+                        normal_no_template = "— สร้างโดยไม่ใช้ Template —"
+                        normal_template_map = {safe_str(item.get("drawing_name")): item for item in (templates or [])}
+                        normal_template_map[normal_no_template] = {}
                         normal_form_version_key = "normal_template_job_form_version"
                         normal_last_machine_key = "normal_template_last_machine"
                         normal_last_drawing_key = "normal_template_last_drawing"
@@ -9477,15 +9635,20 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             else:
                                 _, qr_plan, qr_drawing, qr_qty_text, qr_material = qr_fields
                                 qr_qty = int(qr_qty_text) if re.fullmatch(r"[0-9]{1,5}", qr_qty_text) else 0
-                                matches = [item for item in templates
+                                matches = [item for item in (templates or [])
                                            if safe_str(item.get("drawing_name")).casefold() == qr_drawing.casefold()]
-                                if not qr_plan or not qr_material or not 1 <= qr_qty <= 10000:
-                                    st.error("QR ต้องมีรหัสแผน วัสดุ และจำนวน 1–10,000 ชิ้น")
-                                elif len(matches) != 1:
-                                    st.error("ไม่พบ Drawing Template ที่ตรงกัน หรือมีชื่อซ้ำ กรุณาตรวจรายการ Template")
+                                if not matches:
+                                    qr_base = re.sub(r"\s+Unit\s+[0-9]+$", "", qr_drawing, flags=re.IGNORECASE)
+                                    if qr_base != qr_drawing:
+                                        matches = [item for item in (templates or [])
+                                                   if safe_str(item.get("drawing_name")).strip().casefold() == qr_base.casefold()]
+                                if not qr_plan or not qr_drawing or not qr_material or not 1 <= qr_qty <= 10000:
+                                    st.error("QR ต้องมีรหัสแผน เลข Drawing วัสดุ และจำนวน 1–10,000 ชิ้น")
+                                elif len(matches) > 1:
+                                    st.error("พบ Drawing Template ชื่อซ้ำ กรุณาตรวจรายการก่อนเติมข้อมูล")
                                 else:
-                                    qr_name = safe_str(matches[0].get("drawing_name"))
-                                    qr_id = safe_int(matches[0].get("id"), 0)
+                                    qr_name = safe_str(matches[0].get("drawing_name")) if matches else normal_no_template
+                                    qr_id = safe_int(matches[0].get("id"), 0) if matches else 0
                                     qr_key = f"{normal_form_version}_{qr_id}_{qr_name}"
                                     qr_other = "อื่น ๆ (พิมพ์เอง)"
                                     qr_preset = next((item for item in MATERIAL_OPTIONS
@@ -9496,6 +9659,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                     st.session_state[f"normal_drawing_edit_{qr_key}"] = qr_drawing
                                     st.session_state[f"normal_material_select_{qr_key}"] = qr_preset
                                     st.session_state[f"normal_material_custom_{qr_key}"] = qr_material if qr_preset == qr_other else ""
+                                    st.session_state[f"normal_template_confirm_{normal_form_version}_{qr_id}"] = False
                                     st.success("เติมข้อมูลจาก QR แล้ว ตรวจข้อมูลและเครื่องจักรก่อนบันทึกใบงาน")
                         n1, n2, n3 = st.columns([1.2, 2, 1])
                         with n1:
@@ -9529,7 +9693,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                         normal_drawing = st.text_input(
                             "Drawing (แก้ไขชื่อหรือพิมพ์เพิ่มเติมได้)",
-                            value=normal_template_name,
+                            value="" if normal_template_name == normal_no_template else normal_template_name,
                             key=f"normal_drawing_edit_{normal_form_version}_{normal_template_id}_{normal_template_name}",
                             help="แก้เฉพาะใบงาน Production ที่กำลังสร้าง ไม่เปลี่ยนชื่อ Drawing Template ต้นฉบับ",
                         ).strip()
@@ -9607,7 +9771,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         normal_chain_start = normal_append_ready_at(normal_machine, normal_requested_start, df_db)
                         normal_minutes = normal_setup_mins + normal_basic_mins + normal_program_mins
                         _, normal_chain_finish = add_work_time_with_shift(normal_chain_start, normal_minutes / 60.0)
-                        normal_steps = template_step_names(normal_tpl)
+                        if normal_template_name == normal_no_template:
+                            st.caption("ใบงานนี้ไม่ใช้ Template: ตรวจเครื่องจักรและเวลางาน แล้วระบุขั้นตอนก่อนบันทึก")
+                            normal_manual_step = st.text_input("ขั้นตอนงาน *", key=f"normal_manual_step_{normal_form_version}").strip()
+                            normal_steps = [normal_manual_step] if normal_manual_step else []
+                        else:
+                            normal_steps = template_step_names(normal_tpl)
                         normal_combined_steps = " → ".join(normal_steps)
                         normal_template_material = safe_str(normal_tpl.get("material"), "SS400") or "SS400"
                         normal_material_presets = [item for item in MATERIAL_OPTIONS if item != "อื่น ๆ (พิมพ์เอง)"]
@@ -9672,7 +9841,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "💾 สร้างใบงานและส่งเข้าคิวผลิต",
                             type="primary",
                             use_container_width=True,
-                            disabled=(not normal_confirm or normal_minutes <= 0 or not normal_drawing or not normal_material),
+                            disabled=(not normal_confirm or normal_minutes <= 0 or not normal_drawing or not normal_material or not normal_steps),
                             key=f"normal_template_submit_{normal_form_version}_{normal_template_id}",
                         )
                         if create_normal_job:
@@ -13261,6 +13430,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             st.markdown(cached_screen["html"], unsafe_allow_html=True)
             components.html(cached_screen["script"], height=0)
             return
+        refresh_work_calendar()
         fetch_department_work_orders.clear()
         qc_tv_tasks = fetch_department_work_orders("QC")
         auto_tv_tasks = fetch_department_work_orders("AUTOMATION")
@@ -13417,7 +13587,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                         f'data-start-epoch="{dept_timer_start_epoch}" '
                         f'data-base-work-seconds="{int(elapsed_seconds)}" '
                         f'data-paused-seconds="{paused_seconds}" '
-                        f'data-render-epoch="{dept_timer_render_epoch}">00:00:00</span>'
+                        f'data-render-epoch="{dept_timer_render_epoch}" data-work-calendar="{calendar_timer_data()}">00:00:00</span>'
                     )
                 else:
                     elapsed_display_html = html.escape(elapsed_text)
@@ -13591,9 +13761,16 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             const dayMs = 86400000;
             let dayStart = Math.floor((startTs + offset) / dayMs) * dayMs - offset;
             let workMs = 0;
+            const calendar = JSON.parse(el.getAttribute('data-work-calendar') || '[]');
             for (; dayStart < endTs; dayStart += dayMs) {
                 const day = new Date(dayStart + offset).getUTCDay();
-                const windows = day === 0 ? [] : (day === 6
+                let mode = 'busy';
+                const dayNumber = (dayStart + offset) / dayMs;
+                for (const change of calendar) {
+                    if (change[0] > dayNumber) break;
+                    mode = change[1];
+                }
+                const windows = day === 0 || (day === 6 && mode === 'normal') ? [] : (day === 6 || mode === 'normal' 
                     ? [[510,600],[610,720],[780,900],[910,1020]]
                     : [[510,600],[610,720],[780,900],[910,1020],[1050,1200]]);
                 windows.forEach(w => {
@@ -13646,6 +13823,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
     def render_production_tv_auto_refresh():
         if st.session_state.current_view != "📺 จอทีวีแสดงงานแผนกผลิต":
             return
+        refresh_work_calendar()
         fetch_jobs_from_supabase.clear()
         fetch_job_events.clear()
         df_live = fetch_jobs_from_supabase()
@@ -13742,7 +13920,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
                     tv_render_now = get_bangkok_now().replace(tzinfo=None)
                     tv_base_work_seconds = int(get_net_actual_work_seconds(r_start_parsed, tv_render_now, r_paused_seconds))
                     tv_render_epoch = to_bangkok_epoch_ms(tv_render_now)
-                    timer_display_html = f'<span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" data-base-work-seconds="{tv_base_work_seconds}" data-render-epoch="{tv_render_epoch}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span>'
+                    timer_display_html = f'<span class="pes-live-timer" data-start-epoch="{start_epoch}" data-paused-seconds="{r_paused_seconds}" data-base-work-seconds="{tv_base_work_seconds}" data-render-epoch="{tv_render_epoch}" data-work-calendar="{calendar_timer_data()}" style="font-family:monospace; font-size:14.5px; font-weight:900; color:#FDE047;">00:00:00</span>'
                     actual_start_report = r_start_parsed.strftime("%d/%m/%Y %H:%M")
                 else:
                     # ห้ามใช้เวลาแผนแทนเวลาเริ่มจริง เพราะจะทำให้ตัวจับเวลาเริ่มเองเมื่อถึงเวลาแผน
@@ -14051,9 +14229,16 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             const dayMs = 86400000;
             let dayStart = Math.floor((startTs + offset) / dayMs) * dayMs - offset;
             let workMs = 0;
+            const calendar = JSON.parse(el.getAttribute('data-work-calendar') || '[]');
             for (; dayStart < endTs; dayStart += dayMs) {
                 const day = new Date(dayStart + offset).getUTCDay();
-                const windows = day === 0 ? [] : (day === 6
+                let mode = 'busy';
+                const dayNumber = (dayStart + offset) / dayMs;
+                for (const change of calendar) {
+                    if (change[0] > dayNumber) break;
+                    mode = change[1];
+                }
+                const windows = day === 0 || (day === 6 && mode === 'normal') ? [] : (day === 6 || mode === 'normal' 
                     ? [[510,600],[610,720],[780,900],[910,1020]]
                     : [[510,600],[610,720],[780,900],[910,1020],[1050,1200]]);
                 windows.forEach(w => {
