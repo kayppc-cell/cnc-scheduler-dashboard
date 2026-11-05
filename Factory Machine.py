@@ -4804,6 +4804,8 @@ def department_work_order_duplicate_exists(tasks, payload):
         "department", "work_type", "title", "plan_code", "drawing_name", "assignee",
         "planned_start_at", "due_at"
     ]
+    if payload.get("queue_schedule_mode") in ("manual", "append"):
+        compare_cols = compare_cols[:-2] + ["queue_schedule_mode", "queue_requested_start_at", "estimated_hours"]
     candidate = tasks.copy()
     status_series = candidate.get("status", pd.Series(index=candidate.index, dtype=str)).fillna("").astype(str)
     candidate = candidate[~status_series.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)]
@@ -4812,7 +4814,12 @@ def department_work_order_duplicate_exists(tasks, payload):
     duplicate_mask = pd.Series(True, index=candidate.index)
     for col_name in compare_cols:
         incoming = payload.get(col_name)
-        if col_name in ["planned_start_at", "due_at"]:
+        if col_name == "estimated_hours":
+            existing = candidate.get(col_name, pd.Series(index=candidate.index, dtype=object))
+            duplicate_mask &= existing.apply(lambda value: abs(safe_float(value, -1) - safe_float(incoming, -2)) < 0.000001)
+        elif col_name == "queue_requested_start_at" and incoming is None:
+            duplicate_mask &= candidate.get(col_name, pd.Series(index=candidate.index, dtype=object)).isna()
+        elif col_name in ["planned_start_at", "due_at", "queue_requested_start_at"]:
             incoming_dt = parse_flexible_datetime(incoming)
             existing = candidate.get(col_name, pd.Series(index=candidate.index, dtype=object)).apply(parse_flexible_datetime)
             duplicate_mask &= existing.apply(
@@ -5487,58 +5494,35 @@ def render_people_work_center(department):
                         index=default_index(relationship_options, template_defaults.get("relationship")),
                         key=create_widget_key("relationship")
                     )
-                t1, t2, t3, t4 = st.columns(4)
-                with t1:
-                    planned_start_date = st.date_input(
-                        "วันที่กำหนดเริ่มงาน",
-                        value=get_bangkok_now().date(),
-                        format="DD/MM/YYYY",
-                        key=create_widget_key("planned_start_date")
-                    )
-                with t2:
-                    planned_start_time = st.time_input("เวลากำหนดเริ่มงาน", value=dtime(8, 30), key=create_widget_key("planned_start_time"))
-                with t3:
-                    due_date = st.date_input(
-                        "วันที่กำหนดเสร็จงาน",
-                        value=get_bangkok_now().date(),
-                        format="DD/MM/YYYY",
-                        key=create_widget_key("due_date")
-                    )
-                with t4:
-                    due_time = st.time_input("เวลากำหนดเสร็จงาน", value=dtime(17, 30), key=create_widget_key("due_time"))
+                timing_mode = st.radio(
+                    "การกำหนดเวลาเริ่มใบงาน",
+                    ["ต่อท้ายคิวของผู้รับผิดชอบอัตโนมัติ", "กำหนดวันเวลาเริ่มเอง"],
+                    horizontal=True, key=create_widget_key("timing_mode")
+                )
+                manual_start = timing_mode == "กำหนดวันเวลาเริ่มเอง"
+                if manual_start:
+                    tc1, tc2 = st.columns(2)
+                    with tc1:
+                        planned_start_date = st.date_input(
+                            "วันที่กำหนดเริ่มงาน", value=get_bangkok_now().date(),
+                            format="DD/MM/YYYY", key=create_widget_key("planned_start_date"))
+                    with tc2:
+                        planned_start_time = st.time_input(
+                            "เวลากำหนดเริ่มงาน", value=dtime(8, 30), key=create_widget_key("planned_start_time"))
+                    st.caption("เวลาที่กรอกเป็นเวลาเริ่มตามแผน ถ้าคิวก่อนหน้าจบช้าจะเลื่อนตามคิว ผู้ปฏิบัติงานยังกด Start ก่อนเวลาแผนได้")
+                else:
+                    st.caption("ระบบจะคำนวณเวลาเริ่มจากคิวสุดท้ายของผู้รับผิดชอบตอนบันทึก")
+                duration_minutes = st.number_input(
+                    "เวลาทำงานประมาณ (นาที)", min_value=1, value=60, step=1,
+                    key=create_widget_key("duration_minutes"))
+                estimated_hours = duration_minutes / 60.0
                 details = st.text_area(
                     "รายละเอียดงาน *", value=template_defaults.get("details", ""),
-                    key=create_widget_key("details")
-                )
+                    key=create_widget_key("details"))
                 checklist = ""
-                planned_start_preview = datetime.combine(planned_start_date, planned_start_time)
-                due_at_preview = datetime.combine(due_date, due_time)
-                estimated_hours = round(
-                    get_work_capacity_between(planned_start_preview, due_at_preview), 2
-                ) if due_at_preview > planned_start_preview else 0.0
-                st.number_input(
-                    "เวลาประมาณรวม (ช.ม) — คำนวณอัตโนมัติ",
-                    min_value=0.0,
-                    value=float(estimated_hours),
-                    step=0.01,
-                    disabled=True,
-                    key=(
-                        f"{department}_auto_estimated_hours_v{create_form_version}_"
-                        f"{planned_start_preview.isoformat()}_{due_at_preview.isoformat()}"
-                    )
-                )
-                st.caption("คำนวณเฉพาะเวลาทำงานตามกะ โดยหักเบรกเช้า พักเที่ยง เบรกบ่าย พักเย็น เวลานอกกะ และวันอาทิตย์แล้ว")
-                if due_at_preview <= planned_start_preview:
-                    st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
-                elif estimated_hours <= 0:
-                    st.warning("ช่วงเวลาที่เลือกไม่มีเวลาทำงานตามกะ กรุณาปรับวันหรือเวลา")
                 submitted = st.button(
-                    "💾 สร้างใบงานและส่งเข้าคิวงาน",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=(due_at_preview <= planned_start_preview or estimated_hours <= 0),
-                    key=create_widget_key("work_order_submit")
-                )
+                    "💾 สร้างใบงานและส่งเข้าคิวงาน", type="primary", use_container_width=True,
+                    key=create_widget_key("work_order_submit"))
                 st.caption("ปุ่มนี้จะสร้างคิวงานจริง ส่วนการบันทึก/แก้ไข Template อยู่ในหัวข้อจัดการ Template ด้านล่าง")
 
                 save_template = False
@@ -5670,13 +5654,18 @@ def render_people_work_center(department):
                     else:
                         st.error(f"บันทึก Template ไม่สำเร็จ: {message}")
             if submitted:
-                planned_start_at = datetime.combine(planned_start_date, planned_start_time)
-                due_at_dt = datetime.combine(due_date, due_time)
+                requested_start = datetime.combine(planned_start_date, planned_start_time) if manual_start else None
                 if not task_title.strip() or assignee == "— เลือกผู้รับผิดชอบ —" or not details.strip():
                     st.warning("กรุณากรอกชื่อบริษัทลูกค้า ผู้รับผิดชอบ และรายละเอียดงาน")
-                elif due_at_dt <= planned_start_at:
-                    st.warning("กำหนดเสร็จงานต้องอยู่หลังเวลากำหนดเริ่มงาน")
                 else:
+                    try:
+                        current_person_tasks = fetch_department_person_active_for_schedule(assignee.strip())
+                        planned_start_at, due_at_dt = department_new_work_order_window(
+                            current_person_tasks, assignee.strip(), get_bangkok_now().replace(tzinfo=None),
+                            estimated_hours, requested_start)
+                    except (ValueError, requests.RequestException) as exc:
+                        st.error(f"คำนวณคิวไม่ได้: {exc}")
+                        return
                     planned_start_at_text = planned_start_at.strftime("%Y-%m-%d %H:%M:%S")
                     due_at = due_at_dt.strftime("%Y-%m-%d %H:%M:%S")
                     create_payload = {
@@ -5686,6 +5675,8 @@ def render_people_work_center(department):
                         "priority": priority, "relationship_type": relationship,
                         "planned_start_at": planned_start_at_text, "due_at": due_at,
                         "estimated_hours": estimated_hours, "details": details.strip(),
+                        "queue_schedule_mode": "manual" if manual_start else "append",
+                        "queue_requested_start_at": requested_start.strftime("%Y-%m-%d %H:%M:%S") if requested_start else None,
                         "checklist": checklist.strip() or None, "status": "🟧 รอรับงาน"
                     }
                     if department_work_order_duplicate_exists(tasks, create_payload):
@@ -6193,6 +6184,10 @@ def render_people_work_center(department):
                             "details": edit_details.strip(),
                             "checklist": edit_checklist.strip() or None,
                         }
+                        if edit_start_at != edit_start_dt or safe_str(task.get("queue_schedule_mode")) == "manual":
+                            if edit_start_at != edit_start_dt:
+                                edit_payload["queue_requested_start_at"] = edit_start_at.strftime("%Y-%m-%d %H:%M:%S")
+                                edit_payload["queue_schedule_mode"] = "manual"
                         other_tasks = tasks[tasks.get("id", pd.Series(index=tasks.index)).apply(safe_int) != safe_int(selected_id)].copy()
                         duplicate_payload = {**edit_payload, "department": department}
                         if department_work_order_duplicate_exists(other_tasks, duplicate_payload):
@@ -6276,7 +6271,42 @@ def fetch_training_operator_tasks(department):
 
 def operator_person_active(row, person):
     return (row.get("assignee") == person and row.get("status") in ("🟧 รอรับงาน", "🟦 กำลังทำ", "🟨 พักงาน")
-            and row.get("result_note") != DEPARTMENT_TEMPLATE_MARKER)
+            and safe_str(row.get("result_note")) != DEPARTMENT_TEMPLATE_MARKER)
+
+
+def fetch_department_person_active_for_schedule(person):
+    endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
+    rows = []
+    while True:
+        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=8, params={
+            "select": "*", "assignee": f"eq.{person}", "department": "in.(QC,AUTOMATION)",
+            "status": 'in.("🟧 รอรับงาน","🟦 กำลังทำ","🟨 พักงาน")',
+            "order": "id.asc", "limit": 200, "offset": len(rows),
+        })
+        if res.status_code != 200:
+            raise ValueError("อ่านคิวล่าสุดของผู้รับผิดชอบไม่สำเร็จ กรุณาลองใหม่")
+        page = res.json()
+        rows.extend(page)
+        if not page:
+            return rows
+
+
+def department_operator_order(row, position_field="operator_queue_position"):
+    position = safe_float(row.get(position_field), float("inf"))
+    planned = first_valid_datetime(row.get("planned_start_at")) or datetime.max
+    due = first_valid_datetime(row.get("due_at")) or datetime.max
+    task_id = safe_int(row.get("id"), 0)
+    managed = position == float("inf") and safe_str(row.get("queue_schedule_mode")) in ("manual", "append")
+    return (position, int(managed), datetime.max if managed else planned,
+            datetime.max if managed else due, task_id)
+
+
+def department_new_work_order_window(rows, person, now, hours, requested_start=None):
+    chain = calculate_operator_person_chain(rows, person, now)
+    tail = first_valid_datetime(chain[-1]["due_at"]) if chain else None
+    start = get_next_valid_work_time(max(value for value in (requested_start or now, tail) if value is not None))
+    _, finish = add_work_time_with_shift(start, hours)
+    return start, finish
 
 
 def calculate_operator_person_chain(rows, person, now, position_field="operator_queue_position"):
@@ -6285,13 +6315,8 @@ def calculate_operator_person_chain(rows, person, now, position_field="operator_
     Plans are forecasts; actual timestamps and pause totals are never overwritten.
     """
     active = [dict(row) for row in rows if operator_person_active(row, person)]
-    def order(row):
-        position = row.get(position_field)
-        position = safe_float(position, float("inf")) if position is not None and not pd.isna(position) else float("inf")
-        planned = parse_flexible_datetime(row.get("planned_start_at")) or datetime.max
-        due = parse_flexible_datetime(row.get("due_at")) or datetime.max
-        return (0 if row.get("status") == "🟦 กำลังทำ" else 1, position, planned, due, safe_int(row.get("id"), 0))
-    active.sort(key=order)
+    active.sort(key=lambda row: (
+        0 if row.get("status") == "🟦 กำลังทำ" else 1, department_operator_order(row, position_field)))
     if sum(row.get("status") == "🟦 กำลังทำ" for row in active) > 1:
         raise ValueError("พบผู้ปฏิบัติงานมีงานกำลังทำมากกว่า 1 คิว กรุณาตรวจสถานะก่อนจัดเวลาใหม่")
     cursor = None
@@ -6314,7 +6339,10 @@ def calculate_operator_person_chain(rows, person, now, position_field="operator_
             plan_start = started
             _, forecast_finish = add_work_time_with_shift(started, hours + paused / 3600.0)
         else:
-            anchor = cursor or planned or now
+            requested = first_valid_datetime(row.get("queue_requested_start_at"))
+            anchor = cursor or (requested if requested is not None else planned) or now
+            if requested is not None:
+                anchor = max(anchor, requested)
             if effective_at is not None:
                 anchor = max(anchor, effective_at)
             # คิวที่พักจะไม่นับช่วงรอ Resume เป็นเวลาทำงาน
@@ -6544,10 +6572,7 @@ def prepare_operator_timing_command(person, action, raw, payload, target_id):
     snapshots = [{"id": safe_int(row["id"], 0), "expected": {
         key: (None if row[key] is None or pd.isna(row[key]) else row[key])
         for key in snapshot_fields if key in row}} for row in rows]
-    ordered = sorted(rows, key=lambda row: (
-        safe_float(row.get("operator_queue_position"), float("inf")),
-        parse_flexible_datetime(row.get("planned_start_at")) or datetime.max,
-        parse_flexible_datetime(row.get("due_at")) or datetime.max, safe_int(row["id"], 0)))
+    ordered = sorted(rows, key=department_operator_order)
     if action == "urgent":
         ordered.insert(0, {**payload, "id": -1, "assignee": person, "status": "🟧 รอรับงาน",
                            "actual_start": None, "paused_seconds": 0})
