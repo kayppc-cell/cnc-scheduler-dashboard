@@ -2781,6 +2781,34 @@ def delete_supabase_job(job_id: int) -> bool:
     except Exception:
         return False
 
+def delete_selected_production_jobs(selected):
+    """Route plans delete as a complete transaction; ordinary jobs retain their existing path."""
+    selected_ids = {safe_int(value) for value in selected.get("ID", []) if safe_int(value)>0}
+    if not selected_ids:
+        st.warning("กรุณาเลือกคิวงานก่อนลบ")
+        return False
+    snapshot = fetch_jobs_from_supabase()
+    routed_ids = set()
+    if "flow_case_id" in snapshot.columns:
+        linked = snapshot[snapshot["ID"].apply(safe_int).isin(selected_ids) & snapshot["flow_case_id"].notna()]
+        routed_ids = set(linked["ID"].apply(safe_int))
+        for case_id in linked["flow_case_id"].unique():
+            route = snapshot[snapshot["flow_case_id"].eq(case_id)]
+            if not set(route["ID"].apply(safe_int)).issubset(selected_ids):
+                st.error("กรุณาเลือกครบทุก Process ของเส้นทางผลิตก่อนลบ ไม่สามารถลบเฉพาะบาง Process ได้")
+                return False
+    if routed_ids:
+        if not flow_command("delete_unstarted_routes", {"job_ids": sorted(routed_ids)}):
+            st.info("ถ้ายังไม่ได้อัปเดต SQL ให้รัน TPC_QC_Routing_Setup.sql ฉบับล่าสุดก่อน ลบได้เฉพาะเส้นทางที่ยังไม่เคย Start")
+            return False
+        st.session_state.pop("_flow_notice", None)
+    failed = [job_id for job_id in sorted(selected_ids-routed_ids) if not delete_supabase_job(job_id)]
+    if failed:
+        st.error("ลบบางรายการไม่สำเร็จ: " + ", ".join(map(str, failed)) + " กรุณารีเฟรชตรวจรายการที่เหลือ")
+        return False
+    return True
+
+
 def normalize_status(status_str: str) -> str:
     s = str(status_str)
     if "จ้างภายนอก" in s or "OUTSOURCE" in s.upper():
@@ -11250,21 +11278,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                     if delete_table_clicked:
                         if delete_count > 0:
-                            del_success = True
-                            for _, row in active_to_delete.iterrows():
-                                row_id = row.get("ID")
-                                if pd.notna(row_id) and str(row_id).strip() not in ["", "None", "nan"] and float(row_id) > 0:
-                                    if not delete_supabase_job(int(float(row_id))):
-                                        del_success = False
-                                        
+                            del_success = delete_selected_production_jobs(active_to_delete)
                             if del_success:
                                 st.session_state.active_select_all = False
                                 st.cache_data.clear()
                                 st.session_state.scroll_to_bottom = True
                                 st.toast("ลบรายการที่เลือกเรียบร้อยแล้ว", icon="🗑️")
                                 st.rerun()
-                            else:
-                                st.error("เกิดข้อผิดพลาดในการลบข้อมูลจาก Supabase")
                         else:
                             st.warning("กรุณาเลือกช่อง 🗑️ เลือกลบ อย่างน้อย 1 รายการ")
 
