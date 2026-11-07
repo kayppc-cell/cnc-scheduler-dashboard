@@ -6987,7 +6987,7 @@ def render_operator_upcoming(person):
             incoming.append({"แผนงาน": case.get("plan_code"), "Drawing": case.get("drawing_name"),
                 "จำนวน": case.get("qty"), "กำลังอยู่ที่": f"Process {current['sequence']}/{len(steps)} · {current['machine_name']}" if current else "กำลังส่งต่อ QC",
                 "คาดว่าพร้อมตรวจ": flow_display_time(finish) if finish is not None else "รอข้อมูลแผนผลิต"})
-        ready = fetch_operator_live_tasks("QC")
+        ready, _ = split_department_work_order_templates(fetch_operator_live_tasks("QC"))
         if not ready.empty:
             ready = ready[(ready["assignee"].fillna("").eq(person)) & ready["status"].fillna("").str.contains("รอ", na=False)]
         ready_ids = set(ready["id"].astype(str)) if not ready.empty else set()
@@ -6999,6 +6999,11 @@ def render_operator_upcoming(person):
         st.info(f"📦 งานกำลังจะเข้ามา {len(incoming)} รายการ | ✅ พร้อมตรวจ {len(ready_ids)} รายการ")
         if incoming:
             st.dataframe(pd.DataFrame(incoming), hide_index=True, use_container_width=True)
+        if not ready.empty:
+            with st.expander(f"✅ ดูงานพร้อมตรวจ ({len(ready_ids)} รายการ)"):
+                detail = ready.rename(columns={"plan_code": "แผนงาน", "drawing_name": "Drawing", "work_type": "ประเภทงาน", "assignee": "ผู้รับผิดชอบ", "status": "สถานะ"})
+                columns = [name for name in ["แผนงาน", "Drawing", "ประเภทงาน", "ผู้รับผิดชอบ", "สถานะ"] if name in detail.columns]
+                st.dataframe(detail[columns], hide_index=True, use_container_width=True)
         st.caption("อัปเดตทุก 30 วินาที · เวลาพร้อมตรวจเป็นเวลาคาดการณ์ตามคิวเครื่องและกะทำงาน เวลา QC เริ่มนับเมื่อกด Start")
         if st.button("🔄 อัปเดตคิวพร้อมตรวจ", key="qc_arrival_refresh_" + person):
             st.rerun(scope="app")
@@ -7079,7 +7084,7 @@ def render_department_operator_mode(training=False):
     selected_operator = st.selectbox(
         "เลือกชื่อผู้ปฏิบัติงาน",
         operator_names,
-        format_func=lambda name: name,
+        format_func=lambda name: f"{name} — {active_counts.get(name, 0)} คิว",
         key="training_department_operator_name" if training else "department_operator_name"
     )
     if training:
