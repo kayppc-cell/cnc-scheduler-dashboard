@@ -5603,8 +5603,6 @@ def render_people_work_center(department):
         return
     tasks, templates = split_department_work_order_templates(tasks)
     admin_write_allowed = render_department_creation_access(department)
-    if is_qc:
-        render_flow_center(admin=admin_write_allowed, prefix="admin_qc")
 
     if admin_write_allowed:
         render_department_urgent_work_order(tasks, department)
@@ -12590,7 +12588,6 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
     st.subheader("📈 ติดตามสถานการณ์ฝ่ายผลิต")
     
     df_db = fetch_jobs_from_supabase()
-    render_flow_center(df_db, admin=False, prefix="monitor")
 
     # เปิดให้หน่วยงานอื่นตรวจดูแผน Production จากหน้าวิเคราะห์ Drawing ได้
     # ใช้ข้อมูลและตรรกะเดียวกับหน้า Project Master แต่ปิดคำสั่งเพิ่ม/แก้ไข/ลบ/พิมพ์ทั้งหมด
