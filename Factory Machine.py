@@ -7112,7 +7112,10 @@ def render_department_operator_mode(training=False):
     person_status = person_tasks.get("status", pd.Series(index=person_tasks.index, dtype=str)).fillna("").astype(str)
     active_tasks = person_tasks[~person_status.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)].copy()
     if active_tasks.empty:
-        st.info(f"{selected_operator} ยังไม่มีงานพร้อมควบคุม — ตรวจรายการงานกำลังจะเข้ามาด้านบน" ) if not training else st.success(f"✅ {selected_operator} ยังไม่มีคิวงานค้าง พร้อมรับงานใหม่")
+        if training:
+            st.success(f"✅ {selected_operator} ยังไม่มีคิวงานค้าง พร้อมรับงานใหม่")
+        else:
+            st.info(f"{selected_operator} ยังไม่มีงานพร้อมควบคุม — ตรวจรายการงานกำลังจะเข้ามาด้านบน")
         return
 
     operator_now = get_bangkok_now().replace(tzinfo=None)
