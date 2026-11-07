@@ -10850,8 +10850,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "ลบ": st.column_config.CheckboxColumn("🗑️ เลือกลบ", width=90),
                         },
                         hide_index=True,
-                        # เพิ่มเฉพาะระยะที่จำเป็นให้เห็นช่องเลือกลบด้านขวาครบ ไม่ขยายเต็มหน้าจอ
-                        width=1640,
+                        # ใช้พื้นที่หน้าจอเต็มความกว้าง แทนการจำกัดความกว้างตาราง
+                        use_container_width=True,
                         row_height=30
                     )
                         st.caption("✍️ แก้ไขหรือเพิ่มหลายช่องให้ครบก่อน แล้วกดบันทึกครั้งเดียว ระบบจึงจะคำนวณรวมชั่วโมงและเวลาลูกโซ่ใหม่")
@@ -11523,7 +11523,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "โปรแกรม (น.)": st.column_config.NumberColumn("โปรแกรม", width=75, format="%d"),
                     "รวม (ชม.)": st.column_config.NumberColumn("รวม ชม.", width=70, format="%.2f"),
                 },
-                width=1500,
+                use_container_width=True,
                 hide_index=True,
                 row_height=30
             )
