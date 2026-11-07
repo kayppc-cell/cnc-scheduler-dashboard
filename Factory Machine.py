@@ -68,6 +68,8 @@ def render_touch_safe_chart(tpc_chart_key, figure, show_controls=True, **kwargs)
 
 def filter_batch_jobs_by_plan(jobs, selected_plans=None):
     """None = ทุกแผน, [] = ไม่เลือกแผน; คงลำดับและข้อมูลคิวเดิม"""
+    if not jobs.empty:
+        jobs = jobs[~jobs.apply(flow_job_is_blocked, axis=1)].copy()
     if selected_plans is None:
         return jobs.copy()
     plan_keys = {str(value).strip() for value in selected_plans}
@@ -794,7 +796,7 @@ def production_not_before(row):
         return requested
     return None
 
-def calculate_production_chain(source_df, active_only=True, preserve_input_order=False, as_of=None):
+def calculate_machine_chain_legacy(source_df, active_only=True, preserve_input_order=False, as_of=None):
     """คำนวณลูกโซ่ Production จากกฎกลางชุดเดียวของทั้งระบบ
 
     กฎหลัก:
@@ -903,6 +905,139 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
     jobs["_chain_start"] = chain_starts
     jobs["_chain_finish"] = chain_finishes
     return jobs.drop(columns=["_chain_priority", "_chain_order_time", "_chain_queue_rank", "_chain_input_order"], errors="ignore")
+
+def flow_previous_job_id(row):
+    return safe_int(production_schedule_metadata(row).get("flow_previous_job_id"), 0)
+
+
+def flow_job_is_blocked(row):
+    previous = flow_previous_job_id(row)
+    if not previous:
+        return False
+    snapshot = st.session_state.get("_tpc_flow_jobs_snapshot")
+    if not isinstance(snapshot, pd.DataFrame) or snapshot.empty:
+        return True
+    match = snapshot[snapshot["ID"].apply(safe_int).eq(previous)]
+    return (match.empty or "เสร็จสิ้น" not in safe_str(match.iloc[0].get("สถานะงาน"))
+            or first_valid_datetime(match.iloc[0].get("เสร็จจริง")) is None)
+
+
+def flow_process_label(row):
+    metadata = production_schedule_metadata(row)
+    number, total = safe_int(metadata.get("flow_sequence"), 0), safe_int(metadata.get("flow_total"), 0)
+    if not number or not total:
+        return "—"
+    if flow_job_is_blocked(row):
+        return f"{number}/{total} · 🔒 รอรับจาก Process {number-1}"
+    if "เสร็จสิ้น" in safe_str(row.get("สถานะงาน")):
+        return f"{number}/{total} · ผลิตเสร็จ"
+    return f"{number}/{total} · พร้อม / อยู่ในคิวเครื่อง"
+
+
+def calculate_production_chain(source_df, active_only=True, preserve_input_order=False, as_of=None):
+    """One forecast for machine order AND cross-machine route dependencies."""
+    if not isinstance(source_df, pd.DataFrame) or source_df.empty:
+        return calculate_machine_chain_legacy(source_df, active_only, preserve_input_order, as_of)
+    if source_df.get("เลือกเครื่องจักร", pd.Series(dtype=str)).astype(str).str.startswith("TRAINING-").all():
+        return calculate_machine_chain_legacy(source_df, active_only, preserve_input_order, as_of)
+    snapshot = st.session_state.get("_tpc_flow_jobs_snapshot")
+    scope = source_df.copy()
+    scope["_flow_return"] = True
+    scope["_flow_input"] = range(len(scope))
+    base = snapshot.copy() if isinstance(snapshot, pd.DataFrame) and not snapshot.empty else source_df.iloc[0:0].copy()
+    selected_ids = {safe_int(value, 0) for value in scope.get("ID", []) if safe_int(value, 0)>0}
+    if not base.empty:
+        base = base[~base["ID"].apply(safe_int).isin(selected_ids)].copy()
+    base["_flow_return"] = False
+    base["_flow_input"] = range(len(scope), len(scope)+len(base))
+    jobs = pd.concat([base, scope], ignore_index=True)
+    if not any(flow_previous_job_id(row) for _, row in jobs.iterrows()):
+        return calculate_machine_chain_legacy(source_df, active_only, preserve_input_order, as_of)
+    now = as_of or get_bangkok_now().replace(tzinfo=None)
+    active_mask = jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต|รอคิว|พักงาน|รอวัสดุ", regex=True, na=False)
+    active = jobs[active_mask].copy()
+    rows = {}
+    selected_keys = []
+    completed = {}
+    for index, row in jobs.iterrows():
+        key = safe_int(row.get("ID"), 0) or -(index+1)
+        if active_mask.iloc[index]:
+            rows[key] = row.copy()
+            if row["_flow_return"]:
+                selected_keys.append(key)
+        elif "เสร็จสิ้น" in safe_str(row.get("สถานะงาน")):
+            finished = first_valid_datetime(row.get("เสร็จจริง"))
+            if finished is not None:
+                completed[key] = finished
+    def sort_key(key):
+        row = rows[key]
+        order = get_production_queue_sort_key(row)
+        return (order[0], row["_flow_input"]) if preserve_input_order else order
+    machines = {}
+    for key in sorted(rows, key=sort_key):
+        machines.setdefault(safe_str(rows[key].get("เลือกเครื่องจักร")), []).append(key)
+    prior_machine = {}
+    for keys in machines.values():
+        for prior, key in zip(keys, keys[1:]):
+            if not any(word in safe_str(rows[key].get("สถานะงาน")) for word in ("กำลังผลิต","พักงาน","รอวัสดุ")):
+                prior_machine[key] = prior
+    done, available, machine_available = {}, dict(completed), {}
+    pending = set(rows)
+    while pending:
+        route_eligible = [key for key in pending if not flow_previous_job_id(rows[key])
+                          or flow_previous_job_id(rows[key]) in available]
+        eligible = [key for key in route_eligible if key not in prior_machine or prior_machine[key] not in pending]
+        if not eligible:
+            # A machine queue swap may oppose route order. Keep route order safe and
+            # postpone the conflicting machine slot rather than deadlock the forecast.
+            eligible = route_eligible
+        if not eligible:
+            for key in pending:
+                row = rows[key].copy()
+                row["_chain_start"], row["_chain_finish"] = None, None
+                row["Process"] = flow_process_label(row) + " · รอตรวจข้อมูลขั้นก่อนหน้า"
+                done[key] = row
+            break
+        key = min(eligible, key=sort_key)
+        row = rows[key].copy()
+        machine = safe_str(row.get("เลือกเครื่องจักร"))
+        live = any(word in safe_str(row.get("สถานะงาน")) for word in ("กำลังผลิต","พักงาน","รอวัสดุ"))
+        if live:
+            window = calculate_machine_chain_legacy(pd.DataFrame([row]), active_only=True, as_of=now).iloc[0]
+            start, finish = first_valid_datetime(window["_chain_start"]), first_valid_datetime(window["_chain_finish"])
+        else:
+            ready = first_valid_datetime(row.get("วัน-เวลาขึ้นงาน"))
+            start = machine_available.get(machine) or ready or now
+            previous = flow_previous_job_id(row)
+            if previous:
+                start = max(start, available[previous])
+            not_before = production_not_before(row)
+            if not_before is not None:
+                start = max(start, not_before)
+            effective = next((day for day, _ in reversed(calendar_changes()) if day <= now.date()), None)
+            if effective:
+                start = max(start, datetime.combine(effective, dtime()))
+            start = get_next_valid_work_time(start)
+            _, finish = add_work_time_with_shift(start, get_planned_minutes(row)/60)
+        row["_chain_start"], row["_chain_finish"] = start, finish
+        row["Process"] = flow_process_label(row)
+        done[key] = row
+        free = max(finish, now) if live and finish is not None else finish
+        if free is not None:
+            available[key] = free
+            machine_available[machine] = max(machine_available.get(machine, free), free)
+        pending.remove(key)
+    result = pd.DataFrame([done[key] for key in selected_keys if key in done])
+    if not active_only:
+        closed = scope[~scope["สถานะงาน"].astype(str).str.contains("กำลังผลิต|รอคิว|พักงาน|รอวัสดุ", regex=True, na=False)]
+        if not closed.empty:
+            closed = calculate_machine_chain_legacy(closed, active_only=False, as_of=now)
+            result = pd.concat([result, closed], ignore_index=True)
+    if result.empty:
+        return calculate_machine_chain_legacy(source_df, active_only, preserve_input_order, as_of)
+    result = result.sort_values(["เลือกเครื่องจักร","_chain_start","ID"], kind="stable", na_position="last")
+    return result.drop(columns=["_flow_return","_flow_input"], errors="ignore").reset_index(drop=True)
+
 
 def get_current_production_window(row):
     """เวลาแสดงคิวปัจจุบันทุกเครื่อง/สถานะจากลูกโซ่กลาง ไม่มี Baseline เป็น fallback"""
@@ -1949,7 +2084,7 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
             steps[-1]["finished_at"] = finish_dt.strftime("%Y-%m-%d %H:%M:%S")
         current_index = len(steps) - 1
     result = {"steps": steps, "current_index": current_index}
-    for key in ("schedule_mode", "planned_not_before", "restart_history", "timing_restarted_at", "queue_rank", "machine_time_segments", "machine_cost_history_incomplete", "cancelled_start_history", "yielded_for_urgent"):
+    for key in ("schedule_mode", "planned_not_before", "restart_history", "timing_restarted_at", "queue_rank", "machine_time_segments", "machine_cost_history_incomplete", "cancelled_start_history", "yielded_for_urgent", "flow_previous_job_id", "flow_sequence", "flow_total", "flow_waiting"):
         if key in progress:
             result[key] = progress[key]
     return result
@@ -2694,7 +2829,7 @@ def get_complete_job_response(endpoint, headers, params=None, timeout=8):
 
 
 @st.cache_data(ttl=5, show_spinner=False)
-def fetch_jobs_from_supabase() -> pd.DataFrame:
+def fetch_jobs_from_supabase_cached() -> pd.DataFrame:
     try:
         base_url = st.secrets["SUPABASE_URL"].rstrip("/")
         endpoint = f"{base_url}/rest/v1/cnc_jobs"
@@ -2743,6 +2878,18 @@ def fetch_jobs_from_supabase() -> pd.DataFrame:
     except Exception:
         st.error("โหลดใบงานจากฐานข้อมูลไม่ครบ ระบบหยุดการสร้างและจัดคิวไว้ก่อน กรุณารีเฟรชใหม่")
         st.stop()
+
+def fetch_jobs_from_supabase():
+    jobs = fetch_jobs_from_supabase_cached()
+    st.session_state["_tpc_flow_jobs_snapshot"] = jobs.copy()
+    if not jobs.empty:
+        jobs = jobs.copy()
+        jobs["Process"] = jobs.apply(flow_process_label, axis=1)
+    return jobs
+
+
+fetch_jobs_from_supabase.clear = fetch_jobs_from_supabase_cached.clear
+
 
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_plan_masters():
@@ -4248,7 +4395,7 @@ def render_work_order_readonly(source_df):
     st.caption(f"แสดงผล {len(view_df):,} จากคิวงานทั้งหมด {len(work_df):,} รายการ")
     display_columns = [
         "ID", "เครื่องจักร / แผนก", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.",
-        "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", "เริ่มขึ้นงานตามแผน",
+        "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "Process", "กำหนดพร้อมขึ้นงาน", "เริ่มขึ้นงานตามแผน",
         "จบงานตามแผน", "รวม (ชม.)", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)"
     ]
     if mobile_view or tablet_view:
@@ -4317,6 +4464,7 @@ def render_work_order_readonly(source_df):
             row_height=33,
             column_config={
                 "ID": None, "flow_case_id": None,
+                            "Process": st.column_config.TextColumn("Process / การรับงาน", width=220, disabled=True),
                 "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=140),
                 "ลำดับคิว": st.column_config.TextColumn("คิว", width=70),
                 "สถานะ": st.column_config.TextColumn("สถานะ", width=125),
@@ -6818,6 +6966,46 @@ def render_operator_live_queue_tools(person, tasks):
                     st.rerun()
 
 
+@st.fragment(run_every=30)
+def render_operator_upcoming(person):
+    """Read-only incoming forecast; QC work is created only after production Finish."""
+    if person not in QC_ASSIGNEES[1:]:
+        return
+    try:
+        cases = fetch_flow_rows("tpc_flow_cases", {"status": "in.(producing,reworking)", "qc_assignee": f"eq.{person}"}) or []
+        jobs = fetch_jobs_from_supabase()
+        forecast = calculate_production_chain(jobs)
+        windows = {safe_int(row.get("ID")): row for _, row in forecast.iterrows()}
+        incoming = []
+        for case in cases:
+            steps = fetch_flow_rows("tpc_flow_steps", {"case_id": f"eq.{case['id']}", "cycle": f"eq.{case['cycle']}"}) or []
+            steps = sorted(steps, key=lambda row: safe_int(row.get("sequence")))
+            unfinished = [row for row in steps if not row.get("finished_at")]
+            current = unfinished[0] if unfinished else None
+            last = steps[-1] if steps else None
+            finish = windows.get(safe_int(last.get("job_id")), {}).get("_chain_finish") if last else None
+            incoming.append({"แผนงาน": case.get("plan_code"), "Drawing": case.get("drawing_name"),
+                "จำนวน": case.get("qty"), "กำลังอยู่ที่": f"Process {current['sequence']}/{len(steps)} · {current['machine_name']}" if current else "กำลังส่งต่อ QC",
+                "คาดว่าพร้อมตรวจ": flow_display_time(finish) if finish is not None else "รอข้อมูลแผนผลิต"})
+        ready = fetch_operator_live_tasks("QC")
+        if not ready.empty:
+            ready = ready[(ready["assignee"].fillna("").eq(person)) & ready["status"].fillna("").str.contains("รอ", na=False)]
+        ready_ids = set(ready["id"].astype(str)) if not ready.empty else set()
+        key = "qc_arrival_seen_" + person
+        previous = st.session_state.get(key)
+        if previous is not None and ready_ids - set(previous):
+            st.toast("🔔 มีงานผลิตเสร็จเข้าคิว QC พร้อมตรวจแล้ว")
+        st.session_state[key] = sorted(ready_ids)
+        st.info(f"📦 งานกำลังจะเข้ามา {len(incoming)} รายการ | ✅ พร้อมตรวจ {len(ready_ids)} รายการ")
+        if incoming:
+            st.dataframe(pd.DataFrame(incoming), hide_index=True, use_container_width=True)
+        st.caption("อัปเดตทุก 30 วินาที · เวลาพร้อมตรวจเป็นเวลาคาดการณ์ตามคิวเครื่องและกะทำงาน เวลา QC เริ่มนับเมื่อกด Start")
+        if st.button("🔄 อัปเดตคิวพร้อมตรวจ", key="qc_arrival_refresh_" + person):
+            st.rerun(scope="app")
+    except Exception as exc:
+        st.warning("ยังอัปเดตงานกำลังจะเข้ามาไม่ได้ กรุณารีเฟรชหรือตรวจการติดตั้ง SQL เส้นทางผลิต")
+
+
 def render_department_operator_mode(training=False):
     """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
     fetch_department_work_orders = fetch_training_operator_tasks if training else fetch_operator_live_tasks
@@ -6899,7 +7087,9 @@ def render_department_operator_mode(training=False):
             **st.session_state.get("training_operator_saved_names", {}), training_department: selected_operator}
     else:
         st.session_state["operator_live_saved_name"] = selected_operator
-    st.caption(f"{selected_operator} — มี {active_counts.get(selected_operator, 0)} คิว")
+    st.caption(f"{selected_operator} — งานที่รับมาควบคุม {active_counts.get(selected_operator, 0)} คิว")
+    if not training:
+        render_operator_upcoming(selected_operator)
     if all_tasks.empty:
         st.info("ยังไม่มีคิวงานที่ได้รับมอบหมาย")
         if not training:
@@ -6922,7 +7112,7 @@ def render_department_operator_mode(training=False):
     person_status = person_tasks.get("status", pd.Series(index=person_tasks.index, dtype=str)).fillna("").astype(str)
     active_tasks = person_tasks[~person_status.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)].copy()
     if active_tasks.empty:
-        st.success(f"✅ {selected_operator} ยังไม่มีคิวงานค้าง พร้อมรับงานใหม่")
+        st.info(f"{selected_operator} ยังไม่มีงานพร้อมควบคุม — ตรวจรายการงานกำลังจะเข้ามาด้านบน" ) if not training else st.success(f"✅ {selected_operator} ยังไม่มีคิวงานค้าง พร้อมรับงานใหม่")
         return
 
     operator_now = get_bangkok_now().replace(tzinfo=None)
@@ -7266,7 +7456,7 @@ def summarize_finished_history_months(source_df, today):
 def build_work_order_print_document(source_df, filters, printed_at):
     """Print filtered jobs grouped by factory machine order, then numeric queue order."""
     columns = ["เครื่องจักร / แผนก", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.",
-               "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", "เริ่มขึ้นงานตามแผน",
+               "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "Process", "กำหนดพร้อมขึ้นงาน", "เริ่มขึ้นงานตามแผน",
                "จบงานตามแผน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)"]
     selected_columns = [column for column in columns if column in source_df.columns]
     printable = source_df[selected_columns].copy()
@@ -7525,7 +7715,7 @@ else:
 # ---------------------------------------------------------
 def prepare_production_chart_queue(calc_df):
     column_order = [
-        "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+        "ID", "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)", "Process",
         "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "Setup (น.)",
         "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน",
         # ต้องเก็บเวลาเริ่มจริงไว้เป็นจุดตั้งต้นของงานที่กด Start แล้ว
@@ -8161,7 +8351,7 @@ def render_unified_production_creation(templates):
                 st.info("กรุณาติดตั้ง SQL รุ่นรวมหน้า และเปิดส่ง QC ในหัวข้อเส้นทางผลิตก่อนสร้างใบงาน")
                 return
             cfg = settings[0]
-            if safe_int(cfg.get("production_form_version"), 0) < 2:
+            if safe_int(cfg.get("production_form_version"), 0) < 3:
                 st.info("กรุณารัน TPC_QC_Routing_Setup.sql รุ่นรวมหน้าสร้างใบงานก่อนใช้งาน")
                 return
         except (ValueError, requests.RequestException) as exc:
@@ -8278,6 +8468,79 @@ def render_unified_production_creation(templates):
             st.caption("เวลาคาดการณ์ตามคิวปัจจุบันและกะโรงงาน ขั้นถัดไปคำนวณอีกครั้งเมื่อส่งต่อจริง ยังไม่เริ่มงานอัตโนมัติ")
 
 
+def flow_event_history_rows(events, steps):
+    """Present an audit trail as user-facing Thai; never render raw event payloads."""
+    stages_by_job = {safe_int(item.get("job_id"), 0): item for item in steps if item.get("job_id")}
+    labels = {
+        "stage_ready": "ส่งเข้าคิวเครื่องแล้ว — รอกด Start",
+        "stage_planned": "บันทึก Process ในแผนคิวแล้ว",
+        "create_route": "สร้างเส้นทางผลิตแล้ว",
+        "production_finish": "ผลิตขั้นตอนนี้เสร็จแล้ว",
+        "waiting_qc": "ส่งเข้าคิวตรวจรับ QC แล้ว",
+        "qc_pass": "QC ตรวจผ่าน — งานจบสมบูรณ์",
+        "qc_fail": "QC ตรวจไม่ผ่าน — รอจัดคิวแก้ไข",
+        "plan_rework": "จัดเส้นทางแก้ไขแล้ว",
+        "enabled": "เปิดใช้การส่งตรวจ QC",
+    }
+    result = []
+    for event in events:
+        details = event.get("details")
+        if isinstance(details, str):
+            try:
+                details = json.loads(details)
+            except (ValueError, TypeError):
+                details = {}
+        if not isinstance(details, dict):
+            details = {}
+        kind = safe_str(event.get("event"))
+        stage = stages_by_job.get(safe_int(details.get("job_id"), 0), {})
+        summary = []
+        if kind in ("stage_ready", "stage_planned", "production_finish"):
+            name = safe_str(stage.get("name"))
+            machine = safe_str(details.get("machine")) or safe_str(stage.get("machine_name"))
+            if name:
+                summary.append(f"ขั้นตอน: {name}")
+            if machine:
+                summary.append(f"เครื่อง: {machine}")
+        elif kind in ("create_route", "plan_rework"):
+            qty = safe_int(details.get("qty"), 0)
+            if qty > 0:
+                summary.append(f"จำนวน {qty} ชิ้น")
+            route = details.get("stages")
+            if isinstance(route, list):
+                summary.append(f"{len(route)} ขั้นตอนผลิต")
+                names = [safe_str(item.get("name")) for item in route if isinstance(item, dict)]
+                names = [name for name in names if name]
+                if names:
+                    summary.append(" → ".join(names))
+        elif kind in ("qc_pass", "qc_fail"):
+            person = safe_str(details.get("assignee"))
+            reason = safe_str(details.get("reason"))
+            if person:
+                summary.append(f"ผู้ตรวจ: {person}")
+            if reason:
+                summary.append(f"ผลตรวจ: {reason}")
+        elif kind == "waiting_qc":
+            summary.append("ผลิตครบทุกขั้นแล้ว รอผู้ตรวจ QC กด Start")
+        elif kind == "enabled":
+            summary.append("ส่งตรวจ QC เมื่อผลิตครบทุกขั้น")
+        cycle = event.get("cycle")
+        cycle_number = safe_int(cycle, -1)
+        round_label = ("ผลิตครั้งแรก" if cycle_number == 0 else
+                       f"แก้ไขครั้งที่ {cycle_number}" if cycle_number > 0 else "—")
+        try:
+            when = flow_display_time(event.get("created_at"))
+        except (ValueError, TypeError):
+            when = "—"
+        result.append({
+            "รอบงาน": round_label,
+            "การดำเนินงาน": labels.get(kind, "บันทึกความคืบหน้างาน"),
+            "รายละเอียด": " | ".join(summary) or "—",
+            "วัน–เวลา": when,
+        })
+    return result
+
+
 def render_flow_center(jobs=None, *, admin=False, prefix="production"):
     if st.session_state.pop("_flow_notice", None):
         st.success("บันทึกเส้นทางผลิต / ผล QC เรียบร้อย")
@@ -8356,8 +8619,15 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                 st.caption("ต้นทุนในตารางนี้ใช้เรทมาตรฐาน; รายงานต้นทุนเดิมยังนับจากใบงานเครื่องแต่ละใบครั้งเดียว ไม่รวมเวลารอ QC")
             events = fetch_flow_rows("tpc_flow_events", {"case_id": f"eq.{case_id}"}) or []
             if events:
-                st.dataframe(pd.DataFrame([{"รอบ": e["cycle"], "เหตุการณ์": e["event"],
-                                            "รายละเอียด": e["details"], "เวลา": flow_display_time(e["created_at"])} for e in events]), hide_index=True)
+                st.markdown("#### 📋 ประวัติการดำเนินงานของ Drawing")
+                st.caption("แต่ละแถวคือเหตุการณ์ของ Drawing เดียวกัน ไม่ใช่ใบงานซ้ำ • ส่งเข้าคิวหมายถึงพร้อมรอ Start ยังไม่ใช่เริ่มทำงาน")
+                st.dataframe(pd.DataFrame(flow_event_history_rows(events, steps)), hide_index=True,
+                             use_container_width=True, column_config={
+                                 "รอบงาน": st.column_config.TextColumn(width="small"),
+                                 "การดำเนินงาน": st.column_config.TextColumn(width="medium"),
+                                 "รายละเอียด": st.column_config.TextColumn(width="large"),
+                                 "วัน–เวลา": st.column_config.TextColumn(width="small"),
+                             })
             if admin and case["status"] == "rework_planning":
                 with st.form(f"{prefix}_flow_plan_rework_{case_id}_{case['cycle']}"):
                     st.write("จัดเส้นทางแก้ไข — สร้างใบงานใหม่เชื่อม Drawing เดิม")
@@ -9129,6 +9399,11 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 drawing_code = str(step_row.get("ชื่อ Drawing.", "-"))
                 qty_val = int(step_row.get("จำนวน", 1) or 1)
                 mat_val = str(step_row.get("วัสดุ", "-"))
+                process_text = flow_process_label(step_row)
+                if process_text != "—":
+                    st.caption("Process " + process_text)
+                if flow_job_is_blocked(step_row):
+                    st.info("🔒 งานกำลังจะเข้ามา — รอ Process ก่อนหน้าผลิตเสร็จ จึงจะกด Start ได้")
                 raw_s_name = str(step_row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
                 s_name = raw_s_name if raw_s_name not in ["", "None", "nan", "รอหน้าเครื่องระบุ"] else f"OP{(queue_idx+1)*10}"
                 s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
@@ -9188,7 +9463,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     can_start = False  # Batch Start must use the reviewed selection in its control panel.
                 else:
                     can_start = False
-                    if is_step_waiting and not machine_any_running and not machine_has_paused and not next_available_start_found:
+                    if is_step_waiting and not flow_job_is_blocked(step_row) and not machine_any_running and not machine_has_paused and not next_available_start_found:
                         can_start = True
                         next_available_start_found = True
 
@@ -10505,12 +10780,13 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         key="editor_cnc_jobs_grid_main",
                         num_rows="dynamic",
                         column_order=[
-                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)", "Process",
                             "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "วัน-เวลาจบงาน", "Setup (น.)",
                             "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                         ],
                         column_config={
                             "ID": None, "flow_case_id": None,
+                            "Process": st.column_config.TextColumn("Process / การรับงาน", width=220, disabled=True),
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75),
                             "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=250),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, min_value=1, max_value=10000, step=1, format="%d"),
@@ -10563,7 +10839,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     save_table_clicked = False
                     delete_table_clicked = False
                     readonly_visible_columns = [
-                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)",
+                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ประเภทงาน", "ขั้นตอน (Step)", "Process",
                         "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "วัน-เวลาจบงาน", "Setup (น.)",
                         "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน"
                     ]
@@ -10664,6 +10940,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 record = {column_name: None for column_name in submitted_editor_df.columns}
                                 record.update({
                                     "ID": None, "flow_case_id": None,
+                            "Process": st.column_config.TextColumn("Process / การรับงาน", width=220, disabled=True),
                                     "จำนวน": 1,
                                     "วัสดุ": "SS400",
                                     "ประเภทงาน": "🟢 งานปกติ",
@@ -11197,11 +11474,12 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 styled_df_display,
                 column_order=[
                     "เครื่องจักร / แผนก", "ลำดับคิว", "สถานะ", "ประเภทงาน", "แผนงาน", "ชื่อ Drawing.", 
-                    "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "กำหนดพร้อมขึ้นงาน", 
+                    "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "Process", "กำหนดพร้อมขึ้นงาน", 
                     "เริ่มขึ้นงานตามแผน", "จบงานตามแผน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)"
                 ],
                 column_config={
                     "ID": None, "flow_case_id": None,
+                            "Process": st.column_config.TextColumn("Process / การรับงาน", width=220, disabled=True),
                     "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=115),
                     "ลำดับคิว": st.column_config.TextColumn("คิว", width=60),
                     "สถานะ": st.column_config.TextColumn("สถานะ", width=105),
@@ -11672,13 +11950,14 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         fin_display_df,
                         key="editor_finished_jobs_history",
                         column_order=[
-                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)",
+                            "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "Process",
                             "เลือกเครื่องจักร", "วัน-เวลาขึ้นงาน", "จบตามแผน", "เริ่มจริง", "เสร็จจริง",
                             "เริ่มคลาดเคลื่อน (น.)", "จบคลาดเคลื่อน (น.)", "พักสะสม (ชม.)",
                             "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "เวลาจริงสุทธิ (ชม.)", "ผลเทียบแผน", "สถานะงาน", "ลบประวัติ"
                         ],
                         column_config={
                             "ID": None, "flow_case_id": None,
+                            "Process": st.column_config.TextColumn("Process / การรับงาน", width=220, disabled=True),
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75, disabled=True),
                             "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=180, disabled=True),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, format="%d", disabled=True),
@@ -13293,7 +13572,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
 
                 with b_col_csv:
                     csv_data = monthly_jobs[[
-                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
+                        "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "Process", 
                         "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", 
                         "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "แหล่งเวลา", "ผลตามกำหนด",
                         "เรตราคา (บาท/ชม.)", "มูลค่ารวม (บาท)"
@@ -13455,7 +13734,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             st.caption(f"แสดงผล {len(monthly_detail_df):,} จากทั้งหมด {len(monthly_jobs):,} Step ในเดือนที่เลือก")
             st.dataframe(
                 monthly_detail_df.sort_values(by="Target_Date", ascending=True)[[
-                    "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", 
+                    "แผนงาน", "ชื่อ Drawing.", "จำนวน", "วัสดุ", "ขั้นตอน (Step)", "Process", 
                     "เลือกเครื่องจักร", "เริ่มจริง", "เสร็จจริง", "เวลาแผน (ชม.)", 
                     "เวลาจริง (ชม.)", "ผลต่าง (ชม.)", "แหล่งเวลา", "ผลตามกำหนด", "มูลค่ารวม (บาท)"
                 ]],
