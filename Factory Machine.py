@@ -3104,6 +3104,13 @@ def calculate_plan_drawing_progress(plan_jobs):
         None
     )
     status_column = "สถานะงาน" if "สถานะงาน" in plan_jobs.columns else None
+    linked_cases = set(plan_jobs.get("flow_case_id", pd.Series(dtype=str)).dropna().astype(str))
+    acceptance = {}
+    if linked_cases:
+        try:
+            acceptance = {case["id"]: case["status"] for case in (fetch_flow_rows("tpc_flow_cases") or [])}
+        except (ValueError, requests.RequestException):
+            pass  # Missing QC confirmation must never count as accepted.
     drawing_steps = {}
     for row_index, job in plan_jobs.iterrows():
         drawing_name = safe_str(job.get(drawing_column), "") if drawing_column else ""
@@ -3112,6 +3119,9 @@ def calculate_plan_drawing_progress(plan_jobs):
             # งานที่ไม่มีชื่อ Drawing ต้องไม่ถูกรวมกันเป็น Drawing เดียวโดยไม่ตั้งใจ
             drawing_key = f"__row_{row_index}"
         is_finished = ("เสร็จสิ้น" in safe_str(job.get(status_column), "") and first_valid_datetime(job.get("เสร็จจริง", job.get("actual_finish"))) is not None) if status_column else False
+        linked_case = safe_str(job.get("flow_case_id"))
+        if linked_case and acceptance.get(linked_case) != "accepted":
+            is_finished = False
         drawing_steps.setdefault(drawing_key, []).append(is_finished)
 
     drawing_total = len(drawing_steps)
@@ -4306,7 +4316,7 @@ def render_work_order_readonly(source_df):
             height=min(780, max(320, len(view_df) * 34 + 46)),
             row_height=33,
             column_config={
-                "ID": None,
+                "ID": None, "flow_case_id": None,
                 "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=140),
                 "ลำดับคิว": st.column_config.TextColumn("คิว", width=70),
                 "สถานะ": st.column_config.TextColumn("สถานะ", width=125),
@@ -5054,6 +5064,10 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
         history_display.insert(status_position, "finish_plan_status", [
             finish_plan_status(row) for _, row in history_shown.iterrows()
         ])
+        if "flow_verdict" in history_shown:
+            history_display["qc_acceptance"] = history_shown["flow_verdict"].map({
+                "pass": "✅ QC ผ่าน", "fail": "🔧 ไม่ผ่าน / ส่งแก้ไข", "pending": "รอตรวจรับ"
+            }).fillna("—")
         history_display.insert(0, "เลือก", False)
         for date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish"]:
             if date_col in history_display.columns:
@@ -5075,6 +5089,7 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
             column_config={
                 "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width=58),
                 "id": None,
+                "qc_acceptance": st.column_config.TextColumn("ผลตรวจรับ QC", width=150),
                 "finish_plan_status": st.column_config.TextColumn("ผลเทียบแผน", width=125),
                 "priority": st.column_config.TextColumn("เร่งด่วน", width=72),
                 "work_type": st.column_config.TextColumn("ประเภทงาน", width=135),
@@ -5099,7 +5114,7 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
                 "priority": "เร่งด่วน", "plan_code": "แผน", "drawing_name": "Drawing",
                 "title": "บริษัทลูกค้า", "planned_start_at": "กำหนดเริ่ม", "due_at": "กำหนดเสร็จ",
                 "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง", "finish_plan_status": "ผลเทียบแผน", "actual_work_hours": "เวลาจริง (ชม.)",
-                "estimated_hours": "เวลาประมาณ (ชม.)", "result_note": "หมายเหตุ"
+                "estimated_hours": "เวลาประมาณ (ชม.)", "result_note": "หมายเหตุ", "qc_acceptance": "ผลตรวจรับ QC"
             }
             cols = [col for col in labels if col in print_frame.columns]
             sections = []
@@ -5440,6 +5455,9 @@ def render_people_work_center(department):
         return
     tasks, templates = split_department_work_order_templates(tasks)
     admin_write_allowed = render_department_creation_access(department)
+    if is_qc:
+        render_flow_center(admin=admin_write_allowed, prefix="admin_qc")
+
     if admin_write_allowed:
         render_department_urgent_work_order(tasks, department)
 
@@ -7051,6 +7069,9 @@ def render_department_operator_mode(training=False):
                             st.session_state["operator_live_clear_control"] = True
                         st.rerun()
             with op_a2:
+                if not training and safe_str(queue_task.get("flow_case_id")):
+                    render_flow_qc_result(queue_task, "operator")
+                    continue
                 with st.form(f"operator_finish_{task_id}"):
                     operator_finish_note = st.text_area("หมายเหตุงานเสร็จ (ถ้ามี)")
                     operator_finish_submit = st.form_submit_button("✅ Finish งาน", type="primary", use_container_width=True)
@@ -7912,6 +7933,285 @@ def work_calendar_is_unlocked():
         return True
     lock_work_calendar()
     return False
+
+
+FLOW_STATUS_LABELS = {
+    "producing": "🏭 อยู่ระหว่างผลิต", "waiting_qc": "🔎 รอ QC / กำลังตรวจ",
+    "rework_planning": "🛠️ รอจัดคิวแก้ไข", "reworking": "🔧 กำลังแก้ไข",
+    "accepted": "✅ QC ผ่าน — จบสมบูรณ์",
+}
+
+
+def flow_display_time(value):
+    if not value:
+        return "–"
+    parsed = pd.Timestamp(value)
+    if parsed.tzinfo is not None:
+        parsed = parsed.tz_convert("Asia/Bangkok")
+    return parsed.strftime("%d/%m/%Y %H:%M")
+
+
+def flow_backend_key():
+    return (st.secrets.get("TPC_FLOW_WRITE_KEY") or st.secrets.get("TPC_CALENDAR_WRITE_KEY")
+            or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY") or "")
+
+
+def flow_api_headers(write=False):
+    key = flow_backend_key() if write else st.secrets["SUPABASE_KEY"]
+    if not key:
+        raise ValueError("กรุณาตั้ง TPC_FLOW_WRITE_KEY ใน Streamlit Secrets ด้วยคีย์ฝั่งเซิร์ฟเวอร์")
+    headers = {"apikey": key, "Content-Type": "application/json", "Prefer": "return=representation"}
+    if not key.startswith("sb_"):
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def fetch_flow_rows(table, query=None):
+    if table not in {"tpc_flow_settings", "tpc_flow_cases", "tpc_flow_steps", "tpc_flow_events"}:
+        raise ValueError("ตารางขั้นตอนงานไม่ถูกต้อง")
+    rows = []
+    while True:
+        response = requests.get(
+            st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/" + table,
+            headers=flow_api_headers(), params={
+                "select": "*", "order": "id.asc" if table != "tpc_flow_settings" else "singleton.asc",
+                "limit": 200, "offset": len(rows), **(query or {}),
+            }, timeout=10)
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise ValueError("อ่านข้อมูลเส้นทางผลิต/QC ไม่สำเร็จ กรุณารีเฟรช")
+        page = response.json()
+        if not isinstance(page, list):
+            raise ValueError("ข้อมูลเส้นทางผลิต/QC ไม่ถูกต้อง")
+        rows.extend(page)
+        if not page:
+            return rows
+
+
+def flow_command(action, payload):
+    try:
+        response = requests.post(
+            st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/rpc/tpc_flow_command",
+            headers=flow_api_headers(write=True), json={"p_action": action, "p_data": payload}, timeout=25)
+        if response.status_code != 200:
+            message = response.json().get("message", "บันทึกไม่สำเร็จ")
+            st.error(f"บันทึกขั้นตอนงานไม่สำเร็จ: {message}")
+            return False
+        result = response.json()
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            st.error("ยังยืนยันผลบันทึกไม่ได้ กรุณารีเฟรชก่อนทำรายการซ้ำ")
+            return False
+        fetch_flow_rows.clear()
+        fetch_jobs_from_supabase.clear()
+        fetch_department_work_orders.clear()
+        st.session_state["_flow_notice"] = "บันทึกขั้นตอนงานและตรวจสอบคำตอบจากฐานข้อมูลแล้ว"
+        return True
+    except (requests.RequestException, ValueError) as exc:
+        st.error(f"ยังยืนยันผลบันทึกไม่ได้ กรุณารีเฟรชตรวจรายการก่อนลองใหม่: {exc}")
+        return False
+
+
+def flow_stage_editor(key, optional=False):
+    stage_frame = st.data_editor(
+        pd.DataFrame([{"ขั้นตอน": "", "เครื่องจักร": MACHINE_LIST[0], "นาทีแผน": 60.0,
+                       "เข้าคิว": "ต่อท้ายคิว"}]), num_rows="dynamic", hide_index=True,
+        key=key, use_container_width=True, column_config={
+            "ขั้นตอน": st.column_config.TextColumn(required=not optional),
+            "เครื่องจักร": st.column_config.SelectboxColumn(options=MACHINE_LIST, required=not optional),
+            "นาทีแผน": st.column_config.NumberColumn(min_value=1, max_value=100000, required=not optional),
+            "เข้าคิว": st.column_config.SelectboxColumn(options=["ต่อท้ายคิว", "แทรกก่อนคิวรอ"], required=not optional),
+        })
+    st.caption("เรียงจากบนลงล่าง เช่น มิลลิ่ง 1 → เชื่อม → มิลลิ่ง 2; ขั้นถัดไปพร้อม Start เมื่อขั้นก่อนหน้าจบ แทรกคิวจะไม่หยุดงานที่กำลังรัน")
+    return stage_frame
+
+
+def flow_validate_stages(frame):
+    if not isinstance(frame, pd.DataFrame) or not 1 <= len(frame) <= 30:
+        raise ValueError("กรุณาระบุขั้นตอนผลิต 1–30 ขั้น")
+    stages = []
+    for _, row in frame.iterrows():
+        name, machine = safe_str(row.get("ขั้นตอน")), safe_str(row.get("เครื่องจักร"))
+        minutes = safe_float(row.get("นาทีแผน"), 0)
+        if not name or machine not in MACHINE_LIST or not 1 <= minutes <= 100000:
+            raise ValueError("ทุกขั้นต้องมีชื่อ เครื่องจักร และนาทีแผนมากกว่า 0")
+        placement = safe_str(row.get("เข้าคิว"))
+        if placement not in ("ต่อท้ายคิว", "แทรกก่อนคิวรอ"):
+            raise ValueError("กรุณาเลือกวิธีเข้าคิว")
+        stages.append({"name": name, "machine_name": machine, "minutes": minutes,
+                       "placement": "urgent" if placement == "แทรกก่อนคิวรอ" else "append"})
+    return stages
+
+
+def render_flow_qc_result(task, prefix):
+    task_id = safe_int(task.get("id"), 0)
+    st.info("ใบตรวจรับหลังผลิต: Finish ผ่าน = Drawing จบสมบูรณ์ • ไม่ผ่าน = ส่งกลับแก้ไข ไม่เปิดชั่วโมงงานเดิม")
+    with st.form(f"{prefix}_flow_qc_{task_id}"):
+        verdict = st.radio("ผลตรวจรับ", ["ผ่านตามแบบ", "ไม่ผ่าน — ส่งกลับแก้ไข"])
+        note = st.text_area("ผลตรวจ / จุดที่ต้องแก้ไข (ต้องระบุเมื่อไม่ผ่าน)")
+        rework_mode = st.radio("กรณีไม่ผ่าน", ["ส่งให้ผู้วางแผนจัดคิว", "ระบุเส้นทางแก้ไขตอนนี้"])
+        qty = st.number_input("จำนวนชิ้นที่ต้องแก้ไข", min_value=1, value=1, step=1)
+        st.caption("เส้นทางด้านล่างใช้เฉพาะเมื่อเลือกไม่ผ่านและระบุเส้นทางตอนนี้")
+        stage_frame = flow_stage_editor(f"{prefix}_flow_rework_{task_id}", optional=True)
+        confirmed = st.checkbox("ตรวจสอบผลแล้ว ยืนยันบันทึก")
+        submit = st.form_submit_button("บันทึกผลตรวจ / Finish QC", type="primary", use_container_width=True)
+    if submit:
+        if not confirmed:
+            st.warning("กรุณายืนยันผลตรวจ")
+            return
+        if verdict.startswith("ไม่ผ่าน") and not note.strip():
+            st.warning("กรุณาระบุจุดที่ไม่ผ่านและสิ่งที่ต้องแก้ไข")
+            return
+        payload = {"task_id": task_id, "verdict": "pass" if verdict == "ผ่านตามแบบ" else "fail", "note": note.strip()}
+        if payload["verdict"] == "fail" and rework_mode == "ระบุเส้นทางแก้ไขตอนนี้":
+            try:
+                payload.update(stages=flow_validate_stages(stage_frame), qty=int(qty))
+            except ValueError as exc:
+                st.warning(str(exc))
+                return
+        if flow_command("qc_result", payload):
+            st.rerun()
+
+
+def render_flow_center(jobs=None, *, admin=False, prefix="production"):
+    if st.session_state.pop("_flow_notice", None):
+        st.success("บันทึกเส้นทางผลิต / ผล QC เรียบร้อย")
+    with st.expander("🔄 เส้นทางผลิต → ตรวจรับ QC → งานแก้ไข / งานจบสมบูรณ์"):
+        try:
+            settings = fetch_flow_rows("tpc_flow_settings")
+            if not settings:
+                st.info("ยังไม่เปิดระบบตรวจรับหลังผลิต กรุณารัน TPC_QC_Routing_Setup.sql ก่อน")
+                return
+            cfg = settings[0]
+            qc_names = [name for name in QC_ASSIGNEES[1:] if name != "ปวีณ์กร ลิอุบล"]
+            enabled = bool(cfg.get("enabled_at"))
+            st.caption("ผลิตเสร็จจะปิดชั่วโมงเครื่องทันที ส่วนจบสมบูรณ์ต้องผ่าน QC • ไม่เปลี่ยนประวัติงานเก่าที่จบก่อนเปิดใช้")
+            if enabled:
+                st.success("เปิดการส่ง QC อัตโนมัติแล้ว ตั้งแต่ " + flow_display_time(cfg.get("enabled_at")) + " (เวลาไทย)")
+            if admin:
+                with st.expander("⚙️ เปิดใช้ / ตั้งผู้ตรวจรับเริ่มต้น", expanded=not enabled):
+                    with st.form(f"{prefix}_flow_settings"):
+                        assigned = st.selectbox("ผู้รับผิดชอบ QC เริ่มต้น", ["รอจัดผู้ตรวจ QC"] + qc_names,
+                                               index=(["รอจัดผู้ตรวจ QC"] + qc_names).index(cfg["qc_assignee"])
+                                               if cfg["qc_assignee"] in ["รอจัดผู้ตรวจ QC"] + qc_names else 0)
+                        qc_minutes = st.number_input("เวลาแผนตรวจรับ (นาที)", min_value=1, value=max(1, int(cfg.get("qc_minutes", 30))))
+                        agree = st.checkbox("ยืนยันส่ง Drawing เข้า QC หลังผลิตครบ ตั้งแต่เปิดใช้นี้")
+                        enable = st.form_submit_button("เปิดใช้ / บันทึกค่าตรวจรับ")
+                    if enable and agree:
+                        if flow_command("enable", {"assignee": assigned, "qc_minutes": qc_minutes}):
+                            st.rerun()
+                if enabled:
+                    with st.expander("➕ สร้างใบงานแบบเส้นทางผลิตข้ามเครื่อง"):
+                        st.caption("กรอกแผนและ Drawing ครั้งเดียว; ระบบสร้างใบงานเครื่องถัดไปหลัง Finish เครื่องก่อนหน้า")
+                        generation = st.session_state.get(f"{prefix}_flow_create_generation", 0)
+                        with st.form(f"{prefix}_flow_create_{generation}"):
+                            plan = st.text_input("รหัสแผนงาน")
+                            drawing = st.text_input("Drawing")
+                            material = st.text_input("วัสดุ")
+                            qty = st.number_input("จำนวนชิ้น", min_value=1, value=1)
+                            assignee = st.selectbox("ผู้ตรวจรับ QC", ["รอจัดผู้ตรวจ QC"] + qc_names)
+                            stages = flow_stage_editor(f"{prefix}_flow_stages_{generation}")
+                            checked = st.checkbox("ยืนยันสร้างใบงานใหม่ตามเส้นทางนี้")
+                            submit = st.form_submit_button("สร้างเส้นทางผลิตและคิวเครื่องแรก")
+                        if submit:
+                            if not checked or not plan.strip() or not drawing.strip() or not material.strip():
+                                st.warning("กรุณาระบุแผน Drawing วัสดุ และยืนยันข้อมูล")
+                            else:
+                                try:
+                                    stage_payload = flow_validate_stages(stages)
+                                    key = f"{prefix}_flow_request"
+                                    request_key = st.session_state.setdefault(key, str(uuid.uuid4()))
+                                    if flow_command("create_route", {"request_key": request_key, "plan_code": plan.strip(),
+                                                "drawing_name": drawing.strip(), "material": material.strip(),
+                                                "qty": int(qty), "assignee": assignee, "stages": stage_payload}):
+                                        st.session_state.pop(key, None)
+                                        st.session_state[f"{prefix}_flow_create_generation"] = generation + 1
+                                        st.rerun()
+                                except ValueError as exc:
+                                    st.warning(str(exc))
+            cases = fetch_flow_rows("tpc_flow_cases") or []
+            if not cases:
+                st.info("ยังไม่มี Drawing ที่เข้ากระบวนการตรวจรับ")
+                return
+            accepted_cases = [c for c in cases if c["status"] == "accepted"]
+            with st.expander(f"✅ งานจบสมบูรณ์ — QC ตรวจผ่านแล้ว ({len(accepted_cases)} Drawing)"):
+                st.dataframe(pd.DataFrame([{
+                    "แผน": c["plan_code"], "Drawing": c["drawing_name"], "จำนวน": c["qty"],
+                    "รอบแก้ไข": c["cycle"], "QC ผ่านเมื่อ": flow_display_time(c["accepted_at"]),
+                } for c in accepted_cases]), hide_index=True, use_container_width=True)
+            statuses = st.multiselect("กรองสถานะ Drawing", list(FLOW_STATUS_LABELS),
+                                      default=[s for s in FLOW_STATUS_LABELS if s != "accepted"],
+                                      format_func=FLOW_STATUS_LABELS.get, key=f"{prefix}_flow_statuses")
+            selected_cases = [c for c in cases if c["status"] in statuses]
+            st.dataframe(pd.DataFrame([{
+                "แผน": c["plan_code"], "Drawing": c["drawing_name"], "จำนวน": c["qty"],
+                "สถานะ": FLOW_STATUS_LABELS[c["status"]], "รอบแก้ไข": c["cycle"],
+                "QC": c["qc_assignee"], "QC ผ่านเมื่อ": flow_display_time(c.get("accepted_at")),
+            } for c in selected_cases]), hide_index=True, use_container_width=True)
+            options = [c["id"] for c in selected_cases]
+            if not options:
+                return
+            lookup = {c["id"]: c for c in selected_cases}
+            case_id = st.selectbox("ดูเส้นทาง / ชั่วโมงผลิต / ผล QC", options, key=f"{prefix}_flow_case",
+                                   format_func=lambda value: f"{lookup[value]['plan_code']} | {lookup[value]['drawing_name']} | รอบ {lookup[value]['cycle']}")
+            case = lookup[case_id]
+            steps = fetch_flow_rows("tpc_flow_steps", {"case_id": f"eq.{case_id}"}) or []
+            steps.sort(key=lambda item: (item["cycle"], item["sequence"]))
+            if steps:
+                st.dataframe(pd.DataFrame([{
+                    "รอบ": item["cycle"], "ลำดับ": item["sequence"], "ขั้นตอน": item["name"],
+                    "เครื่อง": item["machine_name"], "นาทีแผน": item["minutes"], "จำนวน": item["qty"],
+                    "สถานะ": "ผลิตเสร็จ" if item.get("finished_at") else ("พร้อม / อยู่ในคิวเครื่อง" if item.get("job_id") else "รอขั้นก่อนหน้า"),
+                } for item in steps]), hide_index=True)
+            if admin and jobs is None:
+                jobs = fetch_jobs_from_supabase()
+            if admin and isinstance(jobs, pd.DataFrame) and "flow_case_id" in jobs:
+                linked = jobs[jobs["flow_case_id"].astype(str).eq(case_id)]
+                cycle_by_job = {safe_int(item["job_id"], 0): item["cycle"] for item in steps if item.get("job_id")}
+                cost_rows = []
+                for _, job in linked.iterrows():
+                    start, end = first_valid_datetime(job.get("เริ่มจริง")), first_valid_datetime(job.get("เสร็จจริง"))
+                    hours = get_net_actual_work_seconds(start, end, job.get("เวลาพักสะสม (วินาที)", 0)) / 3600 if start and end else None
+                    cost = production_machine_actual_cost(job, DEFAULT_RATES) if start and end else None
+                    cost_rows.append({"เครื่อง": job.get("เลือกเครื่องจักร"), "ขั้นตอน": job.get("ขั้นตอน (Step)"),
+                                      "รอบแก้ไข": cycle_by_job.get(safe_int(job["ID"]), 0),
+                                      "ชั่วโมงเครื่องสุทธิ": hours, "ต้นทุนตามเรทมาตรฐาน": cost, "สถานะ": job.get("สถานะงาน")})
+                st.dataframe(pd.DataFrame(cost_rows), hide_index=True)
+                st.caption("ต้นทุนในตารางนี้ใช้เรทมาตรฐาน; รายงานต้นทุนเดิมยังนับจากใบงานเครื่องแต่ละใบครั้งเดียว ไม่รวมเวลารอ QC")
+            events = fetch_flow_rows("tpc_flow_events", {"case_id": f"eq.{case_id}"}) or []
+            if events:
+                st.dataframe(pd.DataFrame([{"รอบ": e["cycle"], "เหตุการณ์": e["event"],
+                                            "รายละเอียด": e["details"], "เวลา": flow_display_time(e["created_at"])} for e in events]), hide_index=True)
+            if admin and case["status"] == "rework_planning":
+                with st.form(f"{prefix}_flow_plan_rework_{case_id}_{case['cycle']}"):
+                    st.write("จัดเส้นทางแก้ไข — สร้างใบงานใหม่เชื่อม Drawing เดิม")
+                    qty = st.number_input("จำนวนชิ้นที่แก้ไข", min_value=1, max_value=int(case["qty"]), value=int(case["qty"]))
+                    frame = flow_stage_editor(f"{prefix}_flow_rework_stages_{case_id}_{case['cycle']}")
+                    checked = st.checkbox("ยืนยันจัดคิวแก้ไข")
+                    submit = st.form_submit_button("ส่งเข้าคิวแก้ไขขั้นแรก")
+                if submit and checked:
+                    try:
+                        stages = flow_validate_stages(frame)
+                        if flow_command("plan_rework", {"case_id": case_id, "expected_cycle": case["cycle"], "qty": int(qty), "stages": stages}):
+                            st.rerun()
+                    except ValueError as exc:
+                        st.warning(str(exc))
+            if admin and case["status"] == "waiting_qc":
+                qc = fetch_department_work_orders("QC")
+                if isinstance(qc, pd.DataFrame) and "flow_case_id" in qc:
+                    relevant = qc[qc["flow_case_id"].astype(str).eq(case_id) & qc["flow_cycle"].eq(case["cycle"])]
+                    for _, task in relevant.iterrows():
+                        if task["status"] == "🟧 รอรับงาน":
+                            with st.form(f"{prefix}_flow_assign_{task['id']}"):
+                                assignee = st.selectbox("จัดผู้ตรวจ QC ให้ใบงานนี้", qc_names)
+                                submit = st.form_submit_button("บันทึกผู้ตรวจ")
+                            if submit and flow_command("assign_qc", {"task_id": safe_int(task["id"]), "assignee": assignee}):
+                                st.rerun()
+                        elif task["status"] == "🟦 กำลังทำ":
+                            render_flow_qc_result(task, prefix)
+        except (requests.RequestException, ValueError) as exc:
+            st.error(str(exc))
 
 
 def render_work_calendar_admin(jobs):
@@ -9517,11 +9817,15 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
         df_db = fetch_jobs_from_supabase()
 
+        if not is_admin:
+            render_flow_center(df_db, admin=False, prefix="viewer")
+
         if is_admin:
             saved_calendar = st.session_state.pop("_tpc_calendar_saved", None)
             if saved_calendar:
                 st.success(saved_calendar)
             render_work_calendar_admin(df_db)
+            render_flow_center(df_db, admin=True)
 
             @st.fragment
             def render_waiting_start_requirement():
@@ -10639,7 +10943,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "สถานะงาน", "ลบ"
                         ],
                         column_config={
-                            "ID": None,
+                            "ID": None, "flow_case_id": None,
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75),
                             "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=250),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, min_value=1, max_value=10000, step=1, format="%d"),
@@ -10792,7 +11096,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             def blank_editor_job_record():
                                 record = {column_name: None for column_name in submitted_editor_df.columns}
                                 record.update({
-                                    "ID": None,
+                                    "ID": None, "flow_case_id": None,
                                     "จำนวน": 1,
                                     "วัสดุ": "SS400",
                                     "ประเภทงาน": "🟢 งานปกติ",
@@ -11330,7 +11634,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     "เริ่มขึ้นงานตามแผน", "จบงานตามแผน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)"
                 ],
                 column_config={
-                    "ID": None,
+                    "ID": None, "flow_case_id": None,
                     "เครื่องจักร / แผนก": st.column_config.TextColumn("เครื่องจักร", width=115),
                     "ลำดับคิว": st.column_config.TextColumn("คิว", width=60),
                     "สถานะ": st.column_config.TextColumn("สถานะ", width=105),
@@ -11387,7 +11691,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # =====================================================
             # 5. ตารางสรุปประวัติงานที่เสร็จสิ้น (Finished Production History)
             # =====================================================
-            st.subheader("✅ ตารางสรุปประวัติงานผลิตที่เสร็จแล้ว (Finished History - เริ่มจริง / เสร็จจริง)")
+            st.subheader("🏭 ประวัติขั้นตอนผลิตเสร็จ — ชั่วโมงเครื่อง (งานจบสมบูรณ์ดูผล QC)")
 
             if not finished_jobs_df.empty:
                 fin_display_df = finished_jobs_df.copy()
@@ -11807,7 +12111,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                             "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)", "รวม (ชม.)", "เวลาจริงสุทธิ (ชม.)", "ผลเทียบแผน", "สถานะงาน", "ลบประวัติ"
                         ],
                         column_config={
-                            "ID": None,
+                            "ID": None, "flow_case_id": None,
                             "แผนงาน": st.column_config.TextColumn("แผนงาน", width=75, disabled=True),
                             "ชื่อ Drawing.": st.column_config.TextColumn("Drawing", width=180, disabled=True),
                             "จำนวน": st.column_config.NumberColumn("จำนวน", width=55, format="%d", disabled=True),
@@ -12432,6 +12736,7 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
     st.subheader("📈 ติดตามสถานการณ์ฝ่ายผลิต")
     
     df_db = fetch_jobs_from_supabase()
+    render_flow_center(df_db, admin=False, prefix="monitor")
 
     # เปิดให้หน่วยงานอื่นตรวจดูแผน Production จากหน้าวิเคราะห์ Drawing ได้
     # ใช้ข้อมูลและตรรกะเดียวกับหน้า Project Master แต่ปิดคำสั่งเพิ่ม/แก้ไข/ลบ/พิมพ์ทั้งหมด
