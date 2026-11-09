@@ -9167,6 +9167,9 @@ def render_work_calendar_admin(jobs):
             st.rerun()
 
 
+# Reserve a visible diagnostic panel above the selected page.
+_tpc_performance_slot = st.container() if st.session_state.get("user_role") == "admin" else None
+
 if tv_rotation_mode and tv_rotation_index == 4:
     @st.fragment(run_every=10)
     def render_tv_master_chart():
@@ -14871,8 +14874,8 @@ elif not tv_rotation_mode:
 
 
 # Read-only diagnostics, visible to the logged-in administrator on every mode.
-if st.session_state.get("user_role") == "admin":
-    with st.sidebar.expander("⏱️ ตรวจสอบความเร็วระบบ", expanded=False):
+if st.session_state.get("user_role") == "admin" and _tpc_performance_slot is not None:
+    with _tpc_performance_slot.expander("⏱️ ตรวจสอบความเร็วระบบ", expanded=False):
         elapsed = tpc_auth_time.perf_counter() - _tpc_render_started
         records = list(st.session_state.get("_tpc_request_timings", []))
         network = sum(row["seconds"] for row in records)
