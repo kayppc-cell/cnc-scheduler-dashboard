@@ -7078,11 +7078,15 @@ def render_operator_management(person,tasks,training=False):
     notice=st.session_state.pop("operator_management_feedback",None)
     if notice:st.success(notice)
     eligible=tasks[~tasks["status"].astype(str).str.contains("เสร็จ|ยกเลิก",regex=True)].copy() if not tasks.empty else tasks
-    if eligible.empty:return
+    st.markdown("#### 👥 ส่งต่องานและคืนคิว Start ผิด")
+    st.caption("เครื่องมือผู้ปฏิบัติงาน รุ่น 09/11/2026 R2")
+    if eligible.empty:
+        st.info("ยังไม่มีงานเปิดของผู้ปฏิบัติงานคนนี้ให้ส่งต่อหรือคืนคิว")
+        return
     by_id={safe_int(row["id"]):row.to_dict() for _,row in eligible.iterrows()}
     prefix="training" if training else "live"
     label=lambda value:f"{safe_str(by_id[value].get('plan_code'))} | {safe_str(by_id[value].get('drawing_name'))} | {safe_str(by_id[value].get('title'))} | {safe_str(by_id[value].get('status'))}"
-    with st.expander("👥 ส่งต่องาน / เปลี่ยนผู้ทำงาน"):
+    with st.expander("👥 ส่งต่องาน / เปลี่ยนผู้ทำงาน", expanded=True):
         st.caption("ย้ายได้ในแผนกเดียวกัน • เก็บชั่วโมงของคนเดิม • งานที่เริ่มแล้วจะพักและรอคนใหม่กด Resume")
         source=st.selectbox("เลือกงานที่จะส่งต่อ",list(by_id),format_func=label,key=f"{prefix}_handover_source_{person}")
         dept=by_id[source]["department"]
@@ -7099,7 +7103,7 @@ def render_operator_management(person,tasks,training=False):
                 if not agree:st.warning("กรุณาติ๊กยืนยันก่อนส่งต่อ")
                 elif apply_operator_management(person,"transfer",by_id[source],target,reason+(" — "+note if note else ""),training):st.rerun()
     wrong={i:r for i,r in by_id.items() if r.get("status") in ("🟦 กำลังทำ","🟨 พักงาน")}
-    with st.expander("↩️ ยกเลิก Start ผิด → คืนเป็นคิวรอ"):
+    with st.expander("↩️ ยกเลิก Start ผิด → คืนเป็นคิวรอ", expanded=True):
         st.caption("ใช้เฉพาะกดผิดและไม่ได้ทำงานจริง • เวลาที่กดผิดจะไม่คิดเป็นเวลาทำงาน แต่เก็บประวัติการยกเลิกไว้")
         if not wrong:st.info("ไม่มีงานกำลังทำหรืองานพักที่จะคืนคิว")
         else:
