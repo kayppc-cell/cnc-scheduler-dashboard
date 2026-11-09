@@ -7046,6 +7046,71 @@ def render_operator_upcoming(person):
         st.warning("ยังอัปเดตงานกำลังจะเข้ามาไม่ได้ กรุณารีเฟรชหรือตรวจการติดตั้ง SQL เส้นทางผลิต")
 
 
+def _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, fragment_mode=False):
+    has_next_step = current_step_index < len(tracked_steps) - 1
+    finish_button_label = f'✅ จบ Step {current_step_index + 1} → รอ Start Step {current_step_index + 2}' if has_next_step else '🏁 Finish Drawing (ครบทุก Step)'
+    if st.button(finish_button_label, key=f'btn_finish_step_{target_id}', type='primary', use_container_width=True):
+        st.session_state.pending_shop_finish_confirmation = {'job_id': target_id, 'machine': selected_m, 'step_index': current_step_index, 'nonce': uuid.uuid4().hex}
+    pending_finish = st.session_state.get('pending_shop_finish_confirmation')
+    pending_matches = bool(pending_finish and safe_int(pending_finish.get('job_id')) == target_id and (safe_str(pending_finish.get('machine')) == safe_str(selected_m)) and (safe_int(pending_finish.get('step_index'), -1) == current_step_index))
+    if pending_matches:
+        finish_action_text = f'จบ Step {current_step_index + 1} และให้ Step {current_step_index + 2} รอ Start' if has_next_step else 'Finish Drawing นี้'
+        st.warning(f'⚠️ ยืนยันว่าจะ {finish_action_text} หรือไม่?  \nแผนงาน: **{plan_code}** | Drawing: **{drawing_code}** | Step: **{current_step_name}**')
+        confirm_finish_col, cancel_finish_col = st.columns(2)
+        with cancel_finish_col:
+            cancel_finish = st.button('✖️ ยกเลิก', key=f"cancel_finish_step_{target_id}_{pending_finish.get('nonce', 'current')}", use_container_width=True)
+        with confirm_finish_col:
+            confirm_finish = st.button('✅ ยืนยัน Finish', key=f"confirm_finish_step_{target_id}_{pending_finish.get('nonce', 'current')}", type='primary', use_container_width=True)
+        if cancel_finish:
+            st.session_state.pop('pending_shop_finish_confirmation', None)
+            st.rerun(scope='fragment' if fragment_mode else 'app')
+        if confirm_finish:
+            fetch_jobs_from_supabase.clear()
+            fresh_finish_jobs = fetch_jobs_from_supabase()
+            fresh_finish_rows = fresh_finish_jobs[fresh_finish_jobs['ID'].apply(safe_int).eq(target_id)].copy()
+            if fresh_finish_rows.empty:
+                st.session_state.pop('pending_shop_finish_confirmation', None)
+                st.error('ไม่พบคิวงานนี้แล้ว กรุณารีเฟรชหน้าจอ')
+                st.rerun()
+            fresh_finish_row = fresh_finish_rows.iloc[0]
+            fresh_finish_status = safe_str(fresh_finish_row.get('สถานะงาน'), '')
+            fresh_step_progress = normalize_step_progress(fresh_finish_row.get('ติดตาม Step'), fresh_finish_row.get('ขั้นตอน (Step)'), fresh_finish_status, fresh_finish_row.get('เริ่มจริง'), fresh_finish_row.get('เสร็จจริง'))
+            fresh_step_index = safe_int(fresh_step_progress.get('current_index'), 0)
+            fresh_tracked_steps = fresh_step_progress.get('steps', [])
+            if 'กำลังผลิต' not in fresh_finish_status or fresh_step_index != current_step_index or fresh_step_index >= len(fresh_tracked_steps):
+                st.session_state.pop('pending_shop_finish_confirmation', None)
+                st.error('⚠️ สถานะหรือ Step ของคิวเปลี่ยนไปแล้ว ระบบยังไม่บันทึก Finish กรุณาตรวจสอบใหม่')
+                st.rerun()
+            step_finish_dt = get_bangkok_now().replace(tzinfo=None)
+            step_finish_str = step_finish_dt.strftime('%Y-%m-%d %H:%M:%S')
+            fresh_tracked_steps[fresh_step_index]['finished_at'] = step_finish_str
+            fresh_has_next_step = fresh_step_index < len(fresh_tracked_steps) - 1
+            if fresh_has_next_step:
+                fresh_step_progress['current_index'] = fresh_step_index + 1
+                fresh_tracked_steps[fresh_step_index + 1]['started_at'] = None
+                fresh_tracked_steps[fresh_step_index + 1]['pending_pause_started_at'] = step_finish_str
+                finish_payload = {'status': '🟧 รอคิวผลิต', 'actual_finish': None, 'hold_started_at': None, 'step_progress': fresh_step_progress}
+            else:
+                finish_payload = {'status': '🟩 เสร็จสิ้นแล้ว', 'actual_finish': step_finish_str, 'hold_started_at': None, 'step_progress': fresh_step_progress}
+            if update_supabase_job(target_id, finish_payload):
+                st.session_state.pop('pending_shop_finish_confirmation', None)
+                if fresh_has_next_step:
+                    next_step_name = safe_str(fresh_tracked_steps[fresh_step_index + 1].get('name'), 'Step ถัดไป')
+                    log_job_event(target_id, plan_code, drawing_code, selected_m, 'Finish Step', fresh_step_index + 1, current_step_name)
+                    st.toast(f'จบ Step แล้ว กรุณากด Start และยืนยันเพื่อเริ่ม {next_step_name}', icon='➡️')
+                else:
+                    log_job_event(target_id, plan_code, drawing_code, selected_m, 'Finish Drawing', fresh_step_index + 1, current_step_name)
+                    st.session_state.operator_finish_feedback = build_operator_finish_feedback(pd.DataFrame([fresh_finish_row]), step_finish_dt)
+                st.rerun()
+            else:
+                st.error('บันทึกจบ Step ไม่สำเร็จ')
+
+
+@st.fragment
+def render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name):
+    _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, fragment_mode=True)
+
+
 def render_department_operator_mode(training=False):
     """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
     fetch_department_work_orders = fetch_training_operator_tasks if training else fetch_operator_live_tasks
@@ -9688,131 +9753,10 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                             else:
                                                 st.error("เปลี่ยนสถานะพักงานไม่สำเร็จ")
                             with c_btn_finish:
-                                has_next_step = current_step_index < len(tracked_steps) - 1
-                                finish_button_label = (
-                                    f"✅ จบ Step {current_step_index + 1} → รอ Start Step {current_step_index + 2}"
-                                    if has_next_step else "🏁 Finish Drawing (ครบทุก Step)"
-                                )
-                                if st.button(finish_button_label, key=f"btn_finish_step_{target_id}", type="primary", use_container_width=True):
-                                    # แตะครั้งแรกเป็นเพียงการเปิดกล่องยืนยัน ห้ามบันทึก Finish ทันที
-                                    st.session_state.pending_shop_finish_confirmation = {
-                                        "job_id": target_id,
-                                        "machine": selected_m,
-                                        "step_index": current_step_index,
-                                        "armed_at": get_bangkok_str(),
-                                        "nonce": uuid.uuid4().hex,
-                                    }
-                                    st.rerun()
-
-                                pending_finish = st.session_state.get("pending_shop_finish_confirmation")
-                                pending_matches = bool(
-                                    pending_finish
-                                    and safe_int(pending_finish.get("job_id")) == target_id
-                                    and safe_str(pending_finish.get("machine")) == safe_str(selected_m)
-                                    and safe_int(pending_finish.get("step_index"), -1) == current_step_index
-                                )
-                                if pending_matches:
-                                    confirmation_started = parse_flexible_datetime(pending_finish.get("armed_at"))
-                                    confirmation_now = get_bangkok_now().replace(tzinfo=None)
-                                    confirmation_expired = bool(
-                                        confirmation_started is None
-                                        or (confirmation_now - confirmation_started).total_seconds() > 30
-                                    )
-                                    if confirmation_expired:
-                                        st.session_state.pop("pending_shop_finish_confirmation", None)
-                                        st.warning("⌛ การยืนยัน Finish หมดอายุแล้ว กรุณากดปุ่ม Finish ใหม่")
-                                    else:
-                                        finish_action_text = (
-                                            f"จบ Step {current_step_index + 1} และให้ Step {current_step_index + 2} รอ Start"
-                                            if has_next_step else "Finish Drawing นี้"
-                                        )
-                                        st.warning(
-                                            f"⚠️ ยืนยันว่าจะ {finish_action_text} หรือไม่?  \n"
-                                            f"แผนงาน: **{plan_code}** | Drawing: **{drawing_code}** | Step: **{current_step_name}**"
-                                        )
-                                        confirm_finish_col, cancel_finish_col = st.columns(2)
-                                        with cancel_finish_col:
-                                            cancel_finish = st.button(
-                                                "✖️ ยกเลิก",
-                                                key=f"cancel_finish_step_{target_id}_{pending_finish.get('nonce', 'current')}",
-                                                use_container_width=True,
-                                            )
-                                        with confirm_finish_col:
-                                            confirm_finish = st.button(
-                                                "✅ ยืนยัน Finish",
-                                                key=f"confirm_finish_step_{target_id}_{pending_finish.get('nonce', 'current')}",
-                                                type="primary",
-                                                use_container_width=True,
-                                            )
-
-                                        if cancel_finish:
-                                            st.session_state.pop("pending_shop_finish_confirmation", None)
-                                            st.rerun()
-
-                                        if confirm_finish:
-                                            # อ่านสถานะล่าสุดก่อนบันทึก ป้องกันการกดยืนยันซ้ำหรือสถานะถูกเปลี่ยนจากหน้าจออื่น
-                                            fetch_jobs_from_supabase.clear()
-                                            fresh_finish_jobs = fetch_jobs_from_supabase()
-                                            fresh_finish_rows = fresh_finish_jobs[
-                                                fresh_finish_jobs["ID"].apply(safe_int).eq(target_id)
-                                            ].copy()
-                                            if fresh_finish_rows.empty:
-                                                st.session_state.pop("pending_shop_finish_confirmation", None)
-                                                st.error("ไม่พบคิวงานนี้แล้ว กรุณารีเฟรชหน้าจอ")
-                                                st.rerun()
-
-                                            fresh_finish_row = fresh_finish_rows.iloc[0]
-                                            fresh_finish_status = safe_str(fresh_finish_row.get("สถานะงาน"), "")
-                                            fresh_step_progress = normalize_step_progress(
-                                                fresh_finish_row.get("ติดตาม Step"),
-                                                fresh_finish_row.get("ขั้นตอน (Step)"),
-                                                fresh_finish_status,
-                                                fresh_finish_row.get("เริ่มจริง"),
-                                                fresh_finish_row.get("เสร็จจริง"),
-                                            )
-                                            fresh_step_index = safe_int(fresh_step_progress.get("current_index"), 0)
-                                            fresh_tracked_steps = fresh_step_progress.get("steps", [])
-                                            if (
-                                                "กำลังผลิต" not in fresh_finish_status
-                                                or fresh_step_index != current_step_index
-                                                or fresh_step_index >= len(fresh_tracked_steps)
-                                            ):
-                                                st.session_state.pop("pending_shop_finish_confirmation", None)
-                                                st.error("⚠️ สถานะหรือ Step ของคิวเปลี่ยนไปแล้ว ระบบยังไม่บันทึก Finish กรุณาตรวจสอบใหม่")
-                                                st.rerun()
-
-                                            step_finish_dt = get_bangkok_now().replace(tzinfo=None)
-                                            step_finish_str = step_finish_dt.strftime("%Y-%m-%d %H:%M:%S")
-                                            fresh_tracked_steps[fresh_step_index]["finished_at"] = step_finish_str
-                                            fresh_has_next_step = fresh_step_index < len(fresh_tracked_steps) - 1
-                                            if fresh_has_next_step:
-                                                fresh_step_progress["current_index"] = fresh_step_index + 1
-                                                fresh_tracked_steps[fresh_step_index + 1]["started_at"] = None
-                                                fresh_tracked_steps[fresh_step_index + 1]["pending_pause_started_at"] = step_finish_str
-                                                finish_payload = {
-                                                    "status": "🟧 รอคิวผลิต", "actual_finish": None,
-                                                    "hold_started_at": None, "step_progress": fresh_step_progress,
-                                                }
-                                            else:
-                                                finish_payload = {
-                                                    "status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": step_finish_str,
-                                                    "hold_started_at": None, "step_progress": fresh_step_progress,
-                                                }
-
-                                            if update_supabase_job(target_id, finish_payload):
-                                                st.session_state.pop("pending_shop_finish_confirmation", None)
-                                                if fresh_has_next_step:
-                                                    next_step_name = safe_str(fresh_tracked_steps[fresh_step_index + 1].get("name"), "Step ถัดไป")
-                                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Step", fresh_step_index + 1, current_step_name)
-                                                    st.toast(f"จบ Step แล้ว กรุณากด Start และยืนยันเพื่อเริ่ม {next_step_name}", icon="➡️")
-                                                else:
-                                                    log_job_event(target_id, plan_code, drawing_code, selected_m, "Finish Drawing", fresh_step_index + 1, current_step_name)
-                                                    st.session_state.operator_finish_feedback = build_operator_finish_feedback(
-                                                        pd.DataFrame([fresh_finish_row]), step_finish_dt
-                                                    )
-                                                st.rerun()
-                                            else:
-                                                st.error("บันทึกจบ Step ไม่สำเร็จ")
+                                if training_active:
+                                    _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name)
+                                else:
+                                    render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name)
                         else:
                             if can_start:
                                 if st.button(f"{'▶️ Resume' if step_progress.get('yielded_for_urgent') else '🚀 Start'} Step {current_step_index + 1}: {current_step_name}", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
