@@ -7169,7 +7169,7 @@ def render_operator_live_queue_tools(person, tasks):
                     st.rerun()
 
 
-@st.fragment(run_every=30)
+@st.fragment(run_every=120)
 def render_operator_upcoming(person):
     """Read-only incoming forecast; QC work is created only after production Finish."""
     if person not in QC_ASSIGNEES[1:]:
@@ -7207,7 +7207,7 @@ def render_operator_upcoming(person):
                 detail = ready.rename(columns={"plan_code": "แผนงาน", "drawing_name": "Drawing", "work_type": "ประเภทงาน", "assignee": "ผู้รับผิดชอบ", "status": "สถานะ"})
                 columns = [name for name in ["แผนงาน", "Drawing", "ประเภทงาน", "ผู้รับผิดชอบ", "สถานะ"] if name in detail.columns]
                 st.dataframe(detail[columns], hide_index=True, use_container_width=True)
-        st.caption("อัปเดตทุก 30 วินาที · เวลาพร้อมตรวจเป็นเวลาคาดการณ์ตามคิวเครื่องและกะทำงาน เวลา QC เริ่มนับเมื่อกด Start")
+        st.caption("อัปเดตทุก 2 นาที · เวลาพร้อมตรวจเป็นเวลาคาดการณ์ตามคิวเครื่องและกะทำงาน เวลา QC เริ่มนับเมื่อกด Start")
         if st.button("🔄 อัปเดตคิวพร้อมตรวจ", key="qc_arrival_refresh_" + person):
             st.rerun(scope="app")
     except Exception as exc:
