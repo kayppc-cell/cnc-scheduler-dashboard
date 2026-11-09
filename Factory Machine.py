@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, datetime, timedelta, time as dtime
 from contextvars import ContextVar
+from functools import lru_cache
 
 _calendar_preview = ContextVar("tpc_calendar_preview", default=None)
 import zoneinfo
@@ -267,18 +268,34 @@ def parse_flexible_datetime(dt_val):
             dt_val = dt_val.replace(year=dt_val.year - 543)
         return dt_val
         
-    s = str(dt_val).strip()
+    text = str(dt_val).strip()
+    # Only a date without a year depends on today's year. Include it in the cache key.
+    year = get_bangkok_now().year if "/" in text and len(text.split()[0].split("/")) == 2 else 0
+    return _parse_datetime_text(text, year)
+
+
+@lru_cache(maxsize=16384)
+def _parse_datetime_text(text, current_year):
+    """Memoize immutable scalar dates within a render; never cache live elapsed time."""
+    s = text
     if s in ["", "None", "nan", "NaN", "null", "-", "NaT"]:
         return None
     
     # คงตัวเลขนาฬิกาตามที่ระบบเดิมบันทึกไว้ แล้วถอด Z/offset ออก
     # ตัวอย่าง 08:59+00:00 ต้องอ่านเป็น 08:59 ไม่ใช่แปลงซ้ำเป็น 15:59
     s = s.replace('T', ' ').split('+')[0].split('Z')[0].strip()
-    current_year = get_bangkok_now().year
 
     if "-" in s:
         parts_dash = s.split(" ")[0].split("-")
         if len(parts_dash) == 3 and len(parts_dash[0]) == 4:
+            # Supabase ISO timestamps: avoid Pandas format inference for each scalar.
+            # Keep uncommon/legacy inputs on the exact original fallback below.
+            if re.match(r"^\d{4}-\d{2}-\d{2}(?:$| )", s) and 1678 <= int(parts_dash[0]) <= 2261:
+                try:
+                    parsed = pd.Timestamp(s)
+                    return parsed.tz_localize(None) if parsed.tzinfo is not None else parsed
+                except (ValueError, OverflowError):
+                    pass
             dt_parsed = pd.to_datetime(s, errors='coerce')
             if pd.notna(dt_parsed):
                 if getattr(dt_parsed, 'tzinfo', None) is not None:
