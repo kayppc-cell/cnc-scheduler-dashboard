@@ -74,6 +74,18 @@ class TPCRequestsProxy:
 
 requests = TPCRequestsProxy()
 
+# Opt-in one-run profiler. No payloads, credentials or local variables are retained.
+import cProfile
+import pstats
+_tpc_detail_profiler = None
+if st.session_state.pop("_tpc_profile_next_run", False) and st.session_state.get("user_role") == "admin":
+    _tpc_detail_profiler = cProfile.Profile()
+    _tpc_detail_profiler.enable()
+
+def request_tpc_detail_profile():
+    st.session_state["_tpc_profile_next_run"] = True
+
+
 # ค่าเวลาเริ่มต้นต้องใช้ค่าเดียวกันทุกหน้า/รายงาน
 DEFAULT_SETUP_MINUTES = 10.0
 DEFAULT_BASIC_MINUTES = 0.0
@@ -14873,6 +14885,17 @@ elif not tv_rotation_mode:
     st.session_state.pop("_tv_rotation_index", None)
 
 
+# Stop before rendering diagnostics so its own table does not affect the results.
+if _tpc_detail_profiler is not None:
+    _tpc_detail_profiler.disable()
+    _tpc_stats = pstats.Stats(_tpc_detail_profiler)
+    _tpc_rows = []
+    for (_filename, _line, _name), (_primitive, _calls, _self_time, _cumulative, _callers) in _tpc_stats.stats.items():
+        _tpc_rows.append({"ส่วนงาน": os.path.basename(_filename) + ":" + str(_line) + " · " + _name,
+                          "จำนวนครั้ง": _calls, "เวลาเฉพาะส่วน (วินาที)": round(_self_time, 3),
+                          "เวลารวมงานย่อย (วินาที)": round(_cumulative, 3)})
+    st.session_state["_tpc_profile_result"] = sorted(_tpc_rows, key=lambda row: row["เวลารวมงานย่อย (วินาที)"], reverse=True)[:25]
+
 # Read-only diagnostics, visible to the logged-in administrator on every mode.
 if st.session_state.get("user_role") == "admin" and _tpc_performance_slot is not None:
     with _tpc_performance_slot.expander("⏱️ ตรวจสอบความเร็วระบบ", expanded=False):
@@ -14886,3 +14909,9 @@ if st.session_state.get("user_role") == "admin" and _tpc_performance_slot is not
         else:
             st.caption("รอบนี้ใช้ข้อมูลที่เก็บไว้ชั่วคราว ไม่มีการเรียกฐานข้อมูลใหม่")
         st.caption("หากหน้าจอยังหน่วง ส่งภาพส่วนนี้มาเพื่อตรวจจุดที่ช้าได้ครับ")
+
+        st.button("🔎 วัดรายละเอียดความช้า 1 รอบ", key="tpc_profile_once", on_click=request_tpc_detail_profile)
+        profile_rows = st.session_state.get("_tpc_profile_result")
+        if profile_rows:
+            st.caption("ผลจากรอบที่กดวัดรายละเอียด · ตารางนี้อาจเพิ่มภาระขณะวัด · เวลารวมงานย่อยซ้อนกัน ห้ามนำแต่ละแถวมาบวกกัน")
+            st.dataframe(pd.DataFrame(profile_rows), hide_index=True, use_container_width=True)
