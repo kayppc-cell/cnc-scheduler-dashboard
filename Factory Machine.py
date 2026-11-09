@@ -2822,6 +2822,13 @@ def normalize_status(status_str: str) -> str:
     else:
         return "🟧 รอคิวผลิต"
 
+def response_page_is_last(response, page_size):
+    """Use the server's exact range, never assume its configured row limit."""
+    content_range = getattr(response, "headers", {}).get("Content-Range", "")
+    match = re.fullmatch(r"(\d+)-(\d+)/(\d+)", content_range.strip())
+    return bool(match and page_size > 0 and int(match[2])+1 >= int(match[3]))
+
+
 def read_all_job_rows(endpoint, headers, filters=None):
     """Read stable ID pages, including when the server caps responses below our limit."""
     rows = []
@@ -2831,7 +2838,7 @@ def read_all_job_rows(endpoint, headers, filters=None):
         params.update({"select": "*", "order": "id.asc", "limit": 500})
         if last_id is not None:
             params["id"] = f"gt.{last_id}"
-        response = requests.get(endpoint, headers=headers, params=params, timeout=8)
+        response = requests.get(endpoint, headers={**headers, "Prefer": "count=exact"}, params=params, timeout=8)
         if response.status_code not in (200, 206):
             raise ValueError(f"โหลดใบงานไม่ครบ (HTTP {response.status_code})")
         page = response.json()
@@ -2844,6 +2851,8 @@ def read_all_job_rows(endpoint, headers, filters=None):
             raise ValueError("ข้อมูลใบงานแต่ละชุดไม่ต่อเนื่อง กรุณารีเฟรชใหม่")
         rows.extend(page)
         last_id = ids[-1]
+        if response_page_is_last(response, len(page)):
+            return rows
 
 
 def get_complete_job_response(endpoint, headers, params=None, timeout=8):
@@ -8198,19 +8207,19 @@ def fetch_flow_rows(table, query=None):
     while True:
         response = requests.get(
             st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/" + table,
-            headers=flow_api_headers(), params={
+            headers={**flow_api_headers(), "Prefer": "count=exact"}, params={
                 "select": "*", "order": "id.asc" if table != "tpc_flow_settings" else "singleton.asc",
                 "limit": 200, "offset": len(rows), **(query or {}),
             }, timeout=10)
         if response.status_code == 404:
             return None
-        if response.status_code != 200:
+        if response.status_code not in (200, 206):
             raise ValueError("อ่านข้อมูลเส้นทางผลิต/QC ไม่สำเร็จ กรุณารีเฟรช")
         page = response.json()
         if not isinstance(page, list):
             raise ValueError("ข้อมูลเส้นทางผลิต/QC ไม่ถูกต้อง")
         rows.extend(page)
-        if not page:
+        if not page or response_page_is_last(response, len(page)):
             return rows
 
 
@@ -8575,10 +8584,14 @@ def flow_event_history_rows(events, steps):
     return result
 
 
+@st.fragment
 def render_flow_center(jobs=None, *, admin=False, prefix="production"):
     if st.session_state.pop("_flow_notice", None):
         st.success("บันทึกเส้นทางผลิต / ผล QC เรียบร้อย")
     with st.expander("🔄 เส้นทางผลิต → ตรวจรับ QC → งานแก้ไข / งานจบสมบูรณ์"):
+        if not st.checkbox("เปิดตารางเส้นทางผลิต / ผล QC", key=f"{prefix}_load_flow_center"):
+            st.caption("ติ๊กเพื่อโหลดรายละเอียดเมื่อใช้งาน ลดการโหลดซ้ำระหว่างทำงานส่วนอื่น")
+            return
         try:
             settings = fetch_flow_rows("tpc_flow_settings")
             if not settings:
