@@ -5218,6 +5218,10 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
         ]
         history_cols = [col for col in history_cols if col in history_shown.columns]
         history_display = history_shown[history_cols].copy()
+        if "operator_labor_segments" in history_shown:
+            history_display["labor_contributors"]=history_shown.apply(lambda row:" → ".join(dict.fromkeys(
+                [safe_str(item.get("assignee")) for item in row.get("operator_labor_segments",[]) if isinstance(item,dict)]
+                +[safe_str(row.get("assignee"))])) if isinstance(row.get("operator_labor_segments"),list) and row.get("operator_labor_segments") else safe_str(row.get("assignee")),axis=1)
         actual_work_hours = history_shown.apply(
             lambda row: (
                 round(get_net_actual_work_seconds(
@@ -5272,6 +5276,7 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
                 "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width=58),
                 "id": None,
                 "qc_acceptance": st.column_config.TextColumn("ผลตรวจรับ QC", width=150),
+                "labor_contributors": st.column_config.TextColumn("ผู้ร่วมทำงาน / ส่งต่อ", width=220),
                 "finish_plan_status": st.column_config.TextColumn("ผลเทียบแผน", width=125),
                 "priority": st.column_config.TextColumn("เร่งด่วน", width=72),
                 "work_type": st.column_config.TextColumn("ประเภทงาน", width=135),
@@ -5387,6 +5392,8 @@ def render_department_time_cost_table(qc_tasks, now, department):
         if filtered_tasks.empty:
             st.info(f"ยังไม่มีใบงาน {label} ที่เสร็จแล้วสำหรับคำนวณเวลาและต้นทุน")
             return
+        filtered_tasks = expand_operator_labor_cost_rows(filtered_tasks)
+        st.caption("งานส่งต่อแยกชั่วโมงและต้นทุนตามผู้ทำงานจริง เวลาแผนถูกแบ่งตามสัดส่วนชั่วโมงจริงเพื่อไม่ให้นับซ้ำ")
         quick_filter = st.radio(
             "⚡ ค้นหาเร็ว",
             ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"],
@@ -5491,6 +5498,9 @@ def render_department_time_cost_table(qc_tasks, now, department):
             actual_hours = 0.0
             if actual_start is not None and actual_end is not None and actual_end > actual_start:
                 actual_hours = get_net_actual_work_seconds(actual_start, actual_end, paused_seconds) / 3600.0
+
+            if "_operator_actual_seconds" in task_row and pd.notna(task_row.get("_operator_actual_seconds")):
+                actual_hours=max(0,safe_float(task_row.get("_operator_actual_seconds"),0))/3600.0
 
             planned_cost = planned_hours * hourly_rate if hourly_rate is not None else None
             actual_cost = actual_hours * hourly_rate if hourly_rate is not None else None
@@ -6968,6 +6978,163 @@ def render_department_urgent_work_order(tasks, department):
                         st.rerun()
 
 
+def operator_json_clean(value):
+    if isinstance(value,dict):return {key:operator_json_clean(item) for key,item in value.items()}
+    if isinstance(value,(list,tuple)):return [operator_json_clean(item) for item in value]
+    if isinstance(value,(datetime,pd.Timestamp)):return value.isoformat()
+    if value is None or pd.isna(value):return None
+    return value.item() if hasattr(value,"item") else value
+
+
+def operator_management_preview(rows, person, action, task_id, target, reason, now, training=False):
+    rows = operator_json_clean(rows)
+    selected = next((row for row in rows if safe_int(row.get("id"),0)==task_id and row.get("assignee")==person), None)
+    if selected is None or selected.get("status") not in ("🟧 รอรับงาน","🟦 กำลังทำ","🟨 พักงาน"):
+        raise ValueError("คิวงานเปลี่ยนแล้ว กรุณารีเฟรช")
+    if not reason.strip():
+        raise ValueError("กรุณาเลือกเหตุผล")
+    names = [person]
+    if action=="transfer":
+        allowed = ([name for name in TRAINING_OPERATOR_NAMES if TRAINING_OPERATOR_DEPARTMENTS[name]==selected["department"]]
+                   if training else [name for name in get_department_assignees(selected["department"])[1:] if name!="ปวีณ์กร ลิอุบล"])
+        if target not in allowed or target==person:
+            raise ValueError("กรุณาเลือกคนใหม่ในแผนกเดียวกัน")
+        names.append(target)
+    elif action!="return_wrong_start":
+        raise ValueError("คำสั่งไม่ถูกต้อง")
+    snapshot_fields=("status","assignee","department","actual_start","actual_finish","hold_started_at","paused_seconds","planned_start_at","due_at","estimated_hours","operator_queue_position","updated_at")
+    snapshots=[{"id":safe_int(row["id"]),"expected":{key:row.get(key) for key in snapshot_fields}}
+               for row in rows if any(operator_person_active(row,name) for name in names)]
+    before=json.loads(json.dumps(selected))
+    history=selected.get("operator_action_history") or []
+    segments=selected.get("operator_labor_segments") or []
+    if action=="transfer":
+        start=first_valid_datetime(selected.get("actual_start"))
+        if start is not None:
+            hold=first_valid_datetime(selected.get("hold_started_at"))
+            net=get_net_actual_work_seconds(start,hold or now,safe_float(selected.get("paused_seconds"),0))
+            allocated=sum(safe_float(item.get("net_seconds"),0) for item in segments)
+            if allocated>net+1:
+                raise ValueError("ประวัติเวลาส่งต่อไม่ตรง กรุณาตรวจเวลาก่อน")
+            segments=segments+[{"assignee":person,"net_seconds":max(0,net-allocated),"closed_at":now.strftime("%Y-%m-%d %H:%M:%S")}]
+            selected.update(status="🟨 พักงาน",hold_started_at=selected.get("hold_started_at") or now.strftime("%Y-%m-%d %H:%M:%S"))
+        else:
+            selected.update(status="🟧 รอรับงาน",hold_started_at=None)
+        selected["assignee"]=target
+        position="training_queue_position" if training else "operator_queue_position"
+        selected[position]=max([safe_int(row.get(position),0) for row in rows if row.get("assignee")==target]+[0])+1
+        selected["operator_labor_segments"]=segments
+        history=history+[{"action":action,"from":person,"to":target,"reason":reason,"at":now.strftime("%Y-%m-%d %H:%M:%S")}]
+    else:
+        if selected.get("status") not in ("🟦 กำลังทำ","🟨 พักงาน") or not selected.get("actual_start") or segments:
+            raise ValueError("คืนได้เฉพาะงาน Start ผิดที่ยังไม่มีเวลาส่งต่อจากคนอื่น")
+        history=history+[{"action":action,"reason":reason,"at":now.strftime("%Y-%m-%d %H:%M:%S"),"cancelled_snapshot":{key:value for key,value in before.items() if key not in ("operator_action_history","operator_labor_segments")}}]
+        selected.update(status="🟧 รอรับงาน",actual_start=None,actual_finish=None,hold_started_at=None,paused_seconds=0,pause_reason=None,pause_note=None)
+    selected["operator_action_history"]=history
+    updates=[]
+    for name in names:
+        position="training_queue_position" if training else "operator_queue_position"
+        for update in calculate_operator_person_chain(rows,name,now,position):
+            updates.append({**update,"assignee":name})
+            next(row for row in rows if safe_int(row["id"])==update["id"]).update(update)
+    return rows,{"snapshots":snapshots,"updates":updates}
+
+
+def apply_operator_management(person, action, task, target, reason, training=False):
+    try:
+        task=operator_json_clean(dict(task))
+        if training:
+            initialize_operator_training()
+            rows=st.session_state["training_operator_tasks"]
+        else:
+            frames=[fetch_operator_live_tasks(dept) for dept in ("QC","AUTOMATION")]
+            rows=pd.concat([frame for frame in frames if not frame.empty],ignore_index=True).to_dict("records")
+        rows=operator_json_clean(rows)
+        current=next((row for row in rows if safe_int(row.get("id"))==safe_int(task.get("id"))),None)
+        if current is None or any(not timing_value_matches(key,current.get(key),task.get(key)) for key in ("status","assignee","actual_start","hold_started_at","paused_seconds","updated_at")):
+            raise ValueError("ข้อมูลคิวเปลี่ยนแล้ว กรุณารีเฟรชก่อนทำรายการ")
+        changed,chain=operator_management_preview(rows,person,action,safe_int(task["id"]),target,reason,get_bangkok_now().replace(tzinfo=None),training)
+        if training:
+            st.session_state["training_operator_tasks"]=changed
+        else:
+            expected={key:current.get(key) for key in ("status","updated_at","assignee","actual_start","hold_started_at","paused_seconds")}
+            response=requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_operator_manage_v3",headers=get_supabase_headers(),
+                json={"p_person":person,"p_action":action,"p_task_id":safe_int(task["id"]),"p_target":target,"p_reason":reason,"p_expected":expected,"p_chain":chain},timeout=15)
+            if response.status_code==404:
+                raise ValueError("กรุณารัน TPC_Operator_Management_Setup.sql ก่อนใช้งาน")
+            if response.status_code not in (200,201) or response.json().get("ok") is not True:
+                raise ValueError(response.json().get("message","ยังยืนยันผลไม่ได้ กรุณารีเฟรชตรวจคิว"))
+            fetch_department_work_orders.clear()
+            fetch_flow_rows.clear()
+        st.session_state.pop("operator_pending_start",None)
+        st.session_state["operator_management_feedback"]="ส่งต่องานและคำนวณคิวทั้งสองคนแล้ว" if action=="transfer" else "คืนเป็นคิวรอแล้ว เก็บประวัติการ Start ที่ยกเลิกไว้"
+        return True
+    except Exception as exc:
+        st.error(f"ยังไม่ยืนยันผลบันทึก: {exc} กรุณารีเฟรชตรวจคิวก่อนลองซ้ำ")
+        return False
+
+
+def render_operator_management(person,tasks,training=False):
+    notice=st.session_state.pop("operator_management_feedback",None)
+    if notice:st.success(notice)
+    eligible=tasks[~tasks["status"].astype(str).str.contains("เสร็จ|ยกเลิก",regex=True)].copy() if not tasks.empty else tasks
+    if eligible.empty:return
+    by_id={safe_int(row["id"]):row.to_dict() for _,row in eligible.iterrows()}
+    prefix="training" if training else "live"
+    label=lambda value:f"{safe_str(by_id[value].get('plan_code'))} | {safe_str(by_id[value].get('drawing_name'))} | {safe_str(by_id[value].get('title'))} | {safe_str(by_id[value].get('status'))}"
+    with st.expander("👥 ส่งต่องาน / เปลี่ยนผู้ทำงาน"):
+        st.caption("ย้ายได้ในแผนกเดียวกัน • เก็บชั่วโมงของคนเดิม • งานที่เริ่มแล้วจะพักและรอคนใหม่กด Resume")
+        source=st.selectbox("เลือกงานที่จะส่งต่อ",list(by_id),format_func=label,key=f"{prefix}_handover_source_{person}")
+        dept=by_id[source]["department"]
+        people=([name for name in TRAINING_OPERATOR_NAMES if TRAINING_OPERATOR_DEPARTMENTS[name]==dept] if training else get_department_assignees(dept)[1:])
+        people=[name for name in people if name not in (person,"ปวีณ์กร ลิอุบล")]
+        if people:
+            with st.form(f"{prefix}_handover_{person}_{source}"):
+                target=st.selectbox("ผู้รับงานคนใหม่",people)
+                reason=st.selectbox("เหตุผลส่งต่อ",["ผู้รับผิดชอบเดิมไม่มา / ลา","ติดงานอื่น","ปรับแบ่งงานในทีม","เปลี่ยนผู้รับผิดชอบ","อื่น ๆ"])
+                note=st.text_input("รายละเอียดเพิ่มเติม (ถ้ามี)")
+                agree=st.checkbox("ยืนยันส่งต่องานให้คนที่เลือก")
+                submit=st.form_submit_button("👥 ยืนยันส่งต่องาน")
+            if submit:
+                if not agree:st.warning("กรุณาติ๊กยืนยันก่อนส่งต่อ")
+                elif apply_operator_management(person,"transfer",by_id[source],target,reason+(" — "+note if note else ""),training):st.rerun()
+    wrong={i:r for i,r in by_id.items() if r.get("status") in ("🟦 กำลังทำ","🟨 พักงาน")}
+    with st.expander("↩️ ยกเลิก Start ผิด → คืนเป็นคิวรอ"):
+        st.caption("ใช้เฉพาะกดผิดและไม่ได้ทำงานจริง • เวลาที่กดผิดจะไม่คิดเป็นเวลาทำงาน แต่เก็บประวัติการยกเลิกไว้")
+        if not wrong:st.info("ไม่มีงานกำลังทำหรืองานพักที่จะคืนคิว")
+        else:
+            with st.form(f"{prefix}_wrong_start_{person}"):
+                source=st.selectbox("งานที่กด Start ผิด",list(wrong),format_func=label)
+                reason=st.selectbox("เหตุผลคืนคิว",["เลือกผิด Drawing","เลือกผิดแผนงาน","กด Start โดยไม่ตั้งใจ","ยังไม่ได้เริ่มทำงานจริง","เลือกผู้ปฏิบัติงานผิด","อื่น ๆ"])
+                note=st.text_input("รายละเอียด (ถ้ามี)")
+                agree=st.checkbox("ยืนยันว่า Start ผิดและยังไม่ได้ทำงานจริง")
+                submit=st.form_submit_button("↩️ ยืนยันคืนคิว")
+            if submit:
+                if not agree:st.warning("กรุณายืนยันว่าไม่ได้ทำงานจริงก่อนคืนคิว")
+                elif apply_operator_management(person,"return_wrong_start",wrong[source],None,reason+(" — "+note if note else ""),training):st.rerun()
+
+
+def expand_operator_labor_cost_rows(tasks):
+    """Split finished work by actual contributors without duplicating total hours or plan."""
+    output=[]
+    for _,original in tasks.iterrows():
+        row=original.to_dict()
+        segments=row.get("operator_labor_segments")
+        if not isinstance(segments,list) or not segments:
+            output.append(row);continue
+        start,end=first_valid_datetime(row.get("actual_start")),first_valid_datetime(row.get("actual_finish"))
+        total=get_net_actual_work_seconds(start,end,safe_float(row.get("paused_seconds"),0)) if start and end else 0
+        allocated=sum(safe_float(item.get("net_seconds"),0) for item in segments)
+        total=max(total,allocated)  # Recorded contributions must not disappear after later calendar edits.
+        parts=segments+[{"assignee":row.get("assignee"),"net_seconds":max(0,total-allocated)}]
+        for index,part in enumerate(parts):
+            seconds=max(0,safe_float(part.get("net_seconds"),0))
+            item={**row,"assignee":part.get("assignee"),"_operator_actual_seconds":seconds}
+            item["estimated_hours"]=safe_float(row.get("estimated_hours"),0)*(seconds/total if total>0 else (1 if index==len(parts)-1 else 0))
+            output.append(item)
+    return pd.DataFrame(output)
+
+
 def render_operator_live_queue_tools(person, tasks):
     feedback = st.session_state.pop("operator_live_queue_feedback", None)
     if feedback:
@@ -7043,6 +7210,38 @@ def render_operator_upcoming(person):
         st.warning("ยังอัปเดตงานกำลังจะเข้ามาไม่ได้ กรุณารีเฟรชหรือตรวจการติดตั้ง SQL เส้นทางผลิต")
 
 
+def fetch_shop_finish_job(job_id):
+    """Read one uncached job for Finish validation, without downloading the factory."""
+    response = requests.get(st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs",
+                            headers=get_supabase_headers(), params={"id": f"eq.{int(job_id)}", "select": "*", "limit": 1}, timeout=8)
+    if response.status_code not in (200, 206):
+        raise ValueError("ตรวจสถานะล่าสุดก่อน Finish ไม่สำเร็จ กรุณาลองใหม่")
+    rows = response.json()
+    if not isinstance(rows, list):
+        raise ValueError("ข้อมูลคิวงานไม่ถูกต้อง ยังไม่บันทึก Finish")
+    if not rows:
+        return pd.DataFrame()
+    if len(rows)!=1 or safe_int(rows[0].get("id"),0)!=int(job_id):
+        raise ValueError("ข้อมูลคิวงานไม่ตรงกัน ยังไม่บันทึก Finish")
+    frame = pd.DataFrame(rows).rename(columns={
+        "id":"ID", "plan_code":"แผนงาน", "drawing_name":"ชื่อ Drawing.",
+        "machine_name":"เลือกเครื่องจักร", "step_name":"ขั้นตอน (Step)", "status":"สถานะงาน",
+        "actual_start":"เริ่มจริง", "actual_finish":"เสร็จจริง", "step_progress":"ติดตาม Step",
+        "ready_at":"วัน-เวลาขึ้นงาน", "baseline_finish_at":"เวลาจบ Baseline",
+        "baseline_ready_at":"กำหนดพร้อมขึ้นงาน (Baseline)", "paused_seconds":"เวลาพักสะสม (วินาที)",
+        "hold_started_at":"เริ่มพักจริง", "setup_mins":"Setup (น.)", "basic_hrs":"Basic (น.)",
+        "prog_hrs":"โปรแกรม (น.)", "qty":"จำนวน", "material":"วัสดุ", "job_type":"ประเภทงาน"})
+    frame["สถานะงาน"] = frame["สถานะงาน"].apply(normalize_status)
+    return frame
+
+
+def clear_shop_work_caches():
+    fetch_jobs_from_supabase.clear()
+    fetch_job_events.clear()
+    fetch_flow_rows.clear()
+    fetch_department_work_orders.clear()
+
+
 def _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, fragment_mode=False):
     has_next_step = current_step_index < len(tracked_steps) - 1
     finish_button_label = f'✅ จบ Step {current_step_index + 1} → รอ Start Step {current_step_index + 2}' if has_next_step else '🏁 Finish Drawing (ครบทุก Step)'
@@ -7062,9 +7261,11 @@ def _render_shop_finish_controls(target_id, selected_m, current_step_index, trac
             st.session_state.pop('pending_shop_finish_confirmation', None)
             st.rerun(scope='fragment' if fragment_mode else 'app')
         if confirm_finish:
-            fetch_jobs_from_supabase.clear()
-            fresh_finish_jobs = fetch_jobs_from_supabase()
-            fresh_finish_rows = fresh_finish_jobs[fresh_finish_jobs['ID'].apply(safe_int).eq(target_id)].copy()
+            try:
+                fresh_finish_rows = fetch_shop_finish_job(target_id)
+            except (ValueError, requests.RequestException) as exc:
+                st.error(str(exc))
+                return
             if fresh_finish_rows.empty:
                 st.session_state.pop('pending_shop_finish_confirmation', None)
                 st.error('ไม่พบคิวงานนี้แล้ว กรุณารีเฟรชหน้าจอ')
@@ -7074,7 +7275,7 @@ def _render_shop_finish_controls(target_id, selected_m, current_step_index, trac
             fresh_step_progress = normalize_step_progress(fresh_finish_row.get('ติดตาม Step'), fresh_finish_row.get('ขั้นตอน (Step)'), fresh_finish_status, fresh_finish_row.get('เริ่มจริง'), fresh_finish_row.get('เสร็จจริง'))
             fresh_step_index = safe_int(fresh_step_progress.get('current_index'), 0)
             fresh_tracked_steps = fresh_step_progress.get('steps', [])
-            if 'กำลังผลิต' not in fresh_finish_status or fresh_step_index != current_step_index or fresh_step_index >= len(fresh_tracked_steps):
+            if safe_str(fresh_finish_row.get('เลือกเครื่องจักร')) != safe_str(selected_m) or 'กำลังผลิต' not in fresh_finish_status or fresh_step_index != current_step_index or fresh_step_index >= len(fresh_tracked_steps):
                 st.session_state.pop('pending_shop_finish_confirmation', None)
                 st.error('⚠️ สถานะหรือ Step ของคิวเปลี่ยนไปแล้ว ระบบยังไม่บันทึก Finish กรุณาตรวจสอบใหม่')
                 st.rerun()
@@ -7089,7 +7290,9 @@ def _render_shop_finish_controls(target_id, selected_m, current_step_index, trac
                 finish_payload = {'status': '🟧 รอคิวผลิต', 'actual_finish': None, 'hold_started_at': None, 'step_progress': fresh_step_progress}
             else:
                 finish_payload = {'status': '🟩 เสร็จสิ้นแล้ว', 'actual_finish': step_finish_str, 'hold_started_at': None, 'step_progress': fresh_step_progress}
-            if update_supabase_job(target_id, finish_payload):
+            if update_supabase_job(target_id, finish_payload, clear_cache=False):
+                clear_shop_work_caches()
+                st.success("✅ บันทึก Finish สำเร็จแล้ว กำลังอัปเดตคิวงาน")
                 st.session_state.pop('pending_shop_finish_confirmation', None)
                 if fresh_has_next_step:
                     next_step_name = safe_str(fresh_tracked_steps[fresh_step_index + 1].get('name'), 'Step ถัดไป')
@@ -7190,6 +7393,8 @@ def render_department_operator_mode(training=False):
     else:
         st.session_state["operator_live_saved_name"] = selected_operator
     st.caption(f"{selected_operator} — งานที่รับมาควบคุม {active_counts.get(selected_operator, 0)} คิว")
+    management_tasks=all_tasks[all_tasks["assignee"].eq(selected_operator)].copy() if not all_tasks.empty else all_tasks
+    render_operator_management(selected_operator,management_tasks,training)
     if not training:
         render_operator_upcoming(selected_operator)
     if all_tasks.empty:
@@ -7342,13 +7547,22 @@ def render_department_operator_mode(training=False):
                     st.rerun()
             continue
         if "รอรับงาน" in task_status:
+            start_token=(selected_operator,training,task_id)
             if st.button("▶️ Start งานคิวปัจจุบัน", type="primary", use_container_width=True, key=f"operator_start_{task_id}"):
-                if update_department_work_order(task_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
-                    if training:
-                        st.session_state["training_operator_clear_control"] = True
-                    else:
-                        st.session_state["operator_live_clear_control"] = True
+                st.session_state["operator_pending_start"]={"token":start_token,"nonce":uuid.uuid4().hex}
+            pending=st.session_state.get("operator_pending_start",{})
+            if pending.get("token")==start_token:
+                st.warning(f"ยืนยัน Start: {selected_operator} | แผน {safe_str(queue_task.get('plan_code'))} | Drawing {safe_str(queue_task.get('drawing_name'))} | {safe_str(queue_task.get('title'))}")
+                yes,no=st.columns(2)
+                confirmed=yes.button("✅ ยืนยัน Start",key=f"operator_confirm_{pending['nonce']}",type="primary")
+                if no.button("ยกเลิก",key=f"operator_cancel_{pending['nonce']}"):
+                    st.session_state.pop("operator_pending_start",None)
                     st.rerun()
+                if confirmed:
+                    if update_department_work_order(task_id, {"status": "🟦 กำลังทำ", "actual_start": get_bangkok_str(), "actual_finish": None}):
+                        st.session_state.pop("operator_pending_start",None)
+                        st.session_state["training_operator_clear_control" if training else "operator_live_clear_control"]=True
+                        st.rerun()
         elif "กำลังทำ" in task_status:
             op_a1, op_a2 = st.columns(2)
             with op_a1:
@@ -8967,6 +9181,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
     from contextlib import nullcontext
     with TrainingOperatorContext() if training_active else nullcontext():
         st.markdown("### 📱 บันทึกสถานะงานหน้าเครื่อง / แผนกผลิต")
+        st.caption("Start / Finish และ Batch: ยืนยันได้โดยไม่จำกัดเวลา")
 
         cancel_feedback = st.session_state.pop("operator_cancel_start_feedback", None)
         if cancel_feedback:
