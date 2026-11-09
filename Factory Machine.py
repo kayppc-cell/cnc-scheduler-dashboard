@@ -22,6 +22,58 @@ from PIL import Image
 import requests
 import streamlit.components.v1 as components
 
+# One isolated connection pool per browser session. Never retry a write automatically.
+import threading
+from urllib.parse import urlsplit
+_tpc_requests_module = requests
+_tpc_render_started = tpc_auth_time.perf_counter()
+st.session_state["_tpc_request_timings"] = []
+
+@st.cache_resource(ttl=1800, max_entries=128, show_spinner=False)
+def tpc_connection_pool(session_key):
+    client = _tpc_requests_module.Session()
+    adapter = _tpc_requests_module.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=0)
+    client.mount("https://", adapter)
+    client.mount("http://", adapter)
+    return client, threading.RLock()
+
+class TPCRequestsProxy:
+    def __getattr__(self, name):
+        return getattr(_tpc_requests_module, name)
+
+    def request(self, method, url, **kwargs):
+        token = st.session_state.get("_tpc_connection_token")
+        if not token:
+            token = uuid.uuid4().hex
+            st.session_state["_tpc_connection_token"] = token
+        client, lock = tpc_connection_pool(token)
+        started = tpc_auth_time.perf_counter()
+        status = "error"
+        try:
+            with lock:
+                # Do not retain cookies or credentials between application calls.
+                client.cookies.clear()
+                response = client.request(method, url, **kwargs)
+            status = response.status_code
+            return response
+        finally:
+            # Store endpoint names only: no keys, payloads, query strings or error bodies.
+            entry = {"method": method.upper(), "endpoint": urlsplit(url).path.rsplit("/", 1)[-1],
+                     "seconds": round(tpc_auth_time.perf_counter()-started, 3), "status": status}
+            records = st.session_state.get("_tpc_request_timings", [])
+            st.session_state["_tpc_request_timings"] = (records + [entry])[-100:]
+
+    def get(self, url, **kwargs):
+        return self.request("GET", url, **kwargs)
+    def post(self, url, **kwargs):
+        return self.request("POST", url, **kwargs)
+    def patch(self, url, **kwargs):
+        return self.request("PATCH", url, **kwargs)
+    def delete(self, url, **kwargs):
+        return self.request("DELETE", url, **kwargs)
+
+requests = TPCRequestsProxy()
+
 # ค่าเวลาเริ่มต้นต้องใช้ค่าเดียวกันทุกหน้า/รายงาน
 DEFAULT_SETUP_MINUTES = 10.0
 DEFAULT_BASIC_MINUTES = 0.0
@@ -6813,11 +6865,12 @@ def fetch_operator_live_tasks(department):
     endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
     rows, last_id = [], None
     while True:
-        params = {"select": "*", "department": f"eq.{department}", "order": "id.asc", "limit": "500"}
+        params = {"select": "*", "department": f"eq.{department}", "order": "id.asc", "limit": "500",
+                  "status": "in.(🟧 รอรับงาน,🟦 กำลังทำ,🟨 พักงาน)"}
         if last_id is not None:
             params["id"] = f"gt.{last_id}"
-        response = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
-        if response.status_code != 200:
+        response = requests.get(endpoint, headers={**get_supabase_headers(), "Prefer": "count=exact"}, params=params, timeout=8)
+        if response.status_code not in (200, 206):
             raise RuntimeError("โหลดคิวผู้ปฏิบัติงานไม่สำเร็จ กรุณารีเฟรชแล้วลองใหม่")
         batch = response.json()
         if not isinstance(batch, list):
@@ -6830,6 +6883,8 @@ def fetch_operator_live_tasks(department):
                 raise RuntimeError("ลำดับข้อมูลคิวไม่ถูกต้อง")
             rows.append(row)
             last_id = current_id
+        if response_page_is_last(response, len(batch)):
+            return pd.DataFrame(rows)
 
 
 def operator_supervisor_is_unlocked():
@@ -13952,7 +14007,6 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
             components.html(cached_screen["script"], height=0)
             return
         refresh_work_calendar()
-        fetch_department_work_orders.clear()
         qc_tv_tasks = fetch_department_work_orders("QC")
         auto_tv_tasks = fetch_department_work_orders("AUTOMATION")
         qc_tv_tasks, _ = split_department_work_order_templates(qc_tv_tasks)
@@ -14345,8 +14399,6 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         if st.session_state.current_view != "📺 จอทีวีแสดงงานแผนกผลิต":
             return
         refresh_work_calendar()
-        fetch_jobs_from_supabase.clear()
-        fetch_job_events.clear()
         df_live = fetch_jobs_from_supabase()
         # ทุกสถานะแสดงเวลาลูกโซ่ปัจจุบัน และเก็บ Baseline เป็นข้อมูลอ้างอิงแยก
         if not df_live.empty:
@@ -14816,3 +14868,18 @@ if tv_rotation_mode and "_tv_rotation_deadline" not in st.session_state:
 elif not tv_rotation_mode:
     st.session_state.pop("_tv_rotation_deadline", None)
     st.session_state.pop("_tv_rotation_index", None)
+
+
+# Read-only diagnostics, visible to the logged-in administrator on every mode.
+if st.session_state.get("user_role") == "admin":
+    with st.sidebar.expander("⏱️ ตรวจสอบความเร็วระบบ", expanded=False):
+        elapsed = tpc_auth_time.perf_counter() - _tpc_render_started
+        records = list(st.session_state.get("_tpc_request_timings", []))
+        network = sum(row["seconds"] for row in records)
+        st.caption("รุ่นตรวจความเร็ว 09/11/2026 · วัดการโหลดหน้ารอบนี้ ไม่รวมเวลาส่งภาพไปเบราว์เซอร์")
+        st.write(f"โหลดหน้าฝั่งเซิร์ฟเวอร์ {elapsed:.2f} วินาที · เรียกฐานข้อมูล {len(records)} ครั้ง · รอฐานข้อมูลรวม {network:.2f} วินาที")
+        if records:
+            st.dataframe(pd.DataFrame(records).rename(columns={"method":"คำสั่ง", "endpoint":"รายการ", "seconds":"วินาที", "status":"ผลตอบกลับ"}), hide_index=True, use_container_width=True)
+        else:
+            st.caption("รอบนี้ใช้ข้อมูลที่เก็บไว้ชั่วคราว ไม่มีการเรียกฐานข้อมูลใหม่")
+        st.caption("หากหน้าจอยังหน่วง ส่งภาพส่วนนี้มาเพื่อตรวจจุดที่ช้าได้ครับ")
