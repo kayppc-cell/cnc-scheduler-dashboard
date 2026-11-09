@@ -438,15 +438,20 @@ def refresh_work_calendar():
 
 
 def get_day_working_windows(dt_date):
+    # Return a fresh list; cached windows are immutable and keyed by the actual mode.
+    return list(_working_windows_for_mode(dt_date, calendar_mode_for_date(dt_date)))
+
+
+@lru_cache(maxsize=8192)
+def _working_windows_for_mode(dt_date, mode):
     weekday = dt_date.weekday()
-    mode = calendar_mode_for_date(dt_date)
     if weekday == 6 or (weekday == 5 and mode == "normal"):
-        return []
+        return ()
     times = [(510, 600), (610, 720), (780, 900), (910, 1020)]
     if weekday < 5 and mode == "busy":
         times.append((1050, 1200))
     midnight = datetime.combine(dt_date, dtime())
-    return [(midnight + timedelta(minutes=a), midnight + timedelta(minutes=b)) for a, b in times]
+    return tuple((midnight + timedelta(minutes=a), midnight + timedelta(minutes=b)) for a, b in times)
 
 
 def get_next_valid_work_time(dt: datetime) -> datetime:
@@ -497,13 +502,21 @@ def add_work_time_with_shift(start_dt: datetime, duration_hours: float):
     return segments, current_dt
 
 def get_work_capacity_between(range_start: datetime, range_end: datetime) -> float:
-    """ชั่วโมงที่โรงงานเปิดจริงภายในช่วงเวลา (หักพักและวันหยุด)"""
+    """Same shift calculation; reuse identical intervals under the same calendar."""
+    return _work_capacity_for_calendar(range_start, range_end, tuple(calendar_changes()))
+
+
+@lru_cache(maxsize=32768)
+def _work_capacity_for_calendar(range_start, range_end, changes):
+    # Changes are part of the key, including calendar previews. Actual timer endpoints
+    # are also keys, so a running job never reuses an older elapsed-time result.
     if range_end <= range_start:
         return 0.0
     total_hours = 0.0
     cur_date = range_start.date()
     while cur_date <= range_end.date():
-        for window_start, window_end in get_day_working_windows(cur_date):
+        mode = next((mode for effective, mode in reversed(changes) if effective <= cur_date), "busy")
+        for window_start, window_end in _working_windows_for_mode(cur_date, mode):
             overlap_start = max(window_start, range_start)
             overlap_end = min(window_end, range_end)
             if overlap_end > overlap_start:
