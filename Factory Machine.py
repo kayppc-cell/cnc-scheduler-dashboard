@@ -208,7 +208,7 @@ def build_performance_metrics(source_df):
 
     actual_hours, variances, time_sources, schedule_results = [], [], [], []
     actual_starts, actual_finishes, plan_finishes = [], [], []
-    for _, row in result.iterrows():
+    for row in result.to_dict("records"):
         actual_start = parse_flexible_datetime(row.get("เริ่มจริง"))
         actual_finish = parse_flexible_datetime(row.get("เสร็จจริง"))
         # ทุกหน้าต้องเทียบกับเวลาจบ Baseline ชุดเดียวกัน
@@ -217,7 +217,8 @@ def build_performance_metrics(source_df):
         actual_finishes.append(actual_finish)
         plan_finishes.append(plan_finish)
 
-        if not production_time_quality_issue(row):
+        time_issue = production_time_quality_issue(row)
+        if not time_issue:
             paused_seconds = max(0.0, safe_float(row.get("เวลาพักสะสม (วินาที)"), 0.0))
             net_seconds = get_net_actual_work_seconds(actual_start, actual_finish, paused_seconds)
             actual_value = round(net_seconds / 3600.0, 2)
@@ -227,7 +228,7 @@ def build_performance_metrics(source_df):
         else:
             actual_hours.append(float("nan"))
             variances.append(float("nan"))
-            time_sources.append("⚠️ " + production_time_quality_issue(row))
+            time_sources.append("⚠️ " + time_issue)
 
         if actual_finish is not None and plan_finish is not None:
             schedule_results.append(actual_finish <= plan_finish)
@@ -575,6 +576,13 @@ def production_machine_actual_cost(row, rate_map):
         return float("nan")
     machine = row.get("เลือกเครื่องจักร", row.get("machine_name"))
     return round(cost + max(0.0, total-allocated) / 3600.0 * safe_float(rate_map.get(machine, 500.0), 500.0), 2)
+
+
+
+def production_machine_actual_costs(frame, rate_map):
+    """Keep the same per-job cost formula without allocating a Series per row."""
+    return pd.Series([production_machine_actual_cost(row, rate_map) for row in frame.to_dict("records")],
+                     index=frame.index, dtype=float)
 
 
 def active_step_time_issue(row, now_dt=None):
@@ -1045,7 +1053,8 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
     base["_flow_return"] = False
     base["_flow_input"] = range(len(scope), len(scope)+len(base))
     jobs = pd.concat([base, scope], ignore_index=True)
-    if not any(flow_previous_job_id(row) for _, row in jobs.iterrows()):
+    job_records = jobs.to_dict("records")
+    if not any(flow_previous_job_id(row) for row in job_records):
         return calculate_machine_chain_legacy(source_df, active_only, preserve_input_order, as_of)
     now = as_of or get_bangkok_now().replace(tzinfo=None)
     active_mask = jobs["สถานะงาน"].astype(str).str.contains("กำลังผลิต|รอคิว|พักงาน|รอวัสดุ", regex=True, na=False)
@@ -1053,7 +1062,7 @@ def calculate_production_chain(source_df, active_only=True, preserve_input_order
     rows = {}
     selected_keys = []
     completed = {}
-    for index, row in jobs.iterrows():
+    for index, row in enumerate(job_records):
         key = safe_int(row.get("ID"), 0) or -(index+1)
         if active_mask.iloc[index]:
             rows[key] = row.copy()
@@ -3015,7 +3024,7 @@ def fetch_jobs_from_supabase():
     st.session_state["_tpc_flow_jobs_snapshot"] = jobs.copy()
     if not jobs.empty:
         jobs = jobs.copy()
-        jobs["Process"] = jobs.apply(flow_process_label, axis=1)
+        jobs["Process"] = [flow_process_label(row) for row in jobs.to_dict("records")]
     return jobs
 
 
@@ -4888,7 +4897,7 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
             finished_costs["_cost_date"] = pd.to_datetime(finished_costs["_actual_finish_dt"], errors="coerce")
             finished_costs["แผนงาน"] = finished_costs["แผนงาน"].map(lambda value: safe_str(value, "ไม่ระบุแผนงาน"))
             finished_costs["_machine_rate"] = finished_costs["เลือกเครื่องจักร"].map(rate_map).fillna(500.0)
-            finished_costs["_machine_actual_cost"] = finished_costs.apply(lambda row: production_machine_actual_cost(row, rate_map), axis=1)
+            finished_costs["_machine_actual_cost"] = production_machine_actual_costs(finished_costs, rate_map)
             incomplete_cost_count = int(finished_costs["_machine_actual_cost"].isna().sum())
             if incomplete_cost_count:
                 st.warning(f"ค่าเครื่องจริงไม่รวมรายการข้อมูลเวลาไม่ครบ/ไม่สัมพันธ์ {incomplete_cost_count} รายการ")
@@ -12547,7 +12556,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     cost_df["แหล่งเวลา"] = metrics["แหล่งเวลา"]
                     cost_df["เรตราคา (บาท/ชม.)"] = pd.to_numeric(cost_df["เลือกเครื่องจักร"].map(rate_map), errors="coerce").fillna(500.0)
                     cost_df["ต้นทุนตามแผน (บาท)"] = (cost_df["เวลาแผน (ชม.)"] * cost_df["เรตราคา (บาท/ชม.)"]).round(2)
-                    cost_df["ต้นทุนจริงสุทธิ (บาท)"] = cost_df.apply(lambda row: production_machine_actual_cost(row, rate_map), axis=1)
+                    cost_df["ต้นทุนจริงสุทธิ (บาท)"] = production_machine_actual_costs(cost_df, rate_map)
                     bad_cost = cost_df["ต้นทุนจริงสุทธิ (บาท)"].isna()
                     cost_df.loc[bad_cost, "แหล่งเวลา"] = cost_df.loc[bad_cost, "แหล่งเวลา"].map(lambda text: text if "⚠️" in text else "⚠️ ประวัติเวลาเครื่องไม่สัมพันธ์กัน")
                     cost_df["ประมาณจากแผน (บาท)"] = cost_df["ต้นทุนตามแผน (บาท)"].where(bad_cost, 0.0)
@@ -13393,7 +13402,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
             monthly_jobs["เลือกเครื่องจักร"] = monthly_jobs["เลือกเครื่องจักร"].map(lambda v: safe_str(v, "ไม่ระบุเครื่อง"))
             monthly_jobs["วัสดุ"] = monthly_jobs["วัสดุ"].map(lambda v: safe_str(v, "ไม่ระบุ"))
             monthly_jobs["เรตราคา (บาท/ชม.)"] = monthly_jobs["เลือกเครื่องจักร"].map(rate_map).fillna(500)
-            monthly_jobs["มูลค่ารวม (บาท)"] = monthly_jobs.apply(lambda row: production_machine_actual_cost(row, rate_map), axis=1)
+            monthly_jobs["มูลค่ารวม (บาท)"] = production_machine_actual_costs(monthly_jobs, rate_map)
             monthly_jobs["ผลตามกำหนด"] = monthly_jobs["_schedule_on_time"].map(
                 {True: "🟢 จบไม่เกินแผนอ้างอิง", False: "🔴 จบเกินแผนอ้างอิง"}
             ).fillna("⚠️ ไม่มีเวลาจบแผน")
@@ -13476,7 +13485,7 @@ elif st.session_state.current_view == "📑 รายงานสรุปปร
                 prev_monthly_jobs = build_performance_metrics(prev_monthly_jobs)
                 prev_qty = unique_drawing_quantity(prev_monthly_jobs)
                 prev_rates = prev_monthly_jobs["เลือกเครื่องจักร"].map(rate_map).fillna(500)
-                prev_val = prev_monthly_jobs.apply(lambda row: production_machine_actual_cost(row, rate_map), axis=1).sum()
+                prev_val = production_machine_actual_costs(prev_monthly_jobs, rate_map).sum()
                 
                 growth_qty = ((total_qty_pieces - prev_qty) / prev_qty * 100) if prev_qty > 0 else 0.0
                 growth_val = ((total_output_val - prev_val) / prev_val * 100) if prev_val > 0 else 0.0
