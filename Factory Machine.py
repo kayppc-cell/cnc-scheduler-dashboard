@@ -3012,9 +3012,7 @@ def timing_editors_are_unlocked():
         return False
     digest = hashlib.sha256(password.encode("utf-8")).hexdigest()
     valid = (
-        isinstance(grant.get("expires_at"), (int, float))
-        and tpc_auth_time.time() < grant["expires_at"]
-        and hmac.compare_digest(str(grant.get("password_digest", "")), digest)
+        hmac.compare_digest(str(grant.get("password_digest", "")), digest)
     )
     if not valid:
         lock_timing_editors()
@@ -3030,7 +3028,6 @@ def unlock_timing_editors(password_attempt):
         lock_timing_editors()
         return False
     st.session_state["tpc_timing_editor_grant"] = {
-        "expires_at": tpc_auth_time.time() + 15 * 60,
         "password_digest": hashlib.sha256(configured.encode("utf-8")).hexdigest(),
     }
     return True
@@ -3055,7 +3052,7 @@ def render_locked_timing_editors(jobs_df, render_waiting_editor):
             if not unlock_timing_editors(password_attempt):
                 st.error("รหัสไม่ถูกต้อง")
                 return
-        st.caption("เปิดสิทธิ์ไว้ 15 นาที แล้วกลับมาล็อกเมื่อมีการใช้งานครั้งถัดไป หรือกดล็อกทันทีหลังใช้งาน")
+        st.caption("ปลดล็อกแล้ว ไม่จำกัดเวลา กดล็อกอีกครั้งเมื่อใช้งานเสร็จ")
         if st.button("🔒 ล็อกเครื่องมืออีกครั้ง", key="tpc_timing_editor_lock", use_container_width=True):
             lock_timing_editors()
             st.rerun()
@@ -3169,7 +3166,7 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
 
         if submitted:
             if not timing_editors_are_unlocked():
-                st.warning("เครื่องมือถูกล็อกหรือสิทธิ์หมดอายุ กรุณากรอกรหัสอีกครั้งก่อนบันทึก")
+                st.warning("เครื่องมือถูกล็อก กรุณากรอกรหัสอีกครั้งก่อนบันทึก")
                 return
             new_start = datetime.combine(edited_date, edited_time)
             if edit_reason == "เลือกเหตุผล":
@@ -7538,8 +7535,7 @@ def history_archive_is_unlocked():
     if not password or not isinstance(grant, dict):
         return False
     digest = hashlib.sha256(password.encode("utf-8")).hexdigest()
-    age = tpc_auth_time.time() - safe_float(grant.get("granted_at"), 0.0)
-    return 0 <= age < 1800 and hmac.compare_digest(str(grant.get("digest", "")), digest)
+    return hmac.compare_digest(str(grant.get("digest", "")), digest)
 
 
 def summarize_finished_history_months(source_df, today):
@@ -8226,7 +8222,6 @@ def work_calendar_is_unlocked():
     password = work_calendar_password()
     grant = st.session_state.get("_tpc_calendar_grant")
     if (st.session_state.get("user_role") == "admin" and password and grant
-            and tpc_auth_time.monotonic() < grant[0]
             and hmac.compare_digest(grant[1], hashlib.sha256(password.encode()).digest())):
         return True
     lock_work_calendar()
@@ -8806,9 +8801,9 @@ def render_work_calendar_admin(jobs):
                 st.error("รหัสไม่ถูกต้อง")
                 return
             st.session_state["_tpc_calendar_grant"] = (
-                tpc_auth_time.monotonic() + 15 * 60, hashlib.sha256(password.encode()).digest(),
+                None, hashlib.sha256(password.encode()).digest(),
             )
-        st.caption("สิทธิ์แก้ไขกะหมดอายุหลังปลดล็อก 15 นาที")
+        st.caption("ปลดล็อกแก้ไขกะแล้ว ไม่จำกัดเวลา กดล็อกเมื่อใช้งานเสร็จ")
         if st.button("🔒 ล็อกการตั้งค่ากะ", key="tpc_calendar_lock"):
             lock_work_calendar()
             st.rerun()
@@ -8878,7 +8873,7 @@ def render_work_calendar_admin(jobs):
             try:
                 record = {"effective_date": day.isoformat(), "mode": mode}
                 if not work_calendar_is_unlocked():
-                    st.error("สิทธิ์แก้ไขกะหมดอายุ กรุณาปลดล็อกใหม่")
+                    st.error("การแก้ไขกะถูกล็อก กรุณาปลดล็อกใหม่")
                     return
                 response = calendar_request("POST", json=record)
                 response.raise_for_status()
@@ -9120,14 +9115,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     hold_jobs["ID"].apply(safe_int).isin(batch_paused_job_ids)
                 ].copy()
                 batch_guard = st.session_state.get("batch_bulk_guard")
-                guard_now = get_bangkok_now().replace(tzinfo=None)
-                guard_expired = False
-                if batch_guard:
-                    armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
-                    guard_expired = armed_at is None or (guard_now - armed_at).total_seconds() > 60
-                    if guard_expired or batch_guard.get("machine") != selected_m:
-                        st.session_state.pop("batch_bulk_guard", None)
-                        batch_guard = None
+                if batch_guard and batch_guard.get("machine") != selected_m:
+                    st.session_state.pop("batch_bulk_guard", None)
+                    batch_guard = None
 
                 with st.expander(
                     "🔒 เปิดแผงควบคุม Batch Processing",
@@ -9137,7 +9127,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     <div class="batch-toolbar">
                         <div>
                             <b style="color:#1E3A8A; font-size:14.5px;">📦 แผงควบคุมการรันงานแบบกลุ่ม (Batch Processing Mode)</b><br>
-                            <span style="font-size:12px; color:#64748B;">คำสั่งรวมต้องตรวจรายการและยืนยัน 2 ชั้นภายใน 60 วินาทีก่อนบันทึกทุกครั้ง</span>
+                            <span style="font-size:12px; color:#64748B;">คำสั่งรวมต้องตรวจรายการและยืนยัน 2 ชั้นก่อนบันทึก ไม่จำกัดเวลายืนยัน</span>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
@@ -9202,9 +9192,6 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     st.caption(f"Start เฉพาะ Drawing รอคิวที่เลือก ({len(waiting_jobs)} คิว) • ตัวเลือก Drawing นี้ไม่มีผลกับ Resume / หยุด / Finish / คืนคิว")
 
 
-
-                    if guard_expired:
-                        st.warning("⌛ การยืนยันครั้งก่อนหมดอายุแล้ว กรุณาตรวจรายการใหม่")
 
                     if not batch_guard:
                         b_c1, b_c2 = st.columns(2)
@@ -9348,12 +9335,6 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                 key=f"execute_{confirm_key}"
                             ):
                                 confirm_now = get_bangkok_now().replace(tzinfo=None)
-                                armed_at = parse_flexible_datetime(batch_guard.get("armed_at"))
-                                if armed_at is None or (confirm_now - armed_at).total_seconds() > 60:
-                                    st.session_state.pop("batch_bulk_guard", None)
-                                    st.error("⌛ การยืนยันหมดอายุแล้ว กรุณาเปิดตรวจรายการใหม่")
-                                    st.rerun()
-
                                 # อ่านข้อมูลล่าสุดซ้ำก่อนบันทึก และทำเฉพาะ ID ที่ผู้ใช้ตรวจไว้เท่านั้น
                                 fetch_jobs_from_supabase.clear()
                                 fresh_jobs = fetch_jobs_from_supabase()
@@ -9773,22 +9754,13 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                     and start_guard.get("training") == training_active)
                                 confirm_start = False
                                 if start_matches:
-                                    armed = parse_flexible_datetime(start_guard.get("armed_at"))
-                                    if armed is None or (get_bangkok_now().replace(tzinfo=None) - armed).total_seconds() > 30:
+                                    st.warning(f"ยืนยันเริ่มงาน: เครื่อง {selected_m} | แผน {plan_code} | Drawing {drawing_code} | Step {current_step_index + 1}: {current_step_name}")
+                                    start_yes_col, start_no_col = st.columns(2)
+                                    confirm_start = start_yes_col.button("✅ ยืนยัน Start", key="confirm_start_" + start_guard["nonce"], type="primary", use_container_width=True)
+                                    if start_no_col.button("ยกเลิก", key="cancel_start_" + start_guard["nonce"], use_container_width=True):
                                         st.session_state.pop("pending_shop_start_confirmation", None)
-                                        st.warning("การยืนยัน Start หมดอายุ กรุณากด Start ใหม่")
-                                    else:
-                                        st.warning(f"ยืนยันเริ่มงาน: เครื่อง {selected_m} | แผน {plan_code} | Drawing {drawing_code} | Step {current_step_index + 1}: {current_step_name}")
-                                        start_yes_col, start_no_col = st.columns(2)
-                                        confirm_start = start_yes_col.button("✅ ยืนยัน Start", key="confirm_start_" + start_guard["nonce"], type="primary", use_container_width=True)
-                                        if start_no_col.button("ยกเลิก", key="cancel_start_" + start_guard["nonce"], use_container_width=True):
-                                            st.session_state.pop("pending_shop_start_confirmation", None)
-                                            st.rerun()
+                                        st.rerun()
                                 if confirm_start:
-                                    if (get_bangkok_now().replace(tzinfo=None) - parse_flexible_datetime(start_guard["armed_at"])).total_seconds() > 30:
-                                        st.session_state.pop("pending_shop_start_confirmation", None)
-                                        st.error("ยืนยัน Start หมดอายุ กรุณาตรวจรายการใหม่")
-                                        st.stop()
                                     fetch_jobs_from_supabase.clear()
                                     fresh_start_jobs = fetch_jobs_from_supabase()
                                     fresh_start_matches = fresh_start_jobs[
@@ -10342,7 +10314,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         st.success("✅ บันทึกกำหนดเวลาเริ่มสำเร็จแล้ว")
                     if st.button("✅ บันทึกแล้ว" if already_saved else "💾 บันทึกกำหนดเวลาเริ่ม", key="waiting_start_submit", disabled=already_saved):
                         if not timing_editors_are_unlocked():
-                            st.warning("เครื่องมือถูกล็อกหรือสิทธิ์หมดอายุ กรุณากรอกรหัสอีกครั้งก่อนบันทึก")
+                            st.warning("เครื่องมือถูกล็อก กรุณากรอกรหัสอีกครั้งก่อนบันทึก")
                             return
                         try:
                             endpoint = st.secrets["SUPABASE_URL"].rstrip("/") + "/rest/v1/cnc_jobs"
@@ -11592,7 +11564,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                                 else:
                                     st.error("รหัสไม่ถูกต้อง")
                     else:
-                        st.success("ปลดล็อกแล้ว ใช้งานได้ 30 นาที")
+                        st.success("ปลดล็อกแล้ว ใช้งานได้โดยไม่จำกัดเวลา")
                         if st.button("🔒 ล็อกกลับ", key="history_archive_lock"):
                             st.session_state.pop("history_archive_access", None)
                             st.session_state.finish_select_all = False
@@ -11973,7 +11945,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     del_fin_count = len(fin_to_del)
                     if st.button(f"🗑️ ยืนยันลบรายการที่เลือก ({del_fin_count} รายการ)", key="btn_del_finished_records", type="secondary", disabled=(del_fin_count == 0)):
                         if not history_archive_is_unlocked():
-                            st.error("รหัสหมดอายุ กรุณาปลดล็อกใหม่ก่อนลบประวัติ")
+                            st.error("สิทธิ์จัดการประวัติถูกล็อก กรุณาปลดล็อกใหม่ก่อนลบประวัติ")
                             st.stop()
                         for _, r in fin_to_del.iterrows():
                             if pd.notna(r.get("ID")):
