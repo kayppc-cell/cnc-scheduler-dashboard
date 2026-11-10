@@ -3561,7 +3561,14 @@ def build_project_delay_evidence(plan_jobs, all_jobs_by_id, machine_sequences, n
             "หลักฐานที่ตรวจพบ": " | ".join(evidence),
             "สาเหตุหน้างาน": "ยังไม่ได้ยืนยันจากประวัติเหตุการณ์ในรายงานนี้",
         })
-    details.sort(key=lambda item: item["เลยจบอ้างอิง (ชม.ทำงาน)"], reverse=True)
+    machine_rank = {normalize_filter_key(name): rank for rank, name in enumerate(MACHINE_LIST)}
+    def evidence_machine_order(item):
+        name = normalize_filter_key(item["เครื่อง"])
+        natural_name = tuple((0, int(part)) if part.isdigit() else (1, part.casefold())
+                             for part in re.split(r"(\d+)", name))
+        return (machine_rank.get(name, len(machine_rank)), natural_name,
+                -item["เลยจบอ้างอิง (ชม.ทำงาน)"])
+    details.sort(key=evidence_machine_order)
     findings = []
     if counts["beyond_due"]:
         quantity = f"ทั้ง {len(details)} งาน" if counts["beyond_due"] == len(details) else f"มี {counts['beyond_due']} งาน"
