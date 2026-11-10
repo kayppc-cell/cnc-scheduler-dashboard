@@ -28,6 +28,7 @@ import threading
 from urllib.parse import urlsplit
 _tpc_requests_module = requests
 _tpc_render_started = tpc_auth_time.perf_counter()
+_tpc_dashboard_run_data = {}
 st.session_state["_tpc_request_timings"] = []
 
 @st.cache_resource(ttl=1800, max_entries=128, show_spinner=False)
@@ -9235,9 +9236,34 @@ def render_work_calendar_admin(jobs):
             st.rerun()
 
 
+def dashboard_is_partial_run():
+    """Only reuse a full-render snapshot; partial interactions must read again."""
+    try:
+        from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+        context = get_script_run_ctx(suppress_warning=True)
+        return context is None or not hasattr(context, "fragment_ids_this_run") or bool(context.fragment_ids_this_run)
+    except ImportError:
+        return True  # Unknown runtime: use the existing fresh-read path.
+
+
+def dashboard_fragment_queue(calc_df):
+    """Calculate the shared initial queue once, returning independent frames to each panel."""
+    if dashboard_is_partial_run():
+        return prepare_production_chart_queue(calc_df)
+    calendar_key = tuple(calendar_changes())
+    cached = _tpc_dashboard_run_data.get("queue")
+    if cached is None or cached[0] != calendar_key:
+        calculated, active = prepare_production_chart_queue(calc_df)
+        cached = (calendar_key, calculated.copy(deep=True), active.copy(deep=True))
+        _tpc_dashboard_run_data["queue"] = cached
+    return cached[1].copy(deep=True), cached[2].copy(deep=True)
+
+
 def dashboard_fragment_snapshot():
-    """Read the current complete snapshot; do not cache a rendered queue or live time."""
-    jobs = fetch_jobs_from_supabase()
+    """Reuse one read within a full render, never across clicks or before a write."""
+    initial = _tpc_dashboard_run_data.get("jobs") if not dashboard_is_partial_run() else None
+    jobs = initial.copy(deep=True) if isinstance(initial, pd.DataFrame) else fetch_jobs_from_supabase()
+    st.session_state["_tpc_flow_jobs_snapshot"] = jobs.copy(deep=True)
     calc = jobs.copy()
     if not calc.empty:
         for column, fallback in [("Setup (น.)", 10.0), ("Basic (น.)", 0.0), ("โปรแกรม (น.)", DEFAULT_PROGRAM_MINUTES)]:
@@ -10585,6 +10611,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.rerun()
 
         df_db = fetch_jobs_from_supabase()
+        _tpc_dashboard_run_data["jobs"] = df_db.copy(deep=True)
 
         if not is_admin:
             render_flow_center(df_db, admin=False, prefix="viewer")
@@ -11006,7 +11033,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if st.session_state.pop("reset_cnc_editor_after_manual_save", False):
                     st.session_state.pop("editor_cnc_jobs_grid_main", None)
 
-                calc_df, active_jobs_editor_df = prepare_production_chart_queue(calc_df)
+                calc_df, active_jobs_editor_df = dashboard_fragment_queue(calc_df)
                 if active_jobs_editor_df.empty:
                     # An empty queue keeps the manual-entry grid, with text date columns.
                     for column in ("วัน-เวลาขึ้นงาน", "วัน-เวลาจบงาน", "กำหนดพร้อมขึ้นงาน (Baseline)", "เวลาจบ Baseline"):
@@ -11611,7 +11638,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if df_db.empty:
                     st.info("ยังไม่มีข้อมูลใบงาน")
                     return
-                calc_df, active_jobs_editor_df = prepare_production_chart_queue(calc_df)
+                calc_df, active_jobs_editor_df = dashboard_fragment_queue(calc_df)
                 if active_jobs_editor_df.empty:
                     st.subheader("📋 ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)")
                     st.info("ยังไม่มีงานที่กำลังผลิตหรือรอคิว")
@@ -11885,7 +11912,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 if df_db.empty:
                     st.info("ยังไม่มีข้อมูลใบงาน")
                     return
-                _, active_jobs_editor_df = prepare_production_chart_queue(calc_df)
+                _, active_jobs_editor_df = dashboard_fragment_queue(calc_df)
                 render_production_schedule_charts(active_jobs_editor_df)
 
             render_dashboard_charts_fragment()
