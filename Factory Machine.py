@@ -88,6 +88,78 @@ def request_tpc_detail_profile():
     st.session_state["_tpc_profile_next_run"] = True
 
 
+
+def tpc_read_process_resources():
+    """Read only this server process's counters; no DB calls or profiling hooks."""
+    result = {"pid": os.getpid(), "wall": tpc_auth_time.monotonic(),
+              "cpu_seconds": tpc_auth_time.process_time(), "ram_mb": None,
+              "threads": None, "open_files": None}
+    try:
+        with open("/proc/self/status", encoding="utf-8") as source:
+            for line in source:
+                if line.startswith("VmRSS:"):
+                    result["ram_mb"] = round(float(line.split()[1]) / 1024.0, 2)
+                elif line.startswith("Threads:"):
+                    result["threads"] = int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass  # Unsupported hosts must not block any production controls.
+    try:
+        result["open_files"] = len(os.listdir("/proc/self/fd"))
+    except OSError:
+        pass
+    return result
+
+
+def tpc_record_resource_sample(state, sample, load, timestamp):
+    """Keep at most 120 numeric samples; never retain frames, payloads or profiler objects."""
+    previous = state.get("_tpc_resource_previous")
+    history = list(state.get("_tpc_resource_history", []))[-120:]
+    if previous and sample["pid"] == previous["pid"] and 0 <= sample["wall"]-previous["wall"] < 1.0:
+        return history  # Avoid noisy duplicate samples on immediate widget/full-page reruns.
+    cpu_percent = None
+    if previous and sample["pid"] == previous["pid"]:
+        wall_delta = sample["wall"] - previous["wall"]
+        cpu_delta = sample["cpu_seconds"] - previous["cpu_seconds"]
+        if wall_delta > 0 and cpu_delta >= 0:
+            cpu_percent = round(100.0 * cpu_delta / wall_delta, 1)
+    row = {"เวลาไทย": timestamp, "PID": sample["pid"], "RAM (MB)": sample["ram_mb"],
+           "CPU (% ของ 1 core)": cpu_percent, "Threads": sample["threads"],
+           "ไฟล์/การเชื่อมต่อที่เปิด": sample["open_files"],
+           "โหมดรอบโหลดล่าสุด": load.get("view"), "เวลาโหลดล่าสุด (วินาที)": load.get("elapsed"),
+           "รอฐานข้อมูลล่าสุด (วินาที)": load.get("database"), "เวลารอบโหลดล่าสุด": load.get("at")}
+    history = (history + [row])[-120:]
+    state["_tpc_resource_previous"] = dict(sample)
+    state["_tpc_resource_history"] = history
+    return history
+
+
+@st.fragment(run_every=30)
+def render_tpc_resource_monitor():
+    if st.session_state.get("user_role") != "admin":
+        return
+    st.markdown("#### 🧠 RAM / CPU และประวัติความหน่วง")
+    enabled = st.checkbox("เก็บตัวอย่างทรัพยากรทุก 30 วินาที", value=True, key="tpc_resource_monitor_enabled")
+    if enabled:
+        tpc_record_resource_sample(st.session_state, tpc_read_process_resources(),
+            st.session_state.get("_tpc_last_full_load", {}), get_bangkok_now().strftime("%d/%m/%Y %H:%M:%S"))
+    history = st.session_state.get("_tpc_resource_history", [])
+    if history:
+        latest = history[-1]
+        a, b, c = st.columns(3)
+        ram = latest["RAM (MB)"]
+        cpu = latest["CPU (% ของ 1 core)"]
+        a.metric("RAM ของโปรเซส TPC", "อ่านค่าไม่ได้" if ram is None else f"{ram:,.1f} MB")
+        b.metric("CPU เฉลี่ยช่วงเก็บตัวอย่าง", "รอตัวอย่างถัดไป" if cpu is None else f"{cpu:,.1f}%")
+        c.metric("Threads", "อ่านค่าไม่ได้" if latest["Threads"] is None else str(latest["Threads"]))
+        st.caption("ค่ารวมของโปรเซสเซิร์ฟเวอร์ที่ให้บริการผู้ใช้ทุกคน ไม่ใช่ RAM ของคอมพิวเตอร์นี้ · CPU 100% เท่ากับใช้ 1 core และไม่ใช่เปอร์เซ็นต์โควตา Cloud")
+        st.dataframe(pd.DataFrame(history).iloc[::-1], hide_index=True, use_container_width=True, height=240)
+        st.download_button("⬇️ ดาวน์โหลดประวัติ RAM / CPU (CSV)",
+            pd.DataFrame(history).to_csv(index=False).encode("utf-8-sig"),
+            file_name="TPC_Resource_History.csv", mime="text/csv", key="tpc_resource_history_csv")
+    st.caption("เก็บล่าสุดไม่เกิน 120 ตัวอย่างในเซสชันนี้ (ประมาณ 1 ชั่วโมงเมื่อเก็บทุก 30 วินาที) · เวลาโหลดเป็นรอบโหลดทั้งหน้าล่าสุด ไม่ได้โหลดหน้าใหม่ทุกครั้งที่วัด · RAM เพิ่มอย่างเดียวไม่ได้ยืนยันว่าหน่วยความจำรั่ว")
+    st.caption("ใช้งานต่อในแท็บเดิม ถ้าเริ่มหน่วง ให้เปิดช่องนี้แล้วดาวน์โหลด CSV ส่งมาตรวจได้ ไม่ต้องกดวัดรายละเอียดหรือ Reboot")
+
+
 # ค่าเวลาเริ่มต้นต้องใช้ค่าเดียวกันทุกหน้า/รายงาน
 DEFAULT_SETUP_MINUTES = 10.0
 DEFAULT_BASIC_MINUTES = 0.0
@@ -9236,6 +9308,48 @@ def render_work_calendar_admin(jobs):
             st.rerun()
 
 
+
+def tpc_lazy_filter_keys(panel):
+    filters = {
+        "editor": ["active_jobs_machine_select", "active_jobs_plan_select", "active_jobs_material_select", "active_jobs_drawing_select"],
+        "work_order": ["wo_machine_select", "wo_plan_select", "wo_material_select", "wo_drawing_select"],
+        "history": ["finished_history_date_mode", "finished_history_machine_select", "finished_history_plan_select",
+                    "finished_history_drawing_select_v2", "finished_history_single_date", "finished_history_date_range", "finished_history_month_select"],
+        "cost": ["cost_machine_filter", "cost_plan_filter", "cost_drawing_filter", "cost_table_search", "cost_from_date", "cost_to_date"],
+    }
+    return filters.get(panel, [])
+
+
+def tpc_toggle_lazy_panel(panel):
+    key = "_tpc_lazy_open_" + panel
+    is_open = bool(st.session_state.get(key, False))
+    if is_open:
+        st.session_state["_tpc_lazy_filters_" + panel] = {
+            key: st.session_state[key] for key in tpc_lazy_filter_keys(panel) if key in st.session_state}
+    else:
+        for field, value in st.session_state.get("_tpc_lazy_filters_" + panel, {}).items():
+            st.session_state[field] = value
+    st.session_state[key] = not is_open
+
+
+def tpc_lazy_panel_is_open(panel, label):
+    is_open = bool(st.session_state.get("_tpc_lazy_open_" + panel, False))
+    unsaved = False
+    if panel == "editor" and is_open:
+        edits = st.session_state.get("editor_cnc_jobs_grid_main", {})
+        if isinstance(edits, dict):
+            unsaved = bool(edits.get("added_rows") or edits.get("deleted_rows") or
+                any(any(field != "ลบ" for field in row) for row in edits.get("edited_rows", {}).values()))
+    st.button(("ซ่อน · " if is_open else "แสดง · ") + label,
+        key="tpc_lazy_toggle_" + panel, on_click=tpc_toggle_lazy_panel, args=(panel,),
+        disabled=unsaved, type="secondary" if is_open else "primary", use_container_width=True)
+    if unsaved:
+        st.caption("มีการแก้ไขที่ยังไม่ได้บันทึก กรุณาบันทึกให้เสร็จก่อนซ่อนตาราง")
+    if not is_open:
+        st.caption("ยังไม่โหลดหรือคำนวณส่วนนี้ กดแสดงเมื่อต้องการใช้งาน")
+    return is_open
+
+
 def dashboard_is_partial_run():
     """Only reuse a full-render snapshot; partial interactions must read again."""
     try:
@@ -11024,6 +11138,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             def render_dashboard_editor_fragment():
                 if st.session_state.get("current_view") != "📊 แดชบอร์ดภาพรวมโรงงาน" or st.session_state.get("user_role") not in ("admin", "viewer"):
                     st.rerun()
+                if not tpc_lazy_panel_is_open('editor', 'รายการสั่งผลิต'):
+                    return
                 is_admin = st.session_state.get("user_role") == "admin"
                 refresh_work_calendar()
                 df_db, calc_df = dashboard_fragment_snapshot()
@@ -11632,6 +11748,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             def render_dashboard_work_order_fragment():
                 if st.session_state.get("current_view") != "📊 แดชบอร์ดภาพรวมโรงงาน" or st.session_state.get("user_role") not in ("admin", "viewer"):
                     st.rerun()
+                if not tpc_lazy_panel_is_open('work_order', 'ใบจ่ายคิวงานหน้าเครื่อง'):
+                    return
                 is_admin = st.session_state.get("user_role") == "admin"
                 refresh_work_calendar()
                 df_db, calc_df = dashboard_fragment_snapshot()
@@ -11906,6 +12024,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             def render_dashboard_charts_fragment():
                 if st.session_state.get("current_view") != "📊 แดชบอร์ดภาพรวมโรงงาน" or st.session_state.get("user_role") not in ("admin", "viewer"):
                     st.rerun()
+                if not tpc_lazy_panel_is_open('charts', 'กราฟเวลาผลิตและอัตราการใช้งาน'):
+                    return
                 is_admin = st.session_state.get("user_role") == "admin"
                 refresh_work_calendar()
                 df_db, calc_df = dashboard_fragment_snapshot()
@@ -11924,6 +12044,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             def render_dashboard_history_fragment():
                 if st.session_state.get("current_view") != "📊 แดชบอร์ดภาพรวมโรงงาน" or st.session_state.get("user_role") not in ("admin", "viewer"):
                     st.rerun()
+                if not tpc_lazy_panel_is_open('history', 'ประวัติงานผลิตเสร็จ'):
+                    return
                 is_admin = st.session_state.get("user_role") == "admin"
                 refresh_work_calendar()
                 df_db, calc_df = dashboard_fragment_snapshot()
@@ -12607,6 +12729,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             def render_dashboard_cost_fragment():
                 if st.session_state.get("current_view") != "📊 แดชบอร์ดภาพรวมโรงงาน" or st.session_state.get("user_role") not in ("admin", "viewer"):
                     st.rerun()
+                if not tpc_lazy_panel_is_open('cost', 'ชั่วโมงและต้นทุนเครื่องจักร'):
+                    return
                 is_admin = st.session_state.get("user_role") == "admin"
                 refresh_work_calendar()
                 df_db, calc_df = dashboard_fragment_snapshot()
@@ -15098,7 +15222,10 @@ if st.session_state.get("user_role") == "admin" and _tpc_performance_slot is not
         elapsed = tpc_auth_time.perf_counter() - _tpc_render_started
         records = list(st.session_state.get("_tpc_request_timings", []))
         network = sum(row["seconds"] for row in records)
-        st.caption("รุ่นแยกส่วน 09/11/2026 · วัดรอบโหลดทั้งหน้า ไม่รวมเวลาส่งภาพไปเบราว์เซอร์")
+        st.session_state["_tpc_last_full_load"] = {"view": st.session_state.get("current_view"),
+            "elapsed": round(elapsed, 3), "database": round(network, 3),
+            "at": get_bangkok_now().strftime("%d/%m/%Y %H:%M:%S")}
+        st.caption("รุ่นตรวจทรัพยากร 10/11/2026 · วัดรอบโหลดทั้งหน้า ไม่รวมเวลาส่งภาพไปเบราว์เซอร์")
         st.write(f"โหลดหน้าฝั่งเซิร์ฟเวอร์ {elapsed:.2f} วินาที · เรียกฐานข้อมูล {len(records)} ครั้ง · รอฐานข้อมูลรวม {network:.2f} วินาที")
         if records:
             st.dataframe(pd.DataFrame(records).rename(columns={"method":"คำสั่ง", "endpoint":"รายการ", "seconds":"วินาที", "status":"ผลตอบกลับ"}), hide_index=True, use_container_width=True)
@@ -15111,3 +15238,5 @@ if st.session_state.get("user_role") == "admin" and _tpc_performance_slot is not
         if profile_rows:
             st.caption("ผลจากรอบที่กดวัดรายละเอียด · ตารางนี้อาจเพิ่มภาระขณะวัด · เวลารวมงานย่อยซ้อนกัน ห้ามนำแต่ละแถวมาบวกกัน")
             st.dataframe(pd.DataFrame(profile_rows), hide_index=True, use_container_width=True)
+
+        render_tpc_resource_monitor()
