@@ -3525,67 +3525,71 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             st.error(f"ลบไม่สำเร็จ: {', '.join(delete_feedback['failed'])} กรุณาตรวจสิทธิ์ DELETE ของตาราง cnc_plan_master")
 
     plan_codes = sorted({safe_str(v) for v in calc_df.get("แผนงาน", pd.Series(dtype=str)) if safe_str(v)})
-    if is_admin and not read_only and plan_codes:
-        with st.expander("➕ กำหนดหรือแก้ไขกรอบเวลา Production", expanded=master_df.empty):
-            selected_plan = st.selectbox("แผนงาน", plan_codes, key="master_plan_code")
-            current = master_df[master_df["plan_code"].map(normalize_filter_key) == normalize_filter_key(selected_plan)]
-            current_row = current.iloc[0] if not current.empty else None
-            default_start = current_row["customer_start"] if current_row is not None and pd.notna(current_row["customer_start"]) else get_bangkok_now().replace(tzinfo=None, second=0, microsecond=0)
-            default_due = (
-                current_row["customer_due"]
-                if current_row is not None and pd.notna(current_row["customer_due"])
-                else datetime.combine((default_start + timedelta(days=14)).date(), dtime(17, 30))
-            )
-            with st.form(f"plan_master_form_{selected_plan}"):
-                fc1, fc2 = st.columns(2)
-                with fc1:
-                    start_date = st.date_input(
-                        "วันที่เริ่ม Production",
-                        default_start.date(),
-                        format="DD/MM/YYYY",
-                        key=f"master_start_date_{selected_plan}"
-                    )
-                    start_time = st.time_input(
-                        "เวลาเริ่ม",
-                        default_start.time(),
-                        key=f"master_start_time_{selected_plan}"
-                    )
-                with fc2:
-                    due_date = st.date_input(
-                        "วันที่สิ้นสุด Production",
-                        default_due.date(),
-                        format="DD/MM/YYYY",
-                        key=f"master_due_date_{selected_plan}"
-                    )
-                    due_time = st.time_input(
-                        "เวลาสิ้นสุด Production",
-                        default_due.time(),
-                        key=f"master_due_time_{selected_plan}"
-                    )
-                note = st.text_input(
-                    "หมายเหตุ",
-                    value=safe_str(current_row.get("note"), "") if current_row is not None else "",
-                    key=f"master_note_{selected_plan}"
+    def render_production_time_form(master_df):
+        if is_admin and not read_only and plan_codes:
+            with st.expander("➕ กำหนดหรือแก้ไขกรอบเวลา Production", expanded=master_df.empty):
+                selected_plan = st.selectbox("แผนงาน", plan_codes, key="master_plan_code")
+                current = master_df[master_df["plan_code"].map(normalize_filter_key) == normalize_filter_key(selected_plan)]
+                current_row = current.iloc[0] if not current.empty else None
+                default_start = current_row["customer_start"] if current_row is not None and pd.notna(current_row["customer_start"]) else get_bangkok_now().replace(tzinfo=None, second=0, microsecond=0)
+                default_due = (
+                    current_row["customer_due"]
+                    if current_row is not None and pd.notna(current_row["customer_due"])
+                    else datetime.combine((default_start + timedelta(days=14)).date(), dtime(17, 30))
                 )
-                master_save_clicked = st.form_submit_button(
-                    "💾 บันทึก/แก้ไขเวลาแผนหลัก",
-                    type="primary",
-                    use_container_width=True
-                )
+                with st.form(f"plan_master_form_{selected_plan}"):
+                    fc1, fc2 = st.columns(2)
+                    with fc1:
+                        start_date = st.date_input(
+                            "วันที่เริ่ม Production",
+                            default_start.date(),
+                            format="DD/MM/YYYY",
+                            key=f"master_start_date_{selected_plan}"
+                        )
+                        start_time = st.time_input(
+                            "เวลาเริ่ม",
+                            default_start.time(),
+                            key=f"master_start_time_{selected_plan}"
+                        )
+                    with fc2:
+                        due_date = st.date_input(
+                            "วันที่สิ้นสุด Production",
+                            default_due.date(),
+                            format="DD/MM/YYYY",
+                            key=f"master_due_date_{selected_plan}"
+                        )
+                        due_time = st.time_input(
+                            "เวลาสิ้นสุด Production",
+                            default_due.time(),
+                            key=f"master_due_time_{selected_plan}"
+                        )
+                    note = st.text_input(
+                        "หมายเหตุ",
+                        value=safe_str(current_row.get("note"), "") if current_row is not None else "",
+                        key=f"master_note_{selected_plan}"
+                    )
+                    master_save_clicked = st.form_submit_button(
+                        "💾 บันทึก/แก้ไขเวลาแผนหลัก",
+                        type="primary",
+                        use_container_width=True
+                    )
 
-                if master_save_clicked:
-                    start_dt = datetime.combine(start_date, start_time)
-                    due_dt = datetime.combine(due_date, due_time)
-                    if due_dt <= start_dt:
-                        st.error("เวลาสิ้นสุด Production ต้องอยู่หลังเวลาเริ่ม Production")
-                    else:
-                        master_saved, master_error = upsert_plan_master(selected_plan, start_dt, due_dt, note)
-                        if master_saved:
-                            st.cache_data.clear(); st.toast("บันทึกกรอบเวลา Production แล้ว", icon="✅"); st.rerun()
+                    if master_save_clicked:
+                        start_dt = datetime.combine(start_date, start_time)
+                        due_dt = datetime.combine(due_date, due_time)
+                        if due_dt <= start_dt:
+                            st.error("เวลาสิ้นสุด Production ต้องอยู่หลังเวลาเริ่ม Production")
                         else:
-                            st.error(f"บันทึกไม่สำเร็จ: {master_error}")
+                            master_saved, master_error = upsert_plan_master(selected_plan, start_dt, due_dt, note)
+                            if master_saved:
+                                st.cache_data.clear(); st.toast("บันทึกกรอบเวลา Production แล้ว", icon="✅"); st.rerun()
+                            else:
+                                st.error(f"บันทึกไม่สำเร็จ: {master_error}")
+
+    production_form_masters = master_df.copy()
 
     if master_df.empty:
+        render_production_time_form(production_form_masters)
         st.info("ยังไม่มีแผนงานที่กำหนดกรอบเวลา Production")
         return
 
@@ -3606,6 +3610,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             ~master_df["plan_code"].map(normalize_filter_key).isin(completed_plan_keys)
         ].copy()
     if master_df.empty:
+        render_production_time_form(production_form_masters)
         st.success("แผนงานที่กำหนดไว้ผลิตเสร็จครบทั้งหมดแล้ว จึงไม่มีแผนคงเหลือใน Project Master")
         return
 
@@ -3949,37 +3954,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         else:
             exec_health, exec_health_icon, exec_health_color, exec_health_bg = "ปกติ", "🟢", "#065F46", "#ECFDF5"
 
-        st.markdown("### 📋 บทสรุปสถานการณ์แผนงานสำหรับผู้บริหาร")
-        executive_health_reason = (
-            f"มีแผนเกิน Production แล้ว {exec_late} แผน"
-            if exec_late > 0 else
-            (f"มีแผนที่ต้องตัดสินใจ {exec_decision_count} แผน" if exec_decision_count > 0 else "ทุกแผนยังอยู่ในกรอบ Production")
-        )
-        st.markdown(
-            f"<div class='tpc-light-panel' style='color:#0F172A;border:2px solid {exec_health_color};border-left:9px solid {exec_health_color};"
-            f"border-radius:12px;padding:14px 16px;background:{exec_health_bg};margin:5px 0 12px'>"
-            f"<div style='font-size:20px;font-weight:900;color:{exec_health_color}'>{exec_health_icon} สถานการณ์รวม: {exec_health} — {executive_health_reason}</div>"
-            f"<div style='margin-top:6px;font-size:15px'>มีแผนงาน {exec_total_plans} แผน — "
-            f"🟢 อยู่ในแผน {exec_on_plan} แผน, 🟠 คิวดีเลย์/เสี่ยงแต่ยังไม่เกิน Production {exec_near_risk} แผน, "
-            f"🔴 เกิน Production แล้ว {exec_late} แผน"
-            f"{f', และยังวางงานไม่ครบ {exec_unplanned} แผน' if exec_unplanned else ''}. "
-            f"เหลืองาน {exec_remaining_drawings} Drawing รวมประมาณ {exec_remaining_hours:,.1f} ชั่วโมง "
-            f"และมีกำลังการผลิตที่ขาดจากกรอบรวม {exec_capacity_shortfall:,.1f} ชั่วโมง</div></div>",
-            unsafe_allow_html=True,
-        )
-
-        if executive_issues:
-            st.markdown("#### 🚨 ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ")
-            for issue_no, issue in enumerate(executive_issues[:5], start=1):
-                issue_box = st.error if issue["level"] == "critical" else st.warning
-                issue_box(
-                    f"**{issue_no}. {issue['problem']}**  \n"
-                    f"**สาเหตุที่ระบบตรวจพบ:** {issue['cause']}  \n"
-                    f"**ผลกระทบหากไม่แก้ไข:** {issue['impact']}  \n"
-                    f"**ข้อเสนอเพื่อการตัดสินใจ:** {issue['decision']}"
-                )
-        else:
-            st.success("✅ ยังไม่พบปัญหาที่ต้องเร่งตัดสินใจ แผนงานในมุมมองนี้อยู่ในกรอบ Production")
+    render_production_time_form(production_form_masters)
 
     if not gantt_view.empty:
         st.markdown("#### ช่วงเวลาแผนหลักเทียบแผนผลิต")
@@ -4088,6 +4063,38 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         if gantt_view.empty:
             st.info("ไม่มีช่วงเวลาแผนหลักเทียบแผนผลิตให้แสดง")
         return
+
+    st.markdown("### 📋 บทสรุปสถานการณ์แผนงานสำหรับผู้บริหาร")
+    executive_health_reason = (
+        f"มีแผนเกิน Production แล้ว {exec_late} แผน"
+        if exec_late > 0 else
+        (f"มีแผนที่ต้องตัดสินใจ {exec_decision_count} แผน" if exec_decision_count > 0 else "ทุกแผนยังอยู่ในกรอบ Production")
+    )
+    st.markdown(
+        f"<div class='tpc-light-panel' style='color:#0F172A;border:2px solid {exec_health_color};border-left:9px solid {exec_health_color};"
+        f"border-radius:12px;padding:14px 16px;background:{exec_health_bg};margin:5px 0 12px'>"
+        f"<div style='font-size:20px;font-weight:900;color:{exec_health_color}'>{exec_health_icon} สถานการณ์รวม: {exec_health} — {executive_health_reason}</div>"
+        f"<div style='margin-top:6px;font-size:15px'>มีแผนงาน {exec_total_plans} แผน — "
+        f"🟢 อยู่ในแผน {exec_on_plan} แผน, 🟠 คิวดีเลย์/เสี่ยงแต่ยังไม่เกิน Production {exec_near_risk} แผน, "
+        f"🔴 เกิน Production แล้ว {exec_late} แผน"
+        f"{f', และยังวางงานไม่ครบ {exec_unplanned} แผน' if exec_unplanned else ''}. "
+        f"เหลืองาน {exec_remaining_drawings} Drawing รวมประมาณ {exec_remaining_hours:,.1f} ชั่วโมง "
+        f"และมีกำลังการผลิตที่ขาดจากกรอบรวม {exec_capacity_shortfall:,.1f} ชั่วโมง</div></div>",
+        unsafe_allow_html=True,
+    )
+    
+    if executive_issues:
+        st.markdown("#### 🚨 ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ")
+        for issue_no, issue in enumerate(executive_issues[:5], start=1):
+            issue_box = st.error if issue["level"] == "critical" else st.warning
+            issue_box(
+                f"**{issue_no}. {issue['problem']}**  \n"
+                f"**สาเหตุที่ระบบตรวจพบ:** {issue['cause']}  \n"
+                f"**ผลกระทบหากไม่แก้ไข:** {issue['impact']}  \n"
+                f"**ข้อเสนอเพื่อการตัดสินใจ:** {issue['decision']}"
+            )
+    else:
+        st.success("✅ ยังไม่พบปัญหาที่ต้องเร่งตัดสินใจ แผนงานในมุมมองนี้อยู่ในกรอบ Production")
 
     # กล่องสรุปงานที่ผู้วางแผนควรตัดสินใจและช่วงเวลาที่ซ้อนกัน
     decision_df = summary_view[
