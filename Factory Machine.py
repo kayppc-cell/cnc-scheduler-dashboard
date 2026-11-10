@@ -3495,6 +3495,79 @@ def calculate_plan_drawing_progress(plan_jobs):
     }
 
 
+def build_project_delay_evidence(plan_jobs, all_jobs_by_id, machine_sequences, now_dt, production_due=None):
+    """Read-only evidence from the existing production snapshot; never infer an unrecorded root cause."""
+    from bisect import bisect_left
+    details = []
+    counts = {"late": 0, "paused": 0, "previous": 0, "missing": 0, "beyond_due": 0}
+    for row in plan_jobs:
+        status = safe_str(row.get("สถานะงาน"))
+        if "เสร็จสิ้น" in status or "จ้างภายนอก" in status:
+            continue
+        job_id = safe_int(row.get("ID"))
+        machine = safe_str(row.get("เลือกเครื่องจักร"), "ไม่ระบุเครื่อง")
+        start = first_valid_datetime(row.get("เริ่มจริง"))
+        planned_finish = get_job_planned_finish(row)
+        chain_start = first_valid_datetime(row.get("_start"))
+        chain_finish = first_valid_datetime(row.get("_finish"))
+        evidence = []
+        overdue_hours = 0.0
+        if production_due is not None and chain_finish is not None and chain_finish > production_due:
+            counts["beyond_due"] += 1
+            evidence.append(f"คาดจบตามคิวหลังกรอบ Production {format_thai_datetime(production_due)}")
+        if planned_finish is not None and planned_finish < now_dt:
+            overdue_hours = get_work_seconds_between(planned_finish, now_dt) / 3600.0
+            counts["late"] += 1
+            evidence.append(f"ยังไม่ Finish และเลยเวลาจบอ้างอิง {overdue_hours:,.1f} ชม.ทำงาน")
+        if "พักงาน" in status or "รอวัสดุ" in status:
+            counts["paused"] += 1
+            hold = first_valid_datetime(row.get("เริ่มพักจริง"), row.get("hold_started_at"))
+            text = "สถานะพักงานที่บันทึกไว้ (ยังไม่ยืนยันสาเหตุหน้างาน)"
+            if hold is not None and hold <= now_dt:
+                text += f"; พักรอบนี้ {get_work_seconds_between(hold, now_dt)/3600.0:,.1f} ชม.ทำงาน"
+            evidence.append(text)
+        previous_id = flow_previous_job_id(row)
+        if previous_id and start is None:
+            previous = all_jobs_by_id.get(previous_id)
+            if previous is None:
+                evidence.append(f"อ้างอิง Process ก่อนหน้า ID {previous_id} แต่ไม่มีข้อมูลในชุดที่โหลด จึงยังยืนยันสถานะไม่ได้")
+            elif first_valid_datetime(previous.get("เสร็จจริง")) is None:
+                counts["previous"] += 1
+                evidence.append(
+                    f"Process ก่อนหน้า ID {previous_id}: {safe_str(previous.get('แผนงาน'))} / "
+                    f"{safe_str(previous.get('ชื่อ Drawing.'))} / {safe_str(previous.get('เลือกเครื่องจักร'))} "
+                    f"ยังไม่มี Finish จริง (สถานะ {safe_str(previous.get('สถานะงาน'))})"
+                )
+        if start is None and chain_start is not None:
+            times, sequence = machine_sequences.get(machine, ([], []))
+            earlier_count = bisect_left(times, chain_start)
+            if earlier_count:
+                names = "; ".join(f"ID {safe_int(other.get('ID'))} {safe_str(other.get('แผนงาน'))}/{safe_str(other.get('ชื่อ Drawing.'))}" for other in sequence[:min(earlier_count, 3)])
+                evidence.append(f"ในแผนเครื่องมีงานที่วางเริ่มก่อน {earlier_count} งาน: {names}" + (" …" if earlier_count > 3 else "") + "; เป็นลำดับตามแผน ไม่ใช่การยืนยันสาเหตุหน้างาน")
+        if planned_finish is None or chain_finish is None or not safe_str(row.get("เลือกเครื่องจักร")):
+            counts["missing"] += 1
+            evidence.append("ข้อมูลเวลาอ้างอิง/เวลาจบคิว/เครื่องไม่ครบ ต้องตรวจข้อมูลก่อนสรุป")
+        if not evidence:
+            evidence.append("ยังไม่พบหลักฐานระบุสาเหตุจากชุดข้อมูลนี้ ต้องตรวจหน้างานและประวัติเหตุการณ์")
+        details.append({
+            "ID": job_id, "แผนงาน": safe_str(row.get("แผนงาน")),
+            "Drawing": safe_str(row.get("ชื่อ Drawing.")),
+            "Step": safe_str(row.get("ขั้นตอน (Step)")), "เครื่อง": machine,
+            "สถานะ": status, "เริ่มจริง": format_thai_datetime(start) if start is not None else "ยังไม่ Start",
+            "จบอ้างอิง": format_thai_datetime(planned_finish) if planned_finish is not None else "ไม่มีข้อมูล",
+            "คาดเริ่มตามคิว": format_thai_datetime(chain_start) if chain_start is not None else "ไม่มีข้อมูล",
+            "คาดจบตามคิว": format_thai_datetime(chain_finish) if chain_finish is not None else "ไม่มีข้อมูล",
+            "เลยจบอ้างอิง (ชม.ทำงาน)": round(overdue_hours, 2),
+            "หลักฐานที่ตรวจพบ": " | ".join(evidence),
+            "สาเหตุหน้างาน": "ยังไม่ได้ยืนยันจากประวัติเหตุการณ์ในรายงานนี้",
+        })
+    details.sort(key=lambda item: item["เลยจบอ้างอิง (ชม.ทำงาน)"], reverse=True)
+    summary = (f"ตรวจงานคงเหลือ {len(details)} คิว: ยังไม่ Finish และเลยจบอ้างอิง {counts['late']} คิว; "
+               f"คาดจบหลังกรอบ Production {counts['beyond_due']} คิว; พักงาน {counts['paused']} คิว; รอ Process ก่อนหน้าที่ไม่มี Finish จริง {counts['previous']} คิว; "
+               f"ข้อมูลเวลา/เครื่องไม่ครบ {counts['missing']} คิว (กลุ่มอาจซ้อนกัน ไม่ให้นำจำนวนหรือเวลามาบวกกัน)")
+    return summary, details
+
+
 def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_only=False):
     if chart_only:
         read_only = True
@@ -3920,15 +3993,17 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             status_item = safe_str(item.get("สถานะ"), "")
             if late_hours_item > 0:
                 executive_issues.append({
+                    "plan_code": plan_code,
                     "score": 300000 + late_hours_item * 100 + delayed_count_item,
                     "level": "critical",
                     "problem": f"แผน {plan_code} คาดว่าจะเกินกรอบ Production {late_hours_item:,.1f} ชั่วโมงทำงาน",
                     "cause": f"มี Dwg คงเหลือ {remaining_item} รายการ ({remaining_pct_item:,.1f}%) และคิว/เครื่องเสี่ยงอยู่ที่ {risk_machine_item}",
-                    "impact": f"หากไม่ปรับแผน กำหนดส่งของแผน {plan_code} จะล่าช้าตามเวลาที่เกินอย่างน้อย {late_hours_item:,.1f} ชั่วโมงทำงาน",
+                    "impact": f"หากไม่ปรับแผน กำหนดส่งของแผน {plan_code} คาดว่าจะเกินกรอบ Production {late_hours_item:,.1f} ชั่วโมงทำงานตามคิวปัจจุบัน",
                     "decision": f"เร่งตรวจ {risk_drawing_item}; พิจารณาย้ายเครื่อง ปรับลำดับคิว เพิ่ม OT หรือจ้างภายนอก",
                 })
             elif delayed_count_item > 0:
                 executive_issues.append({
+                    "plan_code": plan_code,
                     "score": 200000 + max_delay_item * 100 + delayed_count_item,
                     "level": "warning",
                     "problem": f"แผน {plan_code} มีคิวดีเลย์ {delayed_count_item} คิว สูงสุด {max_delay_item:,.1f} ชั่วโมง",
@@ -3938,6 +4013,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
                 })
             elif "ยังวางงานไม่ครบ" in status_item:
                 executive_issues.append({
+                    "plan_code": plan_code,
                     "score": 100000 + remaining_item,
                     "level": "warning",
                     "problem": f"แผน {plan_code} ยังวาง Drawing/Step ไม่ครบ จึงประเมินวันจบจริงไม่ได้",
@@ -3946,6 +4022,25 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
                     "decision": "ให้ผู้วางแผนเติม Drawing, Step, เครื่องจักร และเวลาให้ครบก่อนยืนยันกำหนดส่ง",
                 })
         executive_issues = sorted(executive_issues, key=lambda value: value["score"], reverse=True)
+        # Reuse the existing snapshot; no extra database requests or queue calculations.
+        evidence_by_plan, sequence_rows = {}, {}
+        for evidence_row in jobs.to_dict("records"):
+            evidence_by_plan.setdefault(normalize_filter_key(evidence_row.get("แผนงาน")), []).append(evidence_row)
+            evidence_start = first_valid_datetime(evidence_row.get("_start"))
+            if evidence_start is not None:
+                sequence_rows.setdefault(safe_str(evidence_row.get("เลือกเครื่องจักร")), []).append((evidence_start, evidence_row))
+        machine_sequences = {}
+        for machine, entries in sequence_rows.items():
+            entries.sort(key=lambda value: value[0])
+            machine_sequences[machine] = ([value[0] for value in entries], [value[1] for value in entries])
+        evidence_jobs_by_id = {safe_int(row.get("ID")): row for row in calc_df.to_dict("records") if safe_int(row.get("ID")) > 0}
+        evidence_due_by_plan = {normalize_filter_key(row.get("plan_code")): first_valid_datetime(row.get("customer_due")) for row in production_form_masters.to_dict("records")}
+        for issue in executive_issues[:5]:
+            issue["evidence_summary"], issue["evidence_rows"] = build_project_delay_evidence(
+                evidence_by_plan.get(normalize_filter_key(issue["plan_code"]), []),
+                evidence_jobs_by_id, machine_sequences, project_now, evidence_due_by_plan.get(normalize_filter_key(issue["plan_code"])),
+            )
+
 
         if exec_late > 0 or (exec_total_plans > 0 and exec_decision_count / exec_total_plans >= 0.5):
             exec_health, exec_health_icon, exec_health_color, exec_health_bg = "วิกฤต", "🔴", "#991B1B", "#FEF2F2"
@@ -4089,10 +4184,19 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             issue_box = st.error if issue["level"] == "critical" else st.warning
             issue_box(
                 f"**{issue_no}. {issue['problem']}**  \n"
-                f"**สาเหตุที่ระบบตรวจพบ:** {issue['cause']}  \n"
+                f"**สถานการณ์จากแผน:** {issue['cause']}  \n"
+                f"**หลักฐานเพิ่มเติม:** {issue.get('evidence_summary', 'ยังไม่มีข้อมูล')}  \n"
                 f"**ผลกระทบหากไม่แก้ไข:** {issue['impact']}  \n"
                 f"**ข้อเสนอเพื่อการตัดสินใจ:** {issue['decision']}"
             )
+            with st.expander(f"🔎 หลักฐานราย Drawing / Step — แผน {issue['plan_code']}", expanded=False):
+                st.caption("แสดงข้อมูลคิวและสถานะที่บันทึกไว้ ไม่ยืนยันสาเหตุราก เช่น เครื่องเสีย ขาดคน หรือรอวัสดุ จากสถานะเพียงอย่างเดียว; เวลารออาจซ้อนกัน ห้ามบวกเป็นยอดดีเลย์รวม")
+                evidence_rows = issue.get("evidence_rows", [])
+                if evidence_rows and st.checkbox("แสดงตารางหลักฐาน", key=f"project_delay_evidence_{normalize_filter_key(issue['plan_code'])}"):
+                    st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
+                elif not evidence_rows:
+                    st.info("ไม่มีงานคงเหลือในชุดคิวที่ใช้คำนวณ กรุณาตรวจรายการสั่งผลิตและข้อมูลแผน")
+
     else:
         st.success("✅ ยังไม่พบปัญหาที่ต้องเร่งตัดสินใจ แผนงานในมุมมองนี้อยู่ในกรอบ Production")
 
@@ -4207,7 +4311,8 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
     executive_pdf_issues = "".join(
         "<div class='exec-issue " + ("critical" if issue["level"] == "critical" else "warning") + "'>"
         f"<b>{issue_no}. {html.escape(issue['problem'])}</b>"
-        f"<div><strong>สาเหตุ:</strong> {html.escape(issue['cause'])}</div>"
+        f"<div><strong>สถานการณ์จากแผน:</strong> {html.escape(issue['cause'])}</div>"
+        f"<div><strong>หลักฐานเพิ่มเติม:</strong> {html.escape(issue.get('evidence_summary', 'ยังไม่มีข้อมูล'))}</div>"
         f"<div><strong>ผลกระทบ:</strong> {html.escape(issue['impact'])}</div>"
         f"<div><strong>ข้อเสนอ:</strong> {html.escape(issue['decision'])}</div>"
         "</div>"
