@@ -9345,10 +9345,27 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                 } for c in accepted_cases]), hide_index=True, use_container_width=True)
             if admin:
                 render_qc_pass_correction(accepted_cases, prefix)
-            statuses = st.multiselect("กรองสถานะ Drawing", list(FLOW_STATUS_LABELS),
-                                      default=[s for s in FLOW_STATUS_LABELS if s != "accepted"],
-                                      format_func=FLOW_STATUS_LABELS.get, key=f"{prefix}_flow_statuses")
-            selected_cases = [c for c in cases if c["status"] in statuses]
+            status_groups = {
+                "งานที่ยังไม่จบทั้งหมด": ("producing", "waiting_qc", "rework_planning", "reworking"),
+                "รอจัดคิวแก้ไข (NG)": ("rework_planning",),
+                "กำลังแก้ไข": ("reworking",),
+                "อยู่ระหว่างผลิต": ("producing",),
+                "รอตรวจ QC": ("waiting_qc",),
+                "QC ผ่านแล้ว": ("accepted",),
+                "ทุกงาน": tuple(FLOW_STATUS_LABELS),
+            }
+            selected_group = st.selectbox("เลือกกลุ่มงานที่ต้องการดู", list(status_groups),
+                                          key=f"{prefix}_flow_status_group")
+            search = st.text_input("ค้นหาแผนงาน / Drawing", key=f"{prefix}_flow_case_search")
+            search_terms = search.strip().casefold().split()
+            statuses = status_groups[selected_group]
+            selected_cases = [c for c in cases if c["status"] in statuses
+                              and all(term in (safe_str(c.get("plan_code")) + " " + safe_str(c.get("drawing_name"))).casefold()
+                                      for term in search_terms)]
+            st.caption(f"พบ {len(selected_cases)} รายการ • {selected_group}")
+            if not selected_cases:
+                st.info("ไม่พบงานในกลุ่มนี้ตามคำค้น ลองเปลี่ยนกลุ่มงานหรือล้างคำค้น")
+                return
             st.dataframe(pd.DataFrame([{
                 "แผน": c["plan_code"], "Drawing": c["drawing_name"], "จำนวน": c["qty"],
                 "สถานะ": FLOW_STATUS_LABELS[c["status"]], "รอบแก้ไข": c["cycle"],
@@ -9358,6 +9375,9 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
             if not options:
                 return
             lookup = {c["id"]: c for c in selected_cases}
+            case_selection_key = f"{prefix}_flow_case"
+            if st.session_state.get(case_selection_key) not in lookup:
+                st.session_state.pop(case_selection_key, None)
             case_id = st.selectbox("ดูเส้นทาง / ชั่วโมงผลิต / ผล QC", options, key=f"{prefix}_flow_case",
                                    format_func=lambda value: f"{lookup[value]['plan_code']} | {lookup[value]['drawing_name']} | รอบ {lookup[value]['cycle']}")
             case = lookup[case_id]
