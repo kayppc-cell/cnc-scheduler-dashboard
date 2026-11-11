@@ -7591,7 +7591,7 @@ def render_operator_live_queue_tools(person, tasks):
 @st.fragment(run_every=120)
 def render_operator_upcoming(person):
     """Read-only incoming forecast; QC work is created only after production Finish."""
-    if person not in QC_ASSIGNEES[1:]:
+    if st.session_state.get("operator_live_department", "QC") != "QC" or person not in QC_ASSIGNEES[1:]:
         return
     try:
         cases = fetch_flow_rows("tpc_flow_cases", {"status": "in.(producing,reworking)", "qc_assignee": f"eq.{person}"}) or []
@@ -7765,9 +7765,18 @@ def render_department_operator_mode(training=False):
     if not training and not operator_only_mode:
         st.markdown("[🔗 เปิดลิงก์เฉพาะโหมดผู้ปฏิบัติงาน](?view=operator)")
 
+    live_department = None
+    if not training:
+        if st.session_state.get("operator_live_department") not in ("QC", "AUTOMATION"):
+            remembered_person = st.session_state.get("operator_live_saved_name")
+            st.session_state["operator_live_department"] = (
+                "AUTOMATION" if remembered_person in AUTOMATION_ASSIGNEES[1:] and remembered_person not in QC_ASSIGNEES[1:] else "QC")
+        live_department = st.selectbox("🏢 เลือกแผนก", ["QC", "AUTOMATION"],
+            format_func=lambda value: "QC" if value == "QC" else "Automation", key="operator_live_department")
+
     try:
-        qc_tasks = fetch_department_work_orders("QC")
-        automation_tasks = fetch_department_work_orders("AUTOMATION")
+        qc_tasks = fetch_department_work_orders("QC") if training or live_department == "QC" else pd.DataFrame()
+        automation_tasks = fetch_department_work_orders("AUTOMATION") if training or live_department == "AUTOMATION" else pd.DataFrame()
     except Exception as exc:
         st.error(str(exc))
         return
@@ -7790,7 +7799,7 @@ def render_department_operator_mode(training=False):
     if training:
         st.session_state["training_operator_saved_department"] = training_department
     operator_names = [name for name in TRAINING_OPERATOR_NAMES
-                      if TRAINING_OPERATOR_DEPARTMENTS[name] == training_department] if training else list(dict.fromkeys(QC_ASSIGNEES[1:] + AUTOMATION_ASSIGNEES[1:]))
+                      if TRAINING_OPERATOR_DEPARTMENTS[name] == training_department] if training else list(dict.fromkeys(get_department_assignees(live_department)[1:]))
     if not all_tasks.empty and "assignee" in all_tasks.columns:
         existing_operator_names = all_tasks["assignee"].dropna().astype(str).str.strip().tolist()
         if not training:
@@ -7813,7 +7822,7 @@ def render_department_operator_mode(training=False):
             st.session_state["training_department_operator_name"] = (
                 remembered_name if remembered_name in operator_names else operator_names[0])
     elif st.session_state.get("department_operator_name") not in operator_names:
-        remembered_name = st.session_state.get("operator_live_saved_name")
+        remembered_name = st.session_state.get("operator_live_saved_names", {}).get(live_department, st.session_state.get("operator_live_saved_name"))
         st.session_state["department_operator_name"] = (
             remembered_name if remembered_name in operator_names else operator_names[0])
     selected_operator = st.selectbox(
@@ -7827,10 +7836,12 @@ def render_department_operator_mode(training=False):
             **st.session_state.get("training_operator_saved_names", {}), training_department: selected_operator}
     else:
         st.session_state["operator_live_saved_name"] = selected_operator
+        st.session_state["operator_live_saved_names"] = {
+            **st.session_state.get("operator_live_saved_names", {}), live_department: selected_operator}
     st.caption(f"{selected_operator} — งานที่รับมาควบคุม {active_counts.get(selected_operator, 0)} คิว")
     management_tasks=all_tasks[all_tasks["assignee"].eq(selected_operator)].copy() if not all_tasks.empty else all_tasks
     render_operator_management(selected_operator,management_tasks,training)
-    if not training:
+    if not training and live_department == "QC":
         render_operator_upcoming(selected_operator)
     if all_tasks.empty:
         st.info("ยังไม่มีคิวงานที่ได้รับมอบหมาย")
