@@ -8778,6 +8778,29 @@ FLOW_STATUS_LABELS = {
 }
 
 
+def load_shop_rework_cycles(jobs):
+    """Identify actual rework jobs by their immutable route-step cycle, not the case's current cycle."""
+    linked = {safe_int(row.get("ID")): safe_str(row.get("flow_case_id"))
+              for row in jobs.to_dict("records")
+              if safe_int(row.get("ID")) > 0 and safe_str(row.get("flow_case_id"))}
+    cycles = {}
+    ids = sorted(linked)
+    try:
+        for offset in range(0, len(ids), 100):
+            batch = ids[offset:offset+100]
+            steps = fetch_flow_rows("tpc_flow_steps", {"job_id": "in.(" + ",".join(str(value) for value in batch) + ")",
+                                                      "select": "id,job_id,case_id,cycle"})
+            if steps is None:
+                return cycles, False
+            for step in steps:
+                job_id, cycle = safe_int(step.get("job_id")), safe_int(step.get("cycle"))
+                if cycle > 0 and linked.get(job_id) == safe_str(step.get("case_id")):
+                    cycles[job_id] = cycle
+        return cycles, True
+    except (ValueError, requests.RequestException):
+        return cycles, False
+
+
 def flow_display_time(value):
     if not value:
         return "–"
@@ -10247,6 +10270,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 if not first_paused.empty:
                     piece_resume_allowed_id = safe_int(first_paused.iloc[0]["ID"])
             next_available_start_found = False
+            rework_cycles, rework_labels_ready = load_shop_rework_cycles(m_active)
+            if not rework_labels_ready:
+                st.caption("ยังตรวจป้ายงานตีกลับแก้ไขได้ไม่ครบ กรุณารีเฟรชเพื่อตรวจป้ายอีกครั้ง")
 
             for queue_idx, step_row in m_active.iterrows():
                 target_id = safe_int(step_row["ID"])
@@ -10344,7 +10370,12 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     badge_gradient = "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)"
                     status_badge_html = ''
 
-                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{status_badge_html}<span class="badge-chip badge-date">📅 <b>{queue_start_label}:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>{queue_finish_label}:</b> {finish_plan_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
+                rework_badge_html = (
+                    '<span class="badge-chip" style="background:#FFF7ED;color:#9A3412;border:2px solid #EA580C;font-weight:800;">🔧 งานตีกลับแก้ไข (NG)</span>'
+                    if target_id in rework_cycles else ''
+                )
+
+                card_header_html = f'''<div class="{header_box_class}"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-size:20px; font-weight:800; color:#1E1B4B; display:flex; align-items:center; gap:8px;"><span style="background:{badge_gradient}; color:white; padding:4px 12px; border-radius:10px; font-size:14px; box-shadow:0 3px 8px rgba(0,0,0,0.15);">คิวที่ {queue_idx+1}</span><span>แผนงาน: {plan_code}</span></div><span class="badge-chip badge-station">🏭 {selected_m}</span></div><div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">{rework_badge_html}{status_badge_html}<span class="badge-chip badge-date">📅 <b>{queue_start_label}:</b> {ready_display_str}</span><span class="badge-chip badge-finish-date">🏁 <b>{queue_finish_label}:</b> {finish_plan_display_str}</span><span class="badge-chip badge-drawing">📄 <b>Drawing:</b> {drawing_code}</span><span class="badge-chip badge-qty">🔢 <b>จำนวน:</b> {qty_val} ชิ้น</span><span class="badge-chip badge-mat">🔩 <b>วัสดุ:</b> {mat_val}</span></div></div>'''
                 st.markdown(card_header_html, unsafe_allow_html=True)
 
                 card_style_class = "step-card"
