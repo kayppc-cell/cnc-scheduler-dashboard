@@ -1357,6 +1357,60 @@ components.html("""
 </script>
 """, height=0)
 
+def tpc_mobile_batch_toggle(selection_key, checkbox_key, job_id):
+    selected = list(st.session_state.get(selection_key, []))
+    if st.session_state.get(checkbox_key):
+        if job_id not in selected:
+            selected.append(job_id)
+    else:
+        selected = [value for value in selected if value != job_id]
+    st.session_state[selection_key] = selected
+
+
+def tpc_clear_mobile_batch(selection_key):
+    st.session_state[selection_key] = []
+    for key in list(st.session_state):
+        if key.startswith(selection_key + "_mobile_job_"):
+            st.session_state[key] = False
+
+
+def render_mobile_batch_drawing_picker(rows, numbers, selection_key):
+    """Readable mobile cards; stable ID selection survives search and pagination."""
+    selected = [job_id for job_id in st.session_state.get(selection_key, []) if job_id in rows]
+    st.session_state[selection_key] = selected
+    st.markdown("**เลือก Drawing ที่จะ Start — อ่านรายละเอียดแล้วติ๊กทีละงาน**")
+    search = st.text_input("🔍 ค้นหาแผนงาน / Drawing / Step", key=selection_key + "_mobile_search")
+    terms = search.strip().casefold().split()
+    visible = [job_id for job_id, row in rows.items()
+               if all(term in " ".join(safe_str(row.get(column)) for column in ("แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)")).casefold()
+                      for term in terms)]
+    st.caption(f"พบ {len(visible)} งาน • เลือกไว้ {len(selected)} งาน รวมงานที่อยู่นอกคำค้นหรือหน้าอื่น")
+    st.button("ล้าง Drawing ที่เลือก", key=selection_key + "_mobile_clear", use_container_width=True,
+              on_click=tpc_clear_mobile_batch, args=(selection_key,))
+    page_count = max(1, (len(visible)+9)//10)
+    page_key = selection_key + "_mobile_page"
+    if st.session_state.get(page_key, 1) not in range(1, page_count+1):
+        st.session_state.pop(page_key, None)
+    page = st.selectbox("หน้ารายการ (หน้าละ 10 งาน)", list(range(1, page_count+1)), key=page_key) if page_count > 1 else 1
+    if not visible:
+        st.info("ไม่พบงานตามคำค้น รายการที่เลือกไว้ก่อนหน้ายังคงอยู่")
+    for job_id in visible[(page-1)*10:page*10]:
+        row = rows[job_id]
+        checkbox_key = selection_key + f"_mobile_job_{job_id}"
+        st.session_state[checkbox_key] = job_id in selected
+        with st.container(border=True):
+            st.checkbox(f"เลือกคิว {numbers[job_id]}", key=checkbox_key,
+                        on_change=tpc_mobile_batch_toggle, args=(selection_key, checkbox_key, job_id))
+            text = (
+                '<div style="white-space:normal;overflow-wrap:anywhere;word-break:break-word;line-height:1.6;">'
+                f'<b>แผนงาน:</b> {html.escape(safe_str(row.get("แผนงาน"), "-"))}<br>'
+                f'<b>Drawing:</b> {html.escape(safe_str(row.get("ชื่อ Drawing."), "-"))}<br>'
+                f'<b>Step:</b> {html.escape(safe_str(row.get("ขั้นตอน (Step)"), "-"))}</div>'
+            )
+            st.markdown(text, unsafe_allow_html=True)
+    return [job_id for job_id in rows if job_id in st.session_state.get(selection_key, [])]
+
+
 def tpc_set_filter_choice(key, value):
     st.session_state[key] = value
 
@@ -10068,15 +10122,18 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         batch_start_key = f"batch_start_drawings_{selected_m}"
                         if batch_start_key in st.session_state:
                             st.session_state[batch_start_key] = [job_id for job_id in st.session_state[batch_start_key] if job_id in batch_start_rows]
-                        batch_start_ids = st.multiselect(
-                            "เลือก Drawing รอคิวที่จะ Start ได้หลายรายการ",
-                            list(batch_start_rows), key=batch_start_key,
-                            format_func=lambda job_id: (
-                                f"คิว {batch_start_numbers[job_id]} | แผน {safe_str(batch_start_rows[job_id].get('แผนงาน'), '-')} | "
-                                f"Drawing {safe_str(batch_start_rows[job_id].get('ชื่อ Drawing.'), '-')} | "
-                                f"Step {safe_str(batch_start_rows[job_id].get('ขั้นตอน (Step)'), '-')}"
-                            ),
-                        )
+                        if get_device_mode() == "mobile":
+                            batch_start_ids = render_mobile_batch_drawing_picker(batch_start_rows, batch_start_numbers, batch_start_key)
+                        else:
+                            batch_start_ids = st.multiselect(
+                                "เลือก Drawing รอคิวที่จะ Start ได้หลายรายการ",
+                                list(batch_start_rows), key=batch_start_key,
+                                format_func=lambda job_id: (
+                                    f"คิว {batch_start_numbers[job_id]} | แผน {safe_str(batch_start_rows[job_id].get('แผนงาน'), '-')} | "
+                                    f"Drawing {safe_str(batch_start_rows[job_id].get('ชื่อ Drawing.'), '-')} | "
+                                    f"Step {safe_str(batch_start_rows[job_id].get('ขั้นตอน (Step)'), '-')}"
+                                ),
+                            )
                         batch_start_scope = sorted(batch_start_ids)
                         waiting_jobs = waiting_jobs[waiting_jobs["ID"].apply(safe_int).isin(batch_start_ids)].copy()
                         if not batch_start_ids:
