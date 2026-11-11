@@ -1357,6 +1357,40 @@ components.html("""
 </script>
 """, height=0)
 
+def tpc_set_filter_choice(key, value):
+    st.session_state[key] = value
+
+
+def tpc_filter_shortcuts(label, options, *, key=None, index=0, format_func=None, horizontal=True):
+    """Consistent shortcut buttons; keep original option values and filter keys."""
+    options = list(options)
+    if not options:
+        return None
+    key = key or "tpc_shortcut_" + hashlib.sha256(label.encode()).hexdigest()[:12]
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = options[index]
+    selected = st.session_state[key]
+    st.markdown(f"**{label}**")
+    device = get_device_mode()
+    count = 2 if device == "mobile" else 3 if device == "tablet" else min(7, len(options))
+    for offset in range(0, len(options), count):
+        row = options[offset:offset+count]
+        for column, option in zip(st.columns(len(row)), row):
+            with column:
+                st.button(format_func(option) if format_func else str(option),
+                          key=f"{key}_choice_{options.index(option)}", use_container_width=True,
+                          type="primary" if option == selected else "secondary",
+                          on_click=tpc_set_filter_choice, args=(key, option))
+    return selected
+
+
+def tpc_filter_columns(widths):
+    """Compact on desktop; full-width readable controls on narrow screens."""
+    if get_device_mode() == "mobile":
+        return [st.container() for _ in widths]
+    return st.columns(widths)
+
+
 def get_device_mode():
     """แยกโทรศัพท์ แท็บเล็ต และคอม/ทีวีจาก User-Agent"""
     try:
@@ -5080,7 +5114,7 @@ def render_total_project_cost_report(df_db, selected_month, selected_year, rate_
     st.markdown("### 💼 ต้นทุนรวมทั้งแผน")
     st.caption("รวมค่าเครื่องจักรจริง + วัตถุดิบ + Part + งานจ้าง Maker + Tool และค่าใช้จ่ายอื่น")
 
-    view_mode = st.radio(
+    view_mode = tpc_filter_shortcuts(
         "รูปแบบรายงานต้นทุน",
         ["ค่าใช้จ่ายที่เกิดในเดือนนี้", "ต้นทุนสะสมทั้งแผน"],
         horizontal=True,
@@ -5480,7 +5514,7 @@ def delete_waiting_department_work_order(task_id):
 def render_department_finished_history(finished_tasks, department, now, allow_write=False):
     """ตารางประวัติสำหรับผู้ควบคุม แสดงใต้ตารางคิวและเลือกลบจากแถวได้โดยตรง"""
     with st.expander(f"✅ ตารางประวัติงานที่เสร็จแล้ว ({len(finished_tasks)} รายการ)", expanded=False):
-        history_quick = st.radio(
+        history_quick = tpc_filter_shortcuts(
             "⚡ ตัวกรองเร็วประวัติงาน",
             ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"],
             horizontal=True,
@@ -5493,12 +5527,15 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
         history_plan_choices = ["ทุกแผนงาน"] + history_plan_options
         if st.session_state.get(history_plan_key) not in history_plan_choices:
             st.session_state.pop(history_plan_key, None)
-        history_plan = st.selectbox("📋 กรองแผนงาน", history_plan_choices, key=history_plan_key)
-        history_search = st.text_input(
-            "🔍 ค้นหาประวัติงาน",
-            placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ",
-            key=f"{department}_history_search_v2"
-        )
+        history_plan_col, history_search_col = tpc_filter_columns([1.2, 2.4])
+        with history_plan_col:
+            history_plan = st.selectbox("📋 กรองแผนงาน", history_plan_choices, key=history_plan_key)
+        with history_search_col:
+            history_search = st.text_input(
+                "🔍 ค้นหาประวัติงาน",
+                placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ",
+                key=f"{department}_history_search_v2"
+            )
         history_shown = finished_tasks.copy()
         history_finish = history_shown.get("actual_finish", pd.Series(pd.NaT, index=history_shown.index))
         history_period = history_quick
@@ -5719,7 +5756,7 @@ def render_department_time_cost_table(qc_tasks, now, department):
             return
         filtered_tasks = expand_operator_labor_cost_rows(filtered_tasks)
         st.caption("งานส่งต่อแยกชั่วโมงและต้นทุนตามผู้ทำงานจริง เวลาแผนถูกแบ่งตามสัดส่วนชั่วโมงจริงเพื่อไม่ให้นับซ้ำ")
-        quick_filter = st.radio(
+        quick_filter = tpc_filter_shortcuts(
             "⚡ ค้นหาเร็ว",
             ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"],
             horizontal=True,
@@ -5754,7 +5791,7 @@ def render_department_time_cost_table(qc_tasks, now, department):
             value for value in filtered_tasks.get("assignee", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
             if value
         )
-        qf1, qf2, qf3 = st.columns([1.4, 1.8, 3.0])
+        qf1, qf2, qf3 = tpc_filter_columns([1.4, 1.8, 3.0])
         with qf1:
             selected_cost_plan = st.selectbox("📌 เลขแผน", ["ทุกแผนงาน"] + filter_plan_options, key=f"{department}_cost_plan_filter")
         with qf2:
@@ -6438,7 +6475,7 @@ def render_people_work_center(department):
     finished_tasks = tasks[finished_mask].copy()
 
     if False:  # ตารางชุดเก่าเลิกใช้แล้ว; ตารางใหม่จะแสดงใต้ตารางคิวงานปัจจุบัน
-        history_quick = st.radio(
+        history_quick = tpc_filter_shortcuts(
             "⚡ ตัวกรองเร็วประวัติงาน",
             ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้"],
             horizontal=True,
@@ -6554,7 +6591,7 @@ def render_people_work_center(department):
                 st.error(f"ลบประวัติไม่สำเร็จ: {delete_message}")
 
     st.markdown("#### 📋 ตารางคิวงานปัจจุบัน")
-    queue_quick = st.radio(
+    queue_quick = tpc_filter_shortcuts(
         "⚡ ตัวกรองเร็วคิวงาน",
         ["ทั้งหมด", "รอรับงาน", "กำลังทำ", "พักงาน", "เกินกำหนด", "เร่งด่วน"],
         horizontal=True,
@@ -6570,7 +6607,7 @@ def render_people_work_center(department):
         value for value in active_tasks.get("assignee", pd.Series(dtype=str)).fillna("").astype(str).str.strip().unique().tolist()
         if value
     )
-    f1, f2, f3, f4 = st.columns([1.3, 1.6, 2.0, 3.1])
+    f1, f2, f3, f4 = tpc_filter_columns([1.3, 1.6, 2.0, 3.1])
     with f1:
         priority_filter = st.selectbox("ความเร่งด่วน", ["ทั้งหมด"] + DEPT_PRIORITIES, key=f"{department}_priority_filter")
     with f2:
@@ -9192,9 +9229,12 @@ def render_qc_pass_correction(accepted_cases, prefix):
         if not st.checkbox("เปิดเลือกงานที่กด QC ผ่านผิด", key=f"{prefix}_qc_correction_open"):
             return
         plans = sorted({safe_str(c.get("plan_code")) for c in accepted_cases if safe_str(c.get("plan_code"))})
-        selected_plan = st.selectbox("กรองแผนงาน", ["ทุกแผนงาน"] + plans, key=f"{prefix}_qc_correction_plan")
-        search = st.text_input("ค้นหาแผนงาน / Drawing / ผู้ตรวจ QC", key=f"{prefix}_qc_correction_search")
-        period = st.selectbox("วันที่ QC ผ่าน", ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"], key=f"{prefix}_qc_correction_period")
+        period = tpc_filter_shortcuts("วันที่ QC ผ่าน", ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"], key=f"{prefix}_qc_correction_period")
+        selected_plan_col, search_col = tpc_filter_columns([1.2, 2.4])
+        with selected_plan_col:
+            selected_plan = st.selectbox("กรองแผนงาน", ["ทุกแผนงาน"] + plans, key=f"{prefix}_qc_correction_plan")
+        with search_col:
+            search = st.text_input("ค้นหาแผนงาน / Drawing / ผู้ตรวจ QC", key=f"{prefix}_qc_correction_search")
         today = get_bangkok_now().date()
         start_date, end_date = None, None
         if period == "วันนี้":
@@ -9395,11 +9435,14 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
             accepted_cases = [c for c in cases if c["status"] == "accepted"]
             with st.expander(f"✅ งานจบสมบูรณ์ — QC ตรวจผ่านแล้ว ({len(accepted_cases)} Drawing)"):
                 accepted_plans = sorted({safe_str(c.get("plan_code")) for c in accepted_cases if safe_str(c.get("plan_code"))})
-                accepted_plan = st.selectbox("กรองแผนงาน", ["ทุกแผนงาน"] + accepted_plans,
-                                             key=f"{prefix}_accepted_plan")
-                accepted_search = st.text_input("ค้นหา Drawing / แผนงาน", key=f"{prefix}_accepted_search")
-                accepted_period = st.selectbox("วันที่ QC ผ่าน", ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"],
+                accepted_period = tpc_filter_shortcuts("วันที่ QC ผ่าน", ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"],
                                                key=f"{prefix}_accepted_period")
+                accepted_plan_col, accepted_search_col = tpc_filter_columns([1.2, 2.4])
+                with accepted_plan_col:
+                    accepted_plan = st.selectbox("กรองแผนงาน", ["ทุกแผนงาน"] + accepted_plans,
+                                                 key=f"{prefix}_accepted_plan")
+                with accepted_search_col:
+                    accepted_search = st.text_input("ค้นหา Drawing / แผนงาน", key=f"{prefix}_accepted_search")
                 accepted_today = get_bangkok_now().date()
                 accepted_start, accepted_end = None, None
                 accepted_dates_ready = True
@@ -9439,12 +9482,18 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                 "QC ผ่านแล้ว": ("accepted",),
                 "ทุกงาน": tuple(FLOW_STATUS_LABELS),
             }
-            selected_group = st.selectbox("เลือกกลุ่มงานที่ต้องการดู", list(status_groups),
+            selected_group = tpc_filter_shortcuts("เลือกกลุ่มงานที่ต้องการดู", list(status_groups),
                                           key=f"{prefix}_flow_status_group")
-            search = st.text_input("ค้นหาแผนงาน / Drawing", key=f"{prefix}_flow_case_search")
+            flow_plan_col, flow_search_col = tpc_filter_columns([1.2, 2.4])
+            with flow_plan_col:
+                flow_plan_options = ["ทุกแผนงาน"] + sorted({safe_str(c.get("plan_code")) for c in cases if safe_str(c.get("plan_code"))})
+                flow_plan = st.selectbox("📌 แผนงาน", flow_plan_options, key=f"{prefix}_flow_plan_filter")
+            with flow_search_col:
+                search = st.text_input("🔍 ค้นหาแผนงาน / Drawing", key=f"{prefix}_flow_case_search")
             search_terms = search.strip().casefold().split()
             statuses = status_groups[selected_group]
             selected_cases = [c for c in cases if c["status"] in statuses
+                              and (flow_plan == "ทุกแผนงาน" or safe_str(c.get("plan_code")) == flow_plan)
                               and all(term in (safe_str(c.get("plan_code")) + " " + safe_str(c.get("drawing_name"))).casefold()
                                       for term in search_terms)]
             st.caption(f"พบ {len(selected_cases)} รายการ • {selected_group}")
@@ -11107,7 +11156,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     if waiting.empty:
                         st.caption("ไม่มีใบงานรอคิว")
                         return
-                    filter_machine_column, filter_plan_column, filter_drawing_column = st.columns([1, 1, 2])
+                    filter_machine_column, filter_plan_column, filter_drawing_column = tpc_filter_columns([1, 1, 2])
                     machine_options = ["ทั้งหมด"] + sorted(waiting["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
                     selected_machine = filter_machine_column.selectbox("🔎 เครื่องจักร", machine_options, key="waiting_start_filter_machine")
                     if selected_machine != "ทั้งหมด":
@@ -12567,7 +12616,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     selected_history_day = None
                     selected_history_range = None
                     if custom_date_enabled:
-                        date_mode = st.radio(
+                        date_mode = tpc_filter_shortcuts(
                             "รูปแบบการเลือกวันที่",
                             ["วันเดียว", "ช่วงวันที่"],
                             horizontal=True,
@@ -13213,7 +13262,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         cost_machine_options = ["🌐 ทุกเครื่อง"] + sorted(cost_df["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
                         cost_plan_options = ["🌐 ทุกแผนงาน"] + sorted(cost_df["แผนงาน"].dropna().astype(str).unique().tolist())
                         cost_drawing_options = ["🌐 ทุก Drawing"] + sorted(cost_df["ชื่อ Drawing."].dropna().astype(str).unique().tolist())
-                        cf1, cf2, cf3, cf4 = st.columns([1.1, 1, 1.4, 1.7])
+                        cf1, cf2, cf3, cf4 = tpc_filter_columns([1.1, 1, 1.4, 1.7])
                         with cf1:
                             cost_machine_filter = st.selectbox("🏭 เครื่องจักร:", cost_machine_options, key="cost_machine_filter")
                         with cf2:
