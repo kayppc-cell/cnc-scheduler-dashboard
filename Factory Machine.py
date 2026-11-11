@@ -1806,7 +1806,8 @@ MACHINE_LIST = [
     "No.12 มิลลิ่ง 1", "No.13 มิลลิ่ง 2", "No.14 มิลลิ่ง 3", "No.15 มิลลิ่ง 4",
     "No.16 เครื่องกลึง",
     "MIG CO2-No.01", "MIG CO2-No.02", "MIG CO2-No.03",
-    "ARGON-No.01", "ARGON-No.02", "WELDING_ALUMINUM-No.01"
+    "ARGON-No.01", "ARGON-No.02", "WELDING_ALUMINUM-No.01",
+    "Cutting1", "Cutting2"
 ]
 
 DEFAULT_RATES = {
@@ -1816,7 +1817,8 @@ DEFAULT_RATES = {
     "No.12 มิลลิ่ง 1": 400, "No.13 มิลลิ่ง 2": 400, "No.14 มิลลิ่ง 3": 400, "No.15 มิลลิ่ง 4": 400,
     "No.16 เครื่องกลึง": 400,
     "MIG CO2-No.01": 450, "MIG CO2-No.02": 450, "MIG CO2-No.03": 450,
-    "ARGON-No.01": 450, "ARGON-No.02": 450, "WELDING_ALUMINUM-No.01": 500
+    "ARGON-No.01": 450, "ARGON-No.02": 450, "WELDING_ALUMINUM-No.01": 500,
+    "Cutting1": 300, "Cutting2": 300
 }
 
 ASSIGN_OPTIONS = ["อัตโนมัติ (เครื่อง 3 แกนใดก็ได้)"] + MACHINE_LIST
@@ -8497,7 +8499,7 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
             with gantt_f1:
                 m_filter_mode = st.radio(
                     "🔍 กรองกลุ่มสถานีงาน:",
-                    ["🌐 ทุกสถานี (22 เครื่อง)", "⚙️ CNC (No.1 - No.9)", "🔧 เจียร/มิลลิ่ง/กลึง (No.10 - No.16)", "🔥 แผนกเชื่อม (6 เครื่อง)"],
+                    [f"🌐 ทุกสถานี ({len(MACHINE_LIST)} เครื่อง)", "⚙️ CNC (No.1 - No.9)", "🔧 เจียร/มิลลิ่ง/กลึง (No.10 - No.16)", "🔥 แผนกเชื่อม (6 เครื่อง)", "🪚 เครื่องตัด (2 เครื่อง)"],
                     horizontal=True
                 )
 
@@ -8563,7 +8565,9 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
             elif "เจียร" in m_filter_mode:
                 display_machines = MACHINE_LIST[9:16]
             elif "เชื่อม" in m_filter_mode:
-                display_machines = MACHINE_LIST[16:]
+                display_machines = MACHINE_LIST[16:22]
+            elif "เครื่องตัด" in m_filter_mode:
+                display_machines = [name for name in MACHINE_LIST if name in ("Cutting1", "Cutting2")]
             else:
                 display_machines = MACHINE_LIST
 
@@ -13042,7 +13046,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     for m in MACHINE_LIST
                 ])
 
-                if "machine_rates" not in st.session_state or len(st.session_state.machine_rates) != len(MACHINE_LIST):
+                if "machine_rates" not in st.session_state:
                     st.session_state.machine_rates = current_rates_df
                 else:
                     existing_map = dict(zip(st.session_state.machine_rates["เครื่องจักร"], st.session_state.machine_rates["เรตราคา (บาท/ชม.)"]))
@@ -15303,11 +15307,11 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         <div class="tv-live-header" style="background:#0F172A; border:2px solid #1E3A8A; border-radius:14px; padding:12px 20px; color:white; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; box-shadow:0 8px 24px rgba(0,0,0,0.3);">
             <div>
                 <div class="tv-live-title" style="font-size:21px; font-weight:800; color:#38BDF8; display:flex; align-items:center; gap:10px;">
-                    <span>📺 จอทีวีแสดงงานแผนกผลิต (22 สถานี)</span>
+                    <span>📺 จอทีวีแสดงงานแผนกผลิต ({len(MACHINE_LIST)} สถานี)</span>
                     <span class="tv-auto-badge" style="font-size:11.5px; background:#1E293B; border:1px solid #38BDF8; color:#38BDF8; padding:2px 8px; border-radius:16px;">Auto 30s</span>
                 </div>
                 <div style="color:#94A3B8; font-size:12.5px; margin-top:2px;">
-                    สถานะการผลิต 22 สถานีงานแบบ Real-time | ประจำวันที่ <b>{cur_date_str}</b>
+                    สถานะการผลิต {len(MACHINE_LIST)} สถานีงานแบบ Real-time | ประจำวันที่ <b>{cur_date_str}</b>
                 </div>
             </div>
             <div style="text-align:right;">
