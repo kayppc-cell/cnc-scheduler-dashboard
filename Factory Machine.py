@@ -9114,6 +9114,65 @@ def render_unified_production_creation(templates):
             st.caption("เวลาคาดการณ์ตามคิวปัจจุบันและกะโรงงาน ขั้นถัดไปคำนวณอีกครั้งเมื่อส่งต่อจริง ยังไม่เริ่มงานอัตโนมัติ")
 
 
+TPC_QC_CORRECTION_SQL = "begin;\ndo $patch$\ndeclare definition text;\nbegin\n definition:=pg_get_functiondef('public.tpc_flow_before_qc()'::regprocedure);\n if position('tpc_qc_correction_v1' in definition)=0 then\n  if position($old$if old.status='✅ เสร็จแล้ว' and new is distinct from old then raise exception 'Closed QC record is immutable'; end if;$old$ in definition)=0 then raise exception 'QC guard version differs; stop and review'; end if;\n  execute replace(definition,$old$if old.status='✅ เสร็จแล้ว' and new is distinct from old then raise exception 'Closed QC record is immutable'; end if;$old$,$new$if old.status='✅ เสร็จแล้ว' and new is distinct from old then\n   -- tpc_qc_correction_v1: narrowly scoped to the correction transaction.\n   if not (coalesce(current_setting('tpc.qc_correction_task',true),'')=old.id::text\n      and old.flow_verdict='pass' and new.flow_verdict='fail'\n      and nullif(btrim(new.result_note),'') is not null\n      and (to_jsonb(new)-array['flow_verdict','result_note'])=(to_jsonb(old)-array['flow_verdict','result_note'])) then\n    raise exception 'Closed QC record is immutable';\n   end if;\n  end if;$new$);\n end if;\nend $patch$;\ncreate or replace function public.tpc_correct_qc_pass_to_ng(p_data jsonb)\nreturns jsonb language plpgsql security definer set search_path='' set timezone='UTC' as $$\ndeclare c public.tpc_flow_cases; task public.tpc_department_work_orders;\n reason text:=nullif(btrim(p_data->>'reason'),''); actor text:=nullif(btrim(p_data->>'actor'),'');\nbegin\n if reason is null or actor is null then raise exception 'Correction reason and recorder required'; end if;\n select * into c from public.tpc_flow_cases where id=(p_data->>'case_id')::uuid for update;\n if not found or c.status is distinct from 'accepted' or c.cycle is distinct from (p_data->>'expected_cycle')::integer\n    or c.plan_code is distinct from p_data->>'plan_code' or c.drawing_name is distinct from p_data->>'drawing_name'\n    then raise exception 'QC case changed; refresh before correction'; end if;\n select * into task from public.tpc_department_work_orders\n  where flow_case_id=c.id and flow_cycle=c.cycle and department='QC' order by id desc limit 1 for update;\n if not found or task.status is distinct from '✅ เสร็จแล้ว' or task.flow_verdict is distinct from 'pass'\n    or task.id is distinct from (p_data->>'task_id')::bigint\n    then raise exception 'Latest closed QC pass not found or changed'; end if;\n -- Original inspection and production hours stay closed. Only verdict/note change.\n perform set_config('tpc.qc_correction_task',task.id::text,true);\n update public.tpc_department_work_orders set flow_verdict='fail', result_note=reason where id=task.id;\n perform set_config('tpc.qc_correction_task','',true);\n update public.tpc_flow_cases set status='rework_planning',accepted_at=null where id=c.id;\n insert into public.tpc_flow_events(case_id,cycle,event,details) values(c.id,c.cycle,'qc_pass_corrected_to_ng',\n  jsonb_build_object('qc_task_id',task.id,'actor',actor,'reason',reason,\n   'original_qc',to_jsonb(task),'original_accepted_at',c.accepted_at,'new_verdict','fail'));\n return jsonb_build_object('ok',true,'case_id',c.id,'task_id',task.id);\nend $$;\nrevoke all on function public.tpc_correct_qc_pass_to_ng(jsonb) from public,anon,authenticated;\ngrant execute on function public.tpc_correct_qc_pass_to_ng(jsonb) to service_role;\n\nnotify pgrst, 'reload schema';\ncommit;\n"
+
+
+def render_qc_pass_correction(accepted_cases, prefix):
+    if st.session_state.get("user_role") != "admin" or not accepted_cases:
+        return
+    with st.expander("↩️ แก้ผล QC ที่กดผ่านผิด → NG ส่งกลับแก้ไข"):
+        st.caption("สำหรับผู้ดูแล: เก็บประวัติผลเดิมและเวลาเดิม ส่งงานไปรอผู้วางแผนจัดคิวแก้ไข ไม่เริ่มงานหรือเปิดเวลาผลิตเดิมใหม่")
+        with st.expander("ติดตั้งเครื่องมือครั้งแรก"):
+            st.download_button("ดาวน์โหลด SQL ติดตั้งการแก้ผล QC", TPC_QC_CORRECTION_SQL.encode("utf-8"),
+                               file_name="TPC_QC_Correction_Setup.sql", mime="text/plain", key=f"{prefix}_qc_correction_sql")
+            st.caption("รัน SQL นี้ใน Supabase SQL Editor ครั้งเดียวก่อนบันทึกการแก้ผล ไม่มีการแก้ผล QC ใดระหว่างติดตั้ง")
+        if not st.checkbox("เปิดเลือกงานที่กด QC ผ่านผิด", key=f"{prefix}_qc_correction_open"):
+            return
+        lookup = {str(c["id"]): c for c in accepted_cases}
+        case_id = st.selectbox("เลือกรายการที่ต้องแก้ผล", list(lookup),
+            format_func=lambda key: f"{lookup[key]['plan_code']} | {lookup[key]['drawing_name']} | รอบ {lookup[key]['cycle']}",
+            key=f"{prefix}_qc_correction_case")
+        case = lookup[case_id]
+        tasks = fetch_department_work_orders("QC")
+        if not isinstance(tasks, pd.DataFrame) or tasks.empty or "flow_case_id" not in tasks:
+            st.warning("ไม่พบใบตรวจ QC กรุณารีเฟรช")
+            return
+        matches = tasks[tasks["flow_case_id"].astype(str).eq(case_id) & pd.to_numeric(tasks["flow_cycle"], errors="coerce").eq(safe_int(case["cycle"]))]
+        if matches.empty:
+            st.warning("ไม่พบใบตรวจ QC ของรอบนี้ กรุณารีเฟรช")
+            return
+        task = matches.sort_values("id").iloc[-1]
+        if task.get("flow_verdict") != "pass" or task.get("status") != "✅ เสร็จแล้ว":
+            st.warning("ผล QC เปลี่ยนแล้ว กรุณารีเฟรชก่อนดำเนินการ")
+            return
+        st.warning(f"กำลังแก้ผล: {case['plan_code']} / {case['drawing_name']} จาก QC ผ่าน เป็น NG รอจัดคิวแก้ไข")
+        with st.form(f"{prefix}_qc_correction_form_{case_id}_{case['cycle']}"):
+            actor = st.text_input("ชื่อผู้บันทึกการแก้ผล")
+            reason = st.text_area("เหตุผลที่แก้ผล และจุด NG ที่ต้องแก้ไข")
+            confirmed = st.checkbox("ตรวจรายการแล้ว ยืนยันว่า QC ผ่านเดิมเป็นการกดผิด และต้องส่งกลับแก้ไข")
+            submitted = st.form_submit_button("ยืนยันแก้ผลเป็น NG และส่งรอจัดคิวแก้ไข", type="primary")
+        if submitted:
+            if st.session_state.get("user_role") != "admin":
+                st.error("ต้องใช้สิทธิ์ผู้ดูแล")
+                return
+            if not confirmed or not actor.strip() or not reason.strip():
+                st.warning("กรุณาระบุชื่อ เหตุผล/จุด NG และติ๊กยืนยัน")
+                return
+            payload = {"case_id": case_id, "expected_cycle": safe_int(case["cycle"]), "task_id": safe_int(task["id"]),
+                       "plan_code": case["plan_code"], "drawing_name": case["drawing_name"], "actor": actor.strip(), "reason": reason.strip()}
+            try:
+                response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_correct_qc_pass_to_ng",
+                    headers=flow_api_headers(write=True), json={"p_data": payload}, timeout=25)
+                if response.status_code != 200 or response.json().get("ok") is not True:
+                    st.error("ยังแก้ผลไม่สำเร็จ กรุณาตรวจว่าติดตั้ง SQL แล้ว และรีเฟรชเพื่อตรวจสถานะล่าสุดก่อนทำซ้ำ")
+                    return
+                st.cache_data.clear()
+                st.session_state["_flow_notice"] = "แก้ผล QC เป็น NG และส่งรอจัดคิวแก้ไขแล้ว"
+                st.rerun(scope="app")
+            except (requests.RequestException, ValueError):
+                st.error("ยังยืนยันผลไม่ได้ กรุณารีเฟรชตรวจสถานะและประวัติก่อนทำซ้ำ")
+
+
 def flow_event_history_rows(events, steps):
     """Present an audit trail as user-facing Thai; never render raw event payloads."""
     stages_by_job = {safe_int(item.get("job_id"), 0): item for item in steps if item.get("job_id")}
@@ -9124,6 +9183,7 @@ def flow_event_history_rows(events, steps):
         "production_finish": "ผลิตขั้นตอนนี้เสร็จแล้ว",
         "waiting_qc": "ส่งเข้าคิวตรวจรับ QC แล้ว",
         "qc_pass": "QC ตรวจผ่าน — งานจบสมบูรณ์",
+        "qc_pass_corrected_to_ng": "แก้ผล QC ผ่านที่กดผิด → NG รอจัดคิวแก้ไข",
         "qc_fail": "QC ตรวจไม่ผ่าน — รอจัดคิวแก้ไข",
         "plan_rework": "จัดเส้นทางแก้ไขแล้ว",
         "enabled": "เปิดใช้การส่งตรวจ QC",
@@ -9159,6 +9219,10 @@ def flow_event_history_rows(events, steps):
                 names = [name for name in names if name]
                 if names:
                     summary.append(" → ".join(names))
+        elif kind == "qc_pass_corrected_to_ng":
+            summary.append(f"ผู้บันทึกแก้ผล: {safe_str(details.get('actor'))}")
+            summary.append(f"เหตุผล/จุด NG: {safe_str(details.get('reason'))}")
+            summary.append("เก็บประวัติผลเดิมและเวลาเดิมไว้แล้ว")
         elif kind in ("qc_pass", "qc_fail"):
             person = safe_str(details.get("assignee"))
             reason = safe_str(details.get("reason"))
@@ -9228,6 +9292,8 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                     "แผน": c["plan_code"], "Drawing": c["drawing_name"], "จำนวน": c["qty"],
                     "รอบแก้ไข": c["cycle"], "QC ผ่านเมื่อ": flow_display_time(c["accepted_at"]),
                 } for c in accepted_cases]), hide_index=True, use_container_width=True)
+            if admin:
+                render_qc_pass_correction(accepted_cases, prefix)
             statuses = st.multiselect("กรองสถานะ Drawing", list(FLOW_STATUS_LABELS),
                                       default=[s for s in FLOW_STATUS_LABELS if s != "accepted"],
                                       format_func=FLOW_STATUS_LABELS.get, key=f"{prefix}_flow_statuses")
