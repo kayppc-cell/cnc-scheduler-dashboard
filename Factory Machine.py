@@ -8016,6 +8016,9 @@ def render_department_operator_mode(training=False):
                 if not training and safe_str(queue_task.get("flow_case_id")):
                     render_flow_qc_result(queue_task, "operator")
                     continue
+                if not training and safe_str(queue_task.get("department")) == "QC":
+                    if render_operator_legacy_qc_ng(queue_task):
+                        continue
                 with st.form(f"operator_finish_{task_id}"):
                     operator_finish_note = st.text_area("หมายเหตุงานเสร็จ (ถ้ามี)")
                     operator_finish_submit = st.form_submit_button("✅ Finish งาน", type="primary", use_container_width=True)
@@ -8909,6 +8912,125 @@ def load_shop_rework_cycles(jobs):
         return cycles, False
 
 
+TPC_OPERATOR_NG_SQL = "begin;\nalter table public.tpc_department_work_orders\n add column if not exists qc_ng_context jsonb,\n add column if not exists qc_ng_history jsonb not null default '[]'::jsonb;\ncreate or replace function public.tpc_operator_qc_ng(p_data jsonb)\nreturns jsonb language plpgsql security definer set search_path='' set timezone='UTC' as $$\ndeclare task public.tpc_department_work_orders; job public.cnc_jobs; result jsonb; note text;\n action text:=p_data->>'action'; stamp timestamp:=clock_timestamp() at time zone 'Asia/Bangkok';\n entry jsonb; context jsonb;\nbegin\n select * into task from public.tpc_department_work_orders where id=(p_data->>'task_id')::bigint for update;\n if not found or task.department is distinct from 'QC' or task.flow_case_id is not null\n    or task.status is distinct from '🟦 กำลังทำ'\n    or task.assignee is distinct from p_data->>'assignee'\n    or task.actual_start::timestamp is distinct from (p_data->>'expected_start')::timestamp then\n  raise exception 'QC task changed; refresh and check the current task';\n end if;\n if action='pass_recheck' then\n  if task.qc_ng_context is null then raise exception 'No pending NG inspection'; end if;\n  note:=nullif(btrim(p_data->>'note'),'');\n  if note is null then raise exception 'Reinspection result required'; end if;\n  entry:=jsonb_build_object('action','pass_recheck','at',stamp,'assignee',task.assignee,'note',note,'ng',task.qc_ng_context);\n  perform set_config('tpc.qc_recheck_task',task.id::text,true);\n  update public.tpc_department_work_orders set status='✅ เสร็จแล้ว',actual_finish=stamp,\n   flow_verdict='pass',result_note=note,qc_ng_context=null,\n   qc_ng_history=coalesce(qc_ng_history,'[]'::jsonb)||jsonb_build_array(entry),updated_at=stamp where id=task.id;\n  perform set_config('tpc.qc_recheck_task','',true);\n  return jsonb_build_object('ok',true);\n end if;\n note:=nullif(btrim(p_data->>'note'),'');\n if note is null then raise exception 'NG details required'; end if;\n if action='on_machine' then\n  select * into job from public.cnc_jobs where id=(p_data->>'job_id')::bigint for update;\n  if not found or job.status not like '%กำลังผลิต%' or job.actual_finish is not null\n     or job.plan_code is distinct from task.plan_code then\n   raise exception 'Select a running production job of the same plan; refresh before retry';\n  end if;\n  context:=jsonb_build_object('job_id',job.id,'machine',job.machine_name,'drawing',job.drawing_name,\n   'note',note,'at',stamp,'assignee',task.assignee,'qty',(p_data->>'qty')::integer);\n  if (p_data->>'qty')::integer is null or (p_data->>'qty')::integer<1 or (p_data->>'qty')::integer>job.qty then raise exception 'Invalid NG quantity'; end if;\n  entry:=jsonb_build_object('action',action,'at',stamp,'details',context);\n  update public.tpc_department_work_orders set status='🟨 พักงาน',hold_started_at=stamp,\n   pause_reason='NG บนเครื่อง — รอแก้ไขและตรวจซ้ำ',pause_note=note,result_note=note,\n   flow_verdict='fail',qc_ng_context=context,\n   qc_ng_history=coalesce(qc_ng_history,'[]'::jsonb)||jsonb_build_array(entry),updated_at=stamp where id=task.id;\n elsif action='qc_room' then\n  if task.qc_ng_context is not null then raise exception 'Pending on-machine NG: reinspect or coordinate with supervisor first'; end if;\n  result:=public.tpc_flow_command('create_route',jsonb_build_object(\n   'plan_code',task.plan_code,'drawing_name',task.drawing_name,'qty',p_data->'qty',\n   'material',coalesce(p_data->>'material',''),'assignee',task.assignee,'qc_minutes',p_data->'qc_minutes',\n   'request_key',p_data->'request_key','stages',p_data->'stages'));\n  if result->>'ok' is distinct from 'true' then raise exception 'Rework route not confirmed'; end if;\n  -- Mark the freshly created route's steps as its first rework round, before any operator can Start.\n  update public.tpc_flow_steps set cycle=1 where case_id=(result->>'case_id')::uuid and cycle=0;\n  update public.tpc_flow_cases set cycle=1,status='reworking' where id=(result->>'case_id')::uuid;\n  entry:=jsonb_build_object('action',action,'at',stamp,'assignee',task.assignee,'note',note,'route',result,'original_qc',to_jsonb(task));\n  update public.tpc_department_work_orders set status='✅ เสร็จแล้ว',actual_finish=stamp,flow_verdict='fail',result_note=note,\n   qc_ng_history=coalesce(qc_ng_history,'[]'::jsonb)||jsonb_build_array(entry),updated_at=stamp where id=task.id;\n  insert into public.tpc_flow_events(case_id,cycle,event,details) values((result->>'case_id')::uuid,1,'legacy_qc_ng_rework',\n   jsonb_build_object('qc_task_id',task.id,'assignee',task.assignee,'reason',note));\n else raise exception 'Invalid NG action'; end if;\n return jsonb_build_object('ok',true);\nend $$;\ncreate or replace function public.tpc_guard_pending_qc_ng()\nreturns trigger language plpgsql set search_path='' as $guard$\nbegin\n if old.qc_ng_context is not null and new.status='✅ เสร็จแล้ว' and\n    not (coalesce(current_setting('tpc.qc_recheck_task',true),'')=old.id::text and new.qc_ng_context is null and new.flow_verdict='pass') then\n  raise exception 'Pending NG requires an explicit passed reinspection';\n end if;\n return new;\nend $guard$;\ndrop trigger if exists tpc_guard_pending_qc_ng on public.tpc_department_work_orders;\ncreate trigger tpc_guard_pending_qc_ng before update on public.tpc_department_work_orders\nfor each row execute function public.tpc_guard_pending_qc_ng();\nrevoke all on function public.tpc_operator_qc_ng(jsonb) from public,anon,authenticated;\ngrant execute on function public.tpc_operator_qc_ng(jsonb) to service_role;\nnotify pgrst,'reload schema';\ncommit;\n"
+
+
+def operator_qc_ng_command(task, payload):
+    try:
+        data = {"task_id": safe_int(task.get("id")), "assignee": safe_str(task.get("assignee")),
+                "expected_start": safe_str(task.get("actual_start")), **payload}
+        response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_operator_qc_ng",
+                                 headers=flow_api_headers(write=True), json={"p_data": data}, timeout=25)
+        if response.status_code != 200 or response.json().get("ok") is not True:
+            st.error("บันทึก NG ไม่สำเร็จ กรุณาตรวจว่าติดตั้ง SQL รุ่นผู้ปฏิบัติงาน NG แล้ว และรีเฟรชตรวจสถานะก่อนลองใหม่")
+            return False
+        st.cache_data.clear()
+        st.session_state["operator_live_clear_control"] = True
+        return True
+    except (requests.RequestException, ValueError):
+        st.error("ยังยืนยันผลบันทึกไม่ได้ กรุณารีเฟรชตรวจงานและประวัติก่อนทำซ้ำ")
+        return False
+
+
+def render_operator_legacy_qc_ng(task):
+    """Unlinked QC: in-process NG keeps the original job; room NG creates a separate rework route."""
+    task_id = safe_int(task.get("id"))
+    pending_ng = task.get("qc_ng_context")
+    if not isinstance(pending_ng, dict):
+        pending_ng = None
+    with st.expander("🔴 พบงาน NG / ส่งแก้ไข", expanded=bool(pending_ng)):
+        if pending_ng:
+            st.warning("NG บนเครื่อง — รอแก้ในใบงานผลิตเดิม แล้ว QC ตรวจซ้ำ")
+            st.write(f"เครื่อง: {safe_str(pending_ng.get('machine'))} | Drawing: {safe_str(pending_ng.get('drawing'))}")
+            st.write("จุด NG: " + safe_str(pending_ng.get("note")))
+            with st.form(f"operator_qc_recheck_{task_id}"):
+                note = st.text_area("ผลตรวจซ้ำ / รายละเอียดหลังแก้ไข")
+                confirmed = st.checkbox("ตรวจซ้ำแล้วผ่าน ยืนยันจบงานตรวจ QC")
+                submit = st.form_submit_button("✅ ตรวจซ้ำผ่าน / Finish QC", type="primary")
+            if submit:
+                if not confirmed or not note.strip():
+                    st.warning("กรุณาระบุผลตรวจซ้ำและติ๊กยืนยัน")
+                elif operator_qc_ng_command(task, {"action":"pass_recheck", "note":note.strip()}):
+                    st.rerun()
+            st.caption("ถ้ายังไม่ผ่าน ให้บันทึก NG ซ้ำด้านล่างได้ งานผลิตเดิมจะไม่ถูกสร้างซ้ำ")
+        options = ["ตรวจบนเครื่อง — แก้ในงานเดิมและตรวจซ้ำ", "ตรวจที่ห้อง QC — ส่งเป็นคิวแก้ไขใหม่"]
+        default = 0 if pending_ng or "บนเครื่อง" in safe_str(task.get("work_type")) else 1
+        mode = st.radio("สถานที่ตรวจ / วิธีส่งแก้ไข", options, index=default, key=f"operator_ng_mode_{task_id}")
+        on_machine = mode == options[0]
+        if pending_ng and not on_machine:
+            st.warning("งานนี้มี NG บนเครื่องค้างอยู่ ให้ตรวจซ้ำหรือประสานผู้ดูแลก่อนเปลี่ยนวิธีส่งแก้ไข")
+            return True
+        production_rows = {}
+        if on_machine:
+            jobs = fetch_jobs_from_supabase()
+            production_rows = {safe_int(row.get("ID")):row for row in jobs.to_dict("records")
+                               if safe_str(row.get("แผนงาน")) == safe_str(task.get("plan_code"))
+                               and "กำลังผลิต" in safe_str(row.get("สถานะงาน"))}
+            if not production_rows:
+                st.info("ไม่พบงานกำลังผลิตในแผนเดียวกัน กรุณาตรวจแผนงานกับหน้าเครื่องก่อนแจ้ง NG บนเครื่อง")
+                return bool(pending_ng)
+        if on_machine:
+            job_id = st.selectbox("เลือกงานและเครื่องที่ตรวจพบ NG", list(production_rows),
+                format_func=lambda value:f"{production_rows[value].get('เลือกเครื่องจักร')} | {production_rows[value].get('ชื่อ Drawing.')} | ID {value}",
+                key=f"operator_ng_machine_job_{task_id}")
+            st.write("เครื่อง: " + safe_str(production_rows[job_id].get("เลือกเครื่องจักร")))
+            st.write("Drawing: " + safe_str(production_rows[job_id].get("ชื่อ Drawing.")))
+        with st.form(f"operator_ng_{task_id}"):
+            if on_machine:
+                max_qty = max(1, safe_int(production_rows[job_id].get("จำนวน"), 1))
+            else:
+                max_qty = 100000
+                st.caption("ใช้เมื่อชิ้นงานออกจากเครื่องแล้ว ระบบจะสร้างใบงานแก้ไขใหม่และส่งตรวจ QC อีกครั้งเมื่อแก้ครบทุกขั้น")
+            qty = st.number_input("จำนวนชิ้น NG ที่ต้องแก้ไข", min_value=1, max_value=max_qty, value=1, step=1)
+            note = st.text_area("จุด NG / สิ่งที่ต้องแก้ไข (ต้องระบุ)")
+            if not on_machine:
+                material = st.text_input("วัสดุของงานแก้ไข")
+                qc_minutes = st.number_input("เวลาแผนตรวจ QC หลังแก้ไข (นาที)", min_value=1, value=30, step=1)
+                stages = flow_stage_editor(f"operator_ng_stages_{task_id}")
+            confirmed = st.checkbox("ตรวจ Drawing จำนวนชิ้น และวิธีส่งแก้ไขแล้ว ยืนยันบันทึก NG")
+            submit = st.form_submit_button("🔴 แจ้ง NG ให้แก้ในงานเดิม" if on_machine else "🔧 บันทึก NG และส่งเข้าคิวแก้ไข", type="primary")
+        if submit:
+            if not confirmed or not note.strip():
+                st.warning("กรุณาระบุจุด NG และติ๊กยืนยัน")
+            else:
+                payload = {"action":"on_machine" if on_machine else "qc_room", "qty":int(qty), "note":note.strip()}
+                if on_machine:
+                    payload["job_id"] = job_id
+                else:
+                    try:
+                        payload.update(stages=flow_validate_stages(stages), material=material.strip(), qc_minutes=int(qc_minutes),
+                                       request_key=st.session_state.setdefault(f"operator_ng_request_{task_id}",str(uuid.uuid4())))
+                    except ValueError as exc:
+                        st.warning(str(exc))
+                        return bool(pending_ng)
+                if operator_qc_ng_command(task, payload):
+                    st.rerun()
+    return bool(pending_ng)
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def fetch_shop_qc_ng_alerts(machine):
+    response = requests.get(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/tpc_department_work_orders",
+        headers=get_supabase_headers(), params={"select":"id,plan_code,drawing_name,assignee,qc_ng_context",
+        "department":"eq.QC", "qc_ng_context->>machine":"eq."+machine,
+        "status":"in.(🟦 กำลังทำ,🟨 พักงาน)", "limit":500}, timeout=8)
+    if response.status_code not in (200,206):
+        return []
+    return response.json() if isinstance(response.json(),list) else []
+
+
+def render_shop_qc_ng_alerts(machine, active_ids):
+    try:
+        for task in fetch_shop_qc_ng_alerts(machine):
+            context = task.get("qc_ng_context")
+            if isinstance(context,dict) and safe_int(context.get("job_id")) in active_ids:
+                st.error(f"🔴 QC แจ้ง NG — แก้ในงานเดิม | แผน {safe_str(task.get('plan_code'))} | Drawing {safe_str(context.get('drawing'))} | จำนวน {safe_int(context.get('qty'))} ชิ้น")
+                st.write("จุดที่ต้องแก้ไข: " + safe_str(context.get("note")))
+                st.caption("แจ้งผู้ตรวจ QC กลับมาตรวจซ้ำหลังแก้ไข • ป้ายนี้ไม่หยุดหรือเริ่มเวลาเครื่องอัตโนมัติ")
+    except (requests.RequestException, ValueError):
+        st.caption("ยังโหลดการแจ้ง NG จาก QC ไม่สำเร็จ กรุณาตรวจสอบกับผู้ตรวจ QC")
+
+
 def flow_display_time(value):
     if not value:
         return "–"
@@ -9482,6 +9604,11 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                     if enable and agree:
                         if flow_command("enable", {"assignee": assigned, "qc_minutes": qc_minutes}):
                             st.rerun()
+            if admin:
+                with st.expander("ติดตั้งฟังก์ชัน NG สำหรับผู้ปฏิบัติงาน QC"):
+                    st.download_button("ดาวน์โหลด SQL ผู้ปฏิบัติงาน NG", TPC_OPERATOR_NG_SQL.encode("utf-8"),
+                        file_name="TPC_Operator_QC_NG_Setup.sql", mime="text/plain", key=f"{prefix}_operator_ng_sql")
+                    st.caption("รันใน Supabase SQL Editor หนึ่งครั้ง เพื่อเปิดแจ้ง NG บนเครื่อง / ส่งงานห้อง QC กลับแก้ไข การติดตั้งไม่เปลี่ยนผลตรวจเดิม")
             cases = fetch_flow_rows("tpc_flow_cases") or []
             if not cases:
                 st.info("ยังไม่มี Drawing ที่เข้ากระบวนการตรวจรับ")
@@ -10438,6 +10565,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 if not first_paused.empty:
                     piece_resume_allowed_id = safe_int(first_paused.iloc[0]["ID"])
             next_available_start_found = False
+            render_shop_qc_ng_alerts(selected_m, set(active_queue_order_ids))
             rework_cycles, rework_labels_ready = load_shop_rework_cycles(m_active)
             if not rework_labels_ready:
                 st.caption("ยังตรวจป้ายงานตีกลับแก้ไขได้ไม่ครบ กรุณารีเฟรชเพื่อตรวจป้ายอีกครั้ง")
