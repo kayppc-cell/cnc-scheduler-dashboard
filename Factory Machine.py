@@ -9117,6 +9117,29 @@ def render_unified_production_creation(templates):
 TPC_QC_CORRECTION_SQL = "begin;\ndo $patch$\ndeclare definition text;\nbegin\n definition:=pg_get_functiondef('public.tpc_flow_before_qc()'::regprocedure);\n if position('tpc_qc_correction_v1' in definition)=0 then\n  if position($old$if old.status='✅ เสร็จแล้ว' and new is distinct from old then raise exception 'Closed QC record is immutable'; end if;$old$ in definition)=0 then raise exception 'QC guard version differs; stop and review'; end if;\n  execute replace(definition,$old$if old.status='✅ เสร็จแล้ว' and new is distinct from old then raise exception 'Closed QC record is immutable'; end if;$old$,$new$if old.status='✅ เสร็จแล้ว' and new is distinct from old then\n   -- tpc_qc_correction_v1: narrowly scoped to the correction transaction.\n   if not (coalesce(current_setting('tpc.qc_correction_task',true),'')=old.id::text\n      and old.flow_verdict='pass' and new.flow_verdict='fail'\n      and nullif(btrim(new.result_note),'') is not null\n      and (to_jsonb(new)-array['flow_verdict','result_note'])=(to_jsonb(old)-array['flow_verdict','result_note'])) then\n    raise exception 'Closed QC record is immutable';\n   end if;\n  end if;$new$);\n end if;\nend $patch$;\ncreate or replace function public.tpc_correct_qc_pass_to_ng(p_data jsonb)\nreturns jsonb language plpgsql security definer set search_path='' set timezone='UTC' as $$\ndeclare c public.tpc_flow_cases; task public.tpc_department_work_orders;\n reason text:=nullif(btrim(p_data->>'reason'),''); actor text:=nullif(btrim(p_data->>'actor'),'');\nbegin\n if reason is null or actor is null then raise exception 'Correction reason and recorder required'; end if;\n select * into c from public.tpc_flow_cases where id=(p_data->>'case_id')::uuid for update;\n if not found or c.status is distinct from 'accepted' or c.cycle is distinct from (p_data->>'expected_cycle')::integer\n    or c.plan_code is distinct from p_data->>'plan_code' or c.drawing_name is distinct from p_data->>'drawing_name'\n    then raise exception 'QC case changed; refresh before correction'; end if;\n select * into task from public.tpc_department_work_orders\n  where flow_case_id=c.id and flow_cycle=c.cycle and department='QC' order by id desc limit 1 for update;\n if not found or task.status is distinct from '✅ เสร็จแล้ว' or task.flow_verdict is distinct from 'pass'\n    or task.id is distinct from (p_data->>'task_id')::bigint\n    then raise exception 'Latest closed QC pass not found or changed'; end if;\n -- Original inspection and production hours stay closed. Only verdict/note change.\n perform set_config('tpc.qc_correction_task',task.id::text,true);\n update public.tpc_department_work_orders set flow_verdict='fail', result_note=reason where id=task.id;\n perform set_config('tpc.qc_correction_task','',true);\n update public.tpc_flow_cases set status='rework_planning',accepted_at=null where id=c.id;\n insert into public.tpc_flow_events(case_id,cycle,event,details) values(c.id,c.cycle,'qc_pass_corrected_to_ng',\n  jsonb_build_object('qc_task_id',task.id,'actor',actor,'reason',reason,\n   'original_qc',to_jsonb(task),'original_accepted_at',c.accepted_at,'new_verdict','fail'));\n return jsonb_build_object('ok',true,'case_id',c.id,'task_id',task.id);\nend $$;\nrevoke all on function public.tpc_correct_qc_pass_to_ng(jsonb) from public,anon,authenticated;\ngrant execute on function public.tpc_correct_qc_pass_to_ng(jsonb) to service_role;\n\nnotify pgrst, 'reload schema';\ncommit;\n"
 
 
+def filter_qc_correction_cases(cases, plan="", search="", start_date=None, end_date=None):
+    """Filter an existing snapshot only; compare QC acceptance dates in Bangkok."""
+    matches = []
+    terms = search.strip().casefold().split()
+    for case in cases:
+        if plan and safe_str(case.get("plan_code")) != plan:
+            continue
+        label = " ".join(safe_str(case.get(key)) for key in ("plan_code", "drawing_name", "qc_assignee")).casefold()
+        if not all(term in label for term in terms):
+            continue
+        stamp = pd.to_datetime(case.get("accepted_at"), errors="coerce", utc=True)
+        local_day = stamp.tz_convert("Asia/Bangkok").date() if pd.notna(stamp) else None
+        if (start_date is not None or end_date is not None) and local_day is None:
+            continue
+        if start_date is not None and local_day < start_date:
+            continue
+        if end_date is not None and local_day > end_date:
+            continue
+        matches.append((stamp.value if pd.notna(stamp) else -1, case))
+    matches.sort(key=lambda value: value[0], reverse=True)
+    return [case for _, case in matches]
+
+
 def render_qc_pass_correction(accepted_cases, prefix):
     if st.session_state.get("user_role") != "admin" or not accepted_cases:
         return
@@ -9128,9 +9151,37 @@ def render_qc_pass_correction(accepted_cases, prefix):
             st.caption("รัน SQL นี้ใน Supabase SQL Editor ครั้งเดียวก่อนบันทึกการแก้ผล ไม่มีการแก้ผล QC ใดระหว่างติดตั้ง")
         if not st.checkbox("เปิดเลือกงานที่กด QC ผ่านผิด", key=f"{prefix}_qc_correction_open"):
             return
-        lookup = {str(c["id"]): c for c in accepted_cases}
+        plans = sorted({safe_str(c.get("plan_code")) for c in accepted_cases if safe_str(c.get("plan_code"))})
+        selected_plan = st.selectbox("กรองแผนงาน", ["ทุกแผนงาน"] + plans, key=f"{prefix}_qc_correction_plan")
+        search = st.text_input("ค้นหาแผนงาน / Drawing / ผู้ตรวจ QC", key=f"{prefix}_qc_correction_search")
+        period = st.selectbox("วันที่ QC ผ่าน", ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"], key=f"{prefix}_qc_correction_period")
+        today = get_bangkok_now().date()
+        start_date, end_date = None, None
+        if period == "วันนี้":
+            start_date = end_date = today
+        elif period == "7 วันล่าสุด":
+            start_date, end_date = today - timedelta(days=6), today
+        elif period == "เดือนนี้":
+            start_date, end_date = today.replace(day=1), today
+        elif period == "เลือกช่วงวันที่":
+            selected_dates = st.date_input("ช่วงวันที่ QC ผ่าน", value=(today-timedelta(days=6), today),
+                                           format="DD/MM/YYYY", key=f"{prefix}_qc_correction_dates")
+            if not isinstance(selected_dates, (tuple, list)) or len(selected_dates) != 2:
+                st.info("กรุณาเลือกวันเริ่มและวันสิ้นสุดให้ครบ")
+                return
+            start_date, end_date = selected_dates
+        filtered_cases = filter_qc_correction_cases(accepted_cases,
+            "" if selected_plan == "ทุกแผนงาน" else selected_plan, search, start_date, end_date)
+        st.caption(f"พบ {len(filtered_cases)} รายการ จากงาน QC ผ่านทั้งหมด {len(accepted_cases)} รายการ • เรียง QC ผ่านล่าสุดก่อน")
+        if not filtered_cases:
+            st.info("ไม่พบรายการตามตัวกรอง ลองเปลี่ยนแผนงาน คำค้น หรือช่วงวันที่")
+            return
+        lookup = {str(c["id"]): c for c in filtered_cases}
+        selection_key = f"{prefix}_qc_correction_case"
+        if st.session_state.get(selection_key) not in lookup:
+            st.session_state.pop(selection_key, None)
         case_id = st.selectbox("เลือกรายการที่ต้องแก้ผล", list(lookup),
-            format_func=lambda key: f"{lookup[key]['plan_code']} | {lookup[key]['drawing_name']} | รอบ {lookup[key]['cycle']}",
+            format_func=lambda key: f"{lookup[key]['plan_code']} | {lookup[key]['drawing_name']} | QC ผ่าน {flow_display_time(lookup[key].get('accepted_at'))}",
             key=f"{prefix}_qc_correction_case")
         case = lookup[case_id]
         tasks = fetch_department_work_orders("QC")
