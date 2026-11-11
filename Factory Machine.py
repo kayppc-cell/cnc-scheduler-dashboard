@@ -5486,6 +5486,14 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
             horizontal=True,
             key=f"{department}_history_quick_v2"
         )
+        history_plan_values = finished_tasks.get("plan_code", pd.Series(dtype=str)).fillna("").astype(str)
+        history_plan_options = sorted({code.strip() for value in history_plan_values
+                                       for code in re.split(r"[,;\n]+", value) if code.strip()})
+        history_plan_key = f"{department}_history_plan"
+        history_plan_choices = ["ทุกแผนงาน"] + history_plan_options
+        if st.session_state.get(history_plan_key) not in history_plan_choices:
+            st.session_state.pop(history_plan_key, None)
+        history_plan = st.selectbox("📋 กรองแผนงาน", history_plan_choices, key=history_plan_key)
         history_search = st.text_input(
             "🔍 ค้นหาประวัติงาน",
             placeholder="แผนงาน, Drawing, บริษัทลูกค้า, ผู้รับผิดชอบ",
@@ -5516,6 +5524,11 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
             history_shown = history_shown[
                 (history_finish.dt.year == now.year) & (history_finish.dt.month == now.month)
             ]
+        if history_plan != "ทุกแผนงาน":
+            plan_mask = history_shown.get("plan_code", pd.Series("", index=history_shown.index)).fillna("").astype(str).map(
+                lambda value: history_plan in [code.strip() for code in re.split(r"[,;\n]+", value) if code.strip()])
+            history_shown = history_shown[plan_mask]
+            history_period += f" • แผนงาน {history_plan}"
         if history_search.strip():
             history_q = history_search.strip().lower()
             history_mask = pd.Series(False, index=history_shown.index)
@@ -9141,7 +9154,7 @@ def render_unified_production_creation(templates):
             st.caption("เวลาคาดการณ์ตามคิวปัจจุบันและกะโรงงาน ขั้นถัดไปคำนวณอีกครั้งเมื่อส่งต่อจริง ยังไม่เริ่มงานอัตโนมัติ")
 
 
-TPC_QC_CORRECTION_SQL = "begin;\ndo $patch$\ndeclare definition text;\nbegin\n definition:=pg_get_functiondef('public.tpc_flow_before_qc()'::regprocedure);\n if position('tpc_qc_correction_v1' in definition)=0 then\n  if position($old$if old.status='✅ เสร็จแล้ว' and new is distinct from old then raise exception 'Closed QC record is immutable'; end if;$old$ in definition)=0 then raise exception 'QC guard version differs; stop and review'; end if;\n  execute replace(definition,$old$if old.status='✅ เสร็จแล้ว' and new is distinct from old then raise exception 'Closed QC record is immutable'; end if;$old$,$new$if old.status='✅ เสร็จแล้ว' and new is distinct from old then\n   -- tpc_qc_correction_v1: narrowly scoped to the correction transaction.\n   if not (coalesce(current_setting('tpc.qc_correction_task',true),'')=old.id::text\n      and old.flow_verdict='pass' and new.flow_verdict='fail'\n      and nullif(btrim(new.result_note),'') is not null\n      and (to_jsonb(new)-array['flow_verdict','result_note'])=(to_jsonb(old)-array['flow_verdict','result_note'])) then\n    raise exception 'Closed QC record is immutable';\n   end if;\n  end if;$new$);\n end if;\nend $patch$;\ncreate or replace function public.tpc_correct_qc_pass_to_ng(p_data jsonb)\nreturns jsonb language plpgsql security definer set search_path='' set timezone='UTC' as $$\ndeclare c public.tpc_flow_cases; task public.tpc_department_work_orders;\n reason text:=nullif(btrim(p_data->>'reason'),''); actor text:=nullif(btrim(p_data->>'actor'),'');\nbegin\n if reason is null or actor is null then raise exception 'Correction reason and recorder required'; end if;\n select * into c from public.tpc_flow_cases where id=(p_data->>'case_id')::uuid for update;\n if not found or c.status is distinct from 'accepted' or c.cycle is distinct from (p_data->>'expected_cycle')::integer\n    or c.plan_code is distinct from p_data->>'plan_code' or c.drawing_name is distinct from p_data->>'drawing_name'\n    then raise exception 'QC case changed; refresh before correction'; end if;\n select * into task from public.tpc_department_work_orders\n  where flow_case_id=c.id and flow_cycle=c.cycle and department='QC' order by id desc limit 1 for update;\n if not found or task.status is distinct from '✅ เสร็จแล้ว' or task.flow_verdict is distinct from 'pass'\n    or task.id is distinct from (p_data->>'task_id')::bigint\n    then raise exception 'Latest closed QC pass not found or changed'; end if;\n -- Original inspection and production hours stay closed. Only verdict/note change.\n perform set_config('tpc.qc_correction_task',task.id::text,true);\n update public.tpc_department_work_orders set flow_verdict='fail', result_note=reason where id=task.id;\n perform set_config('tpc.qc_correction_task','',true);\n update public.tpc_flow_cases set status='rework_planning',accepted_at=null where id=c.id;\n insert into public.tpc_flow_events(case_id,cycle,event,details) values(c.id,c.cycle,'qc_pass_corrected_to_ng',\n  jsonb_build_object('qc_task_id',task.id,'actor',actor,'reason',reason,\n   'original_qc',to_jsonb(task),'original_accepted_at',c.accepted_at,'new_verdict','fail'));\n return jsonb_build_object('ok',true,'case_id',c.id,'task_id',task.id);\nend $$;\nrevoke all on function public.tpc_correct_qc_pass_to_ng(jsonb) from public,anon,authenticated;\ngrant execute on function public.tpc_correct_qc_pass_to_ng(jsonb) to service_role;\n\nnotify pgrst, 'reload schema';\ncommit;\n"
+TPC_QC_CORRECTION_SQL = "begin;\ndo $patch$\ndeclare definition text;\nbegin\n definition:=pg_get_functiondef('public.tpc_flow_before_qc()'::regprocedure);\n if position('tpc_qc_correction_v1' in definition)=0 then\n  if position($old$if old.status='✅ เสร็จแล้ว' and new is distinct from old then raise exception 'Closed QC record is immutable'; end if;$old$ in definition)=0 then raise exception 'QC guard version differs; stop and review'; end if;\n  execute replace(definition,$old$if old.status='✅ เสร็จแล้ว' and new is distinct from old then raise exception 'Closed QC record is immutable'; end if;$old$,$new$if old.status='✅ เสร็จแล้ว' and new is distinct from old then\n   -- tpc_qc_correction_v1: narrowly scoped to the correction transaction.\n   if not (coalesce(current_setting('tpc.qc_correction_task',true),'')=old.id::text\n      and old.flow_verdict='pass' and new.flow_verdict='fail'\n      and nullif(btrim(new.result_note),'') is not null\n      and (to_jsonb(new)-array['flow_verdict','result_note'])=(to_jsonb(old)-array['flow_verdict','result_note'])) then\n    raise exception 'Closed QC record is immutable';\n   end if;\n  end if;$new$);\n end if;\nend $patch$;\ncreate or replace function public.tpc_correct_qc_pass_to_ng_v2(p_data jsonb)\nreturns jsonb language plpgsql security definer set search_path='' set timezone='UTC' as $$\ndeclare c public.tpc_flow_cases; task public.tpc_department_work_orders; result jsonb;\n reason text:=nullif(btrim(p_data->>'reason'),''); actor text:=nullif(btrim(p_data->>'actor'),'');\nbegin\n if coalesce((p_data->>'queue_now')::boolean,false) and (jsonb_typeof(p_data->'stages') is distinct from 'array' or jsonb_array_length(p_data->'stages')=0) then raise exception 'Rework stages required'; end if;\n if reason is null or actor is null then raise exception 'Correction reason and recorder required'; end if;\n select * into c from public.tpc_flow_cases where id=(p_data->>'case_id')::uuid for update;\n if not found or c.status is distinct from 'accepted' or c.cycle is distinct from (p_data->>'expected_cycle')::integer\n    or c.plan_code is distinct from p_data->>'plan_code' or c.drawing_name is distinct from p_data->>'drawing_name'\n    then raise exception 'QC case changed; refresh before correction'; end if;\n select * into task from public.tpc_department_work_orders\n  where flow_case_id=c.id and flow_cycle=c.cycle and department='QC' order by id desc limit 1 for update;\n if not found or task.status is distinct from '✅ เสร็จแล้ว' or task.flow_verdict is distinct from 'pass'\n    or task.id is distinct from (p_data->>'task_id')::bigint\n    then raise exception 'Latest closed QC pass not found or changed'; end if;\n -- Original inspection and production hours stay closed. Only verdict/note change.\n perform set_config('tpc.qc_correction_task',task.id::text,true);\n update public.tpc_department_work_orders set flow_verdict='fail', result_note=reason where id=task.id;\n perform set_config('tpc.qc_correction_task','',true);\n update public.tpc_flow_cases set status='rework_planning',accepted_at=null where id=c.id;\n insert into public.tpc_flow_events(case_id,cycle,event,details) values(c.id,c.cycle,'qc_pass_corrected_to_ng',\n  jsonb_build_object('qc_task_id',task.id,'actor',actor,'reason',reason,\n   'original_qc',to_jsonb(task),'original_accepted_at',c.accepted_at,'new_verdict','fail'));\n if coalesce((p_data->>'queue_now')::boolean,false) then\n  result:=public.tpc_flow_command('plan_rework',jsonb_build_object('case_id',c.id,'expected_cycle',c.cycle,'qty',p_data->'qty','stages',p_data->'stages'));\n  if result->>'ok' is distinct from 'true' then raise exception 'Rework queue could not be confirmed'; end if;\n end if;\n return jsonb_build_object('ok',true,'case_id',c.id,'task_id',task.id,'queued',coalesce((p_data->>'queue_now')::boolean,false));\nend $$;\nrevoke all on function public.tpc_correct_qc_pass_to_ng_v2(jsonb) from public,anon,authenticated;\ngrant execute on function public.tpc_correct_qc_pass_to_ng_v2(jsonb) to service_role;\n\nnotify pgrst, 'reload schema';\ncommit;\n"
 
 
 def filter_qc_correction_cases(cases, plan="", search="", start_date=None, end_date=None):
@@ -9172,10 +9185,10 @@ def render_qc_pass_correction(accepted_cases, prefix):
         return
     with st.expander("↩️ แก้ผล QC ที่กดผ่านผิด → NG ส่งกลับแก้ไข"):
         st.caption("สำหรับผู้ดูแล: เก็บประวัติผลเดิมและเวลาเดิม ส่งงานไปรอผู้วางแผนจัดคิวแก้ไข ไม่เริ่มงานหรือเปิดเวลาผลิตเดิมใหม่")
-        with st.expander("ติดตั้งเครื่องมือครั้งแรก"):
+        with st.expander("ติดตั้ง / อัปเดตเครื่องมือแก้ผล QC"):
             st.download_button("ดาวน์โหลด SQL ติดตั้งการแก้ผล QC", TPC_QC_CORRECTION_SQL.encode("utf-8"),
                                file_name="TPC_QC_Correction_Setup.sql", mime="text/plain", key=f"{prefix}_qc_correction_sql")
-            st.caption("รัน SQL นี้ใน Supabase SQL Editor ครั้งเดียวก่อนบันทึกการแก้ผล ไม่มีการแก้ผล QC ใดระหว่างติดตั้ง")
+            st.caption("รัน SQL รุ่นนี้ใน Supabase SQL Editor หนึ่งครั้งเพื่อเปิดการแก้ผลพร้อมจัดคิว แม้เคยติดตั้งรุ่นก่อนแล้ว; การติดตั้งยังไม่แก้ผล QC ใด")
         if not st.checkbox("เปิดเลือกงานที่กด QC ผ่านผิด", key=f"{prefix}_qc_correction_open"):
             return
         plans = sorted({safe_str(c.get("plan_code")) for c in accepted_cases if safe_str(c.get("plan_code"))})
@@ -9224,11 +9237,19 @@ def render_qc_pass_correction(accepted_cases, prefix):
             st.warning("ผล QC เปลี่ยนแล้ว กรุณารีเฟรชก่อนดำเนินการ")
             return
         st.warning(f"กำลังแก้ผล: {case['plan_code']} / {case['drawing_name']} จาก QC ผ่าน เป็น NG รอจัดคิวแก้ไข")
+        correction_mode = st.radio("หลังเปลี่ยนผลเป็น NG", ["เลือกเครื่องและส่งเข้าคิวแก้ไขเลย", "ส่งรอผู้วางแผนจัดคิวภายหลัง"],
+                                   key=f"{prefix}_qc_correction_mode_{case_id}")
+        queue_now = correction_mode == "เลือกเครื่องและส่งเข้าคิวแก้ไขเลย"
         with st.form(f"{prefix}_qc_correction_form_{case_id}_{case['cycle']}"):
             actor = st.text_input("ชื่อผู้บันทึกการแก้ผล")
             reason = st.text_area("เหตุผลที่แก้ผล และจุด NG ที่ต้องแก้ไข")
+            if queue_now:
+                st.markdown("#### 🔧 เลือกเครื่องและขั้นตอนแก้ไข")
+                correction_qty = st.number_input("จำนวนชิ้นที่ต้องแก้ไข", min_value=1, max_value=int(case["qty"]), value=int(case["qty"]), step=1)
+                correction_stages = flow_stage_editor(f"{prefix}_correction_stages_{case_id}_{case['cycle']}")
+                st.caption("ระบุชื่อขั้นตอน เครื่อง นาทีแผน และเลือกต่อท้ายคิวหรือแทรกก่อนคิวรอ • งานยังไม่เริ่มจนกด Start และไม่หยุดงานที่เครื่องกำลังทำอยู่")
             confirmed = st.checkbox("ตรวจรายการแล้ว ยืนยันว่า QC ผ่านเดิมเป็นการกดผิด และต้องส่งกลับแก้ไข")
-            submitted = st.form_submit_button("ยืนยันแก้ผลเป็น NG และส่งรอจัดคิวแก้ไข", type="primary")
+            submitted = st.form_submit_button("ยืนยัน NG และส่งเข้าคิวแก้ไข" if queue_now else "ยืนยัน NG และส่งรอผู้วางแผน", type="primary")
         if submitted:
             if st.session_state.get("user_role") != "admin":
                 st.error("ต้องใช้สิทธิ์ผู้ดูแล")
@@ -9238,14 +9259,21 @@ def render_qc_pass_correction(accepted_cases, prefix):
                 return
             payload = {"case_id": case_id, "expected_cycle": safe_int(case["cycle"]), "task_id": safe_int(task["id"]),
                        "plan_code": case["plan_code"], "drawing_name": case["drawing_name"], "actor": actor.strip(), "reason": reason.strip()}
+            payload["queue_now"] = queue_now
+            if queue_now:
+                try:
+                    payload.update(qty=int(correction_qty), stages=flow_validate_stages(correction_stages))
+                except ValueError as exc:
+                    st.warning(str(exc))
+                    return
             try:
-                response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_correct_qc_pass_to_ng",
+                response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_correct_qc_pass_to_ng_v2",
                     headers=flow_api_headers(write=True), json={"p_data": payload}, timeout=25)
-                if response.status_code != 200 or response.json().get("ok") is not True:
+                if response.status_code != 200 or response.json().get("ok") is not True or response.json().get("queued") is not queue_now:
                     st.error("ยังแก้ผลไม่สำเร็จ กรุณาตรวจว่าติดตั้ง SQL แล้ว และรีเฟรชเพื่อตรวจสถานะล่าสุดก่อนทำซ้ำ")
                     return
                 st.cache_data.clear()
-                st.session_state["_flow_notice"] = "แก้ผล QC เป็น NG และส่งรอจัดคิวแก้ไขแล้ว"
+                st.session_state["_flow_notice"] = "แก้ผล QC เป็น NG และส่งเข้าคิวเครื่องแก้ไขแล้ว — รอพนักงานกด Start" if queue_now else "แก้ผล QC เป็น NG และส่งรอจัดคิวแก้ไขแล้ว"
                 st.rerun(scope="app")
             except (requests.RequestException, ValueError):
                 st.error("ยังยืนยันผลไม่ได้ กรุณารีเฟรชตรวจสถานะและประวัติก่อนทำซ้ำ")
@@ -9366,10 +9394,40 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                 return
             accepted_cases = [c for c in cases if c["status"] == "accepted"]
             with st.expander(f"✅ งานจบสมบูรณ์ — QC ตรวจผ่านแล้ว ({len(accepted_cases)} Drawing)"):
-                st.dataframe(pd.DataFrame([{
-                    "แผน": c["plan_code"], "Drawing": c["drawing_name"], "จำนวน": c["qty"],
-                    "รอบแก้ไข": c["cycle"], "QC ผ่านเมื่อ": flow_display_time(c["accepted_at"]),
-                } for c in accepted_cases]), hide_index=True, use_container_width=True)
+                accepted_plans = sorted({safe_str(c.get("plan_code")) for c in accepted_cases if safe_str(c.get("plan_code"))})
+                accepted_plan = st.selectbox("กรองแผนงาน", ["ทุกแผนงาน"] + accepted_plans,
+                                             key=f"{prefix}_accepted_plan")
+                accepted_search = st.text_input("ค้นหา Drawing / แผนงาน", key=f"{prefix}_accepted_search")
+                accepted_period = st.selectbox("วันที่ QC ผ่าน", ["ทั้งหมด", "วันนี้", "7 วันล่าสุด", "เดือนนี้", "เลือกช่วงวันที่"],
+                                               key=f"{prefix}_accepted_period")
+                accepted_today = get_bangkok_now().date()
+                accepted_start, accepted_end = None, None
+                accepted_dates_ready = True
+                if accepted_period == "วันนี้":
+                    accepted_start = accepted_end = accepted_today
+                elif accepted_period == "7 วันล่าสุด":
+                    accepted_start, accepted_end = accepted_today-timedelta(days=6), accepted_today
+                elif accepted_period == "เดือนนี้":
+                    accepted_start, accepted_end = accepted_today.replace(day=1), accepted_today
+                elif accepted_period == "เลือกช่วงวันที่":
+                    accepted_dates = st.date_input("ช่วงวันที่ QC ผ่าน", value=(accepted_today-timedelta(days=6), accepted_today),
+                                                   format="DD/MM/YYYY", key=f"{prefix}_accepted_dates")
+                    accepted_dates_ready = isinstance(accepted_dates, (tuple, list)) and len(accepted_dates) == 2
+                    if accepted_dates_ready:
+                        accepted_start, accepted_end = accepted_dates
+                    else:
+                        st.info("กรุณาเลือกวันเริ่มและวันสิ้นสุดให้ครบ")
+                accepted_filtered = filter_qc_correction_cases(accepted_cases,
+                    "" if accepted_plan == "ทุกแผนงาน" else accepted_plan,
+                    accepted_search, accepted_start, accepted_end) if accepted_dates_ready else []
+                st.caption(f"แสดง {len(accepted_filtered)} จากทั้งหมด {len(accepted_cases)} Drawing • เรียง QC ผ่านล่าสุดก่อน")
+                if accepted_filtered:
+                    st.dataframe(pd.DataFrame([{
+                        "แผน": c["plan_code"], "Drawing": c["drawing_name"], "จำนวน": c["qty"],
+                        "รอบแก้ไข": c["cycle"], "QC ผ่านเมื่อ": flow_display_time(c["accepted_at"]),
+                    } for c in accepted_filtered]), hide_index=True, use_container_width=True)
+                elif accepted_dates_ready:
+                    st.info("ไม่พบงานตามตัวกรอง ลองเปลี่ยนแผนงาน คำค้น หรือช่วงวันที่")
             if admin:
                 render_qc_pass_correction(accepted_cases, prefix)
             status_groups = {
