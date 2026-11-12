@@ -1438,6 +1438,50 @@ def tpc_filter_shortcuts(label, options, *, key=None, index=0, format_func=None,
     return selected
 
 
+def render_dashboard_tool_menu(is_admin):
+    # Retain server-received draft values, excluding transient action events.
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+    from streamlit.errors import StreamlitAPIException
+    ctx = get_script_run_ctx()
+    triggers = set()
+    if ctx is not None:
+        triggers = {widget.id.split("-", 2)[-1] for widget in ctx.session_state.get_widget_states()
+                    if widget.WhichOneof("value") in ("trigger_value", "string_trigger_value", "chat_input_value", "json_trigger_value")}
+    for state_key in list(st.session_state):
+        if state_key in triggers or str(state_key).startswith(("FormSubmitter:", "dashboard_tool_")):
+            continue
+        value = st.session_state[state_key]
+        if not isinstance(value, dict):
+            try:
+                st.session_state[state_key] = value
+            except StreamlitAPIException:
+                pass  # Widgets already rendered above the menu remain owned by Streamlit.
+    labels = {
+        "overview": "📊 ภาพรวมและต้นทุน",
+        "create": "📝 สร้างใบงาน Production",
+        "routing": "🔄 เส้นทางผลิตและ QC",
+        "templates": "📚 Drawing Template",
+        "outsource": "📦 งานจ้างภายนอก",
+        "settings": "⚙️ ตั้งค่าและเครื่องมือผู้ดูแล",
+    }
+    options = list(labels) if is_admin else ["overview", "routing"]
+    key = "tpc_dashboard_tool"
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = "overview"
+    selected = st.session_state[key]
+    columns_per_row = 1 if get_device_mode() == "mobile" else 3
+    for offset in range(0, len(options), columns_per_row):
+        row = options[offset:offset + columns_per_row]
+        for column, option in zip(st.columns(len(row)), row):
+            with column:
+                st.button(labels[option], key=f"dashboard_tool_{option}", use_container_width=True,
+                          type="primary" if selected == option else "secondary",
+                          on_click=tpc_set_filter_choice, args=(key, option))
+    st.caption("กำลังใช้งาน: " + labels[selected])
+    st.caption("หากกำลังกรอกแบบฟอร์มหรือแก้ตาราง กรุณาบันทึกก่อนเปลี่ยนเมนู")
+    return selected
+
+
 def tpc_filter_columns(widths):
     """Compact on desktop; full-width readable controls on narrow screens."""
     if get_device_mode() == "mobile":
@@ -9755,7 +9799,6 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                     if enable and agree:
                         if flow_command("enable", {"assignee": assigned, "qc_minutes": qc_minutes}):
                             st.rerun()
-                    render_flow_installation_downloads(prefix)
             cases = fetch_flow_rows("tpc_flow_cases") or []
             if admin:
                 render_missing_production_controls(cases, prefix)
@@ -11466,18 +11509,23 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 st.session_state.user_role = None
                 st.rerun()
 
+        dashboard_tool = render_dashboard_tool_menu(is_admin)
         df_db = fetch_jobs_from_supabase()
         _tpc_dashboard_run_data["jobs"] = df_db.copy(deep=True)
 
-        if not is_admin:
+        if not is_admin and dashboard_tool == "routing":
             render_flow_center(df_db, admin=False, prefix="viewer")
 
         if is_admin:
             saved_calendar = st.session_state.pop("_tpc_calendar_saved", None)
             if saved_calendar:
                 st.success(saved_calendar)
-            render_work_calendar_admin(df_db)
-            render_flow_center(df_db, admin=True)
+            if dashboard_tool == "settings":
+                render_work_calendar_admin(df_db)
+                with st.expander("🛠️ ติดตั้ง / อัปเดตเครื่องมือระบบ", expanded=False):
+                    render_flow_installation_downloads("dashboard_settings")
+            if dashboard_tool == "routing":
+                render_flow_center(df_db, admin=True)
 
             @st.fragment
             def render_waiting_start_requirement():
@@ -11578,169 +11626,173 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                         except Exception:
                             st.error("เชื่อมต่อฐานข้อมูลไม่สำเร็จ กรุณาลองใหม่")
 
-            render_locked_timing_editors(df_db, render_waiting_start_requirement)
-
-            render_outsource_management(df_db)
-            templates = fetch_drawing_templates()
-            with st.expander("📚 Drawing Template — ลดการพิมพ์ข้อมูลซ้ำ", expanded=False):
-                if templates is None:
-                    st.warning("ยังไม่พบตาราง cnc_drawing_templates ใน Supabase กรุณารันไฟล์ SQL ที่แนบให้ก่อน")
-                else:
-                    render_bulk_drawing_template_delete(templates)
-                    template_map = {safe_str(item.get("drawing_name")): item for item in templates}
-                    template_options = ["➕ สร้าง Template ใหม่"] + list(template_map.keys())
-                    selected_template_name = st.selectbox(
-                        "เลือก Drawing Template เพื่อดู/แก้ไข",
-                        template_options,
-                        key="drawing_template_select"
-                    )
-                    selected_template = template_map.get(selected_template_name, {})
-                    selected_template_id = safe_int(selected_template.get("id"), 0)
-                    template_form_suffix = f"id_{selected_template_id}" if selected_template_id > 0 else "new"
-                    selected_steps = template_step_names(selected_template) if selected_template else ["รอหน้าเครื่องระบุ"]
-                    current_material = safe_str(selected_template.get("material"), "SS400")
-                    material_presets = [item for item in MATERIAL_OPTIONS if item != "อื่น ๆ (พิมพ์เอง)"]
-                    selected_material_option = current_material if current_material in material_presets else "อื่น ๆ (พิมพ์เอง)"
-                    selected_custom_material = "" if current_material in material_presets else current_material
-                    if selected_template_id > 0:
-                        st.info(f"✏️ กำลังแก้ไข Drawing Template: {selected_template_name}")
+            if dashboard_tool == "settings":
+                render_locked_timing_editors(df_db, render_waiting_start_requirement)
+            if dashboard_tool == "outsource":
+                render_outsource_management(df_db)
+            if dashboard_tool in ("templates", "create"):
+                templates = fetch_drawing_templates()
+            if dashboard_tool == "templates":
+                with st.expander("📚 Drawing Template — ลดการพิมพ์ข้อมูลซ้ำ", expanded=True):
+                    if templates is None:
+                        st.warning("ยังไม่พบตาราง cnc_drawing_templates ใน Supabase กรุณารันไฟล์ SQL ที่แนบให้ก่อน")
                     else:
-                        st.caption("สร้าง Drawing Template ใหม่ — การบันทึกส่วนนี้ยังไม่สร้างคิวงานผลิต")
-                    template_saved_key = f"drawing_template_saved_{template_form_suffix}"
-                    if "plan_code" not in selected_template and templates and not any("plan_code" in item for item in templates):
-                        st.info("หากยังไม่เคยเพิ่มช่องรหัสแผนงาน ให้รัน SQL ด้านล่างใน Supabase SQL Editor หนึ่งครั้งก่อนบันทึก")
-                        st.code("ALTER TABLE public.cnc_drawing_templates ADD COLUMN IF NOT EXISTS plan_code text NOT NULL DEFAULT '';", language="sql")
-                    with st.form(f"drawing_template_form_{template_form_suffix}", clear_on_submit=False):
-                        tpl_plan_code = st.text_input(
-                            "รหัสแผนงาน", value=safe_str(selected_template.get("plan_code")),
-                            placeholder="เช่น 26-146", key=f"tpl_plan_code_{template_form_suffix}",
-                            help="รหัสแผนงานสำหรับ Template นี้ การบันทึก Template ยังไม่สร้างคิวงานผลิต",
+                        render_bulk_drawing_template_delete(templates)
+                        template_map = {safe_str(item.get("drawing_name")): item for item in templates}
+                        template_options = ["➕ สร้าง Template ใหม่"] + list(template_map.keys())
+                        selected_template_name = st.selectbox(
+                            "เลือก Drawing Template เพื่อดู/แก้ไข",
+                            template_options,
+                            key="drawing_template_select"
                         )
-                        t1, t2, t3, t_qty = st.columns([2.0, 1.3, 1.3, 0.8])
-                        with t1:
-                            tpl_drawing = st.text_input(
-                                "ชื่อ Template / Drawing",
-                                value=safe_str(selected_template.get("drawing_name")),
-                                key=f"tpl_drawing_{template_form_suffix}",
-                            )
-                        with t2:
-                            tpl_material_selected = st.selectbox(
-                                "เลือกวัสดุมาตรฐาน", MATERIAL_OPTIONS,
-                                index=MATERIAL_OPTIONS.index(selected_material_option),
-                                key=f"tpl_material_selected_{template_form_suffix}",
-                            )
-                        with t3:
-                            tpl_material_custom = st.text_input(
-                                "วัสดุอื่น (พิมพ์เอง)", value=selected_custom_material,
-                                placeholder="กรอกเมื่อไม่มีในรายการ",
-                                key=f"tpl_material_custom_{template_form_suffix}",
-                            )
-                        with t_qty:
-                            tpl_qty = st.number_input(
-                                "จำนวนมาตรฐาน", 1, 10000,
-                                safe_int(selected_template.get("default_qty"), 1),
-                                key=f"tpl_qty_{template_form_suffix}",
-                            )
-                        t4, t5, t6, t7 = st.columns([1.5, 1, 1, 1])
-                        with t4:
-                            default_machine = safe_str(selected_template.get("machine_name"), MACHINE_LIST[0])
-                            tpl_machine = st.selectbox(
-                                "เครื่องจักรแนะนำ", MACHINE_LIST,
-                                index=MACHINE_LIST.index(default_machine) if default_machine in MACHINE_LIST else 0,
-                                key=f"tpl_machine_{template_form_suffix}",
-                            )
-                        with t5:
-                            tpl_setup = st.number_input(
-                                "Setup (นาที)", 0, 720,
-                                safe_int(selected_template.get("setup_mins"), 10), step=5,
-                                key=f"tpl_setup_{template_form_suffix}",
-                            )
-                        with t6:
-                            tpl_basic = st.number_input(
-                                "Basic (นาที)", 0, 6000,
-                                safe_int(selected_template.get("basic_mins"), 0), step=5,
-                                key=f"tpl_basic_{template_form_suffix}",
-                            )
-                        with t7:
-                            tpl_prog = st.number_input(
-                                "โปรแกรม (นาที)", 0, 12000,
-                                safe_int(selected_template.get("program_mins"), 120), step=10,
-                                key=f"tpl_program_{template_form_suffix}",
-                            )
-                        tpl_steps_text = st.text_area(
-                            "รายการ Step — หนึ่งบรรทัดต่อหนึ่ง Step เรียงตามลำดับทำงาน",
-                            value="\n".join(selected_steps),
-                            height=130,
-                            placeholder="Step 1: ตั้งงาน\nStep 2: กัดหยาบ\nStep 3: กัดละเอียด",
-                            key=f"tpl_steps_{template_form_suffix}",
-                        )
-                        save_tpl = st.form_submit_button(
-                            ("✓ บันทึกแล้ว — กดเพื่อบันทึกการแก้ไขอีกครั้ง" if st.session_state.get(template_saved_key, False)
-                             else ("💾 บันทึกการแก้ไข Drawing Template" if selected_template_id > 0 else "💾 บันทึก Drawing Template ใหม่")),
-                            type="secondary" if st.session_state.get(template_saved_key, False) else "primary",
-                            use_container_width=True,
-                        )
-                    if save_tpl:
-                        step_names = [line.strip() for line in tpl_steps_text.splitlines() if line.strip()]
-                        normalized_tpl_name = normalize_filter_key(tpl_drawing)
-                        duplicate_template_name = any(
-                            safe_int(item.get("id"), 0) != selected_template_id and
-                            normalize_filter_key(item.get("drawing_name")) == normalized_tpl_name
-                            for item in templates
-                        )
-                        tpl_material = safe_str(tpl_material_custom, "") or (
-                            "" if tpl_material_selected == "อื่น ๆ (พิมพ์เอง)" else tpl_material_selected
-                        )
-                        if not tpl_drawing.strip():
-                            st.error("กรุณาระบุ Drawing")
-                        elif duplicate_template_name:
-                            st.error("ชื่อ Template / Drawing นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น")
-                        elif not tpl_material:
-                            st.error("กรุณาระบุวัสดุอื่น หรือเลือกวัสดุจากรายการ")
-                        elif not step_names:
-                            st.error("กรุณาระบุอย่างน้อย 1 Step")
+                        selected_template = template_map.get(selected_template_name, {})
+                        selected_template_id = safe_int(selected_template.get("id"), 0)
+                        template_form_suffix = f"id_{selected_template_id}" if selected_template_id > 0 else "new"
+                        selected_steps = template_step_names(selected_template) if selected_template else ["รอหน้าเครื่องระบุ"]
+                        current_material = safe_str(selected_template.get("material"), "SS400")
+                        material_presets = [item for item in MATERIAL_OPTIONS if item != "อื่น ๆ (พิมพ์เอง)"]
+                        selected_material_option = current_material if current_material in material_presets else "อื่น ๆ (พิมพ์เอง)"
+                        selected_custom_material = "" if current_material in material_presets else current_material
+                        if selected_template_id > 0:
+                            st.info(f"✏️ กำลังแก้ไข Drawing Template: {selected_template_name}")
                         else:
-                            template_payload = {
-                                "plan_code": tpl_plan_code.strip(),
-                                "drawing_name": tpl_drawing.strip(), "material": tpl_material.strip(),
-                                "default_qty": int(tpl_qty), "machine_name": tpl_machine,
-                                "setup_mins": float(tpl_setup), "basic_mins": float(tpl_basic),
-                                "program_mins": float(tpl_prog),
-                                "steps": [{"name": name, "order": idx + 1} for idx, name in enumerate(step_names)],
-                                "updated_at": get_bangkok_str()
-                            }
-                            ok, error = (
-                                update_drawing_template(selected_template_id, template_payload)
-                                if selected_template_id > 0 else
-                                save_drawing_template(template_payload)
+                            st.caption("สร้าง Drawing Template ใหม่ — การบันทึกส่วนนี้ยังไม่สร้างคิวงานผลิต")
+                        template_saved_key = f"drawing_template_saved_{template_form_suffix}"
+                        if "plan_code" not in selected_template and templates and not any("plan_code" in item for item in templates):
+                            st.info("หากยังไม่เคยเพิ่มช่องรหัสแผนงาน ให้รัน SQL ด้านล่างใน Supabase SQL Editor หนึ่งครั้งก่อนบันทึก")
+                            st.code("ALTER TABLE public.cnc_drawing_templates ADD COLUMN IF NOT EXISTS plan_code text NOT NULL DEFAULT '';", language="sql")
+                        with st.form(f"drawing_template_form_{template_form_suffix}", clear_on_submit=False):
+                            tpl_plan_code = st.text_input(
+                                "รหัสแผนงาน", value=safe_str(selected_template.get("plan_code")),
+                                placeholder="เช่น 26-146", key=f"tpl_plan_code_{template_form_suffix}",
+                                help="รหัสแผนงานสำหรับ Template นี้ การบันทึก Template ยังไม่สร้างคิวงานผลิต",
                             )
-                            if ok:
-                                st.session_state[template_saved_key] = True
-                                st.success(
-                                    f"บันทึกการแก้ไข Template {tpl_drawing.strip()} แล้ว"
-                                    if selected_template_id > 0 else
-                                    f"บันทึก Template ใหม่ {tpl_drawing.strip()} แล้ว"
+                            t1, t2, t3, t_qty = st.columns([2.0, 1.3, 1.3, 0.8])
+                            with t1:
+                                tpl_drawing = st.text_input(
+                                    "ชื่อ Template / Drawing",
+                                    value=safe_str(selected_template.get("drawing_name")),
+                                    key=f"tpl_drawing_{template_form_suffix}",
                                 )
+                            with t2:
+                                tpl_material_selected = st.selectbox(
+                                    "เลือกวัสดุมาตรฐาน", MATERIAL_OPTIONS,
+                                    index=MATERIAL_OPTIONS.index(selected_material_option),
+                                    key=f"tpl_material_selected_{template_form_suffix}",
+                                )
+                            with t3:
+                                tpl_material_custom = st.text_input(
+                                    "วัสดุอื่น (พิมพ์เอง)", value=selected_custom_material,
+                                    placeholder="กรอกเมื่อไม่มีในรายการ",
+                                    key=f"tpl_material_custom_{template_form_suffix}",
+                                )
+                            with t_qty:
+                                tpl_qty = st.number_input(
+                                    "จำนวนมาตรฐาน", 1, 10000,
+                                    safe_int(selected_template.get("default_qty"), 1),
+                                    key=f"tpl_qty_{template_form_suffix}",
+                                )
+                            t4, t5, t6, t7 = st.columns([1.5, 1, 1, 1])
+                            with t4:
+                                default_machine = safe_str(selected_template.get("machine_name"), MACHINE_LIST[0])
+                                tpl_machine = st.selectbox(
+                                    "เครื่องจักรแนะนำ", MACHINE_LIST,
+                                    index=MACHINE_LIST.index(default_machine) if default_machine in MACHINE_LIST else 0,
+                                    key=f"tpl_machine_{template_form_suffix}",
+                                )
+                            with t5:
+                                tpl_setup = st.number_input(
+                                    "Setup (นาที)", 0, 720,
+                                    safe_int(selected_template.get("setup_mins"), 10), step=5,
+                                    key=f"tpl_setup_{template_form_suffix}",
+                                )
+                            with t6:
+                                tpl_basic = st.number_input(
+                                    "Basic (นาที)", 0, 6000,
+                                    safe_int(selected_template.get("basic_mins"), 0), step=5,
+                                    key=f"tpl_basic_{template_form_suffix}",
+                                )
+                            with t7:
+                                tpl_prog = st.number_input(
+                                    "โปรแกรม (นาที)", 0, 12000,
+                                    safe_int(selected_template.get("program_mins"), 120), step=10,
+                                    key=f"tpl_program_{template_form_suffix}",
+                                )
+                            tpl_steps_text = st.text_area(
+                                "รายการ Step — หนึ่งบรรทัดต่อหนึ่ง Step เรียงตามลำดับทำงาน",
+                                value="\n".join(selected_steps),
+                                height=130,
+                                placeholder="Step 1: ตั้งงาน\nStep 2: กัดหยาบ\nStep 3: กัดละเอียด",
+                                key=f"tpl_steps_{template_form_suffix}",
+                            )
+                            save_tpl = st.form_submit_button(
+                                ("✓ บันทึกแล้ว — กดเพื่อบันทึกการแก้ไขอีกครั้ง" if st.session_state.get(template_saved_key, False)
+                                 else ("💾 บันทึกการแก้ไข Drawing Template" if selected_template_id > 0 else "💾 บันทึก Drawing Template ใหม่")),
+                                type="secondary" if st.session_state.get(template_saved_key, False) else "primary",
+                                use_container_width=True,
+                            )
+                        if save_tpl:
+                            step_names = [line.strip() for line in tpl_steps_text.splitlines() if line.strip()]
+                            normalized_tpl_name = normalize_filter_key(tpl_drawing)
+                            duplicate_template_name = any(
+                                safe_int(item.get("id"), 0) != selected_template_id and
+                                normalize_filter_key(item.get("drawing_name")) == normalized_tpl_name
+                                for item in templates
+                            )
+                            tpl_material = safe_str(tpl_material_custom, "") or (
+                                "" if tpl_material_selected == "อื่น ๆ (พิมพ์เอง)" else tpl_material_selected
+                            )
+                            if not tpl_drawing.strip():
+                                st.error("กรุณาระบุ Drawing")
+                            elif duplicate_template_name:
+                                st.error("ชื่อ Template / Drawing นี้มีอยู่แล้ว กรุณาใช้ชื่ออื่น")
+                            elif not tpl_material:
+                                st.error("กรุณาระบุวัสดุอื่น หรือเลือกวัสดุจากรายการ")
+                            elif not step_names:
+                                st.error("กรุณาระบุอย่างน้อย 1 Step")
+                            else:
+                                template_payload = {
+                                    "plan_code": tpl_plan_code.strip(),
+                                    "drawing_name": tpl_drawing.strip(), "material": tpl_material.strip(),
+                                    "default_qty": int(tpl_qty), "machine_name": tpl_machine,
+                                    "setup_mins": float(tpl_setup), "basic_mins": float(tpl_basic),
+                                    "program_mins": float(tpl_prog),
+                                    "steps": [{"name": name, "order": idx + 1} for idx, name in enumerate(step_names)],
+                                    "updated_at": get_bangkok_str()
+                                }
+                                ok, error = (
+                                    update_drawing_template(selected_template_id, template_payload)
+                                    if selected_template_id > 0 else
+                                    save_drawing_template(template_payload)
+                                )
+                                if ok:
+                                    st.session_state[template_saved_key] = True
+                                    st.success(
+                                        f"บันทึกการแก้ไข Template {tpl_drawing.strip()} แล้ว"
+                                        if selected_template_id > 0 else
+                                        f"บันทึก Template ใหม่ {tpl_drawing.strip()} แล้ว"
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.session_state[template_saved_key] = False
+                                    st.error(f"บันทึก Template ไม่สำเร็จ: {error}")
+                                    if "plan_code" in safe_str(error):
+                                        st.info("เพิ่มคอลัมน์รหัสแผนงานใน Supabase SQL Editor แล้วลองบันทึกใหม่")
+                                        st.code("ALTER TABLE public.cnc_drawing_templates ADD COLUMN IF NOT EXISTS plan_code text NOT NULL DEFAULT '';", language="sql")
+                        if selected_template and st.button("🗑️ ลบ Template ที่เลือก", key="delete_selected_drawing_template"):
+                            ok, error = delete_drawing_template(safe_int(selected_template.get("id"), 0))
+                            if ok:
+                                st.success("ลบ Template แล้ว โดยไม่ลบงานผลิตที่เคยสร้าง")
                                 st.rerun()
                             else:
-                                st.session_state[template_saved_key] = False
-                                st.error(f"บันทึก Template ไม่สำเร็จ: {error}")
-                                if "plan_code" in safe_str(error):
-                                    st.info("เพิ่มคอลัมน์รหัสแผนงานใน Supabase SQL Editor แล้วลองบันทึกใหม่")
-                                    st.code("ALTER TABLE public.cnc_drawing_templates ADD COLUMN IF NOT EXISTS plan_code text NOT NULL DEFAULT '';", language="sql")
-                    if selected_template and st.button("🗑️ ลบ Template ที่เลือก", key="delete_selected_drawing_template"):
-                        ok, error = delete_drawing_template(safe_int(selected_template.get("id"), 0))
-                        if ok:
-                            st.success("ลบ Template แล้ว โดยไม่ลบงานผลิตที่เคยสร้าง")
-                            st.rerun()
-                        else:
-                            st.error(error)
+                                st.error(error)
 
 
-            render_unified_production_creation(templates)
+            if dashboard_tool == "create":
+                render_unified_production_creation(templates)
 
 
-        if not df_db.empty:
+        if dashboard_tool == "overview" and not df_db.empty:
             calc_df = df_db.copy()
             calc_df["Setup (น.)"] = pd.to_numeric(calc_df["Setup (น.)"], errors='coerce').fillna(10.0)
             calc_df["Basic (น.)"] = pd.to_numeric(calc_df["Basic (น.)"], errors='coerce').fillna(0.0)
