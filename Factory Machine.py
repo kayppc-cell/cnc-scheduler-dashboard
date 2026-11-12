@@ -1439,27 +1439,23 @@ def tpc_filter_shortcuts(label, options, *, key=None, index=0, format_func=None,
 
 
 def render_dashboard_tool_menu(is_admin):
-    # Keep only known editable widgets. Never copy arbitrary session keys:
-    # hidden button keys may outlive their trigger metadata across reruns.
+    # Retain server-received draft values, excluding transient action events.
     from streamlit.runtime.scriptrunner import get_script_run_ctx
     from streamlit.errors import StreamlitAPIException
     ctx = get_script_run_ctx()
-    editable_types = {"string_value", "int_value", "double_value", "bool_value",
-                      "string_array_value", "int_array_value", "double_array_value"}
+    triggers = set()
     if ctx is not None:
-        for widget in ctx.session_state.get_widget_states():
-            if widget.WhichOneof("value") not in editable_types:
-                continue
-            state_key = widget.id.split("-", 2)[-1]
-            if state_key not in st.session_state:
-                continue
-            value = st.session_state[state_key]
-            if isinstance(value, dict):
-                continue
+        triggers = {widget.id.split("-", 2)[-1] for widget in ctx.session_state.get_widget_states()
+                    if widget.WhichOneof("value") in ("trigger_value", "string_trigger_value", "chat_input_value", "json_trigger_value")}
+    for state_key in list(st.session_state):
+        if state_key in triggers or str(state_key).startswith(("FormSubmitter:", "dashboard_tool_")):
+            continue
+        value = st.session_state[state_key]
+        if not isinstance(value, dict):
             try:
                 st.session_state[state_key] = value
             except StreamlitAPIException:
-                pass  # An already-rendered widget is still owned by Streamlit.
+                pass  # Widgets already rendered above the menu remain owned by Streamlit.
     labels = {
         "overview": "📊 ภาพรวมและต้นทุน",
         "create": "📝 สร้างใบงาน Production",
@@ -1473,15 +1469,14 @@ def render_dashboard_tool_menu(is_admin):
     if st.session_state.get(key) not in options:
         st.session_state[key] = "overview"
     selected = st.session_state[key]
-    columns_per_row = 1 if get_device_mode() == "mobile" else len(options)
+    columns_per_row = 1 if get_device_mode() == "mobile" else 3
     for offset in range(0, len(options), columns_per_row):
         row = options[offset:offset + columns_per_row]
         for column, option in zip(st.columns(len(row)), row):
             with column:
                 st.button(labels[option], key=f"dashboard_tool_{option}", use_container_width=True,
                           type="primary" if selected == option else "secondary",
-                          disabled=dashboard_table_has_unsaved_edits() and option != selected,
-                          on_click=select_dashboard_tool, args=(key, option))
+                          on_click=tpc_set_filter_choice, args=(key, option))
     st.caption("กำลังใช้งาน: " + labels[selected])
     st.caption("หากกำลังกรอกแบบฟอร์มหรือแก้ตาราง กรุณาบันทึกก่อนเปลี่ยนเมนู")
     return selected
@@ -3634,6 +3629,38 @@ def calculate_plan_drawing_progress(plan_jobs):
     }
 
 
+def build_delay_evidence_print_document(rows, plan_code, printed_at):
+    """Print every visible evidence row; long evidence gets full-width detail rows."""
+    frame = pd.DataFrame(rows)
+    details = [name for name in ("หลักฐานที่ตรวจพบ", "สาเหตุหน้างาน") if name in frame.columns]
+    columns = [name for name in frame.columns if name not in details]
+    esc = lambda value: html.escape("" if value is None else str(value))
+    heading = "".join("<th>" + esc(name) + "</th>" for name in columns)
+    body = []
+    for row in frame.to_dict("records"):
+        cells = "".join("<td>" + esc(row.get(name)) + "</td>" for name in columns)
+        detail_rows = "".join(f'<tr class="detail"><td colspan="{max(1,len(columns))}"><b>{esc(name)}:</b> {esc(row.get(name))}</td></tr>' for name in details)
+        body.append("<tbody><tr>" + cells + "</tr>" + detail_rows + "</tbody>")
+    note = "ข้อมูลคิวและสถานะที่บันทึกไว้ ไม่ใช่การยืนยันสาเหตุหน้างาน; กลุ่มงานและเวลารออาจซ้อนกัน ไม่ควรนำมาบวกเป็นยอดรวม"
+    return f"""<!doctype html><html lang="th"><meta charset="utf-8"><title>TPC - ข้อมูลงานแผน {esc(plan_code)}</title>
+    <style>@page{{size:A4 landscape;margin:10mm}}*{{box-sizing:border-box}}body{{font-family:Tahoma,'Angsana New',sans-serif;color:#111;font-size:11px}}
+    h1{{font-size:19px;margin:0 0 7px}}p{{line-height:1.6;margin:5px 0}}table{{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px}}
+    th,td{{border:1px solid #788596;padding:5px;vertical-align:top;text-align:left;white-space:normal;overflow-wrap:anywhere;word-break:normal}}
+    th{{background:#dce5ef}}thead{{display:table-header-group}}tbody{{break-inside:avoid;page-break-inside:avoid}}.detail td{{font-size:11px;line-height:1.6;background:#f7f9fb}}
+    </style><body><h1>ตารางข้อมูลงาน Drawing / Step - แผน {esc(plan_code)}</h1>
+    <p>พิมพ์เมื่อ {esc(printed_at)} | จำนวน {len(frame):,} รายการ | เรียงตามตารางในระบบ</p><p>{esc(note)}</p>
+    <table><thead><tr>{heading}</tr></thead>{''.join(body)}</table></body></html>"""
+
+
+def render_delay_evidence_print_button(rows, plan_code):
+    document = build_delay_evidence_print_document(rows, plan_code, get_bangkok_now().strftime("%d/%m/%Y %H:%M:%S"))
+    encoded = base64.b64encode(document.encode("utf-8")).decode("ascii")
+    components.html("""<button onclick="printEvidence()" style="border:0;border-radius:7px;background:#dc2626;color:white;padding:10px 18px;cursor:pointer;font-family:Tahoma,sans-serif">พิมพ์ตารางข้อมูลงาน / บันทึก PDF</button>
+    <script>function printEvidence(){const w=window.open('','_blank');if(!w){alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์ตาราง');return;}
+    const bytes=Uint8Array.from(atob('""" + encoded + """'),c=>c.charCodeAt(0));const doc=new TextDecoder('utf-8').decode(bytes);
+    w.document.open();w.document.write(doc);w.document.close();w.focus();setTimeout(()=>w.print(),500);}</script>""", height=52)
+
+
 def build_project_delay_evidence(plan_jobs, all_jobs_by_id, machine_sequences, now_dt, production_due=None):
     """Read-only evidence from the existing production snapshot; never infer an unrecorded root cause."""
     from bisect import bisect_left
@@ -4350,6 +4377,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
                 evidence_rows = issue.get("evidence_rows", [])
                 if evidence_rows and st.checkbox("แสดงตารางข้อมูลงาน", key=f"project_delay_evidence_{normalize_filter_key(issue['plan_code'])}"):
                     st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
+                    render_delay_evidence_print_button(evidence_rows, issue["plan_code"])
                 elif not evidence_rows:
                     st.info("ไม่มีงานคงเหลือในชุดคิวที่ใช้คำนวณ กรุณาตรวจรายการสั่งผลิตและข้อมูลแผน")
 
@@ -9958,6 +9986,65 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
             st.error(str(exc))
 
 
+def sort_calendar_preview_rows(rows):
+    def natural(value):
+        return tuple((0, int(part)) if part.isdigit() else (1, part.casefold()) for part in re.split(r"(\d+)", safe_str(value)))
+    rank = {safe_str(name): i for i, name in enumerate(MACHINE_LIST)}
+    return sorted(rows, key=lambda row: (natural(row.get("แผน")), rank.get(safe_str(row.get("เครื่อง")), len(rank)),
+                                        natural(row.get("เครื่อง")), natural(row.get("Drawing"))))
+
+
+def build_calendar_preview_print_document(rows, shift_label, effective_day, printed_at):
+    ordered = sort_calendar_preview_rows(rows)
+    table = pd.DataFrame(ordered).to_html(index=False, escape=True, na_rep="", border=0)
+    esc = lambda value: html.escape(str(value))
+    return f"""<!doctype html><html lang="th"><meta charset="utf-8"><title>TPC - ผลกระทบการเปลี่ยนกะ</title>
+    <style>@page{{size:A4 landscape;margin:10mm}}body{{font-family:Tahoma,'Angsana New',sans-serif;color:#111;font-size:11px}}
+    h1{{font-size:19px}}p{{line-height:1.6}}table{{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px}}
+    th,td{{border:1px solid #7b8795;padding:6px 4px;text-align:left;vertical-align:top;white-space:normal;overflow-wrap:anywhere}}
+    th{{background:#dce5ef}}thead{{display:table-header-group}}tr{{break-inside:avoid;page-break-inside:avoid}}</style><body>
+    <h1>ตัวอย่างผลกระทบจากการเปลี่ยนกะโรงงาน</h1><p>กะที่เสนอ: {esc(shift_label)} | วันเริ่มใช้: {esc(effective_day)} เวลาไทย 00:00 น.<br>
+    พิมพ์เมื่อ {esc(printed_at)} | {len(ordered):,} รายการ | เรียงตามแผน เครื่อง และ Drawing</p>
+    <p>รายงานนี้เป็นตัวอย่างก่อนบันทึก ไม่ใช่การยืนยันเปลี่ยนกะ เวลาจบเป็นค่าคาดการณ์จากคิวปัจจุบัน วันส่งและประวัติงานที่เสร็จแล้วคงเดิม</p>
+    {table}</body></html>"""
+
+
+def render_calendar_preview_print_button(rows, shift_label, effective_day):
+    document = build_calendar_preview_print_document(rows, shift_label, effective_day, get_bangkok_now().strftime("%d/%m/%Y %H:%M:%S"))
+    encoded = base64.b64encode(document.encode("utf-8")).decode("ascii")
+    components.html("""<button onclick="printCalendarPreview()" style="border:0;border-radius:7px;background:#dc2626;color:white;padding:10px 18px;cursor:pointer;font-family:Tahoma,sans-serif">พิมพ์ผลกระทบการเปลี่ยนกะ / บันทึก PDF</button>
+    <script>function printCalendarPreview(){const w=window.open('','_blank');if(!w){alert('กรุณาอนุญาต Pop-up เพื่อพิมพ์ตาราง');return;}
+    const bytes=Uint8Array.from(atob('""" + encoded + """'),c=>c.charCodeAt(0));const doc=new TextDecoder('utf-8').decode(bytes);
+    w.document.open();w.document.write(doc);w.document.close();w.focus();setTimeout(()=>w.print(),500);}</script>""", height=52)
+
+
+def build_calendar_comparison_rows(with_ot, without_ot, due_by_plan):
+    if with_ot.empty or without_ot.empty:
+        return []
+    no_ot_by_id = {safe_int(row["ID"]): row for _, row in without_ot.iterrows()}
+    def fmt(value):
+        return value.strftime("%d/%m/%Y %H:%M") if value is not None else "ไม่มีข้อมูล"
+    def risk(finish, due):
+        return "ไม่มีข้อมูลเทียบ" if finish is None or due is None else ("เสี่ยงเลยวันส่ง" if finish > due else "อยู่ในกำหนด")
+    rows = []
+    for _, row in with_ot.iterrows():
+        if "เสร็จ" in safe_str(row.get("สถานะงาน")) or "ยกเลิก" in safe_str(row.get("สถานะงาน")):
+            continue
+        other = no_ot_by_id.get(safe_int(row["ID"]))
+        if other is None:
+            continue
+        plan = safe_str(row.get("แผนงาน"))
+        due = due_by_plan.get(plan)
+        ot_start, ot_finish = first_valid_datetime(row.get("_chain_start")), first_valid_datetime(row.get("_chain_finish"))
+        no_start, no_finish = first_valid_datetime(other.get("_chain_start")), first_valid_datetime(other.get("_chain_finish"))
+        rows.append({"แผน":plan, "เครื่อง":row.get("เลือกเครื่องจักร"), "Drawing":row.get("ชื่อ Drawing."), "ID":safe_int(row["ID"]),
+                     "เริ่ม มีโอที":fmt(ot_start), "จบ มีโอที":fmt(ot_finish),
+                     "เริ่ม ไม่มีโอที":fmt(no_start), "จบ ไม่มีโอที":fmt(no_finish),
+                     "ไม่มีโอทีจบช้ากว่า (ชม.ปฏิทิน)":round((no_finish-ot_finish).total_seconds()/3600,2) if no_finish and ot_finish else None,
+                     "วันส่งเดิม":fmt(due), "มีโอที เทียบวันส่ง":risk(ot_finish,due), "ไม่มีโอที เทียบวันส่ง":risk(no_finish,due)})
+    return sort_calendar_preview_rows(rows)
+
+
 def render_work_calendar_admin(jobs):
     if st.session_state.get("user_role") != "admin":
         lock_work_calendar()
@@ -10000,7 +10087,7 @@ def render_work_calendar_admin(jobs):
             lock_work_calendar()
             st.rerun()
         with st.form("tpc_calendar_preview_form"):
-            mode = st.selectbox("กะที่จะใช้", [m for m in CALENDAR_LABELS if m != previous],
+            mode = st.selectbox("กะที่จะใช้", list(CALENDAR_LABELS),
                                 format_func=admin_labels.get)
             day = st.date_input("วันเริ่มใช้ (เวลาไทย 00:00 น.)", value=first_day, min_value=first_day,
                                 format="DD/MM/YYYY")
@@ -10030,6 +10117,28 @@ def render_work_calendar_admin(jobs):
             safe_str(row.get("plan_code")): first_valid_datetime(row.get("customer_due"))
             for _, row in masters.iterrows()
         }
+        # Compare the same snapshot at the same future anchor, without saving either policy.
+        alternative_mode = "normal" if mode == "busy" else "busy"
+        compare_token = _calendar_preview.set(existing + ((day, alternative_mode),))
+        try:
+            alternative = calculate_production_chain(jobs, as_of=anchor)
+        finally:
+            _calendar_preview.reset(compare_token)
+        with_ot = after if mode == "busy" else alternative
+        without_ot = after if mode == "normal" else alternative
+        comparison_rows = build_calendar_comparison_rows(with_ot, without_ot, due_by_plan)
+        st.markdown("#### เปรียบเทียบกะมีโอที กับกะไม่มีโอที")
+        st.caption("กะมีโอที: จันทร์-ศุกร์ถึง 20:00 น. เสาร์ถึง 17:00 น. | กะไม่มีโอที: จันทร์-ศุกร์ถึง 17:00 น. หยุดเสาร์-อาทิตย์ • ใช้ช่วงพักตามปฏิทินโรงงาน")
+        if comparison_rows:
+            st.dataframe(pd.DataFrame(comparison_rows), hide_index=True, use_container_width=True)
+            ot_late = sum(row["มีโอที เทียบวันส่ง"] == "เสี่ยงเลยวันส่ง" for row in comparison_rows)
+            no_late = sum(row["ไม่มีโอที เทียบวันส่ง"] == "เสี่ยงเลยวันส่ง" for row in comparison_rows)
+            st.caption(f"เปรียบเทียบ {len(comparison_rows)} คิวที่ยังไม่เสร็จ • เสี่ยงเลยวันส่ง: มีโอที {ot_late} คิว / ไม่มีโอที {no_late} คิว • จำนวนนี้เป็นคิว ไม่ใช่จำนวน Drawing ที่ไม่ซ้ำ")
+            st.caption("ส่วนต่างเป็นชั่วโมงปฏิทิน รวมกลางคืนและวันหยุด ไม่ใช่ชั่วโมงทำงานหรือจำนวนชั่วโมง OT; การเปรียบเทียบยังไม่เปลี่ยนกะจริง")
+            render_calendar_preview_print_button(comparison_rows, "เปรียบเทียบมีโอที / ไม่มีโอที", day.strftime("%d/%m/%Y"))
+        else:
+            st.info("ไม่มีคิวที่ยังไม่เสร็จสำหรับเปรียบเทียบ")
+        st.markdown("#### ผลกระทบของกะที่เลือก เทียบปฏิทินปัจจุบัน")
         rows = []
         if not after.empty:
             old_by_id = before.set_index("ID")
@@ -10051,7 +10160,9 @@ def render_work_calendar_admin(jobs):
                         "เทียบวันส่ง": "⚠️ เสี่ยงเลยวันส่ง" if late else ("อยู่ในกำหนด" if due and new_finish else "–"),
                     })
         if rows:
-            st.dataframe(pd.DataFrame(rows), hide_index=True)
+            display_rows = sort_calendar_preview_rows(rows)
+            st.dataframe(pd.DataFrame(display_rows), hide_index=True, use_container_width=True)
+            render_calendar_preview_print_button(display_rows, admin_labels[mode], day.strftime("%d/%m/%Y"))
         else:
             st.info("ไม่พบคิวที่เปลี่ยนเวลา หรือเสี่ยงเลยวันส่งจากข้อมูลปัจจุบัน")
         st.caption("เวลาจบเป็นค่าคาดการณ์จากคิวปัจจุบัน วันส่งลูกค้าและประวัติงานที่เสร็จแล้วจะคงเดิม")
@@ -10110,55 +10221,22 @@ def tpc_toggle_lazy_panel(panel):
     st.session_state[key] = not is_open
 
 
-def select_dashboard_tool(key, option):
-    if not dashboard_table_has_unsaved_edits():
-        st.session_state[key] = option
-
-
-def dashboard_table_has_unsaved_edits():
-    if st.session_state.get("tpc_dashboard_table") != "editor":
-        return False
-    edits = st.session_state.get("editor_cnc_jobs_grid_main", {})
-    return isinstance(edits, dict) and bool(edits.get("added_rows") or edits.get("deleted_rows") or edits.get("edited_rows"))
-
-
-def select_dashboard_table(panel):
-    if dashboard_table_has_unsaved_edits():
-        return
-    previous = st.session_state.get("tpc_dashboard_table")
-    if previous:
-        st.session_state["_tpc_lazy_filters_" + previous] = {
-            key: st.session_state[key] for key in tpc_lazy_filter_keys(previous) if key in st.session_state}
-    for field, value in st.session_state.get("_tpc_lazy_filters_" + panel, {}).items():
-        st.session_state[field] = value
-    st.session_state["tpc_dashboard_table"] = panel
-
-
-def render_dashboard_table_menu():
-    labels = {"editor":"📝 รายการสั่งผลิต", "work_order":"📋 คิวงานหน้าเครื่อง",
-              "charts":"📈 กราฟเวลาผลิต", "history":"✅ ประวัติงานเสร็จ", "cost":"💰 ชั่วโมงและต้นทุน"}
-    selected = st.session_state.get("tpc_dashboard_table")
-    if selected not in labels:
-        selected = None
-    unsaved = dashboard_table_has_unsaved_edits()
-    columns = [st.container() for _ in labels] if get_device_mode() == "mobile" else st.columns(5)
-    for column, (panel, label) in zip(columns, labels.items()):
-        with column:
-            st.button(label, key="tpc_table_menu_" + panel, use_container_width=True,
-                      type="primary" if selected == panel else "secondary",
-                      disabled=unsaved and panel != selected, on_click=select_dashboard_table, args=(panel,))
-    if unsaved:
-        st.warning("มีข้อมูลแก้ไขในตารางที่ยังไม่บันทึก กรุณาบันทึกด้านล่าง หรือยกเลิกก่อนเปลี่ยนเมนู")
-        if st.button("ยกเลิกการแก้ไขที่ยังไม่บันทึก", key="tpc_table_cancel_edits"):
-            st.session_state.pop("editor_cnc_jobs_grid_main", None)
-            st.rerun()
-    elif selected is None:
-        st.caption("เลือกเมนูเพื่อเปิดตารางหรือกราฟที่ต้องการ")
-    return selected
-
-
 def tpc_lazy_panel_is_open(panel, label):
-    return st.session_state.get("tpc_dashboard_table") == panel
+    is_open = bool(st.session_state.get("_tpc_lazy_open_" + panel, False))
+    unsaved = False
+    if panel == "editor" and is_open:
+        edits = st.session_state.get("editor_cnc_jobs_grid_main", {})
+        if isinstance(edits, dict):
+            unsaved = bool(edits.get("added_rows") or edits.get("deleted_rows") or
+                any(any(field != "ลบ" for field in row) for row in edits.get("edited_rows", {}).values()))
+    st.button(("ซ่อน · " if is_open else "แสดง · ") + label,
+        key="tpc_lazy_toggle_" + panel, on_click=tpc_toggle_lazy_panel, args=(panel,),
+        disabled=unsaved, type="secondary" if is_open else "primary", use_container_width=True)
+    if unsaved:
+        st.caption("มีการแก้ไขที่ยังไม่ได้บันทึก กรุณาบันทึกให้เสร็จก่อนซ่อนตาราง")
+    if not is_open:
+        st.caption("ยังไม่โหลดหรือคำนวณส่วนนี้ กดแสดงเมื่อต้องการใช้งาน")
+    return is_open
 
 
 def dashboard_is_partial_run():
@@ -11840,8 +11918,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.caption("เลือก ‘📊 ภาพรวมโรงงาน’ เพื่อใช้ตารางและปุ่มค้นหาด่วนทั้งหมดที่มีอยู่เดิม")
             old_project_master_label = "🗓️ แผนงานลูกค้าและ Project Master Gantt"
             project_master_label = "🗓️ แผนงาน Production และ Project Master Gantt"
-            if dashboard_table_has_unsaved_edits():
-                st.session_state["dashboard_subview"] = "📊 ภาพรวมโรงงาน"
             if st.session_state.get("dashboard_subview") == old_project_master_label:
                 st.session_state.dashboard_subview = project_master_label
             dashboard_subview = st.radio(
@@ -11849,7 +11925,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 ["📊 ภาพรวมโรงงาน", project_master_label],
                 horizontal=True,
                 label_visibility="collapsed",
-                key="dashboard_subview", disabled=dashboard_table_has_unsaved_edits()
+                key="dashboard_subview"
             )
             if dashboard_subview == project_master_label:
                 render_project_master_dashboard(calc_df, is_admin)
@@ -11968,8 +12044,6 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # 🔗 ระบบลูกโซ่สมบูรณ์: ล็อก Baseline ตั้งต้น + ส่งต่อเวลาคิวงาน (Auto-Chain)
             # =========================================================================
             # ล้างสถานะ editor หลังผู้ใช้กดบันทึกสำเร็จ เพื่อโหลดค่าที่คำนวณแล้วกลับจากฐานข้อมูล
-            selected_dashboard_table = render_dashboard_table_menu()
-
             @st.fragment
             def render_dashboard_editor_fragment():
                 if st.session_state.get("current_view") != "📊 แดชบอร์ดภาพรวมโรงงาน" or st.session_state.get("user_role") not in ("admin", "viewer"):
@@ -12575,8 +12649,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-            if selected_dashboard_table == "editor":
-                render_dashboard_editor_fragment()
+            render_dashboard_editor_fragment()
 
             # =====================================================
             # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)
@@ -12852,8 +12925,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-            if selected_dashboard_table == "work_order":
-                render_dashboard_work_order_fragment()
+            render_dashboard_work_order_fragment()
 
             # =====================================================
             # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline)
@@ -12873,8 +12945,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 _, active_jobs_editor_df = dashboard_fragment_queue(calc_df)
                 render_production_schedule_charts(active_jobs_editor_df)
 
-            if selected_dashboard_table == "charts":
-                render_dashboard_charts_fragment()
+            render_dashboard_charts_fragment()
 
             # =====================================================
             # 5. ตารางสรุปประวัติงานที่เสร็จสิ้น (Finished Production History)
@@ -13559,8 +13630,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-            if selected_dashboard_table == "history":
-                render_dashboard_history_fragment()
+            render_dashboard_history_fragment()
 
             # =====================================================
             # 6. ตารางคำนวณเวลาและต้นทุนเครื่องจักร (Machining Cost Calculation)
@@ -13947,8 +14017,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     else:
                         st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
-            if selected_dashboard_table == "cost":
-                render_dashboard_cost_fragment()
+            render_dashboard_cost_fragment()
 
 # ---------------------------------------------------------
 # VIEW 3: ติดตามสถานการณ์ฝ่ายผลิต
