@@ -7746,6 +7746,23 @@ def render_shop_finish_controls(target_id, selected_m, current_step_index, track
     _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, fragment_mode=True)
 
 
+def operator_ng_card_details(task):
+    context = task.get("qc_ng_context")
+    status = safe_str(task.get("status"))
+    if not isinstance(context, dict) or not context or "เสร็จ" in status or "ยกเลิก" in status:
+        return "", ""
+    label = "🔴 NG — กำลังตรวจซ้ำหลังแก้ไข" if "กำลังทำ" in status else "🔴 NG — รองานแก้ไข / รอตรวจซ้ำ"
+    detail = (
+        '<div style="margin-top:10px;padding:10px;border:1px solid #F97316;border-radius:8px;background:#FFF7ED;color:#9A3412;overflow-wrap:anywhere;">'
+        f'<b>{html.escape(label)}</b><br>'
+        f'<b>เครื่อง:</b> {html.escape(safe_str(context.get("machine"), "-"))} | '
+        f'<b>จำนวน NG:</b> {safe_int(context.get("qty"), 0)} ชิ้น<br>'
+        f'<b>จุดที่ต้องแก้ไข:</b> {html.escape(safe_str(context.get("note"), "-"))}'
+        '</div>'
+    )
+    return label, detail
+
+
 def render_department_operator_mode(training=False):
     """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
     fetch_department_work_orders = fetch_training_operator_tasks if training else fetch_operator_live_tasks
@@ -7771,7 +7788,7 @@ def render_department_operator_mode(training=False):
             remembered_person = st.session_state.get("operator_live_saved_name")
             st.session_state["operator_live_department"] = (
                 "AUTOMATION" if remembered_person in AUTOMATION_ASSIGNEES[1:] and remembered_person not in QC_ASSIGNEES[1:] else "QC")
-        live_department = st.selectbox("🏢 เลือกแผนก", ["QC", "AUTOMATION"],
+        live_department = tpc_filter_shortcuts("🏢 เลือกแผนก", ["QC", "AUTOMATION"],
             format_func=lambda value: "QC" if value == "QC" else "Automation", key="operator_live_department")
 
     try:
@@ -7934,6 +7951,9 @@ def render_department_operator_mode(training=False):
         banner_class, banner_text = "shop-live-hold", "🟡 พักงาน — กด Resume เพื่อทำต่อ"
     else:
         banner_class, banner_text = "shop-live-idle", "🟠 พร้อม Start คิวที่เลือก"
+    current_ng_label, _ = operator_ng_card_details(current_task)
+    if current_ng_label:
+        banner_text = current_ng_label
     current_urgency = get_department_urgency_label(current_task)
     if current_urgency:
         banner_text += f" | {current_urgency}"
@@ -7957,6 +7977,9 @@ def render_department_operator_mode(training=False):
         urgency = get_department_urgency_label(queue_task)
         urgency_badge = f'<span class="tpc-person-urgent-badge">{html.escape(urgency)}</span>' if urgency else ""
         status_label = "🚨 เกินกำหนด" if is_overdue else task_status
+        ng_status_label, ng_detail_html = operator_ng_card_details(queue_task)
+        if ng_status_label:
+            status_label = ng_status_label + (" • เกินกำหนด" if is_overdue else "")
         lock_text = "🎯 คิวปัจจุบัน — พร้อมควบคุมงาน" if is_current else (
             "เลือกควบคุมได้เมื่อพักหรือจบงานที่กำลังทำ")
         card_class = "tpc-light-panel"
@@ -7979,13 +8002,14 @@ def render_department_operator_mode(training=False):
           <div><b>📌 แผน:</b> {html.escape(safe_str(queue_task.get('plan_code'), '-'))} | <b>📄 Drawing:</b> {html.escape(safe_str(queue_task.get('drawing_name'), '-'))}</div>
           <div><b>🗓️ เริ่มตามคิวปัจจุบัน:</b> {planned_text} | <b>🏁 จบตามคิวปัจจุบัน:</b> {due_text}</div>
           <div style="margin-top:6px;"><b>📝 รายละเอียด:</b> {html.escape(safe_str(queue_task.get('details'), '-'))}</div>
+          {ng_detail_html}
           <div style="margin-top:9px;font-weight:800;color:{'#047857' if is_current else '#64748B'};">{lock_text}</div>
         </div>
         """, unsafe_allow_html=True)
 
         if not is_current:
             if running.empty and ("รอรับงาน" in task_status or "พักงาน" in task_status):
-                pick_label = "เลือกคิวนี้เพื่อ Resume" if "พักงาน" in task_status else "เลือกคิวนี้เพื่อ Start"
+                pick_label = ("เลือกคิวนี้เพื่อตรวจซ้ำ (Resume)" if ng_status_label else "เลือกคิวนี้เพื่อ Resume") if "พักงาน" in task_status else "เลือกคิวนี้เพื่อ Start"
                 if st.button(pick_label, key=f"operator_pick_{'training' if training else 'live'}_{task_id}",
                              use_container_width=True):
                     st.session_state["operator_queue_pick"] = {
@@ -8041,7 +8065,7 @@ def render_department_operator_mode(training=False):
                             st.session_state["operator_live_clear_control"] = True
                         st.rerun()
         elif "พักงาน" in task_status:
-            if st.button("▶️ Resume งานคิวปัจจุบัน", type="primary", use_container_width=True, key=f"operator_resume_{task_id}"):
+            if st.button("🔎 Resume เพื่อตรวจซ้ำหลังแก้ไข" if ng_status_label else "▶️ Resume งานคิวปัจจุบัน", type="primary", use_container_width=True, key=f"operator_resume_{task_id}"):
                 operator_hold_start = parse_flexible_datetime(queue_task.get("hold_started_at"))
                 operator_pause_total = safe_float(queue_task.get("paused_seconds"), 0.0)
                 if operator_hold_start is not None:
