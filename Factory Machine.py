@@ -1480,7 +1480,8 @@ def render_dashboard_tool_menu(is_admin):
             with column:
                 st.button(labels[option], key=f"dashboard_tool_{option}", use_container_width=True,
                           type="primary" if selected == option else "secondary",
-                          on_click=tpc_set_filter_choice, args=(key, option))
+                          disabled=dashboard_table_has_unsaved_edits() and option != selected,
+                          on_click=select_dashboard_tool, args=(key, option))
     st.caption("กำลังใช้งาน: " + labels[selected])
     st.caption("หากกำลังกรอกแบบฟอร์มหรือแก้ตาราง กรุณาบันทึกก่อนเปลี่ยนเมนู")
     return selected
@@ -10109,22 +10110,55 @@ def tpc_toggle_lazy_panel(panel):
     st.session_state[key] = not is_open
 
 
-def tpc_lazy_panel_is_open(panel, label):
-    is_open = bool(st.session_state.get("_tpc_lazy_open_" + panel, False))
-    unsaved = False
-    if panel == "editor" and is_open:
-        edits = st.session_state.get("editor_cnc_jobs_grid_main", {})
-        if isinstance(edits, dict):
-            unsaved = bool(edits.get("added_rows") or edits.get("deleted_rows") or
-                any(any(field != "ลบ" for field in row) for row in edits.get("edited_rows", {}).values()))
-    st.button(("ซ่อน · " if is_open else "แสดง · ") + label,
-        key="tpc_lazy_toggle_" + panel, on_click=tpc_toggle_lazy_panel, args=(panel,),
-        disabled=unsaved, type="secondary" if is_open else "primary", use_container_width=True)
+def select_dashboard_tool(key, option):
+    if not dashboard_table_has_unsaved_edits():
+        st.session_state[key] = option
+
+
+def dashboard_table_has_unsaved_edits():
+    if st.session_state.get("tpc_dashboard_table") != "editor":
+        return False
+    edits = st.session_state.get("editor_cnc_jobs_grid_main", {})
+    return isinstance(edits, dict) and bool(edits.get("added_rows") or edits.get("deleted_rows") or edits.get("edited_rows"))
+
+
+def select_dashboard_table(panel):
+    if dashboard_table_has_unsaved_edits():
+        return
+    previous = st.session_state.get("tpc_dashboard_table")
+    if previous:
+        st.session_state["_tpc_lazy_filters_" + previous] = {
+            key: st.session_state[key] for key in tpc_lazy_filter_keys(previous) if key in st.session_state}
+    for field, value in st.session_state.get("_tpc_lazy_filters_" + panel, {}).items():
+        st.session_state[field] = value
+    st.session_state["tpc_dashboard_table"] = panel
+
+
+def render_dashboard_table_menu():
+    labels = {"editor":"📝 รายการสั่งผลิต", "work_order":"📋 คิวงานหน้าเครื่อง",
+              "charts":"📈 กราฟเวลาผลิต", "history":"✅ ประวัติงานเสร็จ", "cost":"💰 ชั่วโมงและต้นทุน"}
+    selected = st.session_state.get("tpc_dashboard_table")
+    if selected not in labels:
+        selected = None
+    unsaved = dashboard_table_has_unsaved_edits()
+    columns = [st.container() for _ in labels] if get_device_mode() == "mobile" else st.columns(5)
+    for column, (panel, label) in zip(columns, labels.items()):
+        with column:
+            st.button(label, key="tpc_table_menu_" + panel, use_container_width=True,
+                      type="primary" if selected == panel else "secondary",
+                      disabled=unsaved and panel != selected, on_click=select_dashboard_table, args=(panel,))
     if unsaved:
-        st.caption("มีการแก้ไขที่ยังไม่ได้บันทึก กรุณาบันทึกให้เสร็จก่อนซ่อนตาราง")
-    if not is_open:
-        st.caption("ยังไม่โหลดหรือคำนวณส่วนนี้ กดแสดงเมื่อต้องการใช้งาน")
-    return is_open
+        st.warning("มีข้อมูลแก้ไขในตารางที่ยังไม่บันทึก กรุณาบันทึกด้านล่าง หรือยกเลิกก่อนเปลี่ยนเมนู")
+        if st.button("ยกเลิกการแก้ไขที่ยังไม่บันทึก", key="tpc_table_cancel_edits"):
+            st.session_state.pop("editor_cnc_jobs_grid_main", None)
+            st.rerun()
+    elif selected is None:
+        st.caption("เลือกเมนูเพื่อเปิดตารางหรือกราฟที่ต้องการ")
+    return selected
+
+
+def tpc_lazy_panel_is_open(panel, label):
+    return st.session_state.get("tpc_dashboard_table") == panel
 
 
 def dashboard_is_partial_run():
@@ -11806,6 +11840,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             st.caption("เลือก ‘📊 ภาพรวมโรงงาน’ เพื่อใช้ตารางและปุ่มค้นหาด่วนทั้งหมดที่มีอยู่เดิม")
             old_project_master_label = "🗓️ แผนงานลูกค้าและ Project Master Gantt"
             project_master_label = "🗓️ แผนงาน Production และ Project Master Gantt"
+            if dashboard_table_has_unsaved_edits():
+                st.session_state["dashboard_subview"] = "📊 ภาพรวมโรงงาน"
             if st.session_state.get("dashboard_subview") == old_project_master_label:
                 st.session_state.dashboard_subview = project_master_label
             dashboard_subview = st.radio(
@@ -11813,7 +11849,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 ["📊 ภาพรวมโรงงาน", project_master_label],
                 horizontal=True,
                 label_visibility="collapsed",
-                key="dashboard_subview"
+                key="dashboard_subview", disabled=dashboard_table_has_unsaved_edits()
             )
             if dashboard_subview == project_master_label:
                 render_project_master_dashboard(calc_df, is_admin)
@@ -11932,6 +11968,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             # 🔗 ระบบลูกโซ่สมบูรณ์: ล็อก Baseline ตั้งต้น + ส่งต่อเวลาคิวงาน (Auto-Chain)
             # =========================================================================
             # ล้างสถานะ editor หลังผู้ใช้กดบันทึกสำเร็จ เพื่อโหลดค่าที่คำนวณแล้วกลับจากฐานข้อมูล
+            selected_dashboard_table = render_dashboard_table_menu()
+
             @st.fragment
             def render_dashboard_editor_fragment():
                 if st.session_state.get("current_view") != "📊 แดชบอร์ดภาพรวมโรงงาน" or st.session_state.get("user_role") not in ("admin", "viewer"):
@@ -12537,7 +12575,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-            render_dashboard_editor_fragment()
+            if selected_dashboard_table == "editor":
+                render_dashboard_editor_fragment()
 
             # =====================================================
             # 2. ใบจ่ายคิวงานหน้าเครื่อง (Work Order Sheet)
@@ -12813,7 +12852,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-            render_dashboard_work_order_fragment()
+            if selected_dashboard_table == "work_order":
+                render_dashboard_work_order_fragment()
 
             # =====================================================
             # 3. ผังเวลาขึ้นงาน (Gantt Chart Timeline)
@@ -12833,7 +12873,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                 _, active_jobs_editor_df = dashboard_fragment_queue(calc_df)
                 render_production_schedule_charts(active_jobs_editor_df)
 
-            render_dashboard_charts_fragment()
+            if selected_dashboard_table == "charts":
+                render_dashboard_charts_fragment()
 
             # =====================================================
             # 5. ตารางสรุปประวัติงานที่เสร็จสิ้น (Finished Production History)
@@ -13518,7 +13559,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
 
                 st.divider()
 
-            render_dashboard_history_fragment()
+            if selected_dashboard_table == "history":
+                render_dashboard_history_fragment()
 
             # =====================================================
             # 6. ตารางคำนวณเวลาและต้นทุนเครื่องจักร (Machining Cost Calculation)
@@ -13905,7 +13947,8 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     else:
                         st.info("ℹ️ ยังไม่มีรายการที่ขึ้นสถานะ '✅ เสร็จสิ้นแล้ว' จึงยังไม่มีการคำนวณมูลค่าต้นทุน")
 
-            render_dashboard_cost_fragment()
+            if selected_dashboard_table == "cost":
+                render_dashboard_cost_fragment()
 
 # ---------------------------------------------------------
 # VIEW 3: ติดตามสถานการณ์ฝ่ายผลิต
