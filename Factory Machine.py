@@ -1473,7 +1473,7 @@ def render_dashboard_tool_menu(is_admin):
     if st.session_state.get(key) not in options:
         st.session_state[key] = "overview"
     selected = st.session_state[key]
-    columns_per_row = 1 if get_device_mode() == "mobile" else 3
+    columns_per_row = 1 if get_device_mode() == "mobile" else len(options)
     for offset in range(0, len(options), columns_per_row):
         row = options[offset:offset + columns_per_row]
         for column, option in zip(st.columns(len(row)), row):
