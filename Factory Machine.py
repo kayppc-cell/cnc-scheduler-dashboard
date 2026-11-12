@@ -7240,7 +7240,7 @@ def fetch_operator_live_tasks(department):
         if not isinstance(batch, list):
             raise RuntimeError("ข้อมูลคิวไม่ถูกต้อง")
         if not batch:
-            return pd.DataFrame(rows)
+            return hide_deferred_qc_tasks(pd.DataFrame(rows))
         for row in batch:
             current_id = safe_int(row.get("id"), 0)
             if current_id <= (last_id or 0):
@@ -7248,7 +7248,7 @@ def fetch_operator_live_tasks(department):
             rows.append(row)
             last_id = current_id
         if response_page_is_last(response, len(batch)):
-            return pd.DataFrame(rows)
+            return hide_deferred_qc_tasks(pd.DataFrame(rows))
 
 
 def operator_supervisor_is_unlocked():
@@ -7588,6 +7588,19 @@ def render_operator_live_queue_tools(person, tasks):
                     st.rerun()
 
 
+def format_qc_arrival_time(value):
+    """Display created_at in Bangkok when timezone is supplied; retain explicit local clock values."""
+    try:
+        stamp = pd.Timestamp(value)
+        if pd.isna(stamp):
+            return "ไม่มีข้อมูล"
+        if stamp.tzinfo is not None:
+            stamp = stamp.tz_convert("Asia/Bangkok")
+        return stamp.strftime("%d/%m/%Y %H:%M")
+    except (ValueError, TypeError, OverflowError):
+        return "ไม่มีข้อมูล"
+
+
 @st.fragment(run_every=120)
 def render_operator_upcoming(person):
     """Read-only incoming forecast; QC work is created only after production Finish."""
@@ -7636,8 +7649,13 @@ def render_operator_upcoming(person):
         if not ready.empty:
             with st.expander(f"✅ ดูงานพร้อมตรวจ ({len(ready_ids)} รายการ)"):
                 detail = ready.rename(columns={"plan_code": "แผนงาน", "drawing_name": "Drawing", "work_type": "ประเภทงาน", "assignee": "ผู้รับผิดชอบ", "status": "สถานะ"})
-                columns = [name for name in ["แผนงาน", "Drawing", "ประเภทงาน", "ผู้รับผิดชอบ", "สถานะ"] if name in detail.columns]
+                detail = detail.copy()
+                arrival = detail.get("created_at", pd.Series(None, index=detail.index, dtype=object))
+                released = detail.get("qc_released_at", pd.Series(None, index=detail.index, dtype=object))
+                detail["วัน–เวลาเข้าคิว QC"] = released.where(released.notna(), arrival).map(format_qc_arrival_time)
+                columns = [name for name in ["แผนงาน", "Drawing", "วัน–เวลาเข้าคิว QC", "ประเภทงาน", "ผู้รับผิดชอบ", "สถานะ"] if name in detail.columns]
                 st.dataframe(detail[columns], hide_index=True, use_container_width=True)
+                st.caption("วัน–เวลาเข้าคิว QC คือเวลาสร้างใบตรวจ หรือเวลาปล่อยกลับเข้าคิวหลังผลิตขั้นตอนที่เพิ่มครบ ไม่ใช่เวลาเริ่มตรวจหรือเวลาส่งชิ้นงานจริง; เวลา QC เริ่มเมื่อกด Start")
         st.caption("อัปเดตทุก 2 นาที · เวลาพร้อมตรวจเป็นเวลาคาดการณ์ตามคิวเครื่องและกะทำงาน เวลา QC เริ่มนับเมื่อกด Start")
         if st.button("🔄 อัปเดตคิวพร้อมตรวจ", key="qc_arrival_refresh_" + person):
             st.rerun(scope="app")
@@ -9537,6 +9555,7 @@ def flow_event_history_rows(events, steps):
         "stage_ready": "ส่งเข้าคิวเครื่องแล้ว — รอกด Start",
         "stage_planned": "บันทึก Process ในแผนคิวแล้ว",
         "create_route": "สร้างเส้นทางผลิตแล้ว",
+        "append_missing_production": "เพิ่มขั้นตอนผลิตที่ยังขาด — ให้ QC รอ",
         "production_finish": "ผลิตขั้นตอนนี้เสร็จแล้ว",
         "waiting_qc": "ส่งเข้าคิวตรวจรับ QC แล้ว",
         "qc_pass": "QC ตรวจผ่าน — งานจบสมบูรณ์",
@@ -9565,7 +9584,9 @@ def flow_event_history_rows(events, steps):
                 summary.append(f"ขั้นตอน: {name}")
             if machine:
                 summary.append(f"เครื่อง: {machine}")
-        elif kind in ("create_route", "plan_rework"):
+        elif kind in ("create_route", "plan_rework", "append_missing_production"):
+            if kind == "append_missing_production":
+                summary.extend(["ผู้บันทึก: " + safe_str(details.get("actor")), "เหตุผล: " + safe_str(details.get("reason"))])
             qty = safe_int(details.get("qty"), 0)
             if qty > 0:
                 summary.append(f"จำนวน {qty} ชิ้น")
@@ -9608,6 +9629,92 @@ def flow_event_history_rows(events, steps):
     return result
 
 
+TPC_MISSING_PRODUCTION_SQL = "begin;\nalter table public.tpc_department_work_orders\n add column if not exists qc_production_blocked boolean not null default false,\n add column if not exists qc_released_at timestamptz;\ncreate or replace function public.tpc_append_missing_production(p_data jsonb)\nreturns jsonb language plpgsql security definer set search_path='' set timezone='UTC' as $$\ndeclare c public.tpc_flow_cases; task public.tpc_department_work_orders;\n step_id uuid; seq integer; task_count integer; duration numeric; stage jsonb; step_ids jsonb:='[]'::jsonb;\nbegin\n if nullif(btrim(p_data->>'reason'),'') is null or nullif(btrim(p_data->>'actor'),'') is null\n    then raise exception 'Recorder and reason required'; end if;\n if jsonb_typeof(p_data->'stages') is distinct from 'array' then raise exception 'Stages required'; end if;\n if jsonb_array_length(p_data->'stages') not between 1 and 30 then raise exception 'Provide 1 to 30 missing stages'; end if;\n for stage in select value from jsonb_array_elements(p_data->'stages') loop\n  duration:=(stage->>'minutes')::numeric;\n  if nullif(btrim(stage->>'machine_name'),'') is null or nullif(btrim(stage->>'name'),'') is null or duration is null or duration<=0 or duration>100000 then raise exception 'Invalid production stage'; end if;\n end loop;\n select * into c from public.tpc_flow_cases where id=(p_data->>'case_id')::uuid for update;\n if not found or c.status is distinct from 'waiting_qc' or c.cycle is distinct from (p_data->>'expected_cycle')::integer\n  or c.plan_code is distinct from p_data->>'plan_code' or c.drawing_name is distinct from p_data->>'drawing_name' then\n  raise exception 'Case changed or QC already started; refresh and review'; end if;\n if c.cycle<>0 then raise exception 'This tool is for original production only; review rework routes separately'; end if;\n select * into task from public.tpc_department_work_orders where id=(p_data->>'task_id')::bigint for update;\n if not found or task.flow_case_id is distinct from c.id or task.flow_cycle is distinct from c.cycle\n  or task.department is distinct from 'QC' or task.status is distinct from '🟧 รอรับงาน'\n  or task.actual_start is not null or task.actual_finish is not null or task.qc_production_blocked then\n  raise exception 'Only untouched waiting QC can be deferred'; end if;\n select count(*) into task_count from public.tpc_department_work_orders\n  where flow_case_id=c.id and flow_cycle=c.cycle and department='QC';\n if task_count<>1 or exists(select 1 from public.tpc_flow_steps where case_id=c.id and cycle=c.cycle and finished_at is null)\n  then raise exception 'Route has unfinished work or ambiguous QC; stop and review'; end if;\n select coalesce(max(sequence),0)+1 into seq from public.tpc_flow_steps where case_id=c.id and cycle=c.cycle;\n if seq=1 then raise exception 'No completed production history found'; end if;\n update public.tpc_department_work_orders set qc_production_blocked=true where id=task.id;\n update public.tpc_flow_cases set status='producing',accepted_at=null where id=c.id;\n for stage in select value from jsonb_array_elements(p_data->'stages') loop\n  insert into public.tpc_flow_steps(case_id,cycle,sequence,name,machine_name,minutes,qty,placement,setup_minutes,basic_minutes,program_minutes)\n  values(c.id,c.cycle,seq,btrim(stage->>'name'),stage->>'machine_name',(stage->>'minutes')::numeric,c.qty,'append',0,0,(stage->>'minutes')::numeric) returning id into step_id;\n  step_ids:=step_ids||jsonb_build_array(step_id);\n  seq:=seq+1;\n end loop;\n perform public.tpc_flow_sync_case(c.id);\n insert into public.tpc_flow_events(case_id,cycle,event,details) values(c.id,c.cycle,'append_missing_production',\n  jsonb_build_object('qc_task_id',task.id,'step_ids',step_ids,'actor',p_data->>'actor','reason',p_data->>'reason',\n   'stages',p_data->'stages','original_qc',to_jsonb(task)));\n return jsonb_build_object('ok',true,'case_id',c.id,'step_ids',step_ids);\nend $$;\ncreate or replace function public.tpc_guard_deferred_qc()\nreturns trigger language plpgsql security definer set search_path='' as $$\nbegin\n if old.qc_production_blocked and not new.qc_production_blocked and (\n    not exists(select 1 from public.tpc_flow_cases where id=old.flow_case_id and cycle=old.flow_cycle and status='waiting_qc')\n    or exists(select 1 from public.tpc_flow_steps where case_id=old.flow_case_id and cycle=old.flow_cycle and finished_at is null)) then\n  raise exception 'Cannot release QC before all production steps finish'; end if;\n if (old.qc_production_blocked or new.qc_production_blocked) and\n    (new.status is distinct from '🟧 รอรับงาน' or new.actual_start is not null or new.actual_finish is not null) then\n  raise exception 'Production is incomplete; QC cannot Start or Finish yet'; end if;\n return new;\nend $$;\ndrop trigger if exists tpc_guard_deferred_qc on public.tpc_department_work_orders;\ncreate trigger tpc_guard_deferred_qc before update on public.tpc_department_work_orders\n for each row execute function public.tpc_guard_deferred_qc();\ncreate or replace function public.tpc_release_deferred_qc()\nreturns trigger language plpgsql security definer set search_path='' set timezone='UTC' as $$\nbegin\n if new.status='waiting_qc' and old.status is distinct from new.status and\n    not exists(select 1 from public.tpc_flow_steps where case_id=new.id and cycle=new.cycle and finished_at is null) then\n  update public.tpc_department_work_orders set qc_production_blocked=false,qc_released_at=clock_timestamp()\n   where flow_case_id=new.id and flow_cycle=new.cycle and qc_production_blocked\n     and status='🟧 รอรับงาน' and actual_start is null and actual_finish is null;\n end if;\n return new;\nend $$;\ndrop trigger if exists tpc_release_deferred_qc on public.tpc_flow_cases;\ncreate trigger tpc_release_deferred_qc after update on public.tpc_flow_cases\n for each row execute function public.tpc_release_deferred_qc();\nrevoke all on function public.tpc_append_missing_production(jsonb) from public,anon,authenticated;\ngrant execute on function public.tpc_append_missing_production(jsonb) to service_role;\nnotify pgrst,'reload schema';\ncommit;\n"
+
+
+def hide_deferred_qc_tasks(frame):
+    if not isinstance(frame, pd.DataFrame) or frame.empty or "qc_production_blocked" not in frame:
+        return frame
+    return frame.loc[~frame["qc_production_blocked"].fillna(False).astype(bool)].copy()
+
+
+def render_missing_production_controls(cases, prefix):
+    if st.session_state.get("user_role") != "admin":
+        return
+    with st.expander("➕ งานเก่าผลิตยังไม่ครบ — เพิ่มขั้นตอนผลิตต่อ / ให้ QC รอ"):
+        st.caption("ใช้กับการผลิตครั้งแรกที่ส่งเข้า QC ก่อนบันทึกขั้นตอนครบ และ QC ยังไม่ Start • เก็บขั้นตอนที่เสร็จ เวลาและต้นทุนเดิม ไม่บันทึกเป็น NG")
+        with st.expander("ติดตั้งเครื่องมือเพิ่มขั้นตอนผลิตครั้งแรก"):
+            st.download_button("ดาวน์โหลด SQL เพิ่มขั้นตอนผลิตที่ยังขาด", TPC_MISSING_PRODUCTION_SQL.encode("utf-8"),
+                               file_name="TPC_Missing_Production_Setup.sql", mime="text/plain", key=f"{prefix}_missing_sql")
+            st.caption("รัน SQL ใน Supabase SQL Editor หนึ่งครั้ง การติดตั้งยังไม่ย้ายงานหรือเปลี่ยนคิวใด")
+        if not st.checkbox("เปิดเลือก Drawing ที่ต้องผลิตต่อ", key=f"{prefix}_missing_open"):
+            return
+        candidates = [case for case in cases if case.get("status") == "waiting_qc" and safe_int(case.get("cycle")) == 0]
+        plan_col, search_col = tpc_filter_columns([1, 2])
+        with plan_col:
+            plan = st.selectbox("📌 แผนงาน", ["ทุกแผนงาน"] + sorted({safe_str(case.get("plan_code")) for case in candidates}), key=f"{prefix}_missing_plan")
+        with search_col:
+            search = st.text_input("🔍 ค้นหา Drawing", key=f"{prefix}_missing_search").strip().casefold()
+        candidates = [case for case in candidates if (plan == "ทุกแผนงาน" or case.get("plan_code") == plan)
+                      and search in safe_str(case.get("drawing_name")).casefold()]
+        if not candidates:
+            st.info("ไม่มีงานรอ QC ของการผลิตครั้งแรกตามตัวกรอง • งานที่เริ่มตรวจ ผ่าน หรืออยู่รอบแก้ไข ต้องตรวจสอบแยกก่อน")
+            return
+        lookup = {str(case["id"]): case for case in candidates}
+        selected_key = f"{prefix}_missing_case"
+        if st.session_state.get(selected_key) not in lookup:
+            st.session_state.pop(selected_key, None)
+        case_id = st.selectbox("เลือก Drawing ที่ต้องเพิ่มขั้นตอน", list(lookup), key=selected_key,
+            format_func=lambda key:f"{lookup[key]['plan_code']} | {lookup[key]['drawing_name']}")
+        case = lookup[case_id]
+        tasks = fetch_department_work_orders("QC")
+        if not isinstance(tasks,pd.DataFrame) or tasks.empty or "flow_case_id" not in tasks or "flow_cycle" not in tasks:
+            st.warning("ไม่พบใบตรวจ QC ที่เชื่อมกับเส้นทางผลิต กรุณาให้ผู้ดูแลตรวจข้อมูลก่อน")
+            return
+        matching = tasks[tasks["flow_case_id"].astype(str).eq(case_id) & pd.to_numeric(tasks["flow_cycle"],errors="coerce").eq(safe_int(case["cycle"]))]
+        if len(matching) != 1:
+            st.warning("ใบตรวจ QC ของรอบนี้ไม่ชัดเจน กรุณาตรวจข้อมูลก่อน")
+            return
+        task = matching.iloc[0]
+        if task.get("status") != "🟧 รอรับงาน" or first_valid_datetime(task.get("actual_start")) is not None or first_valid_datetime(task.get("actual_finish")) is not None or bool(task.get("qc_production_blocked", False)):
+            st.warning("QC เริ่มตรวจแล้วหรือสถานะเปลี่ยน ต้องตรวจสอบก่อนเพิ่มขั้นตอน ไม่แก้เวลาเดิมอัตโนมัติ")
+            return
+        st.warning(f"กำลังเพิ่มขั้นตอนผลิตต่อ: {case['plan_code']} / {case['drawing_name']} จำนวน {case['qty']} ชิ้น • QC จะรอจนผลิตครบ")
+        with st.form(f"{prefix}_missing_form_{case_id}_{case['cycle']}"):
+            actor = st.text_input("ชื่อผู้วางแผน / ผู้บันทึก")
+            reason = st.text_area("เหตุผลที่เพิ่มขั้นตอน", value="งานเก่าส่งเข้า QC ก่อนบันทึกขั้นตอนผลิตครบ")
+            st.caption("เพิ่มได้หลายขั้น เรียงจากบนลงล่าง • นาทีแผนเป็นเวลารวมของทุกชิ้นในขั้นนั้น • ต่อท้ายคิวเครื่องและรอกด Start")
+            default_machine = "No.12 มิลลิ่ง 1" if "No.12 มิลลิ่ง 1" in MACHINE_LIST else MACHINE_LIST[0]
+            frame = st.data_editor(pd.DataFrame([{"ขั้นตอน":"ขึ้นรูปงาน", "เครื่องจักร":default_machine, "นาทีแผน":180.0, "เข้าคิว":"ต่อท้ายคิว"}]),
+                hide_index=True, num_rows="dynamic", use_container_width=True,
+                key=f"{prefix}_missing_stages_{case_id}", column_config={
+                    "ขั้นตอน":st.column_config.TextColumn(required=True),
+                    "เครื่องจักร":st.column_config.SelectboxColumn(options=MACHINE_LIST,required=True),
+                    "นาทีแผน":st.column_config.NumberColumn(min_value=1,max_value=100000,required=True),
+                    "เข้าคิว":st.column_config.SelectboxColumn(options=["ต่อท้ายคิว"],required=True),
+                })
+            confirmed = st.checkbox("ตรวจ Drawing เครื่อง ขั้นตอน และเวลาแล้ว ยืนยันเพิ่มขั้นตอนผลิตต่อ และให้ QC รอ")
+            submitted = st.form_submit_button("บันทึกขั้นตอนที่ขาด และส่งเข้าคิวผลิตต่อ", type="primary")
+        if submitted:
+            if st.session_state.get("user_role") != "admin" or not confirmed or not actor.strip() or not reason.strip():
+                st.warning("ต้องใช้สิทธิ์ผู้ดูแล ระบุผู้บันทึก เหตุผล และติ๊กยืนยัน")
+                return
+            try:
+                stages = flow_validate_stages(frame)
+                payload = {"case_id":case_id, "expected_cycle":safe_int(case["cycle"]), "task_id":safe_int(task["id"]),
+                           "plan_code":case["plan_code"], "drawing_name":case["drawing_name"], "actor":actor.strip(), "reason":reason.strip(), "stages":stages}
+                response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_append_missing_production",
+                    headers=flow_api_headers(write=True), json={"p_data":payload}, timeout=25)
+                if response.status_code != 200 or response.json().get("ok") is not True:
+                    st.error("ยังเพิ่มขั้นตอนไม่สำเร็จ กรุณาตรวจการติดตั้ง SQL และรีเฟรชสถานะก่อนทำซ้ำ หาก QC เริ่มแล้วต้องตรวจสอบแยก")
+                    return
+                st.cache_data.clear()
+                st.session_state["_flow_notice"] = "เพิ่มขั้นตอนผลิตต่อแล้ว QC จะกลับเข้าคิวพร้อมตรวจเมื่อผลิตครบทุกขั้น"
+                st.rerun(scope="app")
+            except (ValueError,requests.RequestException) as exc:
+                st.warning("ยังยืนยันการเพิ่มขั้นตอนไม่ได้ กรุณารีเฟรชตรวจเส้นทางก่อนทำซ้ำ: " + safe_str(exc))
+
+
 @st.fragment
 def render_flow_center(jobs=None, *, admin=False, prefix="production"):
     if st.session_state.pop("_flow_notice", None):
@@ -9645,6 +9752,8 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                         file_name="TPC_Operator_QC_NG_Setup.sql", mime="text/plain", key=f"{prefix}_operator_ng_sql")
                     st.caption("รันใน Supabase SQL Editor หนึ่งครั้ง เพื่อเปิดแจ้ง NG บนเครื่อง / ส่งงานห้อง QC กลับแก้ไข การติดตั้งไม่เปลี่ยนผลตรวจเดิม")
             cases = fetch_flow_rows("tpc_flow_cases") or []
+            if admin:
+                render_missing_production_controls(cases, prefix)
             if not cases:
                 st.info("ยังไม่มี Drawing ที่เข้ากระบวนการตรวจรับ")
                 return
