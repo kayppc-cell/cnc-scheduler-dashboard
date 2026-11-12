@@ -9451,10 +9451,6 @@ def render_qc_pass_correction(accepted_cases, prefix):
         return
     with st.expander("↩️ แก้ผล QC ที่กดผ่านผิด → NG ส่งกลับแก้ไข"):
         st.caption("สำหรับผู้ดูแล: เก็บประวัติผลเดิมและเวลาเดิม ส่งงานไปรอผู้วางแผนจัดคิวแก้ไข ไม่เริ่มงานหรือเปิดเวลาผลิตเดิมใหม่")
-        with st.expander("ติดตั้ง / อัปเดตเครื่องมือแก้ผล QC"):
-            st.download_button("ดาวน์โหลด SQL ติดตั้งการแก้ผล QC", TPC_QC_CORRECTION_SQL.encode("utf-8"),
-                               file_name="TPC_QC_Correction_Setup.sql", mime="text/plain", key=f"{prefix}_qc_correction_sql")
-            st.caption("รัน SQL รุ่นนี้ใน Supabase SQL Editor หนึ่งครั้งเพื่อเปิดการแก้ผลพร้อมจัดคิว แม้เคยติดตั้งรุ่นก่อนแล้ว; การติดตั้งยังไม่แก้ผล QC ใด")
         if not st.checkbox("เปิดเลือกงานที่กด QC ผ่านผิด", key=f"{prefix}_qc_correction_open"):
             return
         plans = sorted({safe_str(c.get("plan_code")) for c in accepted_cases if safe_str(c.get("plan_code"))})
@@ -9643,10 +9639,6 @@ def render_missing_production_controls(cases, prefix):
         return
     with st.expander("➕ งานเก่าผลิตยังไม่ครบ — เพิ่มขั้นตอนผลิตต่อ / ให้ QC รอ"):
         st.caption("ใช้กับการผลิตครั้งแรกที่ส่งเข้า QC ก่อนบันทึกขั้นตอนครบ และ QC ยังไม่ Start • เก็บขั้นตอนที่เสร็จ เวลาและต้นทุนเดิม ไม่บันทึกเป็น NG")
-        with st.expander("ติดตั้งเครื่องมือเพิ่มขั้นตอนผลิตครั้งแรก"):
-            st.download_button("ดาวน์โหลด SQL เพิ่มขั้นตอนผลิตที่ยังขาด", TPC_MISSING_PRODUCTION_SQL.encode("utf-8"),
-                               file_name="TPC_Missing_Production_Setup.sql", mime="text/plain", key=f"{prefix}_missing_sql")
-            st.caption("รัน SQL ใน Supabase SQL Editor หนึ่งครั้ง การติดตั้งยังไม่ย้ายงานหรือเปลี่ยนคิวใด")
         if not st.checkbox("เปิดเลือก Drawing ที่ต้องผลิตต่อ", key=f"{prefix}_missing_open"):
             return
         candidates = [case for case in cases if case.get("status") == "waiting_qc" and safe_int(case.get("cycle")) == 0]
@@ -9715,6 +9707,23 @@ def render_missing_production_controls(cases, prefix):
                 st.warning("ยังยืนยันการเพิ่มขั้นตอนไม่ได้ กรุณารีเฟรชตรวจเส้นทางก่อนทำซ้ำ: " + safe_str(exc))
 
 
+def render_flow_installation_downloads(prefix):
+    if st.session_state.get("user_role") != "admin":
+        return
+    if not st.checkbox("แสดงไฟล์ติดตั้ง / อัปเดตระบบ (สำหรับผู้ดูแล)", key=f"{prefix}_show_installation", value=False):
+        return
+    st.caption("ใช้เฉพาะเมื่อติดตั้งครั้งแรก หรืออัปเดตตามคำแนะนำ ไม่ต้องรันซ้ำในการใช้งานประจำวัน การดาวน์โหลดไม่เปลี่ยนข้อมูลหรือคิวงาน")
+    packages = [
+        ("แก้ผล QC ผ่านที่กดผิด พร้อมจัดคิวแก้ไข", TPC_QC_CORRECTION_SQL, "TPC_QC_Correction_Setup.sql"),
+        ("แจ้ง NG สำหรับผู้ปฏิบัติงาน QC", TPC_OPERATOR_NG_SQL, "TPC_Operator_QC_NG_Setup.sql"),
+        ("เพิ่มขั้นตอนผลิตที่ยังขาด และให้ QC รอ", TPC_MISSING_PRODUCTION_SQL, "TPC_Missing_Production_Setup.sql"),
+    ]
+    for title, sql, filename in packages:
+        st.download_button("ดาวน์โหลด SQL — " + title, sql.encode("utf-8"), file_name=filename,
+                           mime="text/plain", key=f"{prefix}_install_{filename}")
+    st.caption("เปิดไฟล์ SQL แล้วนำข้อความไปรันใน Supabase SQL Editor ของ TPC เฉพาะเครื่องมือที่ต้องติดตั้งหรืออัปเดต")
+
+
 @st.fragment
 def render_flow_center(jobs=None, *, admin=False, prefix="production"):
     if st.session_state.pop("_flow_notice", None):
@@ -9735,7 +9744,7 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
             if enabled:
                 st.success("เปิดการส่ง QC อัตโนมัติแล้ว ตั้งแต่ " + flow_display_time(cfg.get("enabled_at")) + " (เวลาไทย)")
             if admin:
-                with st.expander("⚙️ เปิดใช้ / ตั้งผู้ตรวจรับเริ่มต้น", expanded=not enabled):
+                with st.expander("⚙️ ตั้งค่าระบบตรวจรับ / เครื่องมือผู้ดูแล", expanded=False):
                     with st.form(f"{prefix}_flow_settings"):
                         assigned = st.selectbox("ผู้รับผิดชอบ QC เริ่มต้น", ["รอจัดผู้ตรวจ QC"] + qc_names,
                                                index=(["รอจัดผู้ตรวจ QC"] + qc_names).index(cfg["qc_assignee"])
@@ -9746,11 +9755,7 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                     if enable and agree:
                         if flow_command("enable", {"assignee": assigned, "qc_minutes": qc_minutes}):
                             st.rerun()
-            if admin:
-                with st.expander("ติดตั้งฟังก์ชัน NG สำหรับผู้ปฏิบัติงาน QC"):
-                    st.download_button("ดาวน์โหลด SQL ผู้ปฏิบัติงาน NG", TPC_OPERATOR_NG_SQL.encode("utf-8"),
-                        file_name="TPC_Operator_QC_NG_Setup.sql", mime="text/plain", key=f"{prefix}_operator_ng_sql")
-                    st.caption("รันใน Supabase SQL Editor หนึ่งครั้ง เพื่อเปิดแจ้ง NG บนเครื่อง / ส่งงานห้อง QC กลับแก้ไข การติดตั้งไม่เปลี่ยนผลตรวจเดิม")
+                    render_flow_installation_downloads(prefix)
             cases = fetch_flow_rows("tpc_flow_cases") or []
             if admin:
                 render_missing_production_controls(cases, prefix)
