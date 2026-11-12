@@ -1439,23 +1439,27 @@ def tpc_filter_shortcuts(label, options, *, key=None, index=0, format_func=None,
 
 
 def render_dashboard_tool_menu(is_admin):
-    # Retain server-received draft values, excluding transient action events.
+    # Keep only known editable widgets. Never copy arbitrary session keys:
+    # hidden button keys may outlive their trigger metadata across reruns.
     from streamlit.runtime.scriptrunner import get_script_run_ctx
     from streamlit.errors import StreamlitAPIException
     ctx = get_script_run_ctx()
-    triggers = set()
+    editable_types = {"string_value", "int_value", "double_value", "bool_value",
+                      "string_array_value", "int_array_value", "double_array_value"}
     if ctx is not None:
-        triggers = {widget.id.split("-", 2)[-1] for widget in ctx.session_state.get_widget_states()
-                    if widget.WhichOneof("value") in ("trigger_value", "string_trigger_value", "chat_input_value", "json_trigger_value")}
-    for state_key in list(st.session_state):
-        if state_key in triggers or str(state_key).startswith(("FormSubmitter:", "dashboard_tool_")):
-            continue
-        value = st.session_state[state_key]
-        if not isinstance(value, dict):
+        for widget in ctx.session_state.get_widget_states():
+            if widget.WhichOneof("value") not in editable_types:
+                continue
+            state_key = widget.id.split("-", 2)[-1]
+            if state_key not in st.session_state:
+                continue
+            value = st.session_state[state_key]
+            if isinstance(value, dict):
+                continue
             try:
                 st.session_state[state_key] = value
             except StreamlitAPIException:
-                pass  # Widgets already rendered above the menu remain owned by Streamlit.
+                pass  # An already-rendered widget is still owned by Streamlit.
     labels = {
         "overview": "📊 ภาพรวมและต้นทุน",
         "create": "📝 สร้างใบงาน Production",
