@@ -9993,9 +9993,63 @@ def sort_calendar_preview_rows(rows):
                                         natural(row.get("เครื่อง")), natural(row.get("Drawing"))))
 
 
+def summarize_calendar_plan_risk(rows):
+    grouped = {}
+    fields = ("มีโอที เทียบวันส่ง", "ไม่มีโอที เทียบวันส่ง")
+    for row in rows:
+        plan = safe_str(row.get("แผน")).strip()
+        if plan:
+            grouped.setdefault(plan, []).append(row)
+    summaries = []
+    risk_sets = [set(), set()]
+    for plan, items in grouped.items():
+        entry = {"แผน": plan}
+        for index, field in enumerate(fields):
+            values = [item.get(field) for item in items]
+            count = values.count("เสี่ยงเลยวันส่ง")
+            if count:
+                risk_sets[index].add(plan)
+                entry[field] = "เสี่ยงเลยวันส่ง"
+            elif any(value != "อยู่ในกำหนด" for value in values):
+                entry[field] = "ข้อมูลไม่ครบ"
+            else:
+                entry[field] = "อยู่ในกำหนด"
+            entry[("คิวเสี่ยง มีโอที" if index == 0 else "คิวเสี่ยง ไม่มีโอที")] = count
+        summaries.append(entry)
+    return {"rows": sort_calendar_preview_rows(summaries), "with_ot": risk_sets[0], "without_ot": risk_sets[1],
+            "additional": risk_sets[1] - risk_sets[0], "total": len(grouped)}
+
+
+def style_calendar_plan_risk(frame, risk_summary):
+    risky = risk_summary["with_ot"] | risk_summary["without_ot"]
+    def colors(row):
+        styles = ["background-color:#fff3dc;color:#17263c" if safe_str(row.get("แผน")) in risky else "" for _ in row]
+        for i, (column, value) in enumerate(row.items()):
+            if column in ("มีโอที เทียบวันส่ง", "ไม่มีโอที เทียบวันส่ง"):
+                if value == "เสี่ยงเลยวันส่ง":
+                    styles[i] = "background-color:#ffd6d6;color:#9c1111;font-weight:bold"
+                elif value in ("ข้อมูลไม่ครบ", "ไม่มีข้อมูลเทียบ"):
+                    styles[i] = "background-color:#fff3b0;color:#644600"
+        return styles
+    return frame.style.apply(colors, axis=1)
+
+
 def build_calendar_preview_print_document(rows, shift_label, effective_day, printed_at):
     ordered = sort_calendar_preview_rows(rows)
-    table = pd.DataFrame(ordered).to_html(index=False, escape=True, na_rep="", border=0)
+    frame = pd.DataFrame(ordered)
+    is_comparison = "มีโอที เทียบวันส่ง" in frame and "ไม่มีโอที เทียบวันส่ง" in frame
+    risk_html = ""
+    if is_comparison:
+        risk = summarize_calendar_plan_risk(ordered)
+        # Escape all values before Styler emits HTML; reports can include user-entered Drawing names.
+        printable = frame.map(lambda value: html.escape("" if value is None else str(value)))
+        table = style_calendar_plan_risk(printable, risk).hide(axis="index").to_html()
+        summary_frame = pd.DataFrame(risk["rows"])
+        summary_html = style_calendar_plan_risk(summary_frame.map(lambda value: html.escape(str(value))), risk).hide(axis="index").to_html() if not summary_frame.empty else ""
+        risk_html = f"<h2>สรุปแผนเสี่ยง เทียบสองกะ</h2><p>จาก {risk['total']} แผน | มีโอทีเสี่ยง {len(risk['with_ot'])} แผน | ไม่มีโอทีเสี่ยง {len(risk['without_ot'])} แผน | เสี่ยงเพิ่มเมื่อไม่มีโอที {len(risk['additional'])} แผน</p>" + summary_html
+        risk_html += "<p>นับแผนไม่ซ้ำ: มีอย่างน้อย 1 คิวคาดจบเลยวันส่งจึงถือว่าเสี่ยง; ข้อมูลไม่ครบไม่ถือว่าอยู่ในกำหนด สีพื้นส้มระบุแผนเสี่ยง สีแดงระบุกะที่เสี่ยง</p><h2>รายละเอียดคิวงาน</h2>"
+    else:
+        table = frame.to_html(index=False, escape=True, na_rep="", border=0)
     esc = lambda value: html.escape(str(value))
     return f"""<!doctype html><html lang="th"><meta charset="utf-8"><title>TPC - ผลกระทบการเปลี่ยนกะ</title>
     <style>@page{{size:A4 landscape;margin:10mm}}body{{font-family:Tahoma,'Angsana New',sans-serif;color:#111;font-size:11px}}
@@ -10005,7 +10059,7 @@ def build_calendar_preview_print_document(rows, shift_label, effective_day, prin
     <h1>ตัวอย่างผลกระทบจากการเปลี่ยนกะโรงงาน</h1><p>กะที่เสนอ: {esc(shift_label)} | วันเริ่มใช้: {esc(effective_day)} เวลาไทย 00:00 น.<br>
     พิมพ์เมื่อ {esc(printed_at)} | {len(ordered):,} รายการ | เรียงตามแผน เครื่อง และ Drawing</p>
     <p>รายงานนี้เป็นตัวอย่างก่อนบันทึก ไม่ใช่การยืนยันเปลี่ยนกะ เวลาจบเป็นค่าคาดการณ์จากคิวปัจจุบัน วันส่งและประวัติงานที่เสร็จแล้วคงเดิม</p>
-    {table}</body></html>"""
+    {risk_html}{table}</body></html>"""
 
 
 def render_calendar_preview_print_button(rows, shift_label, effective_day):
@@ -10129,7 +10183,20 @@ def render_work_calendar_admin(jobs):
         st.markdown("#### เปรียบเทียบกะมีโอที กับกะไม่มีโอที")
         st.caption("กะมีโอที: จันทร์-ศุกร์ถึง 20:00 น. เสาร์ถึง 17:00 น. | กะไม่มีโอที: จันทร์-ศุกร์ถึง 17:00 น. หยุดเสาร์-อาทิตย์ • ใช้ช่วงพักตามปฏิทินโรงงาน")
         if comparison_rows:
-            st.dataframe(pd.DataFrame(comparison_rows), hide_index=True, use_container_width=True)
+            risk = summarize_calendar_plan_risk(comparison_rows)
+            metric_ot, metric_no, metric_extra = st.columns(3)
+            metric_ot.metric("แผนเสี่ยง - มีโอที", f"{len(risk['with_ot'])} แผน")
+            metric_no.metric("แผนเสี่ยง - ไม่มีโอที", f"{len(risk['without_ot'])} แผน")
+            metric_extra.metric("เสี่ยงเพิ่มเมื่อไม่มีโอที", f"{len(risk['additional'])} แผน")
+            st.caption(f"นับแผนไม่ซ้ำจาก {risk['total']} แผนในชุดคิวที่ยังไม่เสร็จ: มีอย่างน้อย 1 คิวคาดจบเลยวันส่งถือว่าเสี่ยง ข้อมูลไม่ครบไม่ถือว่าอยู่ในกำหนด")
+            st.markdown("**สรุปรายแผน**")
+            if risk["rows"]:
+                st.dataframe(style_calendar_plan_risk(pd.DataFrame(risk["rows"]), risk), hide_index=True, use_container_width=True)
+            if risk["additional"]:
+                st.warning("แผนที่เสี่ยงเพิ่มเมื่อไม่มีโอที: " + ", ".join(sorted(risk["additional"])))
+            st.caption("พื้นส้ม = แผนเสี่ยงในอย่างน้อยหนึ่งกะ | ช่องแดง = กะที่เสี่ยง | ช่องเหลือง = ข้อมูลไม่ครบ")
+            st.markdown("**รายละเอียดคิวงาน**")
+            st.dataframe(style_calendar_plan_risk(pd.DataFrame(comparison_rows), risk), hide_index=True, use_container_width=True)
             ot_late = sum(row["มีโอที เทียบวันส่ง"] == "เสี่ยงเลยวันส่ง" for row in comparison_rows)
             no_late = sum(row["ไม่มีโอที เทียบวันส่ง"] == "เสี่ยงเลยวันส่ง" for row in comparison_rows)
             st.caption(f"เปรียบเทียบ {len(comparison_rows)} คิวที่ยังไม่เสร็จ • เสี่ยงเลยวันส่ง: มีโอที {ot_late} คิว / ไม่มีโอที {no_late} คิว • จำนวนนี้เป็นคิว ไม่ใช่จำนวน Drawing ที่ไม่ซ้ำ")
