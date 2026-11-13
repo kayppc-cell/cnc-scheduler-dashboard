@@ -3563,6 +3563,47 @@ def render_machine_activity_dashboard(calc_df):
             st.markdown("  \n".join(move_text))
 
 
+def build_plan_drawing_status_breakdown(plan_jobs, cases):
+    labels = ["รอผลิต", "กำลังผลิต", "พักงาน", "ผลิตครบ รอ/กำลังตรวจ QC", "รอ/กำลังแก้ไข", "ข้อมูลต้องตรวจสอบ", "จบแล้ว"]
+    counts = dict.fromkeys(labels, 0)
+    groups = {}
+    for index, row in plan_jobs.iterrows():
+        if "จ้างภายนอก" in safe_str(row.get("สถานะงาน")):
+            continue
+        name = safe_str(row.get("ชื่อ Drawing.", row.get("Drawing", row.get("drawing_name"))))
+        key = normalize_filter_key(name) or f"__row_{index}"
+        groups.setdefault(key, []).append(row)
+    output = []
+    for entries in groups.values():
+        unfinished = [row for row in entries if not ("เสร็จสิ้น" in safe_str(row.get("สถานะงาน")) and first_valid_datetime(row.get("เสร็จจริง",row.get("actual_finish"))) is not None)]
+        linked = {safe_str(row.get("flow_case_id")) for row in entries if safe_str(row.get("flow_case_id")) not in ("", "None", "nan")}
+        states = {cases.get(case_id) for case_id in linked}
+        if None in states:
+            label = "ข้อมูลต้องตรวจสอบ"
+        elif states & {"rework_planning", "reworking"}:
+            label = "รอ/กำลังแก้ไข"
+        elif not unfinished:
+            label = "จบแล้ว" if not linked or states == {"accepted"} else ("ผลิตครบ รอ/กำลังตรวจ QC" if states == {"waiting_qc"} else "ข้อมูลต้องตรวจสอบ")
+        elif states & {"accepted", "waiting_qc"}:
+            label = "ข้อมูลต้องตรวจสอบ"
+        elif any("พักงาน" in safe_str(row.get("สถานะงาน")) or "รอวัสดุ" in safe_str(row.get("สถานะงาน")) for row in unfinished):
+            label = "พักงาน"
+        elif any("กำลังผลิต" in safe_str(row.get("สถานะงาน")) for row in unfinished):
+            label = "กำลังผลิต"
+        elif all("รอคิว" in safe_str(row.get("สถานะงาน")) for row in unfinished):
+            label = "รอผลิต"
+        else:
+            label = "ข้อมูลต้องตรวจสอบ"
+        counts[label] += 1
+        first = entries[0]
+        output.append({"แผนงาน":safe_str(first.get("แผนงาน")), "Drawing":safe_str(first.get("ชื่อ Drawing.",first.get("Drawing"))),
+                       "สถานะ Drawing":label, "คิวผลิตที่ยังไม่เสร็จ":len(unfinished),
+                       "ID คิวผลิต":" / ".join(str(safe_int(row.get("ID"))) for row in entries),
+                       "สถานะเส้นทาง/QC":" / ".join(sorted(state for state in states if state)) if linked else "งานเดิม ไม่เชื่อมเส้นทาง QC"})
+    output.sort(key=lambda row:(row["สถานะ Drawing"]=="จบแล้ว", normalize_filter_key(row["Drawing"])))
+    return {"counts":counts, "rows":output, "remaining":sum(count for label,count in counts.items() if label != "จบแล้ว")}
+
+
 def calculate_plan_drawing_progress(plan_jobs):
     """สรุปความคืบหน้าระดับ Drawing โดย Drawing จะเสร็จเมื่อทุก Step เสร็จสิ้นแล้ว"""
     if plan_jobs is None or plan_jobs.empty:
@@ -3898,6 +3939,13 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         return f"{value.day} {thai_months_short[value.month - 1]}"
 
     rows, gantt_rows = [], []
+    drawing_status_by_plan = {}
+    report_cases = {}
+    if calc_df.get("flow_case_id", pd.Series(dtype=object)).notna().any():
+        try:
+            report_cases = {safe_str(case["id"]):case.get("status") for case in (fetch_flow_rows("tpc_flow_cases") or [])}
+        except (ValueError, requests.RequestException):
+            pass  # Missing route/QC data remains explicitly unconfirmed.
     project_now = get_bangkok_now().replace(tzinfo=None)
     for _, master in master_df.iterrows():
         code = safe_str(master["plan_code"])
@@ -3906,6 +3954,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             calc_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(code)
         ].copy() if "แผนงาน" in calc_df.columns else pd.DataFrame()
         drawing_progress = calculate_plan_drawing_progress(all_plan_jobs)
+        drawing_status_by_plan[normalize_filter_key(code)] = build_plan_drawing_status_breakdown(all_plan_jobs, report_cases)
         outsourced_plan_jobs = all_plan_jobs[
             all_plan_jobs.get("สถานะงาน", pd.Series(index=all_plan_jobs.index, dtype=str))
             .astype(str).str.contains("จ้างภายนอก", na=False)
@@ -4173,14 +4222,20 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             risk_drawing_item = safe_str(item.get("Drawing เสี่ยง"), "-")
             risk_machine_item = safe_str(item.get("เครื่องเสี่ยง"), "-")
             status_item = safe_str(item.get("สถานะ"), "")
+            finish_item = first_valid_datetime(item.get("จบผลิต"))
+            due_item = first_valid_datetime(item.get("สิ้นสุด Production"))
+            calendar_hours_item = max(0.0, (finish_item-due_item).total_seconds()/3600.0) if finish_item and due_item else None
+            timing_text = (f"กำหนดจบผลิต {format_thai_datetime(due_item)} | คาดจบผลิต {format_thai_datetime(finish_item)} | "
+                           + (f"เลยกำหนด {calendar_hours_item:,.1f} ชั่วโมงปฏิทิน / {late_hours_item:,.1f} ชั่วโมงทำงาน" if calendar_hours_item is not None else "ข้อมูลเวลาไม่ครบ"))
+
             if late_hours_item > 0:
                 executive_issues.append({
                     "plan_code": plan_code,
                     "score": 300000 + late_hours_item * 100 + delayed_count_item,
                     "level": "critical",
                     "problem": f"แผน {plan_code} คาดว่าจะเสร็จช้ากว่ากำหนด Production {late_hours_item:,.1f} ชั่วโมงทำงาน",
-                    "cause": f"เหลือ Drawing {remaining_item} รายการ ({remaining_pct_item:,.1f}%) ที่ต้องติดตาม ได้แก่ {risk_drawing_item} | เครื่องที่ต้องติดตาม: {risk_machine_item}",
-                    "impact": f"หากคิวงานยังเป็นไปตามแผนปัจจุบัน คาดว่าจะส่งงานช้ากว่ากำหนด {late_hours_item:,.1f} ชั่วโมงทำงาน",
+                    "cause": f"Drawing ที่ยังไม่จบรวมผลิตและ QC {remaining_item} รายการ ({remaining_pct_item:,.1f}%) | Drawing เสี่ยงในคิวผลิต ได้แก่ {risk_drawing_item} | เครื่องที่ต้องติดตาม: {risk_machine_item}",
+                    "impact": timing_text + " | เป็นเวลาจบผลิต ยังไม่รวมระยะเวลาตรวจ QC หรือการส่งมอบจริง",
                     "decision": f"ตรวจความพร้อมของ {risk_drawing_item}; พิจารณาปรับลำดับคิว ย้ายไปเครื่องที่รองรับได้ เพิ่ม OT หรือจ้างภายนอก",
                 })
             elif delayed_count_item > 0:
@@ -4218,6 +4273,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         evidence_jobs_by_id = {safe_int(row.get("ID")): row for row in calc_df.to_dict("records") if safe_int(row.get("ID")) > 0}
         evidence_due_by_plan = {normalize_filter_key(row.get("plan_code")): first_valid_datetime(row.get("customer_due")) for row in production_form_masters.to_dict("records")}
         for issue in executive_issues[:5]:
+            issue["drawing_breakdown"] = drawing_status_by_plan.get(normalize_filter_key(issue["plan_code"]), {})
             issue["evidence_summary"], issue["evidence_rows"] = build_project_delay_evidence(
                 evidence_by_plan.get(normalize_filter_key(issue["plan_code"]), []),
                 evidence_jobs_by_id, machine_sequences, project_now, evidence_due_by_plan.get(normalize_filter_key(issue["plan_code"])),
@@ -4373,6 +4429,19 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             )
             with st.expander(f"🔎 หลักฐานราย Drawing / Step — แผน {issue['plan_code']}", expanded=False):
                 st.caption("แสดงข้อมูลคิวและสถานะที่บันทึกไว้ แต่ยังระบุสาเหตุที่แท้จริงไม่ได้ เช่น เครื่องเสีย ขาดคน หรือรอวัสดุ ต้องมีข้อมูลยืนยันเพิ่มเติม; งานเดียวกันอาจอยู่ในหลายกลุ่ม และเวลารออาจซ้อนกัน จึงไม่ควรนำจำนวนงานหรือเวลามาบวกเป็นยอดรวม")
+                breakdown = issue.get("drawing_breakdown", {})
+                counts = breakdown.get("counts", {})
+                if counts:
+                    st.markdown("**สถานะ Drawing คงเหลือ (นับแต่ละ Drawing เพียงครั้งเดียว)**")
+                    st.write(" | ".join(f"{label}: {count} Drawing" for label,count in counts.items() if label != "จบแล้ว"))
+                    st.caption("ยอดด้านบนรวมผลิตและ QC แต่ตารางคิวผลิตด้านล่างนับเป็นคิว/Step จึงอาจมีจำนวนต่างกัน; รอ/กำลังแก้ไขแยกจากงานผลิตปกติ ข้อมูลที่ขาดหรือขัดกันไม่เดาสถานะ")
+                    if st.checkbox("แสดงรายการ Drawing คงเหลือ รวมสถานะ QC", key=f"project_drawing_breakdown_{normalize_filter_key(issue['plan_code'])}"):
+                        pending_drawings = [row for row in breakdown.get("rows", []) if row["สถานะ Drawing"] != "จบแล้ว"]
+                        if pending_drawings:
+                            st.dataframe(pd.DataFrame(pending_drawings), hide_index=True, use_container_width=True)
+                            render_delay_evidence_print_button(pending_drawings, issue["plan_code"])
+                        else:
+                            st.info("ไม่มี Drawing คงเหลือในข้อมูลชุดนี้")
                 evidence_rows = issue.get("evidence_rows", [])
                 if evidence_rows and st.checkbox("แสดงตารางข้อมูลงาน", key=f"project_delay_evidence_{normalize_filter_key(issue['plan_code'])}"):
                     st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
