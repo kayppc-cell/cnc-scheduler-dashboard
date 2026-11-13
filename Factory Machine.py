@@ -3596,15 +3596,22 @@ def build_plan_drawing_status_breakdown(plan_jobs, cases):
             label = "ข้อมูลต้องตรวจสอบ"
         counts[label] += 1
         first = entries[0]
+        def describe_step(row):
+            return f"ID {safe_int(row.get('ID'))} | {safe_str(row.get('เลือกเครื่องจักร'))} | {safe_str(row.get('ขั้นตอน (Step)'), 'ไม่ระบุ Step')} | {safe_str(row.get('สถานะงาน'))}"
+        finished_entries = [row for row in entries if all(row is not pending for pending in unfinished)]
         output.append({"แผนงาน":safe_str(first.get("แผนงาน")), "Drawing":safe_str(first.get("ชื่อ Drawing.",first.get("Drawing"))),
                        "สถานะ Drawing":label, "คิวผลิตที่ยังไม่เสร็จ":len(unfinished),
-                       "ID คิวผลิต":" / ".join(str(safe_int(row.get("ID"))) for row in entries),
+                       "ขั้นตอนที่ยังไม่เสร็จ":" ; ".join(describe_step(row) for row in unfinished),
+                       "ขั้นตอนที่เสร็จแล้ว":" ; ".join(describe_step(row) for row in finished_entries),
+                       "เครื่องของคิวที่ยังไม่เสร็จ":" / ".join(dict.fromkeys(safe_str(row.get("เลือกเครื่องจักร")) for row in unfinished)),
+                       "ID คิวที่ยังไม่เสร็จ":" / ".join(str(safe_int(row.get("ID"))) for row in unfinished),
+                       "ID คิวผลิตทั้งหมด (รวมประวัติ)":" / ".join(str(safe_int(row.get("ID"))) for row in entries),
                        "สถานะเส้นทาง/QC":" / ".join(sorted(state for state in states if state)) if linked else "งานเดิม ไม่เชื่อมเส้นทาง QC"})
     output.sort(key=lambda row:(row["สถานะ Drawing"]=="จบแล้ว", normalize_filter_key(row["Drawing"])))
     return {"counts":counts, "rows":output, "remaining":sum(count for label,count in counts.items() if label != "จบแล้ว")}
 
 
-def calculate_plan_drawing_progress(plan_jobs):
+def calculate_plan_drawing_progress(plan_jobs, case_statuses=None):
     """สรุปความคืบหน้าระดับ Drawing โดย Drawing จะเสร็จเมื่อทุก Step เสร็จสิ้นแล้ว"""
     if plan_jobs is None or plan_jobs.empty:
         return {
@@ -3636,8 +3643,8 @@ def calculate_plan_drawing_progress(plan_jobs):
     )
     status_column = "สถานะงาน" if "สถานะงาน" in plan_jobs.columns else None
     linked_cases = set(plan_jobs.get("flow_case_id", pd.Series(dtype=str)).dropna().astype(str))
-    acceptance = {}
-    if linked_cases:
+    acceptance = dict(case_statuses) if case_statuses is not None else {}
+    if linked_cases and case_statuses is None:
         try:
             acceptance = {case["id"]: case["status"] for case in (fetch_flow_rows("tpc_flow_cases") or [])}
         except (ValueError, requests.RequestException):
@@ -3680,6 +3687,35 @@ def split_project_department_drawings(breakdown):
     return groups
 
 
+def build_project_queue_audit(plan_rows, production_due, include_finished=False):
+    output = []
+    for row in plan_rows:
+        status = safe_str(row.get("สถานะงาน"))
+        if ("เสร็จสิ้น" in status and not include_finished) or "จ้างภายนอก" in status:
+            continue
+        finish = first_valid_datetime(row.get("_finish"))
+        start = first_valid_datetime(row.get("_start"))
+        actual_start = first_valid_datetime(row.get("เริ่มจริง"))
+        actual_finish = first_valid_datetime(row.get("เสร็จจริง"))
+        assessment = "ข้อมูลเวลาไม่ครบ" if finish is None or production_due is None else ("คิวนี้คาดจบหลัง Production" if finish > production_due else "คิวนี้คาดจบในกรอบ Production")
+        if "เสร็จสิ้น" in status and actual_finish is not None:
+            assessment = "ขั้นตอนนี้เสร็จจริงแล้ว ไม่ใช่คิวรอผลิต"
+        elif actual_finish is not None:
+            assessment = "สถานะกับ Finish จริงขัดกัน ต้องตรวจสอบ"
+        elif "เสร็จสิ้น" in status:
+            assessment = "สถานะเสร็จแต่ไม่มี Finish จริง ต้องตรวจสอบ"
+        output.append({"ID":safe_int(row.get("ID")),"แผนงาน":safe_str(row.get("แผนงาน")),"Drawing":safe_str(row.get("ชื่อ Drawing.")),
+                       "เครื่อง":safe_str(row.get("เลือกเครื่องจักร")),"Step":safe_str(row.get("ขั้นตอน (Step)")),"สถานะที่บันทึกจริง":status,
+                       "Start จริง":format_thai_datetime(actual_start) if actual_start else "ยังไม่ Start",
+                       "Finish จริง":format_thai_datetime(actual_finish) if actual_finish else "ยังไม่ Finish",
+                       "เริ่มคาดการณ์ตามคิว":format_thai_datetime(start) if start else "ไม่มีข้อมูล",
+                       "จบคาดการณ์ตามคิว":format_thai_datetime(finish) if finish else "ไม่มีข้อมูล",
+                       "กรอบจบ Production":format_thai_datetime(production_due) if production_due else "ไม่มีข้อมูล",
+                       "ผลประเมินเฉพาะคิวนี้":assessment})
+    ranks = {name:i for i,name in enumerate(MACHINE_LIST)}
+    return sorted(output,key=lambda row:(ranks.get(row["เครื่อง"],len(ranks)),row["ID"]))
+
+
 def render_project_department_drawings(breakdown, evidence_rows, plan_code):
     groups = split_project_department_drawings(breakdown)
     key = normalize_filter_key(plan_code)
@@ -3687,6 +3723,7 @@ def render_project_department_drawings(breakdown, evidence_rows, plan_code):
     st.markdown(f"**ฝ่ายผลิต - คงเหลือ {len(groups['production'])} Drawing**")
     st.caption(" | ".join(f"{label}: {counts.get(label,0)} Drawing" for label in ("รอผลิต", "กำลังผลิต", "พักงาน", "รอ/กำลังแก้ไข")))
     st.caption("รวมงานแก้ไขที่กลับมาฝ่ายผลิต นับ Drawing ไม่ซ้ำ; รายละเอียดคิว/Step อาจมากกว่าจำนวน Drawing")
+    st.caption("ชื่อ Drawing ที่ลงท้าย Welding ไม่ใช่สถานะงานเชื่อม ให้ดูเครื่องและ Step ที่ยังไม่เสร็จ; ขั้นตอนเชื่อมที่เสร็จแล้วจะแสดงแยกจากขั้น CNC หรือขั้นถัดไป")
     if groups["production"]:
         if st.checkbox("แสดง Drawing ของฝ่ายผลิต", key=f"project_production_drawings_{key}"):
             frame = pd.DataFrame(groups["production"]).drop(columns=["สถานะเส้นทาง/QC"], errors="ignore")
@@ -3988,6 +4025,11 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         else:
             st.markdown("### 🗓️ แผนงาน Production และ Project Master Gantt")
             st.caption("กรอบเวลา Production เป็น Baseline หลัก ส่วนแท่งแผนผลิตรวมคำนวณจาก Drawing และ Step ในตารางสั่งผลิต")
+    if not chart_only and st.button("อัปเดตข้อมูลรายงานจากระบบ",key="project_refresh_report_snapshot"):
+        st.cache_data.clear()
+        st.rerun(scope="app")
+    if not chart_only:
+        st.caption("เวลาประเมินรายงาน: " + get_bangkok_now().strftime("%d/%m/%Y %H:%M:%S") + " | ใช้ข้อมูลที่โหลดในรอบนี้ กดอัปเดตเพื่ออ่านใหม่")
     master_df, table_ready = fetch_plan_masters()
     if not table_ready:
         st.error("ยังไม่พบตาราง cnc_plan_master กรุณารันไฟล์ create_cnc_plan_master.sql ใน Supabase SQL Editor ก่อนใช้งานครั้งแรก")
@@ -4132,7 +4174,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         all_plan_jobs = calc_df[
             calc_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(code)
         ].copy() if "แผนงาน" in calc_df.columns else pd.DataFrame()
-        drawing_progress = calculate_plan_drawing_progress(all_plan_jobs)
+        drawing_progress = calculate_plan_drawing_progress(all_plan_jobs, case_statuses=report_cases)
         drawing_status_by_plan[normalize_filter_key(code)] = build_plan_drawing_status_breakdown(all_plan_jobs, report_cases)
         outsourced_plan_jobs = all_plan_jobs[
             all_plan_jobs.get("สถานะงาน", pd.Series(index=all_plan_jobs.index, dtype=str))
@@ -4170,7 +4212,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             lambda v: v is not None and not pd.isna(v) and customer_due is not None and v > customer_due
         ).astype(bool)
         risky = sub.loc[risky_mask].copy()
-        risky_drawings_list = risky.get("ชื่อ Drawing.", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(4).tolist()
+        risky_drawings_list = [f"{safe_str(row.get('ชื่อ Drawing.'))} [ID {safe_int(row.get('ID'))} | {safe_str(row.get('เลือกเครื่องจักร'))} | {safe_str(row.get('ขั้นตอน (Step)'))}]" for _,row in risky.head(4).iterrows()]
         risky_drawings = ", ".join(list(dict.fromkeys(risky_drawings_list))[:4])
         risky_machines_list = risky.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna().astype(str).drop_duplicates().head(3).tolist()
         risky_machines = ", ".join(list(dict.fromkeys(risky_machines_list))[:3])
@@ -4453,6 +4495,14 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         evidence_due_by_plan = {normalize_filter_key(row.get("plan_code")): first_valid_datetime(row.get("customer_due")) for row in production_form_masters.to_dict("records")}
         for issue in executive_issues[:5]:
             issue["drawing_breakdown"] = drawing_status_by_plan.get(normalize_filter_key(issue["plan_code"]), {})
+            audit_plan_rows = [row for row in calc_df.to_dict("records") if normalize_filter_key(row.get("แผนงาน")) == normalize_filter_key(issue["plan_code"])]
+            issue["queue_audit"] = build_project_queue_audit(audit_plan_rows, evidence_due_by_plan.get(normalize_filter_key(issue["plan_code"])), include_finished=True)
+            plan_summary = summary_view[summary_view["แผนงาน"].map(normalize_filter_key).eq(normalize_filter_key(issue["plan_code"]))]
+            issue["report_consistent"] = bool(not plan_summary.empty
+                and issue["drawing_breakdown"].get("remaining") == safe_int(plan_summary.iloc[0].get("Drawing คงเหลือ"))
+                and not issue["drawing_breakdown"].get("counts", {}).get("ข้อมูลต้องตรวจสอบ", 0)
+                and not any(row["ผลประเมินเฉพาะคิวนี้"] in ("ข้อมูลเวลาไม่ครบ", "สถานะกับ Finish จริงขัดกัน ต้องตรวจสอบ", "สถานะเสร็จแต่ไม่มี Finish จริง ต้องตรวจสอบ") for row in issue["queue_audit"]))
+
             issue["evidence_summary"], issue["evidence_rows"] = build_project_delay_evidence(
                 evidence_by_plan.get(normalize_filter_key(issue["plan_code"]), []),
                 evidence_jobs_by_id, machine_sequences, project_now, evidence_due_by_plan.get(normalize_filter_key(issue["plan_code"])),
@@ -4599,7 +4649,15 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         st.markdown("#### 🚨 ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ")
         if is_admin and not read_only:
             render_plan_rescue_simulator(calc_df, production_form_masters, summary_view)
+        st.caption("ผลประเมินระดับแผนรวมทุกเครื่องและ Drawing ไม่ใช่ผลของเครื่องที่เปิดดูเพียงเครื่องเดียว; สถานะรอผลิต/กำลังผลิตเป็นข้อมูลจริง ส่วนวันจบและความเสี่ยงเป็นค่าคาดการณ์")
         for issue_no, issue in enumerate(executive_issues[:5], start=1):
+            if not issue.get("report_consistent", False):
+                st.error(f"แผน {issue['plan_code']}: ข้อมูลสถานะ/เวลายังไม่ครบ ขัดกัน หรือยอดสรุปไม่ตรง ยังไม่ยืนยันข้อเสนอการตัดสินใจ กรุณาอัปเดตและตรวจข้อมูล")
+                with st.expander(f"ตรวจข้อมูลแผน {issue['plan_code']} ก่อนสรุป"):
+                    render_project_department_drawings(issue.get("drawing_breakdown", {}),issue.get("evidence_rows", []),issue["plan_code"])
+                    if issue.get("queue_audit"):
+                        st.dataframe(pd.DataFrame(issue["queue_audit"]),hide_index=True,use_container_width=True)
+                continue
             issue_box = st.error if issue["level"] == "critical" else st.warning
             issue_box(
                 f"**{issue_no}. {issue['problem']}**  \n"
@@ -4611,6 +4669,13 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             with st.expander(f"🔎 หลักฐานราย Drawing / Step — แผน {issue['plan_code']}", expanded=False):
                 st.caption("แสดงข้อมูลคิวและสถานะที่บันทึกไว้ แต่ยังระบุสาเหตุที่แท้จริงไม่ได้ เช่น เครื่องเสีย ขาดคน หรือรอวัสดุ ต้องมีข้อมูลยืนยันเพิ่มเติม; งานเดียวกันอาจอยู่ในหลายกลุ่ม และเวลารออาจซ้อนกัน จึงไม่ควรนำจำนวนงานหรือเวลามาบวกเป็นยอดรวม")
                 render_project_department_drawings(issue.get("drawing_breakdown", {}), issue.get("evidence_rows", []), issue["plan_code"])
+                if st.checkbox("ตรวจเทียบสถานะกับหน้าเครื่อง / ใบจ่ายคิว ด้วย ID",key=f"project_queue_audit_{normalize_filter_key(issue['plan_code'])}"):
+                    audit = issue.get("queue_audit", [])
+                    if audit:
+                        st.dataframe(pd.DataFrame(audit),hide_index=True,use_container_width=True)
+                        st.caption("เทียบ ID + Drawing + เครื่องเดียวกัน: คิวนี้อยู่ในกรอบได้ แม้ทั้งแผนล่าช้าจากคิวอื่น เวลาในภาพที่เปิดคนละรอบอาจต่างกันตามการอัปเดตคิว")
+                        render_delay_evidence_print_button(audit, f"{issue['plan_code']} - ตรวจเทียบรายคิว")
+
 
 
     else:
@@ -4732,7 +4797,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         f"<div><strong>ผลกระทบ:</strong> {html.escape(issue['impact'])}</div>"
         f"<div><strong>ข้อเสนอ:</strong> {html.escape(issue['decision'])}</div>"
         "</div>"
-        for issue_no, issue in enumerate(executive_issues[:5], start=1)
+        for issue_no, issue in enumerate(executive_issues[:5], start=1) if issue.get("report_consistent", False)
     ) or "<div class='exec-ok'>ไม่พบปัญหาที่ต้องเร่งตัดสินใจ</div>"
     project_pdf_payload = json.dumps({
         "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
