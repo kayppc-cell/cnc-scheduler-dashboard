@@ -3669,6 +3669,50 @@ def calculate_plan_drawing_progress(plan_jobs):
     }
 
 
+def split_project_department_drawings(breakdown):
+    groups = {"production":[], "qc":[], "review":[]}
+    for row in breakdown.get("rows", []):
+        status = row.get("สถานะ Drawing")
+        if status == "จบแล้ว":
+            continue
+        group = "qc" if status == "ผลิตครบ รอ/กำลังตรวจ QC" else ("production" if status in ("รอผลิต", "กำลังผลิต", "พักงาน", "รอ/กำลังแก้ไข") else "review")
+        groups[group].append(dict(row))
+    return groups
+
+
+def render_project_department_drawings(breakdown, evidence_rows, plan_code):
+    groups = split_project_department_drawings(breakdown)
+    key = normalize_filter_key(plan_code)
+    counts = breakdown.get("counts", {})
+    st.markdown(f"**ฝ่ายผลิต - คงเหลือ {len(groups['production'])} Drawing**")
+    st.caption(" | ".join(f"{label}: {counts.get(label,0)} Drawing" for label in ("รอผลิต", "กำลังผลิต", "พักงาน", "รอ/กำลังแก้ไข")))
+    st.caption("รวมงานแก้ไขที่กลับมาฝ่ายผลิต นับ Drawing ไม่ซ้ำ; รายละเอียดคิว/Step อาจมากกว่าจำนวน Drawing")
+    if groups["production"]:
+        if st.checkbox("แสดง Drawing ของฝ่ายผลิต", key=f"project_production_drawings_{key}"):
+            frame = pd.DataFrame(groups["production"]).drop(columns=["สถานะเส้นทาง/QC"], errors="ignore")
+            st.dataframe(frame, hide_index=True, use_container_width=True)
+            render_delay_evidence_print_button(frame.to_dict("records"), f"{plan_code} - ฝ่ายผลิต")
+    else:
+        st.info("ไม่มี Drawing คงเหลือในฝ่ายผลิตตามข้อมูลชุดนี้")
+    if evidence_rows and st.checkbox("แสดงตารางข้อมูลงาน - คิวผลิต / Step", key=f"project_delay_evidence_{key}"):
+        st.dataframe(pd.DataFrame(evidence_rows), hide_index=True, use_container_width=True)
+        render_delay_evidence_print_button(evidence_rows, f"{plan_code} - รายละเอียดคิวฝ่ายผลิต")
+    st.markdown(f"**QC - ผลิตครบ รอ/กำลังตรวจ {len(groups['qc'])} Drawing**")
+    st.caption("แสดงเฉพาะ Drawing ที่ผลิตครบและเส้นทางอยู่สถานะรอ QC ไม่รวมงานที่ส่งกลับไปผลิตแก้ไข")
+    if groups["qc"]:
+        if st.checkbox("แสดง Drawing ของ QC", key=f"project_qc_drawings_{key}"):
+            frame = pd.DataFrame(groups["qc"])[["แผนงาน", "Drawing", "สถานะ Drawing"]]
+            st.dataframe(frame, hide_index=True, use_container_width=True)
+            render_delay_evidence_print_button(frame.to_dict("records"), f"{plan_code} - QC")
+    else:
+        st.info("ไม่มี Drawing รอ/กำลังตรวจ QC ตามข้อมูลชุดนี้")
+    if groups["review"]:
+        st.warning(f"ข้อมูลต้องตรวจสอบ {len(groups['review'])} Drawing - ยังไม่จัดเข้าฝ่ายผลิตหรือ QC เพื่อไม่ให้สรุปผิด")
+        if st.checkbox("แสดง Drawing ที่ต้องตรวจสอบ", key=f"project_review_drawings_{key}"):
+            st.dataframe(pd.DataFrame(groups["review"]), hide_index=True, use_container_width=True)
+            render_delay_evidence_print_button(groups["review"], f"{plan_code} - ข้อมูลต้องตรวจสอบ")
+
+
 def build_delay_evidence_print_document(rows, plan_code, printed_at):
     """Print every visible evidence row; long evidence gets full-width detail rows."""
     frame = pd.DataFrame(rows)
@@ -4429,25 +4473,8 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             )
             with st.expander(f"🔎 หลักฐานราย Drawing / Step — แผน {issue['plan_code']}", expanded=False):
                 st.caption("แสดงข้อมูลคิวและสถานะที่บันทึกไว้ แต่ยังระบุสาเหตุที่แท้จริงไม่ได้ เช่น เครื่องเสีย ขาดคน หรือรอวัสดุ ต้องมีข้อมูลยืนยันเพิ่มเติม; งานเดียวกันอาจอยู่ในหลายกลุ่ม และเวลารออาจซ้อนกัน จึงไม่ควรนำจำนวนงานหรือเวลามาบวกเป็นยอดรวม")
-                breakdown = issue.get("drawing_breakdown", {})
-                counts = breakdown.get("counts", {})
-                if counts:
-                    st.markdown("**สถานะ Drawing คงเหลือ (นับแต่ละ Drawing เพียงครั้งเดียว)**")
-                    st.write(" | ".join(f"{label}: {count} Drawing" for label,count in counts.items() if label != "จบแล้ว"))
-                    st.caption("ยอดด้านบนรวมผลิตและ QC แต่ตารางคิวผลิตด้านล่างนับเป็นคิว/Step จึงอาจมีจำนวนต่างกัน; รอ/กำลังแก้ไขแยกจากงานผลิตปกติ ข้อมูลที่ขาดหรือขัดกันไม่เดาสถานะ")
-                    if st.checkbox("แสดงรายการ Drawing คงเหลือ รวมสถานะ QC", key=f"project_drawing_breakdown_{normalize_filter_key(issue['plan_code'])}"):
-                        pending_drawings = [row for row in breakdown.get("rows", []) if row["สถานะ Drawing"] != "จบแล้ว"]
-                        if pending_drawings:
-                            st.dataframe(pd.DataFrame(pending_drawings), hide_index=True, use_container_width=True)
-                            render_delay_evidence_print_button(pending_drawings, issue["plan_code"])
-                        else:
-                            st.info("ไม่มี Drawing คงเหลือในข้อมูลชุดนี้")
-                evidence_rows = issue.get("evidence_rows", [])
-                if evidence_rows and st.checkbox("แสดงตารางข้อมูลงาน", key=f"project_delay_evidence_{normalize_filter_key(issue['plan_code'])}"):
-                    st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
-                    render_delay_evidence_print_button(evidence_rows, issue["plan_code"])
-                elif not evidence_rows:
-                    st.info("ไม่มีงานคงเหลือในชุดคิวที่ใช้คำนวณ กรุณาตรวจรายการสั่งผลิตและข้อมูลแผน")
+                render_project_department_drawings(issue.get("drawing_breakdown", {}), issue.get("evidence_rows", []), issue["plan_code"])
+
 
     else:
         st.success("✅ ยังไม่พบปัญหาที่ต้องเร่งตัดสินใจ แผนงานในมุมมองนี้อยู่ในกรอบ Production")
