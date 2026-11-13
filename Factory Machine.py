@@ -4651,13 +4651,6 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             render_plan_rescue_simulator(calc_df, production_form_masters, summary_view)
         st.caption("ผลประเมินระดับแผนรวมทุกเครื่องและ Drawing ไม่ใช่ผลของเครื่องที่เปิดดูเพียงเครื่องเดียว; สถานะรอผลิต/กำลังผลิตเป็นข้อมูลจริง ส่วนวันจบและความเสี่ยงเป็นค่าคาดการณ์")
         for issue_no, issue in enumerate(executive_issues[:5], start=1):
-            if not issue.get("report_consistent", False):
-                st.error(f"แผน {issue['plan_code']}: ข้อมูลสถานะ/เวลายังไม่ครบ ขัดกัน หรือยอดสรุปไม่ตรง ยังไม่ยืนยันข้อเสนอการตัดสินใจ กรุณาอัปเดตและตรวจข้อมูล")
-                with st.expander(f"ตรวจข้อมูลแผน {issue['plan_code']} ก่อนสรุป"):
-                    render_project_department_drawings(issue.get("drawing_breakdown", {}),issue.get("evidence_rows", []),issue["plan_code"])
-                    if issue.get("queue_audit"):
-                        st.dataframe(pd.DataFrame(issue["queue_audit"]),hide_index=True,use_container_width=True)
-                continue
             issue_box = st.error if issue["level"] == "critical" else st.warning
             issue_box(
                 f"**{issue_no}. {issue['problem']}**  \n"
@@ -4666,6 +4659,16 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
                 f"**ผลกระทบ:** {issue['impact']}  \n"
                 f"**แนวทางพิจารณา:** {issue['decision']}"
             )
+            quality_rows = [row for row in issue.get("queue_audit", []) if row.get("ผลประเมินเฉพาะคิวนี้") in (
+                "ข้อมูลเวลาไม่ครบ", "สถานะกับ Finish จริงขัดกัน ต้องตรวจสอบ", "สถานะเสร็จแต่ไม่มี Finish จริง ต้องตรวจสอบ")]
+            if quality_rows:
+                historic = sum(row.get("ผลประเมินเฉพาะคิวนี้") == "สถานะเสร็จแต่ไม่มี Finish จริง ต้องตรวจสอบ" for row in quality_rows)
+                with st.expander(f"รายละเอียดข้อมูลที่ต้องตรวจสอบ {len(quality_rows)} คิว (ประวัติเก่าไม่มี Finish {historic} คิว)", expanded=False):
+                    st.caption("แสดงผลคาดการณ์จากคิวปัจจุบันต่อไป แยกข้อมูลประวัติ/รายการที่ไม่ครบไว้ตรวจสอบ ไม่ได้สรุปว่าคิวเหล่านี้ยังรอผลิต และไม่เปลี่ยนสถานะงานจริง")
+                    st.dataframe(pd.DataFrame(quality_rows),hide_index=True,use_container_width=True)
+            breakdown = issue.get("drawing_breakdown", {})
+            if breakdown.get("counts", {}).get("ข้อมูลต้องตรวจสอบ", 0):
+                st.caption(f"มี Drawing ที่ยังยืนยันสถานะไม่ได้ {breakdown['counts']['ข้อมูลต้องตรวจสอบ']} รายการ ดูแยกในรายละเอียด ไม่รวมว่าเป็นงานรอผลิตโดยอัตโนมัติ")
             with st.expander(f"🔎 หลักฐานราย Drawing / Step — แผน {issue['plan_code']}", expanded=False):
                 st.caption("แสดงข้อมูลคิวและสถานะที่บันทึกไว้ แต่ยังระบุสาเหตุที่แท้จริงไม่ได้ เช่น เครื่องเสีย ขาดคน หรือรอวัสดุ ต้องมีข้อมูลยืนยันเพิ่มเติม; งานเดียวกันอาจอยู่ในหลายกลุ่ม และเวลารออาจซ้อนกัน จึงไม่ควรนำจำนวนงานหรือเวลามาบวกเป็นยอดรวม")
                 render_project_department_drawings(issue.get("drawing_breakdown", {}), issue.get("evidence_rows", []), issue["plan_code"])
@@ -4797,7 +4800,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         f"<div><strong>ผลกระทบ:</strong> {html.escape(issue['impact'])}</div>"
         f"<div><strong>ข้อเสนอ:</strong> {html.escape(issue['decision'])}</div>"
         "</div>"
-        for issue_no, issue in enumerate(executive_issues[:5], start=1) if issue.get("report_consistent", False)
+        for issue_no, issue in enumerate(executive_issues[:5], start=1)
     ) or "<div class='exec-ok'>ไม่พบปัญหาที่ต้องเร่งตัดสินใจ</div>"
     project_pdf_payload = json.dumps({
         "print_date": get_bangkok_now().strftime("%d/%m/%Y %H:%M น."),
