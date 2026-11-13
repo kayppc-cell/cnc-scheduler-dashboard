@@ -3835,6 +3835,141 @@ def build_project_delay_evidence(plan_jobs, all_jobs_by_id, machine_sequences, n
     return summary, details
 
 
+def rescue_machine_groups():
+    return {"CNC":MACHINE_LIST[:9], "มิลลิ่ง 1-3":MACHINE_LIST[11:14],
+            "MIG CO2":MACHINE_LIST[16:19], "ARGON":MACHINE_LIST[19:21],
+            "Cutting":["Cutting1", "Cutting2"]}
+
+
+def rescue_alternative_machines(machine):
+    return next(([name for name in names if name != machine] for names in rescue_machine_groups().values() if machine in names), [])
+
+
+def rescue_plan_finishes(chain):
+    result = {}
+    for plan, group in chain.groupby("แผนงาน", dropna=False):
+        finishes = [first_valid_datetime(value) for value in group["_chain_finish"]]
+        # Missing forecast must not be reported as a plan recovered on time.
+        result[safe_str(plan)] = max(finishes) if finishes and all(value is not None for value in finishes) else None
+    return result
+
+
+def simulate_rescue_moves(jobs, job_id, targets, masters, now, time_factor=1.0, extra_setup=0.0):
+    source = jobs.copy(deep=True)
+    match = source[source["ID"].map(safe_int).eq(job_id)]
+    if len(match) != 1:
+        raise ValueError("ไม่พบคิวที่เลือก หรือ ID ซ้ำ")
+    job = match.iloc[0]
+    if "รอคิว" not in safe_str(job.get("สถานะงาน")) or first_valid_datetime(job.get("เริ่มจริง")) is not None or first_valid_datetime(job.get("เสร็จจริง")) is not None:
+        raise ValueError("จำลองได้เฉพาะคิวรอที่ยังไม่ Start และยังไม่มี Finish")
+    allowed = rescue_alternative_machines(safe_str(job.get("เลือกเครื่องจักร")))
+    if not targets or any(target not in allowed for target in targets):
+        raise ValueError("เครื่องปลายทางต้องอยู่ในกลุ่มที่รับงานแทนกันได้")
+    if not 0.5 <= time_factor <= 2.0 or not 0 <= extra_setup <= 1440:
+        raise ValueError("ตัวคูณเวลาหรือ Setup เพิ่มอยู่นอกช่วงที่อนุญาต")
+    before = calculate_production_chain(source, active_only=True, as_of=now)
+    old_finishes = rescue_plan_finishes(before)
+    due = {safe_str(row.get("plan_code")):first_valid_datetime(row.get("customer_due")) for row in masters.to_dict("records")}
+    plan = safe_str(job.get("แผนงาน"))
+    baseline = old_finishes.get(plan)
+    deadline = due.get(plan)
+    if baseline is None or deadline is None:
+        raise ValueError("ข้อมูลวันจบแผนหรือกรอบ Production ไม่ครบ จึงยังเปรียบเทียบไม่ได้")
+    output = []
+    for target in targets:
+        scenario = source.copy(deep=True)
+        index = match.index[0]
+        queued = source[source["เลือกเครื่องจักร"].eq(target) & source["สถานะงาน"].astype(str).str.contains("รอคิว|กำลังผลิต|พักงาน|รอวัสดุ",regex=True,na=False)]
+        ready_values = [first_valid_datetime(value) for value in queued.get("วัน-เวลาขึ้นงาน",pd.Series(dtype=object))]
+        tail_ready = max([now] + [value for value in ready_values if value is not None]) + timedelta(seconds=1)
+        scenario.at[index,"เลือกเครื่องจักร"] = target
+        scenario.at[index,"วัน-เวลาขึ้นงาน"] = tail_ready
+        for field in ("Setup (น.)", "Basic (น.)", "โปรแกรม (น.)"):
+            scenario.at[index,field] = safe_float(job.get(field),0) * time_factor + (extra_setup if field == "Setup (น.)" else 0)
+        after = calculate_production_chain(scenario, active_only=True, as_of=now)
+        new_finishes = rescue_plan_finishes(after)
+        finish = new_finishes.get(plan)
+        chosen = after[after["ID"].map(safe_int).eq(job_id)]
+        if finish is None or len(chosen)!=1:
+            continue
+        other_impacts = []
+        unknown = []
+        newly_late = []
+        for other, old in old_finishes.items():
+            if other == plan:
+                continue
+            new = new_finishes.get(other)
+            if old is None or new is None:
+                unknown.append(other)
+            elif new > old:
+                other_impacts.append(f"{other} ช้าลง {(new-old).total_seconds()/3600:.2f} ชม.ปฏิทิน")
+                if due.get(other) is not None and old <= due[other] < new:
+                    newly_late.append(other)
+                if due.get(other) is None:
+                    unknown.append(other + " (ไม่มีกำหนดส่ง)")
+        fmt = lambda value: value.strftime("%d/%m/%Y %H:%M") if value is not None else "ไม่มีข้อมูล"
+        output.append({"แผน":plan,"Drawing":safe_str(job.get("ชื่อ Drawing.")),"ID คิว":job_id,
+                       "เครื่องเดิม":safe_str(job.get("เลือกเครื่องจักร")),"เครื่องที่เสนอ":target,
+                       "เริ่มคิวหลังย้าย":fmt(first_valid_datetime(chosen.iloc[0].get("_chain_start"))),
+                       "จบคิวหลังย้าย":fmt(first_valid_datetime(chosen.iloc[0].get("_chain_finish"))),
+                       "คาดจบแผนเดิม":fmt(baseline),"คาดจบแผนหลังย้าย":fmt(finish),"กำหนด Production":fmt(deadline),
+                       "แผนเร็วขึ้น (ชม.ปฏิทิน)":round((baseline-finish).total_seconds()/3600,2),
+                       "ผลต่อแผนที่เลือก":"ทันกรอบ Production ตามแบบจำลอง" if finish <= deadline else "ยังเกินกรอบ Production",
+                       "แผนอื่นเสี่ยงเพิ่ม":", ".join(newly_late) or "ไม่พบจากข้อมูลที่ประเมินได้",
+                       "ผลกระทบแผนอื่น":" | ".join(other_impacts) or "ไม่พบวันจบแผนอื่นช้าลง",
+                       "ข้อมูลแผนอื่นที่ต้องตรวจสอบ":" | ".join(unknown) or "ไม่มี",
+                       "_new_finish":finish,"_newly_late":len(newly_late)})
+    output.sort(key=lambda row:(row["_newly_late"]>0,row["_new_finish"]))
+    return [{key:value for key,value in row.items() if not key.startswith("_")} for row in output]
+
+
+def render_plan_rescue_simulator(jobs, masters, summary):
+    with st.expander("🧭 จำลองย้ายเครื่องเพื่อกู้แผนล่าช้า", expanded=False):
+        st.caption("จำลองทีละคิว เฉพาะงานที่ยังไม่ Start ต่อท้ายคิวปลายทาง ไม่ย้ายงานจริง ไม่เปลี่ยนเวลาเดิม • วันจบเป็นจบผลิต ไม่รวมเวลาตรวจ QC/ส่งมอบ")
+        if not st.checkbox("เปิดเครื่องมือจำลองกู้แผน",key="rescue_open"):
+            return
+        with st.expander("เครื่องที่รับงานแทนกันได้"):
+            st.dataframe(pd.DataFrame([{"กลุ่ม":group,"เครื่อง":" / ".join(names)} for group,names in rescue_machine_groups().items()]),hide_index=True,use_container_width=True)
+            st.caption("มิลลิ่ง 4 เจียรราบ เจียรกลม กลึง และเชื่อมอลูมิเนียม ไม่เสนอข้ามกลุ่มหรือสลับกันเมื่อไม่มีเครื่องทดแทนในกลุ่ม")
+        plans = summary[summary["เกินกำหนด (ชม.)"].gt(0)]["แผนงาน"].astype(str).tolist()
+        if not plans:
+            st.info("ไม่พบแผนผลิตเกินกรอบ Production ในมุมมองนี้")
+            return
+        plan = st.selectbox("แผนที่ต้องการจำลอง",plans,key="rescue_plan")
+        waiting = jobs[jobs["แผนงาน"].astype(str).eq(plan) & jobs["สถานะงาน"].astype(str).str.contains("รอคิว",na=False)].copy()
+        waiting = waiting[waiting.apply(lambda row:first_valid_datetime(row.get("เริ่มจริง")) is None and first_valid_datetime(row.get("เสร็จจริง")) is None and bool(rescue_alternative_machines(safe_str(row.get("เลือกเครื่องจักร")))),axis=1)] if not waiting.empty else waiting
+        if waiting.empty:
+            st.info("ไม่มีคิวรอที่ยังไม่ Start และมีเครื่องทดแทนในกลุ่ม อาจต้องพิจารณาแนวทางอื่น")
+            return
+        lookup = {safe_int(row["ID"]):row for _,row in waiting.iterrows()}
+        job_id = st.selectbox("คิวงานที่จะลองย้าย",list(lookup),format_func=lambda key:f"ID {key} | {lookup[key].get('ชื่อ Drawing.')} | {lookup[key].get('เลือกเครื่องจักร')}",key="rescue_job")
+        alternatives = rescue_alternative_machines(safe_str(lookup[job_id].get("เลือกเครื่องจักร")))
+        with st.form(f"rescue_form_{plan}_{job_id}"):
+            targets = st.multiselect("เครื่องปลายทางที่จะเปรียบเทียบ",alternatives,default=alternatives)
+            factor = st.number_input("ตัวคูณเวลาแผนบนเครื่องปลายทาง",min_value=0.5,max_value=2.0,value=1.0,step=0.1)
+            setup = st.number_input("Setup เพิ่มสำหรับการย้าย (นาที)",min_value=0.0,max_value=1440.0,value=0.0,step=5.0)
+            st.caption("1.0 = ใช้เวลาแผนเดิมทุกเครื่อง เป็นค่าประมาณ ตัวคูณใช้กับ Setup + Basic + โปรแกรม และเพิ่ม Setup ย้ายตามที่กรอก ต้องตรวจ Tool โปรแกรม Fixture และผู้ปฏิบัติงานก่อนนำข้อเสนอไปใช้")
+            run = st.form_submit_button("จำลองและเปรียบเทียบเครื่อง",type="primary")
+        signature = hashlib.sha256((jobs.to_json(date_format="iso",default_handler=str)+masters.to_json(date_format="iso",default_handler=str)+str(calendar_changes())+repr((plan,job_id,targets,factor,setup))).encode()).hexdigest()
+        if run:
+            try:
+                with st.spinner("กำลังจำลองคิวทั้งระบบและตรวจผลต่อแผนอื่น"):
+                    result = simulate_rescue_moves(jobs,job_id,targets,masters,get_bangkok_now().replace(tzinfo=None),factor,setup)
+                st.session_state["rescue_result"] = {"signature":signature,"rows":result,"at":get_bangkok_now().strftime("%d/%m/%Y %H:%M:%S")}
+            except ValueError as exc:
+                st.warning(str(exc))
+        saved = st.session_state.get("rescue_result",{})
+        if saved.get("signature") == signature:
+            if saved.get("rows"):
+                st.caption("ผลจำลองเมื่อ " + saved["at"] + " • เรียงตัวเลือกที่ไม่ทำให้แผนอื่นเสี่ยงเพิ่มก่อน แล้วตามวันจบแผน")
+                st.dataframe(pd.DataFrame(saved["rows"]),hide_index=True,use_container_width=True)
+                st.warning("เป็นข้อเสนอจากแบบจำลอง ไม่รับประกันเวลาจริง ตรวจข้อมูลที่ยังไม่ครบและผลกระทบก่อนจัดคิวจริงผ่านเครื่องมือเดิม")
+            else:
+                st.info("ยังคำนวณตัวเลือกที่มีข้อมูลครบไม่ได้")
+        elif saved:
+            st.info("ข้อมูลคิว กะ หรือเงื่อนไขเปลี่ยนแล้ว กรุณากดจำลองใหม่")
+
+
 def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_only=False):
     if chart_only:
         read_only = True
@@ -4462,6 +4597,8 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
     
     if executive_issues:
         st.markdown("#### 🚨 ปัญหา ผลกระทบ และสิ่งที่ต้องตัดสินใจ")
+        if is_admin and not read_only:
+            render_plan_rescue_simulator(calc_df, production_form_masters, summary_view)
         for issue_no, issue in enumerate(executive_issues[:5], start=1):
             issue_box = st.error if issue["level"] == "critical" else st.warning
             issue_box(
