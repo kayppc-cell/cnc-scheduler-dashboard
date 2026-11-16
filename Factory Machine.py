@@ -9203,7 +9203,34 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
         return
     st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
 
-    # ใช้ช่วงวันที่เดียวกับ Gantt และนับเฉพาะเวลาทำงานจริงในกะ
+    # ตัวกรองนี้มีผลเฉพาะกราฟ Utilization ไม่แก้กะหรือคิวงานจริง
+    if not tv:
+        util_range_mode = st.radio(
+            "ช่วงเวลาวิเคราะห์", ["ตามช่วง Gantt", "กำหนดวันเวลาเอง"],
+            horizontal=True, key="tpc_util_range_mode"
+        )
+        if util_range_mode == "กำหนดวันเวลาเอง":
+            with st.form("tpc_util_range_form"):
+                util_cols = st.columns(4)
+                util_start_date = util_cols[0].date_input("วันที่เริ่ม", value=util_period_start.date(), key="tpc_util_start_date")
+                util_start_time = util_cols[1].time_input("เวลาเริ่ม", value=dtime(0, 0), key="tpc_util_start_time")
+                util_end_date = util_cols[2].date_input("วันที่สิ้นสุด", value=util_period_end.date(), key="tpc_util_end_date")
+                util_end_time = util_cols[3].time_input("เวลาสิ้นสุด", value=dtime(23, 59), key="tpc_util_end_time")
+                util_apply = st.form_submit_button("แสดงผลตามช่วงเวลา", type="primary")
+            if util_apply:
+                requested_start = datetime.combine(util_start_date, util_start_time)
+                requested_end = datetime.combine(util_end_date, util_end_time)
+                if requested_end <= requested_start:
+                    st.error("วันเวลาสิ้นสุดต้องอยู่หลังวันเวลาเริ่ม กรุณาเลือกใหม่")
+                    return
+                st.session_state["tpc_util_applied_range"] = (requested_start, requested_end)
+            applied_range = st.session_state.get("tpc_util_applied_range")
+            if not applied_range:
+                st.info("เลือกวันเวลาแล้วกดแสดงผลตามช่วงเวลา")
+                return
+            util_period_start, util_period_end = applied_range
+
+    # นับทั้งภาระงานและกำลังเครื่องเฉพาะช่วงเวลาที่เลือก
     m_busy_map = {m: 0.0 for m in MACHINE_LIST}
     for _, r_u in active_jobs_editor_df.iterrows():
         m_name = str(r_u.get("เลือกเครื่องจักร", ""))
@@ -9222,12 +9249,16 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
             )
 
     total_horizon_work_hrs = get_work_capacity_between(util_period_start, util_period_end)
-    util_period_txt = f"{util_period_start.strftime('%d/%m/%Y')} – {util_period_end.strftime('%d/%m/%Y')}"
+    util_period_txt = f"{util_period_start.strftime('%d/%m/%Y %H:%M')} – {util_period_end.strftime('%d/%m/%Y %H:%M')}"
     st.caption(
-        f"ช่วงคำนวณเดียวกับ Gantt: {util_period_txt} | "
+        f"ช่วงวิเคราะห์: {util_period_txt} (เวลาไทย) | "
         f"เวลาที่เครื่องพร้อมทำงานตามกะ: {total_horizon_work_hrs:.2f} ชม./เครื่อง "
-        "(หักเบรก พักเที่ยง และวันอาทิตย์แล้ว)"
+        "(หักเวลาพักและวันหยุดตามปฏิทินกะโรงงานแล้ว)"
     )
+    st.caption("วิเคราะห์ภาระงานตามคิวผลิตในช่วงที่เลือก ไม่ใช่ชั่วโมงเดินเครื่องจริงที่บันทึกย้อนหลัง")
+    if total_horizon_work_hrs <= 0:
+        st.info("ช่วงที่เลือกไม่มีเวลาทำงานตามปฏิทินกะ จึงคำนวณเปอร์เซ็นต์การใช้งานไม่ได้")
+        return
 
     util_list = []
     for m in MACHINE_LIST:
