@@ -2582,7 +2582,7 @@ def prepare_work_order_time_restart(job, new_actual_start, reason, note=""):
         "โปรแกรม (น.)": job.get("prog_hrs", DEFAULT_PROGRAM_MINUTES),
     }) / 60.0)
     archive_fields = ("actual_start", "actual_finish", "ready_at", "baseline_ready_at", "baseline_finish_at",
-                      "paused_seconds", "hold_started_at", "status", "step_progress")
+                      "paused_seconds", "hold_started_at", "status", "step_progress", "setup_mins", "basic_hrs", "prog_hrs")
     # Snapshot ไม่เก็บประวัติรุ่นก่อนซ้ำซ้อนในแต่ละรุ่น
     snapshot = {field: job.get(field) for field in archive_fields}
     snapshot["step_progress"] = {key: value for key, value in old_progress.items() if key != "restart_history"}
@@ -2665,7 +2665,32 @@ def patch_job_timing_if_unchanged(endpoint, job_id, expected, payload):
     return all(timing_value_matches(key, saved[0].get(key), value) for key, value in payload.items())
 
 
-def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason: str, note: str = "") -> tuple[bool, str, int]:
+def prepare_restart_duration(job, new_start, minutes=None, planned_finish=None):
+    """Validate planned duration independently from actual Finish."""
+    if minutes is None:
+        return {}
+    import math
+    values = [float(value) for value in minutes]
+    if len(values) != 3 or any(not math.isfinite(value) or value < 0 for value in values):
+        raise ValueError("นาที Setup / Basic / โปรแกรมต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป")
+    if planned_finish is not None:
+        start = get_next_valid_work_time(new_start)
+        finish = parse_flexible_datetime(planned_finish)
+        if finish is None or pd.isna(finish) or finish <= start:
+            raise ValueError("เวลาจบตามแผนต้องอยู่หลังเวลาเริ่มทำงานตามกะ")
+        total = get_work_capacity_between(start, finish) * 60.0
+        if total < values[0] + values[2]:
+            raise ValueError("เวลาถึงวันจบที่เลือกน้อยกว่า Setup + โปรแกรม กรุณาปรับนาทีหรือวันจบ")
+        values[1] = total - values[0] - values[2]
+        _, calculated = add_work_time_with_shift(start, total / 60.0)
+        if abs((calculated - finish).total_seconds()) > 1:
+            raise ValueError("เวลาจบที่เลือกอยู่ในเวลาพักหรือนอกกะ กรุณาเลือกเวลาจบในกะทำงาน")
+    if sum(values) <= 0:
+        raise ValueError("เวลาผลิตรวมต้องมากกว่า 0 นาที")
+    return dict(zip(("setup_mins", "basic_hrs", "prog_hrs"), values))
+
+
+def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason: str, note: str = "", minutes=None, planned_finish=None) -> tuple[bool, str, int]:
     """เริ่มเวลารอบใหม่เฉพาะใบงานที่เลือก ใช้สูตรลูกโซ่เดิมสำหรับคิวรอเครื่องเดียวกัน"""
     applied = []
     endpoint = None
@@ -2678,7 +2703,9 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
         if response.status_code != 200 or not response.json():
             return False, "อ่านใบงานล่าสุดไม่สำเร็จ", 0
         target = response.json()[0]
+        duration_payload = prepare_restart_duration(target, new_actual_start, minutes, planned_finish)
         target_payload = prepare_work_order_time_restart(target, new_actual_start, reason, note)
+        target_payload.update(duration_payload)
         machine = target.get("machine_name")
         queue_response = get_complete_job_response(endpoint, headers=get_supabase_headers(), params={"select": "*", "machine_name": f"eq.{machine}", "order": "ready_at.asc,id.asc"}, timeout=8)
         if queue_response.status_code != 200:
@@ -2703,6 +2730,8 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
         target_chain = chain[chain["ID"].map(safe_int).eq(job_id)]
         if target_chain.empty:
             return False, "คำนวณแผนใหม่ของใบงานไม่สำเร็จ", 0
+        if planned_finish is not None and abs((target_chain.iloc[0]["_chain_finish"] - planned_finish).total_seconds()) > 1:
+            return False, "กฎคิวหรือเวลาปัจจุบันทำให้จบไม่ตรงเวลาที่ระบุ ยังไม่ได้บันทึก กรุณากำหนดวันจบใหม่หรือใช้แบบกำหนดนาที", 0
         target_payload["baseline_ready_at"] = target_chain.iloc[0]["_chain_start"].strftime("%Y-%m-%d %H:%M:%S")
         target_payload["baseline_finish_at"] = target_chain.iloc[0]["_chain_finish"].strftime("%Y-%m-%d %H:%M:%S")
         mutations = [(target, target_payload)]
@@ -3395,11 +3424,11 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
         label_map[label] = row
 
     with st.container():
-        st.markdown("#### 🛠️ ผู้ดูแล: แก้ไขเวลาเริ่มจริงของงานที่กำลังรัน")
+        st.markdown("#### 🛠️ ผู้ดูแล: แก้เวลาเริ่ม นาทีผลิต และเวลาจบตามแผน")
         st.warning(
             "เมื่อบันทึก เวลาแผน เวลาเริ่มจริง และเวลาพักรอบเดิมของใบงานนี้จะถูกยกเลิกจากการคำนวณ "
             "เริ่มนับใหม่จากเวลาที่ระบุ เก็บข้อมูลเดิมไว้เป็นประวัติเท่านั้น "
-            "เวลาจบใหม่ใช้ Setup + Basic + โปรแกรมตามใบงานปัจจุบัน แล้วต่อคิวรอของเครื่องนี้ใหม่"
+            "ปรับนาที Setup / Basic / โปรแกรม หรือระบุเวลาจบตามแผนได้ แล้วต่อคิวรอของเครื่องนี้ใหม่"
         )
         machine_column, plan_column, drawing_column = st.columns([1, 1, 2])
         machine_options = ["ทั้งหมด"] + sorted(live_jobs["เลือกเครื่องจักร"].dropna().astype(str).unique().tolist())
@@ -3457,6 +3486,17 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
                     step=60,
                     key=f"admin_actual_start_time_{form_version}_{selected_id}",
                 )
+            duration_mode = st.radio("วิธีกำหนดเวลาจบตามแผน", ["กำหนดนาทีผลิต", "กำหนดวันเวลาจบตามแผน"], horizontal=True)
+            duration_cols = st.columns(3)
+            edited_setup = duration_cols[0].number_input("Setup (นาที)", min_value=0.0, value=max(0.0, safe_float(selected_row.get("Setup (น.)"), 10.0)), step=1.0)
+            edited_basic = duration_cols[1].number_input("Basic (นาที)", min_value=0.0, value=max(0.0, safe_float(selected_row.get("Basic (น.)"), 0.0)), step=1.0)
+            edited_program = duration_cols[2].number_input("โปรแกรม (นาที)", min_value=0.0, value=max(0.0, safe_float(selected_row.get("โปรแกรม (น.)"), 120.0)), step=1.0)
+            default_end = first_valid_datetime(selected_row.get("เวลาจบ Baseline")) or default_start + timedelta(days=1)
+            finish_cols = st.columns(2)
+            edited_finish_date = finish_cols[0].date_input("วันที่จบตามแผนใหม่", value=default_end.date(), format="DD/MM/YYYY")
+            edited_finish_time = finish_cols[1].time_input("เวลาจบตามแผนใหม่", value=default_end.time().replace(second=0, microsecond=0), step=60)
+            st.caption("แบบกำหนดนาที: ใช้ Setup + Basic + โปรแกรม แล้วคำนวณวันจบตามกะ | แบบกำหนดวันจบ: คำนวณ Basic ใหม่จากเวลาทำงานสุทธิ โดยคง Setup และโปรแกรมที่ระบุ ช่องวันจบใช้เฉพาะแบบกำหนดวันจบ")
+            st.info("เวลาจบในฟอร์มนี้คือเวลาจบตามแผน ไม่ใช่การกด Finish จริง งานยังคงสถานะเดิม")
             edit_reason = st.selectbox(
                 "เหตุผลการแก้ไข",
                 ["เลือกเหตุผล", "กด Start ล่าช้า", "กด Start ผิดเวลา", "เวลาอุปกรณ์ไม่ถูกต้อง", "แก้ไขข้อมูลโดยผู้ดูแล", "อื่น ๆ"],
@@ -3468,7 +3508,7 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
                 key=f"admin_actual_start_confirm_{form_version}_{selected_id}"
             )
             submitted = st.form_submit_button(
-                "💾 บันทึกเวลาเริ่มใหม่และยกเลิกเวลาเดิม",
+                "💾 บันทึกเวลาและนาทีใหม่ พร้อมคำนวณคิวต่อ",
                 type="primary",
                 use_container_width=True,
             )
@@ -3486,7 +3526,9 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
                 st.error("กรุณาติ๊กยืนยันก่อนแก้ไขเวลาเริ่มจริง")
             else:
                 saved, error_message, shifted_count = update_running_actual_start_with_chain(
-                    selected_id, new_start, edit_reason, edit_note
+                    selected_id, new_start, edit_reason, edit_note,
+                    minutes=(edited_setup, edited_basic, edited_program),
+                    planned_finish=datetime.combine(edited_finish_date, edited_finish_time) if duration_mode == "กำหนดวันเวลาจบตามแผน" else None
                 )
                 if saved:
                     st.success(
@@ -8958,7 +9000,46 @@ def prepare_production_chart_queue(calc_df):
     return calc_df, active_jobs_editor_df
 
 
-def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_gantt=True, show_util=True):
+def build_actual_utilization(jobs, range_start, range_end, now):
+    """Read-only actual job hours; never allocate cumulative pauses to an unknown date."""
+    busy = {machine: 0.0 for machine in MACHINE_LIST}
+    issues = []
+    for row in jobs.to_dict("records"):
+        machine = safe_str(row.get("เลือกเครื่องจักร"))
+        if machine not in busy:
+            continue
+        start = parse_flexible_datetime(row.get("เริ่มจริง"))
+        finish = parse_flexible_datetime(row.get("เสร็จจริง"))
+        status = safe_str(row.get("สถานะงาน"))
+        if start is None or pd.isna(start):
+            continue
+        end = finish if finish is not None and pd.notna(finish) else now
+        if end <= range_start or start >= range_end:
+            continue
+        def uncertain(reason):
+            issues.append({"ID": row.get("ID"), "แผน": row.get("แผนงาน"),
+                           "Drawing": row.get("ชื่อ Drawing."), "เครื่อง": machine, "ข้อมูลที่ต้องตรวจสอบ": reason})
+        if end <= start or ("เสร็จสิ้น" in status and (finish is None or pd.isna(finish))):
+            uncertain("วันเวลา Start–Finish ไม่ครบหรือขัดกัน ไม่นำมาคำนวณ")
+            continue
+        hold = parse_flexible_datetime(row.get("เริ่มพักจริง"))
+        if any(word in status for word in ("พักงาน", "รอวัสดุ")) and (finish is None or pd.isna(finish)):
+            if hold is None or pd.isna(hold):
+                uncertain("งานพักแต่ไม่มีวันเวลาเริ่มพัก ไม่นำมาคำนวณ")
+                continue
+            end = min(end, hold)
+        left, right = max(start, range_start), min(end, range_end, now)
+        if right <= left:
+            continue
+        pause = max(0.0, safe_float(row.get("เวลาพักสะสม (วินาที)"), 0.0))
+        if pause and (left > start or right < end):
+            uncertain("มีเวลาพักสะสม แต่ช่วงที่เลือกครอบคลุมงานเพียงบางส่วน ระบุตำแหน่งเวลาพักไม่ได้ จึงไม่นำงานนี้มาคำนวณ")
+            continue
+        busy[machine] += max(0.0, get_work_capacity_between(left, right) - pause / 3600.0)
+    return busy, issues
+
+
+def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_gantt=True, show_util=True, actual_jobs=None):
     today_date = get_bangkok_now().date()
     today_dt = get_bangkok_now().replace(tzinfo=None)
     util_period_start = datetime.combine(today_date, dtime(0, 0))
@@ -9203,6 +9284,11 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
         return
     st.subheader("📈 อัตราการใช้งานเครื่องจักรและแผนกผลิต (% Utilization)")
 
+    util_actual = False
+    if not tv:
+        util_actual = st.radio("ข้อมูลที่ใช้วิเคราะห์", ["ภาระงานตามแผน", "การใช้งานจริงย้อนหลัง"],
+                               horizontal=True, key="tpc_util_data_mode") == "การใช้งานจริงย้อนหลัง"
+
     # ตัวกรองนี้มีผลเฉพาะกราฟ Utilization ไม่แก้กะหรือคิวงานจริง
     if not tv:
         util_range_mode = st.radio(
@@ -9230,24 +9316,38 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
                 return
             util_period_start, util_period_end = applied_range
 
-    # นับทั้งภาระงานและกำลังเครื่องเฉพาะช่วงเวลาที่เลือก
-    m_busy_map = {m: 0.0 for m in MACHINE_LIST}
-    for _, r_u in active_jobs_editor_df.iterrows():
-        m_name = str(r_u.get("เลือกเครื่องจักร", ""))
-        start_dt_u = parse_flexible_datetime(r_u.get("วัน-เวลาขึ้นงาน"))
-        total_minutes_u = (
-            safe_float(r_u.get("Setup (น.)"), 10.0)
-            + safe_float(r_u.get("Basic (น.)"), 0.0)
-            + safe_float(r_u.get("โปรแกรม (น.)"), 120.0)
-        )
-        if m_name in m_busy_map and start_dt_u is not None and pd.notna(start_dt_u):
-            m_busy_map[m_name] += get_planned_busy_hours_in_range(
-                start_dt_u,
-                total_minutes_u / 60.0,
-                util_period_start,
-                util_period_end
+    if util_actual:
+        if actual_jobs is None:
+            st.info("ไม่มีข้อมูลประวัติงานสำหรับคำนวณย้อนหลัง")
+            return
+        if util_period_start >= today_dt:
+            st.info("ข้อมูลจริงย้อนหลังต้องเลือกเวลาเริ่มก่อนเวลาปัจจุบัน")
+            return
+        util_period_end = min(util_period_end, today_dt)
+        m_busy_map, util_issues = build_actual_utilization(actual_jobs, util_period_start, util_period_end, today_dt)
+        if util_issues:
+            st.warning(f"มี {len(util_issues)} งานที่คำนวณในช่วงนี้ไม่ได้ ตัวเลขจึงยังไม่ครบทุกงาน เปิดดูรายละเอียดด้านล่าง")
+            with st.expander("งานที่ยังไม่นำมาคำนวณการใช้งานจริง"):
+                st.dataframe(pd.DataFrame(util_issues), use_container_width=True, hide_index=True)
+    else:
+        # นับทั้งภาระงานและกำลังเครื่องเฉพาะช่วงเวลาที่เลือก
+        m_busy_map = {m: 0.0 for m in MACHINE_LIST}
+        for _, r_u in active_jobs_editor_df.iterrows():
+            m_name = str(r_u.get("เลือกเครื่องจักร", ""))
+            start_dt_u = parse_flexible_datetime(r_u.get("วัน-เวลาขึ้นงาน"))
+            total_minutes_u = (
+                safe_float(r_u.get("Setup (น.)"), 10.0)
+                + safe_float(r_u.get("Basic (น.)"), 0.0)
+                + safe_float(r_u.get("โปรแกรม (น.)"), 120.0)
             )
-
+            if m_name in m_busy_map and start_dt_u is not None and pd.notna(start_dt_u):
+                m_busy_map[m_name] += get_planned_busy_hours_in_range(
+                    start_dt_u,
+                    total_minutes_u / 60.0,
+                    util_period_start,
+                    util_period_end
+                )
+    
     total_horizon_work_hrs = get_work_capacity_between(util_period_start, util_period_end)
     util_period_txt = f"{util_period_start.strftime('%d/%m/%Y %H:%M')} – {util_period_end.strftime('%d/%m/%Y %H:%M')}"
     st.caption(
@@ -9255,7 +9355,10 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
         f"เวลาที่เครื่องพร้อมทำงานตามกะ: {total_horizon_work_hrs:.2f} ชม./เครื่อง "
         "(หักเวลาพักและวันหยุดตามปฏิทินกะโรงงานแล้ว)"
     )
-    st.caption("วิเคราะห์ภาระงานตามคิวผลิตในช่วงที่เลือก ไม่ใช่ชั่วโมงเดินเครื่องจริงที่บันทึกย้อนหลัง")
+    if util_actual:
+        st.caption("ใช้ Start–Finish จริงของงาน รวมงานที่ Finish แล้ว หักเวลาพักสะสมและเวลานอกกะ; รวมชั่วโมงต่อใบงาน งาน Batch ที่ทำพร้อมกันอาจนับเวลาซ้อนกัน จึงไม่ใช่ค่า OEE หรือเวลาจากเซนเซอร์เครื่อง")
+    else:
+        st.caption("วิเคราะห์ภาระงานตามคิวผลิตในช่วงที่เลือก ไม่ใช่ชั่วโมงเดินเครื่องจริงที่บันทึกย้อนหลัง")
     if total_horizon_work_hrs <= 0:
         st.info("ช่วงที่เลือกไม่มีเวลาทำงานตามปฏิทินกะ จึงคำนวณเปอร์เซ็นต์การใช้งานไม่ได้")
         return
@@ -13372,7 +13475,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
                     st.info("ยังไม่มีข้อมูลใบงาน")
                     return
                 _, active_jobs_editor_df = dashboard_fragment_queue(calc_df)
-                render_production_schedule_charts(active_jobs_editor_df)
+                render_production_schedule_charts(active_jobs_editor_df, actual_jobs=df_db)
 
             if selected_dashboard_table == "charts":
                 render_dashboard_charts_fragment()
