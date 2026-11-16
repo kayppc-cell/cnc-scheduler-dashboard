@@ -8879,6 +8879,21 @@ class TrainingUncached:
     def clear(self): pass
 
 
+def remember_shop_machine(widget_key, memory_key):
+    value = st.session_state.get(widget_key)
+    if value:
+        st.session_state[memory_key] = value
+
+
+def restore_shop_machine(options, widget_key, memory_key):
+    """Persist machine identity independently from widget lifetime and queue counts."""
+    remembered = st.session_state.get(memory_key)
+    current = st.session_state.get(widget_key)
+    selected = remembered if remembered in options else current if current in options else options[0]
+    st.session_state[widget_key] = selected
+    st.session_state[memory_key] = selected
+
+
 class TrainingOperatorContext:
     def __enter__(self):
         self.names = ("requests", "MACHINE_LIST", "fetch_jobs_from_supabase", "fetch_job_events", "get_supabase_headers")
@@ -10927,8 +10942,8 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
 
         operator_machine_options = list(TRAINING_MACHINES if training_active else MACHINE_LIST)
         operator_machine_select_key = "training_op_machine_select" if training_active else "op_machine_select"
-        if st.session_state.get(operator_machine_select_key) not in operator_machine_options:
-            st.session_state.pop(operator_machine_select_key, None)
+        operator_machine_memory_key = "training_shop_machine_remembered" if training_active else "shop_machine_remembered"
+        restore_shop_machine(operator_machine_options, operator_machine_select_key, operator_machine_memory_key)
         machine_queue_counts = {machine_name: 0 for machine_name in operator_machine_options}
         if isinstance(df_all, pd.DataFrame) and not df_all.empty:
             active_machine_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
@@ -10944,9 +10959,12 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
             selected_m = st.selectbox(
                 "🏭 เลือกเครื่องจักร / แผนก:",
                 operator_machine_options,
-                format_func=lambda machine_name: f"{machine_name} — มี {machine_queue_counts.get(machine_name, 0)} คิว",
-                key=operator_machine_select_key
+                key=operator_machine_select_key,
+                on_change=remember_shop_machine,
+                args=(operator_machine_select_key, operator_machine_memory_key),
             )
+            st.session_state[operator_machine_memory_key] = selected_m
+            st.caption(f"{selected_m} — มี {machine_queue_counts.get(selected_m, 0)} คิว")
         with c_mode_sel:
             operator_mode_key = f"operator_run_mode_{selected_m}"
             if st.session_state.pop("operator_reset_piece_mode", False):
