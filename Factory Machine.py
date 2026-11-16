@@ -3470,7 +3470,7 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
         old_start_text = old_start.strftime("%d/%m/%Y %H:%M") if old_start is not None and not pd.isna(old_start) else "ไม่พบเวลาเริ่มจริงเดิม"
         st.info(f"เวลาเริ่มจริงปัจจุบัน: **{old_start_text}**")
         st.caption("เริ่มแผนและเวลาจริงใหม่ทั้งใบงาน ล้างค่าพักเดิม และคำนวณคิวรอของเครื่องนี้ด้วยกฎลูกโซ่เดิม งานที่เสร็จแล้วไม่เปิดกลับมาทำใหม่")
-        with st.form(f"admin_actual_start_form_{form_version}_{selected_id}", clear_on_submit=False):
+        with st.container(border=True):
             edit_col1, edit_col2 = st.columns(2)
             with edit_col1:
                 edited_date = st.date_input(
@@ -3486,16 +3486,28 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
                     step=60,
                     key=f"admin_actual_start_time_{form_version}_{selected_id}",
                 )
-            duration_mode = st.radio("วิธีกำหนดเวลาจบตามแผน", ["กำหนดนาทีผลิต", "กำหนดวันเวลาจบตามแผน"], horizontal=True)
+            duration_mode = st.radio("วิธีกำหนดเวลาจบตามแผน", ["กำหนดนาทีผลิต", "กำหนดวันเวลาจบตามแผน"], horizontal=True, key=f"admin_restart_duration_mode_{form_version}_{selected_id}")
             duration_cols = st.columns(3)
-            edited_setup = duration_cols[0].number_input("Setup (นาที)", min_value=0.0, value=max(0.0, safe_float(selected_row.get("Setup (น.)"), 10.0)), step=1.0)
-            edited_basic = duration_cols[1].number_input("Basic (นาที)", min_value=0.0, value=max(0.0, safe_float(selected_row.get("Basic (น.)"), 0.0)), step=1.0)
-            edited_program = duration_cols[2].number_input("โปรแกรม (นาที)", min_value=0.0, value=max(0.0, safe_float(selected_row.get("โปรแกรม (น.)"), 120.0)), step=1.0)
-            default_end = first_valid_datetime(selected_row.get("เวลาจบ Baseline")) or default_start + timedelta(days=1)
+            edited_setup = duration_cols[0].number_input("Setup (นาที)", min_value=0.0, value=max(0.0, safe_float(selected_row.get("Setup (น.)"), 10.0)), step=1.0, key=f"admin_restart_setup_{form_version}_{selected_id}")
+            edited_basic = duration_cols[1].number_input("Basic (นาที)", min_value=0.0, value=max(0.0, safe_float(selected_row.get("Basic (น.)"), 0.0)), step=1.0, key=f"admin_restart_basic_{form_version}_{selected_id}")
+            edited_program = duration_cols[2].number_input("โปรแกรม (นาที)", min_value=0.0, value=max(0.0, safe_float(selected_row.get("โปรแกรม (น.)"), 120.0)), step=1.0, key=f"admin_restart_program_{form_version}_{selected_id}")
+            preview_start = datetime.combine(edited_date, edited_time)
+            total_minutes = edited_setup + edited_basic + edited_program
+            _, auto_finish = add_work_time_with_shift(get_next_valid_work_time(preview_start), total_minutes / 60.0)
             finish_cols = st.columns(2)
-            edited_finish_date = finish_cols[0].date_input("วันที่จบตามแผนใหม่", value=default_end.date(), format="DD/MM/YYYY")
-            edited_finish_time = finish_cols[1].time_input("เวลาจบตามแผนใหม่", value=default_end.time().replace(second=0, microsecond=0), step=60)
-            st.caption("แบบกำหนดนาที: ใช้ Setup + Basic + โปรแกรม แล้วคำนวณวันจบตามกะ | แบบกำหนดวันจบ: คำนวณ Basic ใหม่จากเวลาทำงานสุทธิ โดยคง Setup และโปรแกรมที่ระบุ ช่องวันจบใช้เฉพาะแบบกำหนดวันจบ")
+            if duration_mode == "กำหนดนาทีผลิต":
+                finish_cols[0].text_input("วันที่จบตามแผน (คำนวณอัตโนมัติ)", value=auto_finish.strftime("%d/%m/%Y"), disabled=True)
+                finish_cols[1].text_input("เวลาจบตามแผน (คำนวณอัตโนมัติ)", value=auto_finish.strftime("%H:%M:%S"), disabled=True)
+                st.caption(f"รวม {total_minutes:,.2f} นาที • คำนวณตามกะ เวลาพัก และวันหยุดโรงงาน • เปลี่ยนเวลาเริ่มหรือนาทีแล้วผลจะอัปเดตเมื่อยืนยันค่าในช่อง")
+            else:
+                edited_finish_date = finish_cols[0].date_input("วันที่จบตามแผนใหม่", value=auto_finish.date(), format="DD/MM/YYYY", key=f"admin_restart_finish_date_{form_version}_{selected_id}")
+                edited_finish_time = finish_cols[1].time_input("เวลาจบตามแผนใหม่", value=auto_finish.time().replace(second=0, microsecond=0), step=60, key=f"admin_restart_finish_time_{form_version}_{selected_id}")
+                try:
+                    preview_values = prepare_restart_duration({}, preview_start, (edited_setup, edited_basic, edited_program), datetime.combine(edited_finish_date, edited_finish_time))
+                    st.caption(f"Basic ที่จะใช้เมื่อบันทึก: {preview_values['basic_hrs']:,.2f} นาที • คง Setup และโปรแกรมที่ระบุ")
+                except ValueError as preview_error:
+                    st.warning(str(preview_error))
+            st.caption("ค่าที่แสดงเป็นตัวอย่างจากเวลาเริ่มและกะ ขณะบันทึกจะตรวจข้อมูลคิวล่าสุดอีกครั้ง ยังไม่บันทึกจนกดปุ่มยืนยัน")
             st.info("เวลาจบในฟอร์มนี้คือเวลาจบตามแผน ไม่ใช่การกด Finish จริง งานยังคงสถานะเดิม")
             edit_reason = st.selectbox(
                 "เหตุผลการแก้ไข",
@@ -3507,7 +3519,7 @@ def render_admin_actual_start_editor(jobs_df: pd.DataFrame):
                 "ยืนยันยกเลิกเวลารอบเดิมและค่าพักทั้งหมด เริ่มคำนวณใหม่จากเวลานี้ และปรับคิวรอของเครื่องนี้",
                 key=f"admin_actual_start_confirm_{form_version}_{selected_id}"
             )
-            submitted = st.form_submit_button(
+            submitted = st.button(
                 "💾 บันทึกเวลาและนาทีใหม่ พร้อมคำนวณคิวต่อ",
                 type="primary",
                 use_container_width=True,
