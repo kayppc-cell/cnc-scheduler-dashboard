@@ -10962,6 +10962,8 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
             selected_m = st.selectbox(
                 "🏭 เลือกเครื่องจักร / แผนก:",
                 operator_machine_options,
+                index=operator_machine_options.index(st.session_state[operator_machine_memory_key]),
+                format_func=lambda machine_name: f"{machine_name} — มี {machine_queue_counts.get(machine_name, 0)} คิว",
                 key=operator_machine_select_key,
                 on_change=remember_shop_machine,
                 args=(operator_machine_select_key, operator_machine_memory_key),
