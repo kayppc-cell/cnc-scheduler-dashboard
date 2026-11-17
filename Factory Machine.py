@@ -8896,13 +8896,16 @@ def restore_shop_machine(options, widget_key, memory_key):
 
 class TrainingOperatorContext:
     def __enter__(self):
-        self.names = ("requests", "MACHINE_LIST", "fetch_jobs_from_supabase", "fetch_job_events", "get_supabase_headers")
+        self.names = ("requests", "MACHINE_LIST", "fetch_jobs_from_supabase", "fetch_jobs_from_supabase_cached", "fetch_job_events", "get_supabase_headers")
         self.saved = {name: globals()[name] for name in self.names}
         if "training_raw_jobs" not in st.session_state:
             st.session_state.training_raw_jobs = [row for i, machine in enumerate(TRAINING_MACHINES, 1) for row in seed_training_machine(machine, i)]
             st.session_state.training_raw_events = []
         globals()["requests"] = TrainingRequests(self.saved["requests"].utils)
         globals()["MACHINE_LIST"] = list(TRAINING_MACHINES)
+        # The public loader now calls a separate cached loader. Bypass BOTH layers:
+        # training must never read or populate the production cache.
+        globals()["fetch_jobs_from_supabase_cached"] = TrainingUncached(self.saved["fetch_jobs_from_supabase_cached"])
         globals()["fetch_jobs_from_supabase"] = TrainingUncached(self.saved["fetch_jobs_from_supabase"])
         globals()["fetch_job_events"] = TrainingUncached(self.saved["fetch_job_events"])
         globals()["get_supabase_headers"] = lambda: {"Prefer": "return=representation"}
