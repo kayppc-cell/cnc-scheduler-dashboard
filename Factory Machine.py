@@ -10102,6 +10102,7 @@ def flow_event_history_rows(events, steps):
         "stage_planned": "บันทึก Process ในแผนคิวแล้ว",
         "create_route": "สร้างเส้นทางผลิตแล้ว",
         "append_missing_production": "เพิ่มขั้นตอนผลิตที่ยังขาด — ให้ QC รอ",
+        "edit_pending_processes": "แก้ไข/ลบ Process ที่ยังไม่เริ่ม และคำนวณคิวใหม่",
         "production_finish": "ผลิตขั้นตอนนี้เสร็จแล้ว",
         "waiting_qc": "ส่งเข้าคิวตรวจรับ QC แล้ว",
         "qc_pass": "QC ตรวจผ่าน — งานจบสมบูรณ์",
@@ -10143,6 +10144,8 @@ def flow_event_history_rows(events, steps):
                 names = [name for name in names if name]
                 if names:
                     summary.append(" → ".join(names))
+        elif kind == "edit_pending_processes":
+            summary.extend(["ผู้แก้ไข: " + safe_str(details.get("actor")), "เหตุผล: " + safe_str(details.get("reason")), "เก็บเส้นทางและคิวเดิมก่อนแก้ไว้แล้ว"])
         elif kind == "qc_pass_corrected_to_ng":
             summary.append(f"ผู้บันทึกแก้ผล: {safe_str(details.get('actor'))}")
             summary.append(f"เหตุผล/จุด NG: {safe_str(details.get('reason'))}")
@@ -10257,6 +10260,186 @@ def render_missing_production_controls(cases, prefix):
                 st.warning("ยังยืนยันการเพิ่มขั้นตอนไม่ได้ กรุณารีเฟรชตรวจเส้นทางก่อนทำซ้ำ: " + safe_str(exc))
 
 
+TPC_PROCESS_EDIT_SQL = "-- TPC: edit only untouched future Processes; install once, no jobs changed by installation.\nbegin;\ncreate or replace function public.tpc_edit_pending_processes(p_data jsonb)\nreturns jsonb language plpgsql security definer set search_path='' set timezone='UTC' as $$\ndeclare\n c public.tpc_flow_cases; s public.tpc_flow_steps; old_s public.tpc_flow_steps;\n j public.cnc_jobs; expected_j public.cnc_jobs; proposed_j public.cnc_jobs;\n expected_s public.tpc_flow_steps; x jsonb; stage jsonb; patch jsonb;\n expected_ids bigint[]; keep_ids uuid[]; edit_ids uuid[]; target_ids bigint[];\n deleted_ids bigint[]; locked_seq integer:=0; seq integer; seen uuid[]:='{}';\n before_steps jsonb; before_jobs jsonb; calendar_snapshot jsonb; n integer;\n duration numeric; actor text:=nullif(btrim(p_data->>'actor'),'');\n reason text:=nullif(btrim(p_data->>'reason'),'');\nbegin\n if actor is null or reason is null then raise exception 'กรุณาระบุผู้แก้ไขและเหตุผล'; end if;\n if jsonb_typeof(p_data->'expected_jobs') is distinct from 'array'\n    or jsonb_typeof(p_data->'expected_steps') is distinct from 'array'\n    or jsonb_typeof(p_data->'steps') is distinct from 'array'\n    or jsonb_typeof(p_data->'patches') is distinct from 'array'\n    or jsonb_array_length(p_data->'steps') not between 1 and 100 then\n  raise exception 'ข้อมูลตรวจสอบก่อนแก้ไขไม่ครบ';\n end if;\n if abs(extract(epoch from ((clock_timestamp() at time zone 'Asia/Bangkok')-(p_data->>'preview_at')::timestamp)))>300\n    or p_data->>'preview_at' is null then raise exception 'ตัวอย่างเกิน 5 นาที กรุณาตรวจผลกระทบใหม่'; end if;\n lock table public.tpc_work_calendar_changes in share mode;\n select coalesce(jsonb_agg(jsonb_build_object('effective_date',effective_date::text,'mode',mode) order by effective_date),'[]'::jsonb)\n into calendar_snapshot from public.tpc_work_calendar_changes;\n if calendar_snapshot is distinct from p_data->'expected_calendar' then raise exception 'กะโรงงานเปลี่ยนแล้ว กรุณาตรวจผลกระทบใหม่'; end if;\n select array_agg((value->>'id')::bigint order by (value->>'id')::bigint) into expected_ids\n from jsonb_array_elements(p_data->'expected_jobs');\n if expected_ids is null or cardinality(expected_ids)<>(select count(distinct id) from unnest(expected_ids) id) then\n  raise exception 'รายการคิวตรวจสอบซ้ำหรือว่าง'; end if;\n -- Match Start/Finish lock order: jobs first, then the route. Any conflict rolls back the whole call.\n perform id from public.cnc_jobs where id=any(expected_ids) order by id for update;\n for x in select value from jsonb_array_elements(p_data->'expected_jobs') loop\n  select * into expected_j from jsonb_populate_record(null::public.cnc_jobs,x);\n  select * into j from public.cnc_jobs where id=expected_j.id;\n  if not found or to_jsonb(j) is distinct from to_jsonb(expected_j) then\n   raise exception 'คิว ID % เปลี่ยนหรือมีผู้กด Start แล้ว กรุณาตรวจผลกระทบใหม่',expected_j.id;\n  end if;\n end loop;\n if exists(select 1 from public.cnc_jobs where\n    (status like '%รอคิว%' or status like '%กำลังผลิต%' or status like '%พักงาน%' or status like '%รอวัสดุ%')\n    and not(id=any(expected_ids))) then raise exception 'มีคิวใหม่เข้ามาหลังตรวจผลกระทบ กรุณาคำนวณใหม่'; end if;\n select * into c from public.tpc_flow_cases where id=(p_data->>'case_id')::uuid for update;\n if not found or c.status not in ('producing','reworking') or c.status is distinct from p_data->>'expected_status'\n    or c.cycle is distinct from (p_data->>'expected_cycle')::integer then\n  raise exception 'สถานะ Drawing เปลี่ยนแล้ว กรุณาเปิดเส้นทางใหม่'; end if;\n perform id from public.tpc_flow_steps where case_id=c.id and cycle=c.cycle order by sequence for update;\n if (select count(*) from public.tpc_flow_steps where case_id=c.id and cycle=c.cycle)\n      <>jsonb_array_length(p_data->'expected_steps') then raise exception 'จำนวน Process เปลี่ยนแล้ว'; end if;\n for x in select value from jsonb_array_elements(p_data->'expected_steps') loop\n  select * into expected_s from jsonb_populate_record(null::public.tpc_flow_steps,x);\n  select * into s from public.tpc_flow_steps where id=expected_s.id and case_id=c.id and cycle=c.cycle;\n  if not found or to_jsonb(s) is distinct from to_jsonb(expected_s) then raise exception 'Process เปลี่ยนแล้ว กรุณาเปิดใหม่'; end if;\n end loop;\n for s in select * from public.tpc_flow_steps where case_id=c.id and cycle=c.cycle order by sequence loop\n  select * into j from public.cnc_jobs where id=s.job_id;\n  if not found or not(j.id=any(expected_ids)) then raise exception 'คิว Process ไม่ครบ กรุณาตรวจข้อมูล'; end if;\n  if s.finished_at is not null or j.status not like '%รอคิว%' or j.actual_start is not null\n    or j.actual_finish is not null or j.hold_started_at is not null or coalesce(j.paused_seconds,0)<>0\n    or exists(select 1 from jsonb_array_elements(coalesce(j.step_progress->'steps','[]'::jsonb)) v\n      where nullif(v->>'started_at','') is not null or nullif(v->>'finished_at','') is not null\n       or nullif(v->>'pending_pause_started_at','') is not null or coalesce((v->>'paused_seconds')::numeric,0)<>0)\n    or coalesce(j.step_progress->'restart_history','[]'::jsonb)<>'[]'::jsonb\n    or coalesce(j.step_progress->'cancelled_start_history','[]'::jsonb)<>'[]'::jsonb\n    or coalesce(j.step_progress->'machine_time_segments','[]'::jsonb)<>'[]'::jsonb\n  then locked_seq:=greatest(locked_seq,s.sequence); end if;\n end loop;\n select array_agg(id) into edit_ids from public.tpc_flow_steps where case_id=c.id and cycle=c.cycle and sequence>locked_seq;\n if edit_ids is null then raise exception 'ไม่มี Process ที่ยังไม่เริ่มให้แก้ไข'; end if;\n seq:=locked_seq;\n for stage in select value from jsonb_array_elements(p_data->'steps') loop\n  seq:=seq+1;\n  if not((stage->>'id')::uuid=any(edit_ids)) or (stage->>'id')::uuid=any(seen)\n     or (stage->>'sequence')::integer is distinct from seq then raise exception 'ลำดับหรือรหัส Process ไม่ถูกต้อง'; end if;\n  seen:=array_append(seen,(stage->>'id')::uuid);\n  select * into s from public.tpc_flow_steps where id=(stage->>'id')::uuid;\n  if s.job_id is distinct from (stage->>'job_id')::bigint then raise exception 'รหัสคิวไม่ตรง Process'; end if;\n  duration:=(stage->>'setup_minutes')::numeric+(stage->>'basic_minutes')::numeric+(stage->>'program_minutes')::numeric;\n  if duration is null or duration::text in ('NaN','Infinity','-Infinity') or duration<=0 or duration>100000\n     or (stage->>'setup_minutes')::numeric<0 or (stage->>'basic_minutes')::numeric<0 or (stage->>'program_minutes')::numeric<0\n     or nullif(btrim(stage->>'name'),'') is null or nullif(btrim(stage->>'machine_name'),'') is null\n     or (stage->>'minutes') is null or abs(duration-(stage->>'minutes')::numeric)>0.0001 then raise exception 'นาทีหรือชื่อ Process ไม่ถูกต้อง'; end if;\n end loop;\n keep_ids:=seen;\n select array_agg(job_id) into target_ids from public.tpc_flow_steps where id=any(keep_ids);\n select coalesce(array_agg(job_id),'{}'::bigint[]) into deleted_ids from public.tpc_flow_steps where id=any(edit_ids) and not(id=any(keep_ids));\n if (select count(distinct (value->>'id')::bigint) from jsonb_array_elements(p_data->'patches'))<>jsonb_array_length(p_data->'patches') then\n  raise exception 'คิวที่จะปรับซ้ำกัน'; end if;\n -- Validate all patches before any mutation; actual timing/history fields are never accepted.\n for x in select value from jsonb_array_elements(p_data->'patches') loop\n  if not((x->>'id')::bigint=any(expected_ids)) or (x->>'id')::bigint=any(deleted_ids) then raise exception 'คิวที่จะปรับไม่ตรงตัวอย่าง'; end if;\n  select * into j from public.cnc_jobs where id=(x->>'id')::bigint;\n  patch:=x->'payload';\n  if jsonb_typeof(patch) is distinct from 'object' or j.status not like '%รอคิว%' or j.actual_start is not null or j.actual_finish is not null then\n   raise exception 'แก้คิวที่เริ่มหรือเสร็จแล้วไม่ได้'; end if;\n  if j.id=any(target_ids) then\n   if patch-array['ready_at','baseline_ready_at','baseline_finish_at','machine_name','setup_mins','basic_hrs','prog_hrs','step_name','step_progress']<>'{}'::jsonb then raise exception 'พบข้อมูลนอกขอบเขต'; end if;\n   select value into stage from jsonb_array_elements(p_data->'steps') where (value->>'job_id')::bigint=j.id;\n   if patch->>'machine_name' is distinct from stage->>'machine_name'\n      or (patch->>'setup_mins')::numeric is distinct from (stage->>'setup_minutes')::numeric\n      or (patch->>'basic_hrs')::numeric is distinct from (stage->>'basic_minutes')::numeric\n      or (patch->>'prog_hrs')::numeric is distinct from (stage->>'program_minutes')::numeric then raise exception 'ค่าคิวไม่ตรง Process'; end if;\n  else\n   if patch-array['ready_at','baseline_ready_at','baseline_finish_at']<>'{}'::jsonb then raise exception 'คิวอื่นแก้ได้เฉพาะเวลาแผน'; end if;\n  end if;\n  if nullif(patch->>'baseline_ready_at','') is null or nullif(patch->>'baseline_finish_at','') is null\n     or nullif(patch->>'ready_at','') is null\n     or (patch->>'baseline_finish_at')::timestamp<=(patch->>'baseline_ready_at')::timestamp then raise exception 'เวลาคิวไม่ครบหรือไม่ถูกต้อง'; end if;\n end loop;\n if exists(select 1 from unnest(target_ids) id where not exists(\n      select 1 from jsonb_array_elements(p_data->'patches') AS patch_item(value) where (patch_item.value->>'id')::bigint=id)) then raise exception 'แผนคิว Process ไม่ครบ'; end if;\n select jsonb_agg(to_jsonb(archive_step) order by archive_step.sequence) into before_steps from public.tpc_flow_steps archive_step where archive_step.case_id=c.id and archive_step.cycle=c.cycle;\n select jsonb_agg(to_jsonb(archive_job) order by archive_job.id) into before_jobs from public.cnc_jobs archive_job where archive_job.id=any(expected_ids);\n -- Move only the editable suffix out of the unique sequence range, then set final order.\n update public.tpc_flow_steps set sequence=sequence+1000000 where id=any(edit_ids);\n delete from public.tpc_flow_steps where id=any(edit_ids) and not(id=any(keep_ids));\n perform set_config('tpc.deleting_unstarted_route',c.id::text,true);\n delete from public.cnc_jobs where id=any(deleted_ids) and flow_case_id=c.id;\n perform set_config('tpc.deleting_unstarted_route','',true);\n for stage in select value from jsonb_array_elements(p_data->'steps') loop\n  update public.tpc_flow_steps set sequence=(stage->>'sequence')::integer,name=stage->>'name',machine_name=stage->>'machine_name',\n    minutes=(stage->>'minutes')::numeric,setup_minutes=(stage->>'setup_minutes')::numeric,\n    basic_minutes=(stage->>'basic_minutes')::numeric,program_minutes=(stage->>'program_minutes')::numeric\n  where id=(stage->>'id')::uuid;\n end loop;\n for x in select value from jsonb_array_elements(p_data->'patches') loop\n  select * into j from public.cnc_jobs where id=(x->>'id')::bigint;\n  select * into proposed_j from jsonb_populate_record(j,x->'payload');\n  update public.cnc_jobs set ready_at=proposed_j.ready_at,baseline_ready_at=proposed_j.baseline_ready_at,\n    baseline_finish_at=proposed_j.baseline_finish_at,machine_name=proposed_j.machine_name,\n    setup_mins=proposed_j.setup_mins,basic_hrs=proposed_j.basic_hrs,prog_hrs=proposed_j.prog_hrs,\n    step_name=proposed_j.step_name,step_progress=proposed_j.step_progress where id=j.id;\n end loop;\n perform public.tpc_flow_sync_case(c.id);\n insert into public.tpc_flow_events(case_id,cycle,event,details) values(c.id,c.cycle,'edit_pending_processes',\n   jsonb_build_object('actor',actor,'reason',reason,'before_steps',before_steps,'before_jobs',before_jobs,\n     'steps',p_data->'steps','deleted_job_ids',to_jsonb(deleted_ids),'queue_changes',p_data->'patches'));\n return jsonb_build_object('ok',true,'case_id',c.id,'deleted_jobs',cardinality(deleted_ids),'updated_queues',jsonb_array_length(p_data->'patches'));\nend $$;\nrevoke all on function public.tpc_edit_pending_processes(jsonb) from public,anon,authenticated;\ngrant execute on function public.tpc_edit_pending_processes(jsonb) to service_role;\nnotify pgrst,'reload schema';\ncommit;\n"
+
+
+def process_job_is_untouched(job):
+    if not job or "รอคิว" not in safe_str(job.get("status")):
+        return False
+    if any(first_valid_datetime(job.get(key)) for key in ("actual_start", "actual_finish", "hold_started_at")) or safe_float(job.get("paused_seconds"), 0):
+        return False
+    meta = production_schedule_metadata(job)
+    if any(meta.get(key) for key in ("restart_history", "cancelled_start_history", "machine_time_segments")):
+        return False
+    return not any(item.get("started_at") or item.get("finished_at") or item.get("pending_pause_started_at")
+                   or safe_float(item.get("paused_seconds"), 0) for item in meta.get("steps", []) if isinstance(item, dict))
+
+
+def prepare_process_edit(case, steps, raw_jobs, frame, now):
+    """Prepare a read-only preview using the same dependency/calendar engine as live queues."""
+    import copy
+    import math
+    cycle_steps = sorted([item for item in steps if safe_int(item.get("cycle")) == safe_int(case["cycle"])], key=lambda item: item["sequence"])
+    by_job = {safe_int(item.get("id")): item for item in raw_jobs}
+    locked_through = max([item["sequence"] for item in cycle_steps
+                          if item.get("finished_at") or not process_job_is_untouched(by_job.get(safe_int(item.get("job_id"))))] or [0])
+    editable = [item for item in cycle_steps if item["sequence"] > locked_through]
+    if not editable:
+        raise ValueError("ไม่มี Process ที่ยังไม่เริ่มและแก้ไขได้")
+    lookup = {str(item["id"]): item for item in editable}
+    if not isinstance(frame, pd.DataFrame) or len(frame) != len(editable) or set(frame["รหัส Process"].astype(str)) != set(lookup):
+        raise ValueError("รายการ Process เปลี่ยนแล้ว กรุณาเปิดใหม่")
+    kept = []
+    for row in frame.to_dict("records"):
+        if bool(row.get("ลบ")):
+            continue
+        old = lookup[str(row["รหัส Process"])]
+        rank = float(row.get("ลำดับใหม่"))
+        values = [float(row.get(key)) for key in ("Setup (นาที)", "Basic (นาที)", "โปรแกรม (นาที)")]
+        if not math.isfinite(rank) or rank < 1 or rank != int(rank) or any(not math.isfinite(v) or v < 0 for v in values) or not 0 < sum(values) <= 100000:
+            raise ValueError("ลำดับต้องเป็นจำนวนเต็มบวก นาทีต้องไม่ติดลบ และเวลารวมต้องมากกว่า 0 ไม่เกิน 100,000 นาที")
+        name, machine = safe_str(row.get("Process")).strip(), safe_str(row.get("เครื่องจักร"))
+        if not name or machine not in MACHINE_LIST:
+            raise ValueError("กรุณาระบุชื่อ Process และเลือกเครื่องจักรในระบบ")
+        kept.append({"id": str(old["id"]), "job_id": safe_int(old["job_id"]), "rank": int(rank),
+                     "name": name, "machine_name": machine, "setup_minutes": values[0],
+                     "basic_minutes": values[1], "program_minutes": values[2], "minutes": sum(values)})
+    if len({item["rank"] for item in kept}) != len(kept):
+        raise ValueError("ลำดับใหม่ของ Process ที่เก็บไว้ต้องไม่ซ้ำกัน")
+    if not kept:
+        raise ValueError("ต้องเหลือ Process ที่ยังไม่เริ่มอย่างน้อย 1 ขั้น เครื่องมือนี้ไม่ปิดงานหรือส่ง QC แทนการ Finish")
+    kept.sort(key=lambda item: item["rank"])
+    for index, item in enumerate(kept, locked_through + 1):
+        item["sequence"] = index
+        item.pop("rank")
+    deleted = [item for item in editable if str(item["id"]) not in {item["id"] for item in kept}]
+    deleted_jobs = {safe_int(item["job_id"]) for item in deleted}
+    staged = copy.deepcopy([row for row in raw_jobs if safe_int(row["id"]) not in deleted_jobs])
+    staged_by_id = {safe_int(item["id"]): item for item in staged}
+    prefix = [item for item in cycle_steps if item["sequence"] <= locked_through]
+    previous = safe_int(prefix[-1].get("job_id")) if prefix else None
+    for item in kept:
+        job = staged_by_id[item["job_id"]]
+        old = lookup[item["id"]]
+        if item["machine_name"] != job["machine_name"]:
+            tail = max([first_valid_datetime(row.get("ready_at")) or now for row in staged
+                        if row.get("machine_name") == item["machine_name"] and "รอคิว" in safe_str(row.get("status"))] + [now])
+            job["ready_at"] = (tail + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+        job.update(machine_name=item["machine_name"], setup_mins=item["setup_minutes"], basic_hrs=item["basic_minutes"], prog_hrs=item["program_minutes"])
+        meta = production_schedule_metadata(job).copy()
+        if item["name"] != old["name"] and not old.get("substeps"):
+            job["step_name"] = item["name"]
+            meta = {**meta, **normalize_step_progress(meta, item["name"], job["status"])}
+        meta.update(flow_previous_job_id=previous, flow_sequence=item["sequence"], flow_total=len(prefix)+len(kept),
+                    flow_waiting=bool(previous and not first_valid_datetime(staged_by_id.get(previous, {}).get("actual_finish"))))
+        job["step_progress"] = meta
+        previous = item["job_id"]
+    mapping = {"id":"ID", "machine_name":"เลือกเครื่องจักร", "status":"สถานะงาน", "actual_start":"เริ่มจริง", "actual_finish":"เสร็จจริง", "hold_started_at":"เริ่มพักจริง", "paused_seconds":"เวลาพักสะสม (วินาที)", "ready_at":"วัน-เวลาขึ้นงาน", "setup_mins":"Setup (น.)", "basic_hrs":"Basic (น.)", "prog_hrs":"โปรแกรม (น.)", "step_progress":"ติดตาม Step", "baseline_ready_at":"กำหนดพร้อมขึ้นงาน (Baseline)", "baseline_finish_at":"เวลาจบ Baseline"}
+    staged_df = pd.DataFrame(staged).rename(columns=mapping)
+    prior_snapshot = st.session_state.get("_tpc_flow_jobs_snapshot")
+    try:
+        st.session_state["_tpc_flow_jobs_snapshot"] = staged_df
+        chain = calculate_production_chain(staged_df, as_of=now)
+    finally:
+        if prior_snapshot is None:
+            st.session_state.pop("_tpc_flow_jobs_snapshot", None)
+        else:
+            st.session_state["_tpc_flow_jobs_snapshot"] = prior_snapshot
+    patches, preview = [], []
+    target_ids = {item["job_id"] for item in kept}
+    for row in chain.to_dict("records"):
+        job_id = safe_int(row["ID"])
+        job = staged_by_id[job_id]
+        if "รอคิว" not in safe_str(job.get("status")):
+            continue
+        start, finish = first_valid_datetime(row.get("_chain_start")), first_valid_datetime(row.get("_chain_finish"))
+        if not start or not finish:
+            if job_id in target_ids:
+                raise ValueError("คำนวณขั้นตอนที่แก้ไม่ครบ กรุณาตรวจข้อมูล Process ก่อนหน้า")
+            continue
+        patch = {"ready_at": start.strftime("%Y-%m-%d %H:%M:%S"), "baseline_ready_at": start.strftime("%Y-%m-%d %H:%M:%S"), "baseline_finish_at": finish.strftime("%Y-%m-%d %H:%M:%S")}
+        if job_id in target_ids:
+            patch.update({key: job[key] for key in ("machine_name", "setup_mins", "basic_hrs", "prog_hrs", "step_name", "step_progress")})
+        elif all(first_valid_datetime(by_job[job_id].get(key)) == first_valid_datetime(value) for key, value in patch.items()):
+            continue
+        patches.append({"id": job_id, "payload": patch})
+        preview.append({"แผน": job.get("plan_code"), "Drawing": job.get("drawing_name"), "ID คิว": job_id,
+                        "เครื่อง": job["machine_name"], "เริ่มใหม่": start, "จบใหม่": finish,
+                        "ผล": "Process ที่แก้ไข" if job_id in target_ids else "คิวที่ได้รับผลกระทบ"})
+    if not target_ids.issubset({item["id"] for item in patches}):
+        raise ValueError("คำนวณคิวเป้าหมายไม่ครบ ยังไม่บันทึก")
+    snapshots = [row for row in raw_jobs if any(word in safe_str(row.get("status")) for word in ("รอคิว", "กำลังผลิต", "พักงาน", "รอวัสดุ")) or safe_int(row["id"]) in {safe_int(item.get("job_id")) for item in cycle_steps}]
+    return {"case_id": case["id"], "expected_cycle": case["cycle"], "expected_status": case["status"],
+            "expected_steps": cycle_steps, "expected_jobs": snapshots, "steps": kept, "patches": patches,
+            "preview_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "expected_calendar": [{"effective_date":day.isoformat(),"mode":mode} for day, mode in calendar_changes()]}, preview, deleted
+
+
+def render_process_route_editor(case, steps, prefix):
+    if st.session_state.get("user_role") != "admin" or case.get("status") not in ("producing", "reworking"):
+        return
+    with st.expander("🛠️ แก้ไขขั้นตอนการผลิต — Process ที่ยังไม่เริ่ม", expanded=False):
+        key = f"{prefix}_process_edit_{case['id']}_{case['cycle']}"
+        if not st.checkbox("เปิดแก้ไข Process ของ Drawing นี้", key=key+"_open"):
+            return
+        raw_jobs = read_all_job_rows(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/cnc_jobs", get_supabase_headers())
+        by_id = {safe_int(row["id"]): row for row in raw_jobs}
+        current = sorted([item for item in steps if safe_int(item.get("cycle")) == safe_int(case["cycle"])], key=lambda item:item["sequence"])
+        locked = max([item["sequence"] for item in current if item.get("finished_at") or not process_job_is_untouched(by_id.get(safe_int(item.get("job_id"))))] or [0])
+        editable = [item for item in current if item["sequence"] > locked]
+        st.caption("แก้เครื่อง นาที ลำดับ หรือติ๊กเพื่อลบได้เฉพาะขั้นตอนหลัง Process ที่เริ่มแล้ว ต้องเหลือขั้นตอนที่ยังไม่เริ่มอย่างน้อย 1 ขั้น เก็บเวลาและประวัติของงานที่ทำแล้วไว้")
+        if not editable:
+            st.info("ไม่มี Process ที่ยังไม่เริ่มให้แก้ไขในรอบนี้")
+            return
+        rows = [{"รหัส Process": str(item["id"]), "ลำดับใหม่": item["sequence"], "Process": item["name"],
+                 "เครื่องจักร": item["machine_name"], "Setup (นาที)": float(item.get("setup_minutes") or 0),
+                 "Basic (นาที)": float(item.get("basic_minutes") or 0),
+                 "โปรแกรม (นาที)": float(item.get("program_minutes") if item.get("program_minutes") is not None else item["minutes"]), "ลบ": False} for item in editable]
+        frame = st.data_editor(pd.DataFrame(rows), hide_index=True, use_container_width=True, key=key+"_table", disabled=["รหัส Process"],
+                               column_config={"เครื่องจักร":st.column_config.SelectboxColumn(options=MACHINE_LIST, required=True),
+                                              "ลำดับใหม่":st.column_config.NumberColumn(min_value=1, step=1, required=True),
+                                              "ลบ":st.column_config.CheckboxColumn("ลบ Process นี้")})
+        actor = st.text_input("ชื่อผู้แก้ไขขั้นตอน", key=key+"_actor")
+        reason = st.text_input("เหตุผลการแก้ไขขั้นตอน", key=key+"_reason")
+        signature = hashlib.sha256(frame.to_json(force_ascii=False).encode()+json.dumps(steps,sort_keys=True,default=str).encode()+str(calendar_changes()).encode()).hexdigest()
+        if st.button("ตรวจผลกระทบก่อนบันทึก", key=key+"_preview"):
+            try:
+                payload, preview, deleted = prepare_process_edit(case, steps, raw_jobs, frame, get_bangkok_now().replace(tzinfo=None))
+                st.session_state[key+"_draft"] = (signature, payload, preview, deleted)
+            except (ValueError, TypeError, KeyError) as exc:
+                st.session_state.pop(key+"_draft", None)
+                st.error(str(exc))
+        draft = st.session_state.get(key+"_draft")
+        if not draft or draft[0] != signature:
+            return
+        _, payload, preview, deleted = draft
+        st.write("ตัวอย่างคิวหลังแก้ไข — ยังไม่บันทึก")
+        st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=True)
+        if deleted:
+            st.warning("จะลบ Process ที่ยังไม่เริ่ม: " + ", ".join(item["name"] for item in deleted) + " (เก็บข้อมูลเดิมไว้ในประวัติการแก้ไข)")
+        checked = st.checkbox("ตรวจผลกระทบและยืนยันแก้ไขขั้นตอน พร้อมปรับคิวที่แสดง", key=key+"_confirm_"+signature[:12])
+        if st.button("บันทึกการแก้ไข Process และคิว", type="primary", disabled=not checked, key=key+"_save"):
+            if not actor.strip() or not reason.strip():
+                st.error("กรุณาระบุผู้แก้ไขและเหตุผล")
+                return
+            try:
+                response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_edit_pending_processes", headers=flow_api_headers(write=True),
+                                         json={"p_data":{**payload,"actor":actor.strip(),"reason":reason.strip()}}, timeout=40)
+                if response.status_code != 200 or response.json().get("ok") is not True:
+                    message = response.json().get("message", "ไม่สามารถยืนยันการบันทึก")
+                    st.error("ยังไม่บันทึกการแก้ไข: " + safe_str(message) + " • หากยังไม่ติดตั้ง ให้รัน SQL แก้ไข Process ในเมนูตั้งค่าและเครื่องมือผู้ดูแล")
+                    st.session_state.pop(key+"_draft", None)
+                    return
+                st.session_state.pop(key+"_draft", None)
+                st.session_state.pop(key+"_table", None)
+                st.cache_data.clear()
+                st.session_state["_flow_notice"] = "แก้ไข Process และคิวครบแล้ว เก็บประวัติเดิมไว้เรียบร้อย"
+                st.rerun(scope="app")
+            except (requests.RequestException, ValueError) as exc:
+                st.session_state.pop(key+"_draft", None)
+                st.error("ยังยืนยันผลไม่ได้ กรุณารีเฟรชตรวจเส้นทางก่อนทำซ้ำ: " + str(exc))
+
+
 def render_flow_installation_downloads(prefix):
     if st.session_state.get("user_role") != "admin":
         return
@@ -10264,6 +10447,7 @@ def render_flow_installation_downloads(prefix):
         return
     st.caption("ใช้เฉพาะเมื่อติดตั้งครั้งแรก หรืออัปเดตตามคำแนะนำ ไม่ต้องรันซ้ำในการใช้งานประจำวัน การดาวน์โหลดไม่เปลี่ยนข้อมูลหรือคิวงาน")
     packages = [
+        ("แก้ไข/ลบ Process ที่ยังไม่เริ่ม พร้อมปรับคิว", TPC_PROCESS_EDIT_SQL, "TPC_Process_Edit_Setup.sql"),
         ("แก้ผล QC ผ่านที่กดผิด พร้อมจัดคิวแก้ไข", TPC_QC_CORRECTION_SQL, "TPC_QC_Correction_Setup.sql"),
         ("แจ้ง NG สำหรับผู้ปฏิบัติงาน QC", TPC_OPERATOR_NG_SQL, "TPC_Operator_QC_NG_Setup.sql"),
         ("เพิ่มขั้นตอนผลิตที่ยังขาด และให้ QC รอ", TPC_MISSING_PRODUCTION_SQL, "TPC_Missing_Production_Setup.sql"),
@@ -10402,6 +10586,8 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                     "เครื่อง": item["machine_name"], "นาทีแผน": item["minutes"], "จำนวน": item["qty"],
                     "สถานะ": "ผลิตเสร็จ" if item.get("finished_at") else ("พร้อม / อยู่ในคิวเครื่อง" if item.get("job_id") else "รอขั้นก่อนหน้า"),
                 } for item in steps]), hide_index=True)
+            if admin:
+                render_process_route_editor(case, steps, prefix)
             if admin and jobs is None:
                 jobs = fetch_jobs_from_supabase()
             if admin and isinstance(jobs, pd.DataFrame) and "flow_case_id" in jobs:
