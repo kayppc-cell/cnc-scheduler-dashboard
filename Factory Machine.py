@@ -10375,34 +10375,111 @@ def prepare_process_edit(case, steps, raw_jobs, frame, now):
             "expected_calendar": [{"effective_date":day.isoformat(),"mode":mode} for day, mode in calendar_changes()]}, preview, deleted
 
 
-def render_process_route_editor(case, steps, prefix):
+def filter_process_route_cases(cases, steps, plan="", query="", machine=""):
+    by_case = {}
+    for step in steps:
+        by_case.setdefault(str(step.get("case_id")), []).append(step)
+    terms = query.strip().casefold().split()
+    return [case for case in cases if case.get("status") in ("producing", "reworking")
+            and (not plan or safe_str(case.get("plan_code")) == plan)
+            and all(term in (safe_str(case.get("plan_code"))+" "+safe_str(case.get("drawing_name"))).casefold() for term in terms)
+            and (not machine or any(step.get("machine_name") == machine and safe_int(step.get("cycle")) == safe_int(case.get("cycle"))
+                                    for step in by_case.get(str(case["id"]), [])))]
+
+
+def render_process_route_search(cases, prefix):
+    if st.session_state.get("user_role") != "admin":
+        return
+    with st.expander("🛠️ ค้นหา Drawing เพื่อแก้ไข / ลบ Process", expanded=False):
+        if not st.checkbox("เปิดค้นหาแผนงานและ Drawing ที่ต้องการแก้", key=prefix+"_process_search_open"):
+            return
+        candidates = [case for case in cases if case.get("status") in ("producing", "reworking")]
+        if not candidates:
+            st.info("ไม่มี Drawing ที่อยู่ระหว่างผลิตหรือแก้ไข")
+            return
+        cols = tpc_filter_columns([1.2, 2, 1.5])
+        plans = ["ทุกแผนงาน"] + sorted({safe_str(case.get("plan_code")) for case in candidates})
+        plan_key = prefix+"_process_search_plan"
+        if st.session_state.get(plan_key) not in plans:
+            st.session_state[plan_key] = plans[0]
+        plan = cols[0].selectbox("📌 แผนงานที่ต้องการค้นหา", plans, key=plan_key)
+        query = cols[1].text_input("🔎 ค้นหา Drawing / เลขแผน", key=prefix+"_process_search_query", placeholder="พิมพ์ชื่อ Drawing หรือเลขแผนเดิม")
+        candidates = filter_process_route_cases(candidates, [], "" if plan == "ทุกแผนงาน" else plan, query)
+        all_steps = []
+        ids = [str(case["id"]) for case in candidates]
+        for offset in range(0, len(ids), 50):
+            batch = fetch_flow_rows("tpc_flow_steps", {"case_id":"in.("+",".join(ids[offset:offset+50])+")"}) or []
+            all_steps.extend(batch)
+        machines = ["ทุกเครื่อง"] + sorted({safe_str(item.get("machine_name")) for item in all_steps})
+        machine_key = prefix+"_process_search_machine"
+        if st.session_state.get(machine_key) not in machines:
+            st.session_state[machine_key] = machines[0]
+        machine = cols[2].selectbox("🏭 ค้นหาจากเครื่องเดิม", machines, key=machine_key)
+        filtered = filter_process_route_cases(candidates, all_steps, machine="" if machine == "ทุกเครื่อง" else machine)
+        st.caption("ตัวกรองเครื่องใช้ค้นหางานเดิม ยังไม่ใช่คำสั่งย้ายเครื่อง • เลือก Drawing ด้านล่างเพื่อดู Process เดิมทุกขั้น")
+        st.caption(f"พบ {len(filtered)} Drawing")
+        if not filtered:
+            st.info("ไม่พบ Drawing ตามตัวกรอง ลองเลือกทุกเครื่องหรือล้างคำค้น")
+            return
+        lookup = {str(case["id"]):case for case in filtered}
+        selected_key = prefix+"_process_search_case"
+        if st.session_state.get(selected_key) not in lookup:
+            st.session_state[selected_key] = None
+        selected = st.selectbox("เลือก Drawing ที่ต้องการแก้ไข", list(lookup), index=None,
+                                placeholder="เลือกแผนงานและ Drawing ก่อน", key=selected_key,
+                                format_func=lambda key:f"แผน {lookup[key]['plan_code']} | Drawing {lookup[key]['drawing_name']}")
+        if selected is None:
+            return
+        selected_steps = [item for item in all_steps if str(item.get("case_id")) == selected]
+        render_process_route_editor(lookup[selected], selected_steps, prefix+"_search", opened=True)
+
+
+def render_process_route_editor(case, steps, prefix, *, opened=False):
     if st.session_state.get("user_role") != "admin" or case.get("status") not in ("producing", "reworking"):
         return
-    with st.expander("🛠️ แก้ไขขั้นตอนการผลิต — Process ที่ยังไม่เริ่ม", expanded=False):
+    with st.expander("🛠️ ข้อมูล Drawing และขั้นตอนผลิตเดิม", expanded=opened):
         key = f"{prefix}_process_edit_{case['id']}_{case['cycle']}"
-        if not st.checkbox("เปิดแก้ไข Process ของ Drawing นี้", key=key+"_open"):
+        if not opened and not st.checkbox("แสดงข้อมูลเดิมและเปิดแก้ไข Process ของ Drawing นี้", key=key+"_open"):
             return
         raw_jobs = read_all_job_rows(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/cnc_jobs", get_supabase_headers())
         by_id = {safe_int(row["id"]): row for row in raw_jobs}
         current = sorted([item for item in steps if safe_int(item.get("cycle")) == safe_int(case["cycle"])], key=lambda item:item["sequence"])
         locked = max([item["sequence"] for item in current if item.get("finished_at") or not process_job_is_untouched(by_id.get(safe_int(item.get("job_id"))))] or [0])
         editable = [item for item in current if item["sequence"] > locked]
-        st.caption("แก้เครื่อง นาที ลำดับ หรือติ๊กเพื่อลบได้เฉพาะขั้นตอนหลัง Process ที่เริ่มแล้ว ต้องเหลือขั้นตอนที่ยังไม่เริ่มอย่างน้อย 1 ขั้น เก็บเวลาและประวัติของงานที่ทำแล้วไว้")
+        st.info(f"กำลังแก้ไข: แผน **{case['plan_code']}** | Drawing **{case['drawing_name']}** | จำนวน **{case['qty']} ชิ้น**")
+        st.markdown("**1. ขั้นตอนที่บันทึกไว้เดิมทั้งหมด**")
+        original_rows = []
+        for item in sorted(steps, key=lambda step:(safe_int(step.get("cycle")), step["sequence"])):
+            job = by_id.get(safe_int(item.get("job_id")), {})
+            same_cycle = safe_int(item.get("cycle")) == safe_int(case["cycle"])
+            can_edit = same_cycle and item["sequence"] > locked
+            original_rows.append({"แผน":case["plan_code"], "Drawing":case["drawing_name"],
+                                  "รอบงาน":"ผลิตครั้งแรก" if safe_int(item.get("cycle")) == 0 else f"แก้ไขครั้งที่ {item['cycle']}",
+                                  "ลำดับเดิม":item["sequence"], "Process เดิม":item["name"], "ขั้นตอนย่อยเดิม":safe_str(job.get("step_name"), item["name"]), "เครื่องเดิม":item["machine_name"],
+                                  "นาทีรวมเดิม":item["minutes"], "สถานะ":safe_str(job.get("status"), "ยังไม่เข้าคิว"),
+                                  "เริ่มจริง":flow_display_time(job.get("actual_start")), "จบจริง":flow_display_time(job.get("actual_finish")),
+                                  "แก้ไขได้หรือไม่":"แก้ไขได้ — ยังไม่เริ่ม" if can_edit else "ล็อกประวัติเดิม"})
+        st.dataframe(pd.DataFrame(original_rows), hide_index=True, use_container_width=True)
+        st.caption("ตารางด้านบนเป็นข้อมูลที่บันทึกไว้เดิม การเปลี่ยนเครื่องหรือติ๊กเลือกลบด้านล่างยังไม่แก้ข้อมูลจนกดยืนยันบันทึก")
+        st.markdown("**2. แก้ไขเฉพาะ Process ที่ระบุผิด**")
+        st.caption("คลิกในช่องเครื่องที่จะใช้หรือนาทีเพื่อแก้ไข • ถ้าจะลบขั้นตอนที่ใส่เกิน ให้ติ๊กช่องลบขั้นตอนนี้ในแถวนั้น • ลำดับใหม่ใช้เรียงขั้นที่ยังไม่เริ่ม")
         if not editable:
             st.info("ไม่มี Process ที่ยังไม่เริ่มให้แก้ไขในรอบนี้")
             return
-        rows = [{"รหัส Process": str(item["id"]), "ลำดับใหม่": item["sequence"], "Process": item["name"],
+        rows = [{"รหัส Process": str(item["id"]), "แผน":case["plan_code"], "Drawing":case["drawing_name"], "เครื่องเดิม":item["machine_name"], "ลำดับใหม่": item["sequence"], "Process": item["name"],
                  "เครื่องจักร": item["machine_name"], "Setup (นาที)": float(item.get("setup_minutes") or 0),
                  "Basic (นาที)": float(item.get("basic_minutes") or 0),
                  "โปรแกรม (นาที)": float(item.get("program_minutes") if item.get("program_minutes") is not None else item["minutes"]), "ลบ": False} for item in editable]
-        frame = st.data_editor(pd.DataFrame(rows), hide_index=True, use_container_width=True, key=key+"_table", disabled=["รหัส Process"],
-                               column_config={"เครื่องจักร":st.column_config.SelectboxColumn(options=MACHINE_LIST, required=True),
+        frame = st.data_editor(pd.DataFrame(rows), hide_index=True, use_container_width=True, key=key+"_table", disabled=["รหัส Process", "แผน", "Drawing", "เครื่องเดิม"],
+                               column_config={"รหัส Process":None, "เครื่องจักร":st.column_config.SelectboxColumn("เครื่องที่จะใช้หลังแก้", options=MACHINE_LIST, required=True),
                                               "ลำดับใหม่":st.column_config.NumberColumn(min_value=1, step=1, required=True),
-                                              "ลบ":st.column_config.CheckboxColumn("ลบ Process นี้")})
+                                              "ลบ":st.column_config.CheckboxColumn("ลบขั้นตอนนี้")})
         actor = st.text_input("ชื่อผู้แก้ไขขั้นตอน", key=key+"_actor")
         reason = st.text_input("เหตุผลการแก้ไขขั้นตอน", key=key+"_reason")
         signature = hashlib.sha256(frame.to_json(force_ascii=False).encode()+json.dumps(steps,sort_keys=True,default=str).encode()+str(calendar_changes()).encode()).hexdigest()
-        if st.button("ตรวจผลกระทบก่อนบันทึก", key=key+"_preview"):
+        if len(editable) == 1:
+            st.caption("เหลือขั้นที่ยังไม่เริ่ม 1 ขั้น: แก้เครื่องและนาทีได้ แต่ลบขั้นสุดท้ายในเครื่องมือนี้ไม่ได้ หากสร้าง Drawing ผิด ต้องลบทั้งเส้นทางที่ยังไม่เคย Start")
+        if st.button("3. แสดงผลหลังแก้ไข / รายการที่จะลบ", type="primary", key=key+"_preview"):
             try:
                 payload, preview, deleted = prepare_process_edit(case, steps, raw_jobs, frame, get_bangkok_now().replace(tzinfo=None))
                 st.session_state[key+"_draft"] = (signature, payload, preview, deleted)
@@ -10413,7 +10490,8 @@ def render_process_route_editor(case, steps, prefix):
         if not draft or draft[0] != signature:
             return
         _, payload, preview, deleted = draft
-        st.write("ตัวอย่างคิวหลังแก้ไข — ยังไม่บันทึก")
+        st.info(f"ตัวอย่างก่อนบันทึก: แผน {case['plan_code']} | Drawing {case['drawing_name']}")
+        st.write("คิวหลังแก้ไข — ยังไม่บันทึก")
         st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=True)
         if deleted:
             st.warning("จะลบ Process ที่ยังไม่เริ่ม: " + ", ".join(item["name"] for item in deleted) + " (เก็บข้อมูลเดิมไว้ในประวัติการแก้ไข)")
@@ -10491,6 +10569,7 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                             st.rerun()
             cases = fetch_flow_rows("tpc_flow_cases") or []
             if admin:
+                render_process_route_search(cases, prefix)
                 render_missing_production_controls(cases, prefix)
             if not cases:
                 st.info("ยังไม่มี Drawing ที่เข้ากระบวนการตรวจรับ")
@@ -10586,8 +10665,6 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                     "เครื่อง": item["machine_name"], "นาทีแผน": item["minutes"], "จำนวน": item["qty"],
                     "สถานะ": "ผลิตเสร็จ" if item.get("finished_at") else ("พร้อม / อยู่ในคิวเครื่อง" if item.get("job_id") else "รอขั้นก่อนหน้า"),
                 } for item in steps]), hide_index=True)
-            if admin:
-                render_process_route_editor(case, steps, prefix)
             if admin and jobs is None:
                 jobs = fetch_jobs_from_supabase()
             if admin and isinstance(jobs, pd.DataFrame) and "flow_case_id" in jobs:
