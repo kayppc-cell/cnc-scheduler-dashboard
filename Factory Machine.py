@@ -8734,7 +8734,7 @@ def build_work_order_print_document(source_df, filters, printed_at):
     {table}</body></html>"""
 
 
-TRAINING_MACHINES = [f"TRAINING-{i:02d}" for i in range(1, 16)]
+TRAINING_MACHINES = [f"TRAINING-{i:02d}" for i in range(1, 18)] + ["TRAINING-18 อาจารย์ผู้สอน"]
 
 
 def seed_training_machine(machine, machine_index):
@@ -8901,6 +8901,15 @@ class TrainingOperatorContext:
         if "training_raw_jobs" not in st.session_state:
             st.session_state.training_raw_jobs = [row for i, machine in enumerate(TRAINING_MACHINES, 1) for row in seed_training_machine(machine, i)]
             st.session_state.training_raw_events = []
+        # Add new stations once to existing sessions; preserve every old training job.
+        provisioned = set(st.session_state.get("training_extra_machines_provisioned", []))
+        existing = {row.get("machine_name") for row in st.session_state.training_raw_jobs}
+        for machine_index, machine in enumerate(TRAINING_MACHINES, 1):
+            if machine_index > 15 and machine not in provisioned:
+                if machine not in existing:
+                    st.session_state.training_raw_jobs.extend(seed_training_machine(machine, machine_index))
+                provisioned.add(machine)
+        st.session_state["training_extra_machines_provisioned"] = sorted(provisioned)
         globals()["requests"] = TrainingRequests(self.saved["requests"].utils)
         globals()["MACHINE_LIST"] = list(TRAINING_MACHINES)
         # The public loader now calls a separate cached loader. Bypass BOTH layers:
@@ -10874,7 +10883,7 @@ elif st.session_state.current_view == "🎓 โหมดฝึกผู้ปฏ
 elif st.session_state.current_view in ("👷 โหมดหน้าเครื่อง", "🎓 โหมดฝึกหน้าเครื่อง"):
     training_active = st.session_state.current_view == "🎓 โหมดฝึกหน้าเครื่อง"
     if training_active:
-        st.warning("🎓 โหมดฝึกใช้งาน — 15 เครื่องจำลอง • หน้าจอและคำสั่งชุดเดียวกับหน้างานจริง • ไม่บันทึกลง Supabase")
+        st.warning("🎓 โหมดฝึกใช้งาน — 18 เครื่องจำลอง • หน้าจอและคำสั่งชุดเดียวกับหน้างานจริง • ไม่บันทึกลง Supabase")
         st.caption("ข้อมูลฝึกแยกของผู้ใช้แต่ละ session ปิด session แล้วข้อมูลอาจหาย; ใช้กะและเวลาจริงของระบบ")
         reset_feedback = st.session_state.pop("training_reset_feedback", None)
         if reset_feedback:
