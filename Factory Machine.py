@@ -204,6 +204,33 @@ def render_touch_safe_chart(tpc_chart_key, figure, show_controls=True, **kwargs)
         st.caption("ปัดเลื่อนหน้าได้ตามปกติ • เปิดการลาก/ซูมด้านบนเพื่อดูรายละเอียดกราฟ")
     return st.plotly_chart(chart, config=config, **kwargs)
 
+def render_batch_action_queue_selection(jobs, reviewed_ids, action, nonce):
+    """Select exact IDs for this command; preserve the reviewed machine/plan boundary."""
+    original_ids = {safe_int(value) for value in reviewed_ids}
+    rows = {safe_int(row["ID"]):row for row in jobs.to_dict("records") if safe_int(row["ID"]) in original_ids}
+    options = list(rows)
+    complete = set(options) == original_ids
+    key = "batch_action_queues_" + str(nonce)
+    if key not in st.session_state:
+        st.session_state[key] = options.copy()
+    else:
+        st.session_state[key] = [safe_int(value) for value in st.session_state[key] if safe_int(value) in rows]
+    st.markdown(f"**เลือกเฉพาะคิวที่จะ {action}**")
+    if get_device_mode() == "mobile":
+        numbers = {job_id:index for index,job_id in enumerate(options,1)}
+        selected = render_mobile_batch_drawing_picker(rows, numbers, key)
+    else:
+        selected = st.multiselect("คิวที่ต้องการสั่งงานครั้งนี้ — เอาคิวที่ไม่ต้องการออกได้", options, key=key,
+                                  format_func=lambda value:f"แผน {safe_str(rows[value].get('แผนงาน'))} | Drawing {safe_str(rows[value].get('ชื่อ Drawing.'))} | Step {safe_str(rows[value].get('ขั้นตอน (Step)'))}")
+    selected_ids = {safe_int(value) for value in selected if safe_int(value) in rows}
+    st.caption("คำสั่งมีผลเฉพาะคิวที่เลือก คิวที่เอาออกจะคงสถานะเดิมและไม่ถูกเปลี่ยนเวลา")
+    if not complete:
+        st.warning("บางคิวเปลี่ยนสถานะแล้ว กรุณายกเลิกคำสั่งและตรวจรายการใหม่")
+    if not selected_ids:
+        st.info("เลือกอย่างน้อย 1 คิวก่อนยืนยัน")
+    return jobs[jobs["ID"].map(safe_int).isin(selected_ids)].copy(), selected_ids, complete
+
+
 def filter_batch_jobs_by_plan(jobs, selected_plans=None):
     """None = ทุกแผน, [] = ไม่เลือกแผน; คงลำดับและข้อมูลคิวเดิม"""
     if not jobs.empty:
@@ -8126,15 +8153,34 @@ def clear_shop_work_caches():
     fetch_department_work_orders.clear()
 
 
-def _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, fragment_mode=False):
+def advance_finished_shop_step(progress, finished_at, auto_start_next=False):
+    """Finish only the current Step; Batch can start its immediate successor."""
+    idx = progress['current_index']
+    progress['steps'][idx]['finished_at'] = finished_at
+    if idx < len(progress['steps']) - 1:
+        progress['current_index'] = idx + 1
+        successor = progress['steps'][idx + 1]
+        successor['started_at'] = finished_at if auto_start_next else None
+        if auto_start_next:
+            successor.pop('pending_pause_started_at', None)
+        else:
+            successor['pending_pause_started_at'] = finished_at
+        return {'status': '🟦 กำลังผลิต' if auto_start_next else '🟧 รอคิวผลิต',
+                'actual_finish': None, 'hold_started_at': None, 'step_progress': progress}
+    return {'status': '🟩 เสร็จสิ้นแล้ว', 'actual_finish': finished_at,
+            'hold_started_at': None, 'step_progress': progress}
+
+
+def _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, fragment_mode=False, auto_start_next=False):
     has_next_step = current_step_index < len(tracked_steps) - 1
-    finish_button_label = f'✅ จบ Step {current_step_index + 1} → รอ Start Step {current_step_index + 2}' if has_next_step else '🏁 Finish Drawing (ครบทุก Step)'
+    next_action = 'เริ่ม' if auto_start_next else 'รอ Start'
+    finish_button_label = f'✅ จบ Step {current_step_index + 1} → {next_action} Step {current_step_index + 2}' if has_next_step else '🏁 Finish Drawing (ครบทุก Step)'
     if st.button(finish_button_label, key=f'btn_finish_step_{target_id}', type='primary', use_container_width=True):
         st.session_state.pending_shop_finish_confirmation = {'job_id': target_id, 'machine': selected_m, 'step_index': current_step_index, 'nonce': uuid.uuid4().hex}
     pending_finish = st.session_state.get('pending_shop_finish_confirmation')
     pending_matches = bool(pending_finish and safe_int(pending_finish.get('job_id')) == target_id and (safe_str(pending_finish.get('machine')) == safe_str(selected_m)) and (safe_int(pending_finish.get('step_index'), -1) == current_step_index))
     if pending_matches:
-        finish_action_text = f'จบ Step {current_step_index + 1} และให้ Step {current_step_index + 2} รอ Start' if has_next_step else 'Finish Drawing นี้'
+        finish_action_text = f'จบ Step {current_step_index + 1} และ{next_action} Step {current_step_index + 2}' if has_next_step else 'Finish Drawing นี้'
         st.warning(f'⚠️ ยืนยันว่าจะ {finish_action_text} หรือไม่?  \nแผนงาน: **{plan_code}** | Drawing: **{drawing_code}** | Step: **{current_step_name}**')
         confirm_finish_col, cancel_finish_col = st.columns(2)
         with cancel_finish_col:
@@ -8165,15 +8211,8 @@ def _render_shop_finish_controls(target_id, selected_m, current_step_index, trac
                 st.rerun()
             step_finish_dt = get_bangkok_now().replace(tzinfo=None)
             step_finish_str = step_finish_dt.strftime('%Y-%m-%d %H:%M:%S')
-            fresh_tracked_steps[fresh_step_index]['finished_at'] = step_finish_str
             fresh_has_next_step = fresh_step_index < len(fresh_tracked_steps) - 1
-            if fresh_has_next_step:
-                fresh_step_progress['current_index'] = fresh_step_index + 1
-                fresh_tracked_steps[fresh_step_index + 1]['started_at'] = None
-                fresh_tracked_steps[fresh_step_index + 1]['pending_pause_started_at'] = step_finish_str
-                finish_payload = {'status': '🟧 รอคิวผลิต', 'actual_finish': None, 'hold_started_at': None, 'step_progress': fresh_step_progress}
-            else:
-                finish_payload = {'status': '🟩 เสร็จสิ้นแล้ว', 'actual_finish': step_finish_str, 'hold_started_at': None, 'step_progress': fresh_step_progress}
+            finish_payload = advance_finished_shop_step(fresh_step_progress, step_finish_str, auto_start_next)
             if update_supabase_job(target_id, finish_payload, clear_cache=False):
                 clear_shop_work_caches()
                 st.success("✅ บันทึก Finish สำเร็จแล้ว กำลังอัปเดตคิวงาน")
@@ -8181,7 +8220,7 @@ def _render_shop_finish_controls(target_id, selected_m, current_step_index, trac
                 if fresh_has_next_step:
                     next_step_name = safe_str(fresh_tracked_steps[fresh_step_index + 1].get('name'), 'Step ถัดไป')
                     log_job_event(target_id, plan_code, drawing_code, selected_m, 'Finish Step', fresh_step_index + 1, current_step_name)
-                    st.toast(f'จบ Step แล้ว กรุณากด Start และยืนยันเพื่อเริ่ม {next_step_name}', icon='➡️')
+                    st.toast(f'เริ่ม {next_step_name} ต่อแล้ว' if auto_start_next else f'จบ Step แล้ว กรุณากด Start และยืนยันเพื่อเริ่ม {next_step_name}', icon='➡️')
                 else:
                     log_job_event(target_id, plan_code, drawing_code, selected_m, 'Finish Drawing', fresh_step_index + 1, current_step_name)
                     st.session_state.operator_finish_feedback = build_operator_finish_feedback(pd.DataFrame([fresh_finish_row]), step_finish_dt)
@@ -8191,8 +8230,8 @@ def _render_shop_finish_controls(target_id, selected_m, current_step_index, trac
 
 
 @st.fragment
-def render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name):
-    _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, fragment_mode=True)
+def render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, auto_start_next=False):
+    _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, fragment_mode=True, auto_start_next=auto_start_next)
 
 
 def operator_ng_card_details(task):
@@ -11445,7 +11484,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     hold_jobs = filter_batch_jobs_by_plan(hold_jobs, batch_selected_plans)
                     batch_stopped_hold_jobs = filter_batch_jobs_by_plan(batch_stopped_hold_jobs, batch_selected_plans)
                     st.caption("คำสั่ง Start / Resume / หยุด / Finish ใช้เฉพาะแผนที่เลือกบนเครื่องนี้")
-                    st.info("หยุด Batch → กลับไปรอคิว โดยเก็บเวลาที่ทำแล้ว; กด Start เพื่อทำต่อ • ยกเลิก Start ผิด → ล้างเวลาเริ่มที่กดผิด อยู่ในโหมดรันทีละคิว • Finish รวมจบเฉพาะ Step ปัจจุบัน หากมี Step ถัดไป งานจะกลับไปรอ Start")
+                    st.info("หยุด Batch → กลับไปรอคิว โดยเก็บเวลาที่ทำแล้ว; กด Start เพื่อทำต่อ • ยกเลิก Start ผิด → ล้างเวลาเริ่มที่กดผิด อยู่ในโหมดรันทีละคิว • Finish รวมจบ Step ปัจจุบันและเริ่ม Step ถัดไปทันที เฉพาะคิวที่ยืนยัน; Step สุดท้ายจึงจบ Drawing")
                     batch_start_mode = st.radio(
                         "🚀 Drawing ที่ต้องการ Start",
                         ["เลือก Drawing", "ทุก Drawing ในแผนที่เลือก"], horizontal=True,
@@ -11540,7 +11579,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                 st.rerun()
                         with b_c4:
                             if st.button(
-                                f"🔎 ตรวจรายการก่อน Finish รวม ({len(running_jobs)} คิว)",
+                                f"🔎 จบ Step และเริ่ม Step ถัดไป / Finish รวม ({len(running_jobs)} คิว)",
                                 disabled=(len(running_jobs) == 0),
                                 type="secondary",
                                 use_container_width=True,
@@ -11575,6 +11614,8 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                             "finish": ("Finish", "🏁")
                         }
                         action_th, action_icon = action_labels.get(guard_action, ("ดำเนินการ", "⚙️"))
+                        review_jobs, guard_ids, review_complete = render_batch_action_queue_selection(
+                            review_jobs, guard_ids, action_th, batch_guard.get("nonce", "current"))
 
                         st.warning(
                             f"⚠️ กำลังจะ {action_th} รวมจำนวน {len(guard_ids)} คิวบนเครื่อง {selected_m} "
@@ -11589,7 +11630,8 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                             )
                         st.markdown("  \n".join(review_lines) if review_lines else "⚠️ ไม่พบรายการตามสถานะเดิม")
 
-                        confirm_key = f"batch_bulk_confirm_{batch_guard.get('nonce', 'current')}"
+                        selection_token = hashlib.sha256(json.dumps(sorted(guard_ids)).encode()).hexdigest()[:12]
+                        confirm_key = f"batch_bulk_confirm_{batch_guard.get('nonce', 'current')}_{selection_token}"
                         confirmed = st.checkbox(
                             f"ตรวจสอบรายการแล้ว ยืนยัน {action_th} งานพร้อมกัน",
                             key=confirm_key
@@ -11602,7 +11644,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         with confirm_col:
                             if st.button(
                                 f"{action_icon} ยืนยัน {action_th} {len(guard_ids)} คิว",
-                                disabled=not confirmed,
+                                disabled=(not confirmed or not guard_ids or not review_complete),
                                 type="primary",
                                 use_container_width=True,
                                 key=f"execute_{confirm_key}"
@@ -11699,14 +11741,8 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                             "step_progress": progress
                                         }
                                     else:
-                                        progress["steps"][idx]["finished_at"] = now_str
-                                        if idx < len(progress["steps"]) - 1:
-                                            progress["current_index"] = idx + 1
-                                            progress["steps"][idx + 1]["started_at"] = None
-                                            progress["steps"][idx + 1]["pending_pause_started_at"] = now_str
-                                            payload = {"status": "🟧 รอคิวผลิต", "actual_finish": None, "hold_started_at": None, "step_progress": progress}
-                                        else:
-                                            payload = {"status": "🟩 เสร็จสิ้นแล้ว", "actual_finish": now_str, "step_progress": progress}
+                                        payload = advance_finished_shop_step(progress, now_str, auto_start_next=True)
+                                        if "เสร็จสิ้น" in payload["status"]:
                                             fully_finished_rows.append(r)
                                     update_ok = update_supabase_job(int(r["ID"]), payload, clear_cache=False)
                                     update_results.append(update_ok)
@@ -12028,9 +12064,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                                 st.error("เปลี่ยนสถานะพักงานไม่สำเร็จ")
                             with c_btn_finish:
                                 if training_active:
-                                    _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name)
+                                    _render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, auto_start_next=(not piece_mode))
                                 else:
-                                    render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name)
+                                    render_shop_finish_controls(target_id, selected_m, current_step_index, tracked_steps, plan_code, drawing_code, current_step_name, auto_start_next=(not piece_mode))
                         else:
                             if can_start:
                                 if st.button(f"{'▶️ Resume' if step_progress.get('yielded_for_urgent') else '🚀 Start'} Step {current_step_index + 1}: {current_step_name}", key=f"btn_start_step_{target_id}", type="primary", use_container_width=True):
