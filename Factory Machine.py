@@ -8879,6 +8879,57 @@ class TrainingUncached:
     def clear(self): pass
 
 
+def render_piece_legacy_batch_return(jobs, events, machine):
+    """Keep the legacy Batch-pause recovery in Piece by Piece, preserving actual work."""
+    if events.empty or not {"job_id", "event_type", "reason"}.issubset(events.columns):
+        return
+    event_ids = {safe_int(value) for value in events.loc[
+        events["event_type"].astype(str).eq("Pause Step") &
+        events["reason"].astype(str).eq("หยุดคิวทั้งหมดจาก Batch Processing"), "job_id"].tolist()}
+    candidates = jobs[jobs["เลือกเครื่องจักร"].eq(machine) & jobs["สถานะงาน"].astype(str).str.contains("พักงาน", na=False)
+                      & jobs["ID"].map(safe_int).isin(event_ids)]
+    if candidates.empty:
+        return
+    with st.expander("↩️ คืนคิวที่ค้างพักจาก Batch รุ่นเดิม — เก็บเวลาที่ทำแล้ว"):
+        st.caption("เครื่องมือนี้คืนสถานะเป็นรอคิว โดยเก็บเวลา Start และเวลาที่ทำแล้ว ต่างจากการยกเลิก Start ผิด")
+        rows = {safe_int(row["ID"]):row for row in candidates.to_dict("records")}
+        with st.form("piece_legacy_batch_return_"+machine):
+            selected = st.multiselect("เลือกงานที่ต้องการคืนคิว", list(rows),
+                                      format_func=lambda value:f"แผน {rows[value]['แผนงาน']} | Drawing {rows[value]['ชื่อ Drawing.']}")
+            checked = st.checkbox("ยืนยันคืนเฉพาะสถานะคิว และเก็บเวลาผลิตจริงทั้งหมด")
+            submit = st.form_submit_button("คืนงานที่เลือกเป็นรอคิว")
+        if not submit:
+            return
+        if not selected or not checked:
+            st.warning("เลือกงานและติ๊กยืนยันก่อนคืนคิว")
+            return
+        try:
+            endpoint = st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/cnc_jobs"
+            operations = []
+            stamp = get_bangkok_now().replace(tzinfo=None)
+            for job_id in selected:
+                response = requests.get(endpoint, headers=get_supabase_headers(), params={"id":f"eq.{job_id}","select":"*"}, timeout=8)
+                latest = response.json() if response.status_code == 200 else []
+                if len(latest) != 1 or latest[0].get("machine_name") != machine or "พักงาน" not in safe_str(latest[0].get("status")):
+                    raise ValueError("สถานะงานเปลี่ยนแล้ว กรุณาตรวจคิวใหม่")
+                row = latest[0]
+                progress = normalize_step_progress(row.get("step_progress"),row.get("step_name"),row.get("status"),row.get("actual_start"),row.get("actual_finish"))
+                current = progress["steps"][progress["current_index"]]
+                pause_from = first_valid_datetime(row.get("hold_started_at"), current.get("pending_pause_started_at")) or stamp
+                current["pending_pause_started_at"] = pause_from.strftime("%Y-%m-%d %H:%M:%S")
+                operations.append({"id":job_id,"expected":row,"payload":{"status":"🟧 รอคิวผลิต","hold_started_at":None,"step_progress":progress}})
+            persist_job_snapshot_updates(endpoint, operations)
+            for operation in operations:
+                row = operation["expected"]
+                log_job_event(operation["id"],row.get("plan_code"),row.get("drawing_name"),machine,"Return to Waiting",reason="คืนคิวที่หยุดจาก Batch เป็นรอคิวปกติ")
+            st.cache_data.clear()
+            st.session_state["operator_cancel_start_feedback"] = "คืนคิวที่เลือกแล้ว โดยเก็บเวลาผลิตจริงเดิมไว้ครบ"
+            st.session_state["operator_reset_piece_mode"] = True
+            st.rerun()
+        except (ValueError, requests.RequestException) as exc:
+            st.error("ยังยืนยันการคืนคิวไม่ได้ กรุณาตรวจข้อมูลล่าสุด: "+str(exc))
+
+
 def remember_shop_machine(widget_key, memory_key):
     value = st.session_state.get(widget_key)
     if value:
@@ -11346,6 +11397,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     hold_jobs["ID"].apply(safe_int).isin(batch_paused_job_ids)
                 ].copy()
                 batch_guard = st.session_state.get("batch_bulk_guard")
+                if batch_guard and batch_guard.get("action") == "return_waiting":
+                    st.session_state.pop("batch_bulk_guard", None)
+                    batch_guard = None
                 if batch_guard and batch_guard.get("machine") != selected_m:
                     st.session_state.pop("batch_bulk_guard", None)
                     batch_guard = None
@@ -11390,7 +11444,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     running_jobs = filter_batch_jobs_by_plan(running_jobs, batch_selected_plans)
                     hold_jobs = filter_batch_jobs_by_plan(hold_jobs, batch_selected_plans)
                     batch_stopped_hold_jobs = filter_batch_jobs_by_plan(batch_stopped_hold_jobs, batch_selected_plans)
-                    st.caption("คำสั่ง Start / Resume / หยุด / Finish / คืนคิว ใช้เฉพาะแผนที่เลือกบนเครื่องนี้")
+                    st.caption("คำสั่ง Start / Resume / หยุด / Finish ใช้เฉพาะแผนที่เลือกบนเครื่องนี้")
                     st.info("หยุด Batch → กลับไปรอคิว โดยเก็บเวลาที่ทำแล้ว; กด Start เพื่อทำต่อ • ยกเลิก Start ผิด → ล้างเวลาเริ่มที่กดผิด อยู่ในโหมดรันทีละคิว • Finish รวมจบเฉพาะ Step ปัจจุบัน หากมี Step ถัดไป งานจะกลับไปรอ Start")
                     batch_start_mode = st.radio(
                         "🚀 Drawing ที่ต้องการ Start",
@@ -11424,7 +11478,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         st.session_state.pop("batch_bulk_guard", None)
                         batch_guard = None
                         st.info("เปลี่ยน Drawing ที่จะ Start แล้ว กรุณาตรวจรายการใหม่")
-                    st.caption(f"Start เฉพาะ Drawing รอคิวที่เลือก ({len(waiting_jobs)} คิว) • ตัวเลือก Drawing นี้ไม่มีผลกับ Resume / หยุด / Finish / คืนคิว")
+                    st.caption(f"Start เฉพาะ Drawing รอคิวที่เลือก ({len(waiting_jobs)} คิว) • ตัวเลือก Drawing นี้ไม่มีผลกับ Resume / หยุด / Finish")
 
 
 
@@ -11501,22 +11555,6 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                     "nonce": uuid.uuid4().hex
                                 }
                                 st.rerun()
-                        if st.button(
-                            f"↩️ คืนคิว Batch เก่าที่ค้างสถานะพัก ({len(batch_stopped_hold_jobs)} คิว)",
-                            disabled=(len(batch_stopped_hold_jobs) == 0),
-                            type="secondary",
-                            use_container_width=True,
-                            key="prepare_batch_return_waiting"
-                        ):
-                            st.session_state.batch_bulk_guard = {
-                                "action": "return_waiting",
-                                "machine": selected_m,
-                                    "plans": batch_plan_scope,
-                                "ids": [safe_int(v) for v in batch_stopped_hold_jobs["ID"].tolist()],
-                                "armed_at": get_bangkok_str(),
-                                "nonce": uuid.uuid4().hex
-                            }
-                            st.rerun()
                     else:
                         guard_action = batch_guard.get("action")
                         guard_ids = {safe_int(v) for v in batch_guard.get("ids", [])}
@@ -11708,6 +11746,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                     st.rerun()
                                 else:
                                     st.error(f"{action_th} แบบกลุ่มไม่สำเร็จครบทุกรายการ กรุณาตรวจสอบการเชื่อมต่อ Supabase")
+
+            if "Batch" not in run_mode:
+                render_piece_legacy_batch_return(m_all_jobs, operator_events, selected_m)
 
             m_active = m_all_jobs.copy()
             m_active["_sort_key"] = m_active.apply(get_production_queue_sort_key, axis=1)
@@ -12078,39 +12119,42 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                 if is_step_waiting and blocking_running_text:
                                     st.caption(f"🔒 เครื่องกำลังรัน {blocking_running_text}")
 
-                if "Batch" not in run_mode and (is_step_running or is_step_hold):
-                    with st.expander("↩️ ยกเลิกการเริ่มผิด → คืนเป็นรอคิว", expanded=False):
-                        st.caption("ใช้เมื่อกด Start ผิดและยังไม่ได้ทำงานจริง คืนเฉพาะการเริ่ม Step แรกที่ยังไม่มี Step จบ")
-                        st.info(f"แผน {plan_code} | Drawing {drawing_code} | Step {current_step_name}")
-                        with st.form(f"cancel_wrong_start_{target_id}"):
-                            cancel_reason_choice = st.selectbox(
-                                "เหตุผลที่ยกเลิก *",
-                                ["กรุณาเลือกสาเหตุ", "เลือกคิวผิด", "เลือก Drawing ผิด", "เลือกแผนงานผิด", "เลือกเครื่องจักรผิด", "กด Start โดยไม่ตั้งใจ", "อื่น ๆ"],
-                            )
-                            cancel_reason_detail = st.text_input(
-                                "รายละเอียดเพิ่มเติม (กรอกเมื่อเลือกอื่น ๆ)",
-                                placeholder="สาเหตุสำเร็จรูปไม่ต้องพิมพ์เพิ่ม",
-                            )
-                            cancel_confirm = st.checkbox("ยืนยันว่าเริ่มผิดและยังไม่ได้ผลิตจริง เวลาที่กดผิดจะไม่ถูกนำมาคำนวณ")
-                            cancel_submit = st.form_submit_button("↩️ ยืนยันยกเลิกการเริ่มผิด", use_container_width=True)
-                        if cancel_submit:
-                            reason_detail = cancel_reason_detail.strip()
-                            cancel_reason = "" if cancel_reason_choice == "กรุณาเลือกสาเหตุ" else (
-                                reason_detail if cancel_reason_choice == "อื่น ๆ" else
-                                cancel_reason_choice + (f" — {reason_detail}" if reason_detail else "")
-                            )
-                            if not cancel_confirm or not cancel_reason:
-                                st.warning("เลือกสาเหตุและติ๊กยืนยันก่อนคืนคิว หากเลือกอื่น ๆ กรุณากรอกรายละเอียด")
-                            else:
-                                cancelled, cancel_message = cancel_wrong_job_start(target_id, selected_m, s_start, cancel_reason)
-                                if cancelled:
-                                    st.session_state.pop("batch_bulk_guard", None)
-                                    st.session_state.pop("pending_shop_finish_confirmation", None)
-                                    st.session_state["operator_cancel_start_feedback"] = cancel_message
-                                    st.session_state["operator_reset_piece_mode"] = True
-                                    st.rerun()
+                if "Batch" not in run_mode:
+                    with st.expander("↩️ คืนคิว — ยกเลิก Start ผิด", expanded=False):
+                        if not (is_step_running or is_step_hold):
+                            st.info("งานนี้อยู่ในสถานะรอคิวอยู่แล้ว จึงไม่ต้องคืนคิว หากต้องการเริ่มทำงานให้กด Start ด้านบน")
+                        else:
+                            st.caption("ใช้เมื่อกด Start ผิดและยังไม่ได้ทำงานจริง คืนเฉพาะการเริ่ม Step แรกที่ยังไม่มี Step จบ")
+                            st.info(f"แผน {plan_code} | Drawing {drawing_code} | Step {current_step_name}")
+                            with st.form(f"cancel_wrong_start_{target_id}"):
+                                cancel_reason_choice = st.selectbox(
+                                    "เหตุผลที่ยกเลิก *",
+                                    ["กรุณาเลือกสาเหตุ", "เลือกคิวผิด", "เลือก Drawing ผิด", "เลือกแผนงานผิด", "เลือกเครื่องจักรผิด", "กด Start โดยไม่ตั้งใจ", "อื่น ๆ"],
+                                )
+                                cancel_reason_detail = st.text_input(
+                                    "รายละเอียดเพิ่มเติม (กรอกเมื่อเลือกอื่น ๆ)",
+                                    placeholder="สาเหตุสำเร็จรูปไม่ต้องพิมพ์เพิ่ม",
+                                )
+                                cancel_confirm = st.checkbox("ยืนยันว่าเริ่มผิดและยังไม่ได้ผลิตจริง เวลาที่กดผิดจะไม่ถูกนำมาคำนวณ")
+                                cancel_submit = st.form_submit_button("↩️ ยืนยันยกเลิกการเริ่มผิด", use_container_width=True)
+                            if cancel_submit:
+                                reason_detail = cancel_reason_detail.strip()
+                                cancel_reason = "" if cancel_reason_choice == "กรุณาเลือกสาเหตุ" else (
+                                    reason_detail if cancel_reason_choice == "อื่น ๆ" else
+                                    cancel_reason_choice + (f" — {reason_detail}" if reason_detail else "")
+                                )
+                                if not cancel_confirm or not cancel_reason:
+                                    st.warning("เลือกสาเหตุและติ๊กยืนยันก่อนคืนคิว หากเลือกอื่น ๆ กรุณากรอกรายละเอียด")
                                 else:
-                                    st.error(cancel_message)
+                                    cancelled, cancel_message = cancel_wrong_job_start(target_id, selected_m, s_start, cancel_reason)
+                                    if cancelled:
+                                        st.session_state.pop("batch_bulk_guard", None)
+                                        st.session_state.pop("pending_shop_finish_confirmation", None)
+                                        st.session_state["operator_cancel_start_feedback"] = cancel_message
+                                        st.session_state["operator_reset_piece_mode"] = True
+                                        st.rerun()
+                                    else:
+                                        st.error(cancel_message)
 
                 current_step_names = [item.get("name", f"Step {idx + 1}") for idx, item in enumerate(tracked_steps)]
                 st.markdown("**รายการ Step และเวลาทำงานจริงในคิวนี้**")
