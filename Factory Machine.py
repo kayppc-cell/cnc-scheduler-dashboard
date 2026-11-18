@@ -8143,7 +8143,7 @@ def _render_shop_finish_controls(target_id, selected_m, current_step_index, trac
             confirm_finish = st.button('✅ ยืนยัน Finish', key=f"confirm_finish_step_{target_id}_{pending_finish.get('nonce', 'current')}", type='primary', use_container_width=True)
         if cancel_finish:
             st.session_state.pop('pending_shop_finish_confirmation', None)
-            st.rerun(scope='fragment' if fragment_mode else 'app')
+            st.rerun(scope='app')
         if confirm_finish:
             try:
                 fresh_finish_rows = fetch_shop_finish_job(target_id)
@@ -10338,6 +10338,11 @@ def prepare_process_edit(case, steps, raw_jobs, frame, now):
     staged_df = pd.DataFrame(staged).rename(columns=mapping)
     prior_snapshot = st.session_state.get("_tpc_flow_jobs_snapshot")
     try:
+        original_df = pd.DataFrame(raw_jobs).rename(columns=mapping)
+        st.session_state["_tpc_flow_jobs_snapshot"] = original_df
+        before_chain = calculate_production_chain(original_df, as_of=now)
+        before_forecast = {safe_int(row["ID"]): (first_valid_datetime(row.get("_chain_start")), first_valid_datetime(row.get("_chain_finish")))
+                           for row in before_chain.to_dict("records")}
         st.session_state["_tpc_flow_jobs_snapshot"] = staged_df
         chain = calculate_production_chain(staged_df, as_of=now)
     finally:
@@ -10360,8 +10365,13 @@ def prepare_process_edit(case, steps, raw_jobs, frame, now):
         patch = {"ready_at": start.strftime("%Y-%m-%d %H:%M:%S"), "baseline_ready_at": start.strftime("%Y-%m-%d %H:%M:%S"), "baseline_finish_at": finish.strftime("%Y-%m-%d %H:%M:%S")}
         if job_id in target_ids:
             patch.update({key: job[key] for key in ("machine_name", "setup_mins", "basic_hrs", "prog_hrs", "step_name", "step_progress")})
-        elif all(first_valid_datetime(by_job[job_id].get(key)) == first_valid_datetime(value) for key, value in patch.items()):
-            continue
+        else:
+            # Compare forecasts from the SAME snapshot and clock, not stale stored baselines.
+            # Unrelated queues must not be rewritten just because their baselines are old.
+            if before_forecast.get(job_id) == (start, finish):
+                continue
+            if not process_job_is_untouched(by_job[job_id]):
+                raise ValueError(f"คิวที่ได้รับผลกระทบ ID {job_id} แผน {job.get('plan_code')} เครื่อง {job['machine_name']} มีประวัติเริ่มงานแล้ว กรุณาตรวจสถานะคิวนี้ก่อน ยังไม่ได้บันทึก")
         patches.append({"id": job_id, "payload": patch})
         preview.append({"แผน": job.get("plan_code"), "Drawing": job.get("drawing_name"), "ID คิว": job_id,
                         "เครื่อง": job["machine_name"], "เริ่มใหม่": start, "จบใหม่": finish,
@@ -10476,7 +10486,7 @@ def render_process_route_editor(case, steps, prefix, *, opened=False):
                                               "ลบ":st.column_config.CheckboxColumn("ลบขั้นตอนนี้")})
         actor = st.text_input("ชื่อผู้แก้ไขขั้นตอน", key=key+"_actor")
         reason = st.text_input("เหตุผลการแก้ไขขั้นตอน", key=key+"_reason")
-        signature = hashlib.sha256(frame.to_json(force_ascii=False).encode()+json.dumps(steps,sort_keys=True,default=str).encode()+str(calendar_changes()).encode()).hexdigest()
+        signature = hashlib.sha256(b"process-scope-v2"+frame.to_json(force_ascii=False).encode()+json.dumps(steps,sort_keys=True,default=str).encode()+str(calendar_changes()).encode()).hexdigest()
         if len(editable) == 1:
             st.caption("เหลือขั้นที่ยังไม่เริ่ม 1 ขั้น: แก้เครื่องและนาทีได้ แต่ลบขั้นสุดท้ายในเครื่องมือนี้ไม่ได้ หากสร้าง Drawing ผิด ต้องลบทั้งเส้นทางที่ยังไม่เคย Start")
         if st.button("3. แสดงผลหลังแก้ไข / รายการที่จะลบ", type="primary", key=key+"_preview"):
@@ -10508,10 +10518,11 @@ def render_process_route_editor(case, steps, prefix, *, opened=False):
                     st.error("ยังไม่บันทึกการแก้ไข: " + safe_str(message) + " • หากยังไม่ติดตั้ง ให้รัน SQL แก้ไข Process ในเมนูตั้งค่าและเครื่องมือผู้ดูแล")
                     st.session_state.pop(key+"_draft", None)
                     return
-                st.session_state.pop(key+"_draft", None)
-                st.session_state.pop(key+"_table", None)
+                for state_key in list(st.session_state):
+                    if state_key.startswith(key+"_"):
+                        st.session_state.pop(state_key, None)
                 st.cache_data.clear()
-                st.session_state["_flow_notice"] = "แก้ไข Process และคิวครบแล้ว เก็บประวัติเดิมไว้เรียบร้อย"
+                st.session_state["_flow_notice"] = "ลบ/แก้ไข Process สำเร็จแล้ว อัปเดตเส้นทางและล้างช่องกรอกเรียบร้อย"
                 st.rerun(scope="app")
             except (requests.RequestException, ValueError) as exc:
                 st.session_state.pop(key+"_draft", None)
@@ -10538,8 +10549,9 @@ def render_flow_installation_downloads(prefix):
 
 @st.fragment
 def render_flow_center(jobs=None, *, admin=False, prefix="production"):
-    if st.session_state.pop("_flow_notice", None):
-        st.success("บันทึกเส้นทางผลิต / ผล QC เรียบร้อย")
+    flow_notice = st.session_state.pop("_flow_notice", None)
+    if flow_notice:
+        st.success(safe_str(flow_notice))
     with st.expander("🔄 เส้นทางผลิต → ตรวจรับ QC → งานแก้ไข / งานจบสมบูรณ์"):
         if not st.checkbox("เปิดตารางเส้นทางผลิต / ผล QC", key=f"{prefix}_load_flow_center"):
             st.caption("ติ๊กเพื่อโหลดรายละเอียดเมื่อใช้งาน ลดการโหลดซ้ำระหว่างทำงานส่วนอื่น")
@@ -11148,6 +11160,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
     if training_active:
         st.warning("🎓 โหมดฝึกใช้งาน — 18 เครื่องจำลอง • หน้าจอและคำสั่งชุดเดียวกับหน้างานจริง • ไม่บันทึกลง Supabase")
         st.caption("ข้อมูลฝึกแยกของผู้ใช้แต่ละ session ปิด session แล้วข้อมูลอาจหาย; ใช้กะและเวลาจริงของระบบ")
+        st.caption("ใบงานตัวอย่างมี 3 Step: ตั้งงาน → ผลิตชิ้นงาน → ตรวจชิ้นงาน ต้อง Finish ทีละ Step จนครบ; งานจริงใช้จำนวน Step ตามใบงานนั้น ปุ่มและคำสั่ง Batch / ยกเลิก Start ผิด ใช้ชุดเดียวกัน")
         reset_feedback = st.session_state.pop("training_reset_feedback", None)
         if reset_feedback:
             st.success(reset_feedback)
@@ -11378,6 +11391,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     hold_jobs = filter_batch_jobs_by_plan(hold_jobs, batch_selected_plans)
                     batch_stopped_hold_jobs = filter_batch_jobs_by_plan(batch_stopped_hold_jobs, batch_selected_plans)
                     st.caption("คำสั่ง Start / Resume / หยุด / Finish / คืนคิว ใช้เฉพาะแผนที่เลือกบนเครื่องนี้")
+                    st.info("หยุด Batch → กลับไปรอคิว โดยเก็บเวลาที่ทำแล้ว; กด Start เพื่อทำต่อ • ยกเลิก Start ผิด → ล้างเวลาเริ่มที่กดผิด อยู่ในโหมดรันทีละคิว • Finish รวมจบเฉพาะ Step ปัจจุบัน หากมี Step ถัดไป งานจะกลับไปรอ Start")
                     batch_start_mode = st.radio(
                         "🚀 Drawing ที่ต้องการ Start",
                         ["เลือก Drawing", "ทุก Drawing ในแผนที่เลือก"], horizontal=True,
@@ -11455,7 +11469,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                         b_c3, b_c4 = st.columns(2)
                         with b_c3:
                             if st.button(
-                                f"🔎 ตรวจรายการก่อนหยุดคิวตามแผนที่เลือก ({len(running_jobs)} คิว)",
+                                f"🔎 หยุด Batch → กลับรอคิว (เก็บเวลาเดิม) ({len(running_jobs)} คิว)",
                                 disabled=(len(running_jobs) == 0),
                                 type="secondary",
                                 use_container_width=True,
@@ -11488,7 +11502,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                 }
                                 st.rerun()
                         if st.button(
-                            f"↩️ คืนคิวที่หยุดจาก Batch เป็นรอคิวปกติ ({len(batch_stopped_hold_jobs)} คิว)",
+                            f"↩️ คืนคิว Batch เก่าที่ค้างสถานะพัก ({len(batch_stopped_hold_jobs)} คิว)",
                             disabled=(len(batch_stopped_hold_jobs) == 0),
                             type="secondary",
                             use_container_width=True,
@@ -11607,11 +11621,19 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                                             payload["actual_start"] = now_str
                                     elif guard_action == "resume":
                                         current = progress["steps"][idx]
-                                        hold_started_dt = parse_flexible_datetime(r.get("เริ่มพักจริง"))
+                                        step_was_started = bool(first_valid_datetime(current.get("started_at")))
+                                        hold_started_dt = (first_valid_datetime(r.get("เริ่มพักจริง"), current.get("pending_pause_started_at"))
+                                                           if step_was_started else first_valid_datetime(current.get("pending_pause_started_at"), r.get("เริ่มพักจริง")))
                                         pause_delta = 0.0
                                         if hold_started_dt is not None and pd.notna(hold_started_dt):
                                             pause_delta = get_work_seconds_between(hold_started_dt, confirm_now)
-                                        current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + pause_delta
+                                        if step_was_started:
+                                            current["paused_seconds"] = safe_float(current.get("paused_seconds"), 0.0) + pause_delta
+                                        else:
+                                            # Waiting before this Step starts belongs to the job wait, not Step work time.
+                                            current["started_at"] = now_str
+                                        # Resume closes the pause interval in both training and production.
+                                        current.pop("pending_pause_started_at", None)
                                         payload = {
                                             "status": "🟦 กำลังผลิต",
                                             "hold_started_at": None,
