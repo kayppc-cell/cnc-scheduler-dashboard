@@ -3797,6 +3797,22 @@ def build_project_queue_audit(plan_rows, production_due, include_finished=False)
     return sorted(output,key=lambda row:(ranks.get(row["เครื่อง"],len(ranks)),row["ID"]))
 
 
+def render_project_evidence_table(rows):
+    """Read-only HTML table, usable without the browser canvas grid."""
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        st.info("ไม่พบรายละเอียดในข้อมูลชุดนี้ กรุณาโหลดข้อมูลใหม่")
+        return
+    st.caption(f"แสดง {len(frame)} รายการ")
+    table = frame.fillna("-").to_html(index=False, escape=True, border=0, classes="tpc-evidence-grid")
+    st.markdown("""<style>.tpc-evidence-scroll{overflow:auto;max-height:540px;border:1px solid #64748b;border-radius:8px;margin:8px 0}
+    .tpc-evidence-grid{border-collapse:collapse;width:100%;font-size:14px;background:#fff;color:#0f172a}
+    .tpc-evidence-grid th,.tpc-evidence-grid td{border:1px solid #94a3b8;padding:8px;text-align:left;min-width:90px;vertical-align:top}
+    .tpc-evidence-grid th{background:#cbd5e1;position:sticky;top:0;color:#0f172a;white-space:nowrap}
+    .tpc-evidence-grid td{max-width:480px;overflow-wrap:anywhere}.tpc-evidence-grid tr:nth-child(even){background:#f1f5f9}</style>"""
+        + '<div class="tpc-evidence-scroll">' + table + '</div>', unsafe_allow_html=True)
+
+
 def render_project_department_drawings(breakdown, evidence_rows, plan_code):
     groups = split_project_department_drawings(breakdown)
     key = normalize_filter_key(plan_code)
@@ -3806,28 +3822,28 @@ def render_project_department_drawings(breakdown, evidence_rows, plan_code):
     st.caption("รวมงานแก้ไขที่กลับมาฝ่ายผลิต นับ Drawing ไม่ซ้ำ; รายละเอียดคิว/Step อาจมากกว่าจำนวน Drawing")
     st.caption("ชื่อ Drawing ที่ลงท้าย Welding ไม่ใช่สถานะงานเชื่อม ให้ดูเครื่องและ Step ที่ยังไม่เสร็จ; ขั้นตอนเชื่อมที่เสร็จแล้วจะแสดงแยกจากขั้น CNC หรือขั้นถัดไป")
     if groups["production"]:
-        if st.checkbox("แสดง Drawing ของฝ่ายผลิต", key=f"project_production_drawings_{key}"):
+        with st.expander("ดู Drawing ของฝ่ายผลิต", expanded=True):
             frame = pd.DataFrame(groups["production"]).drop(columns=["สถานะเส้นทาง/QC"], errors="ignore")
-            st.dataframe(frame, hide_index=True, use_container_width=True)
+            render_project_evidence_table(frame)
             render_delay_evidence_print_button(frame.to_dict("records"), f"{plan_code} - ฝ่ายผลิต")
     else:
         st.info("ไม่มี Drawing คงเหลือในฝ่ายผลิตตามข้อมูลชุดนี้")
-    if evidence_rows and st.checkbox("แสดงตารางข้อมูลงาน - คิวผลิต / Step", key=f"project_delay_evidence_{key}"):
-        st.dataframe(pd.DataFrame(evidence_rows), hide_index=True, use_container_width=True)
+    with st.expander("ดูรายละเอียดคิวผลิต / Step", expanded=False):
+        render_project_evidence_table(evidence_rows)
         render_delay_evidence_print_button(evidence_rows, f"{plan_code} - รายละเอียดคิวฝ่ายผลิต")
     st.markdown(f"**QC - ผลิตครบ รอ/กำลังตรวจ {len(groups['qc'])} Drawing**")
     st.caption("แสดงเฉพาะ Drawing ที่ผลิตครบและเส้นทางอยู่สถานะรอ QC ไม่รวมงานที่ส่งกลับไปผลิตแก้ไข")
     if groups["qc"]:
-        if st.checkbox("แสดง Drawing ของ QC", key=f"project_qc_drawings_{key}"):
+        with st.expander("ดู Drawing ของ QC", expanded=True):
             frame = pd.DataFrame(groups["qc"])[["แผนงาน", "Drawing", "สถานะ Drawing"]]
-            st.dataframe(frame, hide_index=True, use_container_width=True)
+            render_project_evidence_table(frame)
             render_delay_evidence_print_button(frame.to_dict("records"), f"{plan_code} - QC")
     else:
         st.info("ไม่มี Drawing รอ/กำลังตรวจ QC ตามข้อมูลชุดนี้")
     if groups["review"]:
         st.warning(f"ข้อมูลต้องตรวจสอบ {len(groups['review'])} Drawing - ยังไม่จัดเข้าฝ่ายผลิตหรือ QC เพื่อไม่ให้สรุปผิด")
-        if st.checkbox("แสดง Drawing ที่ต้องตรวจสอบ", key=f"project_review_drawings_{key}"):
-            st.dataframe(pd.DataFrame(groups["review"]), hide_index=True, use_container_width=True)
+        with st.expander("ดู Drawing ที่ต้องตรวจสอบ", expanded=True):
+            render_project_evidence_table(groups["review"])
             render_delay_evidence_print_button(groups["review"], f"{plan_code} - ข้อมูลต้องตรวจสอบ")
 
 
@@ -4783,12 +4799,14 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             with st.expander(f"🔎 หลักฐานราย Drawing / Step — แผน {issue['plan_code']}", expanded=False):
                 st.caption("แสดงข้อมูลคิวและสถานะที่บันทึกไว้ แต่ยังระบุสาเหตุที่แท้จริงไม่ได้ เช่น เครื่องเสีย ขาดคน หรือรอวัสดุ ต้องมีข้อมูลยืนยันเพิ่มเติม; งานเดียวกันอาจอยู่ในหลายกลุ่ม และเวลารออาจซ้อนกัน จึงไม่ควรนำจำนวนงานหรือเวลามาบวกเป็นยอดรวม")
                 render_project_department_drawings(issue.get("drawing_breakdown", {}), issue.get("evidence_rows", []), issue["plan_code"])
-                if st.checkbox("ตรวจเทียบสถานะกับหน้าเครื่อง / ใบจ่ายคิว ด้วย ID",key=f"project_queue_audit_{normalize_filter_key(issue['plan_code'])}"):
+                with st.expander("ตรวจเทียบสถานะกับหน้าเครื่อง / ใบจ่ายคิว ด้วย ID", expanded=False):
                     audit = issue.get("queue_audit", [])
                     if audit:
-                        st.dataframe(pd.DataFrame(audit),hide_index=True,use_container_width=True)
+                        render_project_evidence_table(audit)
                         st.caption("เทียบ ID + Drawing + เครื่องเดียวกัน: คิวนี้อยู่ในกรอบได้ แม้ทั้งแผนล่าช้าจากคิวอื่น เวลาในภาพที่เปิดคนละรอบอาจต่างกันตามการอัปเดตคิว")
                         render_delay_evidence_print_button(audit, f"{issue['plan_code']} - ตรวจเทียบรายคิว")
+                    else:
+                        st.info("ไม่พบข้อมูลคิวสำหรับตรวจเทียบในรอบโหลดนี้")
 
 
 
