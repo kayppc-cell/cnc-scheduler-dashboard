@@ -10727,6 +10727,31 @@ def render_process_route_search(cases, prefix):
         render_process_route_editor(lookup[selected], selected_steps, prefix+"_search", opened=True)
 
 
+def process_route_queue_windows(raw_jobs, now):
+    """Read full queue snapshot through the shared chain; never persist display dates."""
+    if not raw_jobs:
+        return {}
+    mapping = {"id":"ID", "plan_code":"แผนงาน", "drawing_name":"ชื่อ Drawing.",
+               "machine_name":"เลือกเครื่องจักร", "step_name":"ขั้นตอน (Step)", "status":"สถานะงาน",
+               "actual_start":"เริ่มจริง", "actual_finish":"เสร็จจริง", "hold_started_at":"เริ่มพักจริง",
+               "paused_seconds":"เวลาพักสะสม (วินาที)", "ready_at":"วัน-เวลาขึ้นงาน",
+               "setup_mins":"Setup (น.)", "basic_hrs":"Basic (น.)", "prog_hrs":"โปรแกรม (น.)",
+               "step_progress":"ติดตาม Step", "baseline_ready_at":"กำหนดพร้อมขึ้นงาน (Baseline)",
+               "baseline_finish_at":"เวลาจบ Baseline"}
+    frame = pd.DataFrame(raw_jobs).rename(columns=mapping)
+    previous = st.session_state.get("_tpc_flow_jobs_snapshot")
+    try:
+        st.session_state["_tpc_flow_jobs_snapshot"] = frame
+        chain = calculate_production_chain(frame, active_only=True, as_of=now)
+    finally:
+        if previous is None:
+            st.session_state.pop("_tpc_flow_jobs_snapshot", None)
+        else:
+            st.session_state["_tpc_flow_jobs_snapshot"] = previous
+    return {safe_int(row["ID"]): (row.get("_chain_start"), row.get("_chain_finish"))
+            for row in chain.to_dict("records")}
+
+
 def render_process_route_editor(case, steps, prefix, *, opened=False):
     if st.session_state.get("user_role") != "admin" or case.get("status") not in ("producing", "reworking"):
         return
@@ -10741,15 +10766,19 @@ def render_process_route_editor(case, steps, prefix, *, opened=False):
         editable = [item for item in current if item["sequence"] > locked]
         st.info(f"กำลังแก้ไข: แผน **{case['plan_code']}** | Drawing **{case['drawing_name']}** | จำนวน **{case['qty']} ชิ้น**")
         st.markdown("**1. ขั้นตอนที่บันทึกไว้เดิมทั้งหมด**")
+        queue_windows = process_route_queue_windows(raw_jobs, get_bangkok_now().replace(tzinfo=None))
+        st.caption("เริ่มตามคิว / จบตามคิว ใช้ลูกโซ่เดียวกับใบจ่ายคิว ณ รอบโหลดนี้ แยกจากเวลาเริ่มจริง / จบจริง; งานที่เสร็จแล้วไม่คำนวณคิวใหม่")
         original_rows = []
         for item in sorted(steps, key=lambda step:(safe_int(step.get("cycle")), step["sequence"])):
             job = by_id.get(safe_int(item.get("job_id")), {})
+            planned_start, planned_finish = queue_windows.get(safe_int(item.get("job_id")), (None, None))
             same_cycle = safe_int(item.get("cycle")) == safe_int(case["cycle"])
             can_edit = same_cycle and item["sequence"] > locked
             original_rows.append({"แผน":case["plan_code"], "Drawing":case["drawing_name"],
                                   "รอบงาน":"ผลิตครั้งแรก" if safe_int(item.get("cycle")) == 0 else f"แก้ไขครั้งที่ {item['cycle']}",
                                   "ลำดับเดิม":item["sequence"], "Process เดิม":item["name"], "ขั้นตอนย่อยเดิม":safe_str(job.get("step_name"), item["name"]), "เครื่องเดิม":item["machine_name"],
                                   "นาทีรวมเดิม":item["minutes"], "สถานะ":safe_str(job.get("status"), "ยังไม่เข้าคิว"),
+                                  "เริ่มตามคิว":flow_display_time(planned_start), "จบตามคิว":flow_display_time(planned_finish),
                                   "เริ่มจริง":flow_display_time(job.get("actual_start")), "จบจริง":flow_display_time(job.get("actual_finish")),
                                   "แก้ไขได้หรือไม่":"แก้ไขได้ — ยังไม่เริ่ม" if can_edit else "ล็อกประวัติเดิม"})
         st.dataframe(pd.DataFrame(original_rows), hide_index=True, use_container_width=True)
