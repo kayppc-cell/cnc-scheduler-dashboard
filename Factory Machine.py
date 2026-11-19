@@ -4088,6 +4088,19 @@ def render_plan_rescue_simulator(jobs, masters, summary):
             st.info("ข้อมูลคิว กะ หรือเงื่อนไขเปลี่ยนแล้ว กรุณากดจำลองใหม่")
 
 
+def build_project_graph_details_table(summary):
+    """Display the graph snapshot directly; do not recalculate its dates or risk."""
+    columns = ["แผนงาน", "สถานะ", "เริ่ม Production", "สิ้นสุด Production", "เริ่มผลิต", "จบผลิต",
+               "เลยกำหนดตามปฏิทิน", "เกินเฉพาะเวลาทำงาน", "คิวดีเลย์", "Drawing ทั้งหมด",
+               "Drawing คงเหลือ", "งานคงเหลือ (%)"]
+    table = summary.reindex(columns=columns).copy()
+    for column in ["เริ่ม Production", "สิ้นสุด Production", "เริ่มผลิต", "จบผลิต"]:
+        table[column] = table[column].map(
+            lambda value: value.strftime("%d/%m/%Y %H:%M") if value is not None and pd.notna(value) else "ยังวางงานไม่ครบ"
+        )
+    return table.rename(columns={"สิ้นสุด Production": "กำหนดจบ Production", "เริ่มผลิต": "คาดว่าเริ่มผลิต", "จบผลิต": "คาดว่าจะจบผลิต"})
+
+
 def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_only=False):
     if chart_only:
         read_only = True
@@ -4342,6 +4355,8 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         shown_risky_drawings = risky_drawings or delayed_drawings
         shown_risky_machines = risky_machines or delayed_machines
         rows.append({"แผนงาน": code, "เริ่ม Production": customer_start, "สิ้นสุด Production": customer_due, "เริ่มผลิต": production_start, "จบผลิต": production_finish, "สถานะ": status, "คิวดีเลย์": delayed_count, "ดีเลย์สูงสุด (ชม.)": round(max_delay_hours, 1), "เกินกำหนด (ชม.)": round(late_hours, 1), "Drawing เสี่ยง": shown_risky_drawings or "-", "เครื่องเสี่ยง": shown_risky_machines or "-", "ส่งจ้างภายนอก": len(outsourced_plan_jobs), "Drawing ทั้งหมด": drawing_progress["drawing_total"], "Drawing เสร็จแล้ว": drawing_progress["drawing_completed"], "Drawing คงเหลือ": drawing_progress["drawing_remaining"], "งานคงเหลือ (%)": drawing_progress["remaining_pct"], "งานเสร็จ (%)": drawing_progress["completed_pct"], "ชั่วโมงแผน": round(planned_hours, 2)})
+        rows[-1]["เลยกำหนดตามปฏิทิน"] = calendar_late_text
+        rows[-1]["เกินเฉพาะเวลาทำงาน"] = work_late_text
         customer_text = f"Production: {project_short_date(customer_start)}–{project_short_date(customer_due)}"
         gantt_rows.append({"แผนงาน": f"{code} | Production", "เริ่ม": customer_start, "จบ": customer_due, "ประเภท": "กรอบเวลา Production", "สถานะ": status, "ข้อความ": customer_text, "รายละเอียดกำหนดจบ": project_due_details})
         if production_start and production_finish:
@@ -4701,6 +4716,20 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             use_container_width=True,
             config={"displayModeBar": device_mode == "desktop", "responsive": True, "scrollZoom": False}
         )
+
+    if not chart_only and not summary_view.empty:
+        st.markdown("### 📋 รายละเอียดแผนงานจากกราฟ")
+        graph_details = build_project_graph_details_table(summary_view)
+        st.dataframe(
+            graph_details.style.apply(
+                lambda row: ["background-color: #FEE2E2; color: #991B1B" if "เกินแผน" in str(row["สถานะ"])
+                             else "background-color: #FFF7ED; color: #9A3412" if "ดีเลย์" in str(row["สถานะ"])
+                             else "" for _ in row], axis=1
+            ),
+            hide_index=True, use_container_width=True,
+            height=min(600, 40 + 36 * len(graph_details))
+        )
+        st.caption("ข้อมูลชุดเดียวกับกราฟและตัวกรองแผนงาน • เวลาปฏิทินรวมกลางคืนและวันหยุด ส่วนเวลาทำงานใช้กะและปฏิทินโรงงาน • วันจบผลิตเป็นค่าคาดการณ์ ไม่ใช่ Finish จริง")
 
     if chart_only:
         if gantt_view.empty:
@@ -9160,12 +9189,105 @@ def build_actual_utilization(jobs, range_start, range_end, now):
         left, right = max(start, range_start), min(end, range_end, now)
         if right <= left:
             continue
+        progress = row.get("ติดตาม Step")
+        if isinstance(progress, str):
+            try:
+                progress = json.loads(progress)
+            except (ValueError, TypeError):
+                progress = {}
+        progress = progress if isinstance(progress, dict) else {}
+        if progress.get("machine_time_segments"):
+            uncertain("เคยย้ายเครื่อง ไม่รวมชั่วโมงทั้งงานเป็นของเครื่องปลายทาง ต้องตรวจประวัติแยกเครื่อง")
+            continue
+        steps = progress.get("steps") or []
+        idx = safe_int(progress.get("current_index"), 0)
+        if finish is None and isinstance(steps, list) and 0 <= idx < len(steps):
+            pending = parse_flexible_datetime(steps[idx].get("pending_pause_started_at"))
+            if pending is not None and pd.notna(pending):
+                end = min(end, pending)
+                right = min(right, end)
+                if right <= left:
+                    continue
         pause = max(0.0, safe_float(row.get("เวลาพักสะสม (วินาที)"), 0.0))
         if pause and (left > start or right < end):
             uncertain("มีเวลาพักสะสม แต่ช่วงที่เลือกครอบคลุมงานเพียงบางส่วน ระบุตำแหน่งเวลาพักไม่ได้ จึงไม่นำงานนี้มาคำนวณ")
             continue
         busy[machine] += max(0.0, get_work_capacity_between(left, right) - pause / 3600.0)
     return busy, issues
+
+
+def build_machine_usage_union(jobs, range_start, range_end, now):
+    """Union proven machine intervals only. Unknown pause/move history blocks a final rate."""
+    intervals = {machine: [] for machine in MACHINE_LIST}
+    uncertain = {machine: [] for machine in MACHINE_LIST}
+    end_limit = min(range_end, now)
+    def dt(value):
+        value = parse_flexible_datetime(value)
+        return value if value is not None and pd.notna(value) else None
+    for row in jobs.to_dict("records"):
+        machine = safe_str(row.get("เลือกเครื่องจักร"))
+        if machine not in intervals:
+            continue
+        start, finish = dt(row.get("เริ่มจริง")), dt(row.get("เสร็จจริง"))
+        progress = row.get("ติดตาม Step")
+        if isinstance(progress, str):
+            try:
+                progress = json.loads(progress)
+            except (ValueError, TypeError):
+                progress = {}
+        progress = progress if isinstance(progress, dict) else {}
+        segments = progress.get("machine_time_segments") or []
+        affected = {machine} | {safe_str(item.get("machine_name")) for item in segments if isinstance(item, dict)}
+        def flag(reason):
+            detail = {"ID": row.get("ID"), "แผน": row.get("แผนงาน"), "Drawing": row.get("ชื่อ Drawing."), "ข้อมูลที่ต้องตรวจสอบ": reason}
+            for name in affected:
+                if name in uncertain:
+                    uncertain[name].append(dict(detail, เครื่อง=name))
+        status = safe_str(row.get("สถานะงาน"))
+        if start is None:
+            if finish is not None and range_start < finish <= end_limit:
+                flag("มี Finish แต่ไม่มี Start จึงยืนยันช่วงใช้เครื่องไม่ได้")
+            elif "กำลังผลิต" in status or "พักงาน" in status:
+                flag("งานกำลังทำ/พัก แต่ไม่มี Start จึงยืนยันช่วงใช้เครื่องไม่ได้")
+            continue
+        end = finish or now
+        if start >= end_limit or end <= range_start:
+            continue
+        if end <= start or ("เสร็จสิ้น" in status and finish is None):
+            flag("Start–Finish ไม่ครบหรือขัดกัน")
+            continue
+        if segments:
+            flag("เคยย้ายเครื่อง มีเพียงชั่วโมงสุทธิรายเครื่อง แต่ไม่มีช่วงเริ่ม–จบที่ใช้หักเวลาซ้อน จึงไม่สรุปเปอร์เซ็นต์เครื่องที่เกี่ยวข้อง")
+            continue
+        steps = progress.get("steps") or []
+        idx = safe_int(progress.get("current_index"), 0)
+        current = steps[idx] if isinstance(steps, list) and 0 <= idx < len(steps) and isinstance(steps[idx], dict) else {}
+        hold = dt(row.get("เริ่มพักจริง"))
+        pending = dt(current.get("pending_pause_started_at"))
+        if finish is None:
+            if hold is not None or pending is not None:
+                end = min([end] + [value for value in (hold, pending) if value is not None])
+            elif "พักงาน" in status or "รอคิว" in status:
+                flag("งานหยุด/รอคิวที่เคย Start แต่ไม่พบเวลาเริ่มหยุด")
+                continue
+        pause = safe_float(row.get("เวลาพักสะสม (วินาที)"), 0.0)
+        step_pause = sum(safe_float(item.get("paused_seconds"), 0.0) for item in steps if isinstance(item, dict)) if isinstance(steps, list) else 0.0
+        if pause != 0 or step_pause != 0:
+            flag("มีเวลาพักสะสม แต่ไม่มีช่วงเริ่ม–จบพักครบ จึงยังรวมช่วงใช้เครื่องโดยไม่ซ้ำไม่ได้")
+            continue
+        left, right = max(start, range_start), min(end, end_limit)
+        if right > left:
+            intervals[machine].append((left, right))
+    hours = {}
+    for machine, spans in intervals.items():
+        merged = []
+        for left, right in sorted(spans):
+            if merged and left <= merged[-1][1]:
+                merged[-1][1] = max(right, merged[-1][1])
+            else:
+                merged.append([left, right])
+        hours[machine] = sum(get_work_capacity_between(left, right) for left, right in merged)
+    return hours, uncertain
 
 
 def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_gantt=True, show_util=True, actual_jobs=None):
@@ -9454,6 +9576,14 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
             return
         util_period_end = min(util_period_end, today_dt)
         m_busy_map, util_issues = build_actual_utilization(actual_jobs, util_period_start, util_period_end, today_dt)
+        machine_hours, machine_uncertain = build_machine_usage_union(actual_jobs, util_period_start, util_period_end, today_dt)
+        usage_view = st.radio("ค่าที่ต้องการดู", ["อัตราการใช้เครื่อง (%)", "ชั่วโมงงานรวม"], horizontal=True, key="tpc_util_actual_measure")
+        union_selected = usage_view == "อัตราการใช้เครื่อง (%)"
+        union_issues = [item for items in machine_uncertain.values() for item in items]
+        if union_issues:
+            st.warning("บางเครื่องยังยืนยันอัตราการใช้เครื่องไม่ได้ เพราะประวัติเวลาพัก/ย้ายเครื่องไม่ครบ ดูเหตุผลในตารางด้านล่าง")
+            with st.expander("ข้อมูลที่ยังยืนยันช่วงใช้เครื่องไม่ได้"):
+                st.dataframe(pd.DataFrame(union_issues), hide_index=True, use_container_width=True)
         if util_issues:
             st.warning(f"มี {len(util_issues)} งานที่คำนวณในช่วงนี้ไม่ได้ ตัวเลขจึงยังไม่ครบทุกงาน เปิดดูรายละเอียดด้านล่าง")
             with st.expander("งานที่ยังไม่นำมาคำนวณการใช้งานจริง"):
@@ -9485,7 +9615,21 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
         "(หักเวลาพักและวันหยุดตามปฏิทินกะโรงงานแล้ว)"
     )
     if util_actual:
-        st.caption("ใช้ Start–Finish จริงของงาน รวมงานที่ Finish แล้ว หักเวลาพักสะสมและเวลานอกกะ; รวมชั่วโมงต่อใบงาน งาน Batch ที่ทำพร้อมกันอาจนับเวลาซ้อนกัน จึงไม่ใช่ค่า OEE หรือเวลาจากเซนเซอร์เครื่อง")
+        st.caption("อัตราการใช้เครื่องรวมช่วง Start–Finish ที่ซ้อนกันเพียงครั้งเดียว และหักเวลานอกกะ ส่วนชั่วโมงงานรวมบวกเวลาของแต่ละใบงาน งานที่รันพร้อมกันจึงรวมซ้ำได้ ทั้งสองค่าอ้างอิงการบันทึกของผู้ใช้ ไม่ใช่ OEE หรือข้อมูลเซนเซอร์")
+        usage_rows = []
+        incomplete_job_machines = {safe_str(item.get("เครื่อง")) for item in util_issues}
+        incomplete_job_machines.update(safe_str(item.get("เครื่อง")) for item in union_issues if "ย้ายเครื่อง" in item.get("ข้อมูลที่ต้องตรวจสอบ", ""))
+        for machine in MACHINE_LIST:
+            complete = not machine_uncertain[machine]
+            usage_rows.append({"เครื่องจักร": machine,
+                "ชั่วโมงพร้อมตามกะ": round(total_horizon_work_hrs, 2),
+                "ชั่วโมงใช้เครื่องไม่ซ้ำ": round(machine_hours[machine], 2) if complete else None,
+                "อัตราการใช้เครื่อง (%)": round(machine_hours[machine] / total_horizon_work_hrs * 100, 1) if complete and total_horizon_work_hrs > 0 else None,
+                "ชั่วโมงงานรวมที่คำนวณได้": round(m_busy_map[machine], 2),
+                "ความครบถ้วนอัตราใช้เครื่อง": "ข้อมูลช่วงเวลาครบตามรายการที่บันทึก" if complete else "ยังสรุปไม่ได้ - ประวัติช่วงเวลาไม่ครบ",
+                "ความครบถ้วนชั่วโมงงานรวม": "ยังไม่ครบทุกงาน" if machine in incomplete_job_machines else "ครบตามรายการที่บันทึก"})
+        st.dataframe(pd.DataFrame(usage_rows), hide_index=True, use_container_width=True)
+        st.caption("ช่องว่างหมายถึงยังสรุปไม่ได้ ไม่ใช่ 0% • 0 หมายถึงไม่พบเวลาใช้งานจากรายการที่บันทึกในช่วงนี้ • งานที่ข้อมูลไม่ครบแสดงแยกไว้ ไม่ประมาณเวลาและไม่ตัดเปอร์เซ็นต์ให้เหลือ 100%")
     else:
         st.caption("วิเคราะห์ภาระงานตามคิวผลิตในช่วงที่เลือก ไม่ใช่ชั่วโมงเดินเครื่องจริงที่บันทึกย้อนหลัง")
     if total_horizon_work_hrs <= 0:
@@ -9494,7 +9638,10 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
 
     util_list = []
     for m in MACHINE_LIST:
-        busy = m_busy_map[m]
+        busy = (machine_hours[m] if not machine_uncertain[m] else None) if util_actual and union_selected else m_busy_map[m]
+        if busy is None:
+            util_list.append({"เครื่องจักร": m, "ชั่วโมงทำงาน (ชม.)": None, "อัตราการใช้งาน (%)": None, "ข้อความแสดง": "ยังสรุปไม่ได้"})
+            continue
         # ไม่ตัดที่ 100% เพื่อให้เห็นข้อมูลคิวซ้อนหรือโหลดเกินกำลังจริง
         util_pct = (busy / total_horizon_work_hrs) * 100.0 if total_horizon_work_hrs > 0 else 0.0
         util_list.append({
@@ -9504,6 +9651,13 @@ def render_production_schedule_charts(active_jobs_editor_df, *, tv=False, show_g
             "ข้อความแสดง": f"{util_pct:.1f}% ({busy:.2f} ชม.)"
         })
     df_util = pd.DataFrame(util_list)
+    if util_actual and not union_selected:
+        fig_job_hours = px.bar(df_util, x="ชั่วโมงทำงาน (ชม.)", y="เครื่องจักร", orientation="h", text="ชั่วโมงทำงาน (ชม.)", category_orders={"เครื่องจักร": MACHINE_LIST})
+        fig_job_hours.update_yaxes(autorange="reversed")
+        fig_job_hours.update_layout(height=max(600, len(MACHINE_LIST)*30), xaxis_title="ชั่วโมงงานรวมที่คำนวณได้ (ชม.)", yaxis_title="เครื่องจักร")
+        render_touch_safe_chart("tpc_chart_job_hours", fig_job_hours, use_container_width=True, show_controls=not tv)
+        st.divider()
+        return
     util_axis_max = max(105.0, float(df_util["อัตราการใช้งาน (%)"].max()) + 10.0)
 
     fig_bar = px.bar(
