@@ -4727,7 +4727,8 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
                              else "" for _ in row], axis=1
             ),
             hide_index=True, use_container_width=True,
-            height=min(600, 40 + 36 * len(graph_details))
+            height=min(600, 40 + 36 * len(graph_details)),
+            column_config={"งานคงเหลือ (%)": st.column_config.NumberColumn("งานคงเหลือ (%)", format="%.1f")}
         )
         st.caption("ข้อมูลชุดเดียวกับกราฟและตัวกรองแผนงาน • เวลาปฏิทินรวมกลางคืนและวันหยุด ส่วนเวลาทำงานใช้กะและปฏิทินโรงงาน • วันจบผลิตเป็นค่าคาดการณ์ ไม่ใช่ Finish จริง")
 
