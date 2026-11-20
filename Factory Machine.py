@@ -1130,6 +1130,74 @@ def flow_job_is_blocked(row):
             or first_valid_datetime(match.iloc[0].get("เสร็จจริง")) is None)
 
 
+def build_shop_incoming_context(row, snapshot, forecast):
+    """Resolve dependencies by job ID, never by Drawing text or machine name."""
+    if not isinstance(snapshot, pd.DataFrame) or snapshot.empty or "ID" not in snapshot:
+        return [], None, "ยังไม่มีข้อมูลคิวต้นทาง กรุณารีเฟรชข้อมูล"
+    records = {safe_int(r.get("ID")): r for r in snapshot.to_dict("records")}
+    predicted = {safe_int(r.get("ID")): r for r in forecast.to_dict("records")} if isinstance(forecast, pd.DataFrame) else {}
+    seen, upstream = {safe_int(row.get("ID"))}, []
+    previous = flow_previous_job_id(row)
+    problem = ""
+    while previous:
+        if previous in seen:
+            problem = "เส้นทางอ้างอิงวนซ้ำ ต้องตรวจสอบข้อมูลก่อนเริ่มงาน"
+            break
+        seen.add(previous)
+        source = records.get(previous)
+        if source is None:
+            problem = f"ไม่พบคิวต้นทาง ID {previous} กรุณารีเฟรชหรือตรวจสอบเส้นทางผลิต"
+            break
+        upstream.append(source)
+        previous = flow_previous_job_id(source)
+    upstream.reverse()
+    def complete(job):
+        return "เสร็จสิ้น" in safe_str(job.get("สถานะงาน")) and first_valid_datetime(job.get("เสร็จจริง")) is not None
+    pending = [job for job in upstream if not complete(job)]
+    origin = pending[0] if pending else None
+    details = []
+    for job in upstream + [dict(row)]:
+        job_id = safe_int(job.get("ID"))
+        machine = safe_str(job.get("เลือกเครื่องจักร"))
+        machine_jobs = [r for r in records.values() if safe_str(r.get("เลือกเครื่องจักร")) == machine
+                        and any(s in safe_str(r.get("สถานะงาน")) for s in ("รอคิว", "กำลังผลิต", "พักงาน", "รอวัสดุ"))]
+        machine_jobs.sort(key=get_production_queue_sort_key)
+        rank = next((i for i, r in enumerate(machine_jobs, 1) if safe_int(r.get("ID")) == job_id), None)
+        estimate = first_valid_datetime(predicted.get(job_id, {}).get("_chain_finish"))
+        details.append({"ตำแหน่ง": "คิวนี้" if job_id == safe_int(row.get("ID")) else ("จุดที่ต้องตามงาน" if origin is not None and job_id == safe_int(origin.get("ID")) else "ขั้นตอนก่อนหน้า"),
+                        "แผนงาน": safe_str(job.get("แผนงาน")), "Drawing": safe_str(job.get("ชื่อ Drawing.")),
+                        "Process": safe_int(production_schedule_metadata(job).get("flow_sequence")),
+                        "ขั้นตอน": safe_str(job.get("ขั้นตอน (Step)")), "เครื่องจักร": machine,
+                        "คิวที่เครื่อง": rank if rank is not None else "–", "สถานะ": safe_str(job.get("สถานะงาน")),
+                        "จบจริง": flow_display_time(first_valid_datetime(job.get("เสร็จจริง"))),
+                        "คาดจบตามคิว": flow_display_time(estimate), "ID คิว": job_id})
+    return details, origin, problem
+
+
+def render_shop_incoming_context(row, snapshot, forecast):
+    details, origin, problem = build_shop_incoming_context(row, snapshot, forecast)
+    if problem:
+        st.warning(problem)
+    if origin is not None:
+        point = next(r for r in details if r["ตำแหน่ง"] == "จุดที่ต้องตามงาน")
+        st.info(f"📍 ตามงานที่ {point['เครื่องจักร']} · ขั้นตอน {point['ขั้นตอน']} · คิวที่ {point['คิวที่เครื่อง']}\n\n"
+                f"สถานะ: {point['สถานะ']} | คาดจบตามคิว: {point['คาดจบตามคิว']}")
+    with st.expander("🔎 ดูเส้นทางงานและคิวที่เครื่องต้นทาง", expanded=False):
+        if details:
+            st.dataframe(pd.DataFrame(details), hide_index=True, use_container_width=True)
+        if origin is not None:
+            machine = safe_str(origin.get("เลือกเครื่องจักร"))
+            source_queue = snapshot[snapshot["เลือกเครื่องจักร"].astype(str).eq(machine)
+                                    & snapshot["สถานะงาน"].astype(str).str.contains("รอคิว|กำลังผลิต|พักงาน|รอวัสดุ", na=False)].copy()
+            source_queue["_incoming_order"] = source_queue.apply(get_production_queue_sort_key, axis=1)
+            source_queue = source_queue.sort_values("_incoming_order").reset_index(drop=True)
+            source_queue.insert(0, "คิวที่เครื่อง", range(1, len(source_queue) + 1))
+            source_queue.insert(1, "งานที่ตามหา", source_queue["ID"].apply(safe_int).eq(safe_int(origin.get("ID"))).map({True: "📍 งานนี้", False: ""}))
+            st.markdown(f"**คิวที่เครื่องต้นทาง: {machine}**")
+            st.dataframe(source_queue[["คิวที่เครื่อง", "งานที่ตามหา", "ID", "แผนงาน", "ชื่อ Drawing.", "ขั้นตอน (Step)", "สถานะงาน"]], hide_index=True, use_container_width=True)
+        st.caption("ตำแหน่งอ้างอิงตามเส้นทางและสถานะที่บันทึกในระบบ ไม่ยืนยันตำแหน่งชิ้นงานจริง เวลาคาดการณ์เปลี่ยนตามคิวและการทำงาน; Start จะพร้อมเมื่อ Process ก่อนหน้าเสร็จจริง")
+
+
 def flow_process_label(row):
     metadata = production_schedule_metadata(row)
     number, total = safe_int(metadata.get("flow_sequence"), 0), safe_int(metadata.get("flow_total"), 0)
@@ -11994,6 +12062,15 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
             if not rework_labels_ready:
                 st.caption("ยังตรวจป้ายงานตีกลับแก้ไขได้ไม่ครบ กรุณารีเฟรชเพื่อตรวจป้ายอีกครั้ง")
 
+            incoming_snapshot = st.session_state.get("_tpc_flow_jobs_snapshot")
+            incoming_forecast = None
+            incoming_forecast_error = False
+            if any(flow_job_is_blocked(r) for _, r in m_active.iterrows()):
+                try:
+                    incoming_forecast = calculate_production_chain(incoming_snapshot, active_only=True)
+                except Exception:
+                    incoming_forecast_error = True
+
             for queue_idx, step_row in m_active.iterrows():
                 target_id = safe_int(step_row["ID"])
                 plan_code = str(step_row.get("แผนงาน", "-"))
@@ -12005,6 +12082,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                     st.caption("Process " + process_text)
                 if flow_job_is_blocked(step_row):
                     st.info("🔒 งานกำลังจะเข้ามา — รอ Process ก่อนหน้าผลิตเสร็จ จึงจะกด Start ได้")
+                    render_shop_incoming_context(step_row, incoming_snapshot, incoming_forecast)
+                    if incoming_forecast_error:
+                        st.caption("ยังคำนวณเวลาจบต้นทางไม่ได้ — ตรวจสอบเส้นทางและปฏิทินงาน")
                 raw_s_name = str(step_row.get("ขั้นตอน (Step)", "รอหน้าเครื่องระบุ"))
                 s_name = raw_s_name if raw_s_name not in ["", "None", "nan", "รอหน้าเครื่องระบุ"] else f"OP{(queue_idx+1)*10}"
                 s_status = str(step_row.get("สถานะงาน", "🟧 รอคิวผลิต"))
