@@ -810,12 +810,12 @@ def patch_job_snapshot(endpoint, job_id, expected, payload):
     return rows[0]
 
 
-def try_atomic_job_snapshot_updates(endpoint, operations, rpc_name="tpc_apply_job_updates"):
+def try_atomic_job_snapshot_updates(endpoint, operations, rpc_name="tpc_apply_job_updates", headers=None):
     """ใช้ RPC transaction ถ้ามี; REST เดิมใช้ CAS และคืนค่าเฉพาะที่ยังตรงกับค่าที่เราเขียน"""
     if not operations:
         return True
     rpc = endpoint.rsplit("/", 1)[0] + "/rpc/" + rpc_name
-    response = requests.post(rpc, headers=get_supabase_headers(), json={"operations": operations}, timeout=15)
+    response = requests.post(rpc, headers=headers if headers is not None else get_supabase_headers(), json={"operations": operations}, timeout=15)
     if response.status_code == 200:
         saved = response.json()
         saved_by_id = {safe_int(row.get("id")): row for row in saved} if isinstance(saved, list) else {}
@@ -2780,7 +2780,7 @@ def update_running_actual_start_with_chain(job_id: int, new_actual_start, reason
             mutations.append((by_id[waiting_id], waiting_payload))
         atomic_operations = [{"id": safe_int(row["id"]), "expected": row, "payload": payload} for row, payload in mutations]
         atomic_operations += [{"id": safe_int(row["id"]), "expected": row, "payload": {}} for row in original_rows if safe_int(row["id"]) != job_id and any(word in safe_str(row.get("status")) for word in ("กำลังผลิต", "พักงาน", "รอวัสดุ"))]
-        if try_atomic_job_snapshot_updates(endpoint, atomic_operations, rpc_name="tpc_apply_admin_timing_updates"):
+        if try_atomic_job_snapshot_updates(endpoint, atomic_operations, rpc_name="tpc_apply_admin_timing_updates", headers=flow_api_headers(write=True)):
             log_job_event(job_id, target.get("plan_code"), target.get("drawing_name"), machine, "Admin Restart Work Order Timing", reason=reason, note=f"เริ่มเวลารอบใหม่ {target_payload['actual_start']}")
             st.cache_data.clear()
             return True, "", len(waiting)
