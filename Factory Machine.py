@@ -823,11 +823,17 @@ def try_atomic_job_snapshot_updates(endpoint, operations):
             raise ValueError("ตรวจผล transaction ไม่ผ่าน กรุณารีเฟรชตรวจข้อมูลก่อนดำเนินการต่อ")
         return True
     try:
-        error_code = response.json().get("code", "")
+        error_body = response.json()
+        error_code = error_body.get("code", "") if isinstance(error_body, dict) else ""
+        error_message = error_body.get("message", "") if isinstance(error_body, dict) else ""
     except Exception:
         error_code = ""
+        error_message = ""
     if response.status_code != 404 or error_code != "PGRST202":
-        raise ValueError(f"ฐานข้อมูลไม่รับชุดการบันทึก HTTP {response.status_code}; กรุณารีเฟรชตรวจข้อมูล")
+        # Show the database's explicit reason, never response headers or full payloads.
+        reason = str(error_message).strip()[:900] or "ฐานข้อมูลไม่ได้ส่งรายละเอียดข้อผิดพลาด"
+        code = str(error_code).strip()[:80] or "ไม่มีรหัส"
+        raise ValueError(f"ฐานข้อมูลไม่รับชุดการบันทึก HTTP {response.status_code} [{code}]: {reason} • ยังไม่ยืนยันการบันทึก กรุณาตรวจข้อมูลก่อนทำซ้ำ")
     return False
 
 
