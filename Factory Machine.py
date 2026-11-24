@@ -10299,11 +10299,55 @@ def filter_qc_correction_cases(cases, plan="", search="", start_date=None, end_d
     return [case for _, case in matches]
 
 
+TPC_QC_UNDO_FINISH_SQL = "-- Undo a mistaken QC pass. Archive the original inspection; production is untouched.\nbegin;\ndo $patch$\ndeclare definition text; needle text:=$needle$begin\n if TG_OP='DELETE' then$needle$;\n replacement text:=$replacement$begin\n -- tpc_qc_reopen_v1: narrow transaction-only override; ordinary closed records stay immutable.\n if TG_OP='UPDATE' and coalesce(current_setting('tpc.qc_reopen_task',true),'')=old.id::text then\n  if old.status is distinct from '✅ เสร็จแล้ว' or old.flow_verdict is distinct from 'pass'\n     or old.flow_case_id is null or new.status is distinct from '🟧 รอรับงาน'\n     or new.flow_verdict is distinct from 'pending' or new.actual_start is not null or new.actual_finish is not null\n     or new.result_note is not null\n     or (to_jsonb(new)-array['status','flow_verdict','actual_start','actual_finish','result_note','updated_at'])\n        is distinct from (to_jsonb(old)-array['status','flow_verdict','actual_start','actual_finish','result_note','updated_at'])\n     or not exists(select 1 from public.tpc_flow_cases where id=old.flow_case_id and cycle=old.flow_cycle and status='waiting_qc') then\n   raise exception 'Invalid QC Finish undo';\n  end if;\n  return new;\n end if;\n if TG_OP='DELETE' then$replacement$;\nbegin\n definition:=pg_get_functiondef('public.tpc_flow_before_qc()'::regprocedure);\n if position('tpc_qc_reopen_v1' in definition)=0 then\n  if position(needle in definition)=0 then raise exception 'QC guard differs; review before installing'; end if;\n  execute replace(definition,needle,replacement);\n end if;\nend $patch$;\ncreate or replace function public.tpc_undo_qc_finish(p_data jsonb)\nreturns jsonb language plpgsql security definer set search_path='' set timezone='UTC' as $$\ndeclare c public.tpc_flow_cases; task public.tpc_department_work_orders; expected public.tpc_department_work_orders;\n actor text:=nullif(btrim(p_data->>'actor'),''); reason text:=nullif(btrim(p_data->>'reason'),'');\nbegin\n if actor is null or reason is null or jsonb_typeof(p_data->'expected_task') is distinct from 'object'\n    or nullif(p_data->>'expected_accepted_at','') is null then raise exception 'Recorder, reason and original QC snapshot required'; end if;\n select * into c from public.tpc_flow_cases where id=(p_data->>'case_id')::uuid for update;\n if not found or c.status is distinct from 'accepted' or c.cycle is distinct from (p_data->>'expected_cycle')::integer\n    or c.plan_code is distinct from p_data->>'plan_code' or c.drawing_name is distinct from p_data->>'drawing_name'\n    or c.accepted_at is distinct from (p_data->>'expected_accepted_at')::timestamptz then\n  raise exception 'Drawing changed; refresh before undoing QC Finish'; end if;\n select * into task from public.tpc_department_work_orders where id=(p_data->>'task_id')::bigint for update;\n if not found or task.flow_case_id is distinct from c.id or task.flow_cycle is distinct from c.cycle\n    or task.department is distinct from 'QC' or task.status is distinct from '✅ เสร็จแล้ว'\n    or task.flow_verdict is distinct from 'pass' then raise exception 'Latest closed QC pass not found'; end if;\n select * into expected from jsonb_populate_record(null::public.tpc_department_work_orders,p_data->'expected_task');\n if to_jsonb(task) is distinct from to_jsonb(expected) then raise exception 'QC snapshot changed; refresh before undo'; end if;\n if (select count(*) from public.tpc_department_work_orders where flow_case_id=c.id and flow_cycle=c.cycle and department='QC')<>1\n    or exists(select 1 from public.tpc_flow_steps where case_id=c.id and cycle=c.cycle and finished_at is null)\n    or exists(select 1 from public.cnc_jobs where flow_case_id=c.id and status not like '%เสร็จสิ้น%' and status not like '%ยกเลิก%') then\n  raise exception 'Production route or QC records are inconsistent; review before undo'; end if;\n -- Archive the complete closed inspection before clearing the mistaken current QC timing.\n insert into public.tpc_flow_events(case_id,cycle,event,details) values(c.id,c.cycle,'qc_finish_undone',\n  jsonb_build_object('qc_task_id',task.id,'actor',actor,'reason',reason,'original_qc',to_jsonb(task),\n                    'original_accepted_at',c.accepted_at,'original_case',to_jsonb(c),'new_status','waiting_qc'));\n update public.tpc_flow_cases set status='waiting_qc',accepted_at=null where id=c.id;\n perform set_config('tpc.qc_reopen_task',task.id::text,true);\n update public.tpc_department_work_orders set status='🟧 รอรับงาน',flow_verdict='pending',actual_start=null,actual_finish=null,\n  result_note=null where id=task.id;\n perform set_config('tpc.qc_reopen_task','',true);\n return jsonb_build_object('ok',true,'case_id',c.id,'task_id',task.id,'status','waiting_qc');\nend $$;\nrevoke all on function public.tpc_undo_qc_finish(jsonb) from public,anon,authenticated;\ngrant execute on function public.tpc_undo_qc_finish(jsonb) to service_role;\nnotify pgrst,'reload schema';\ncommit;\n"
+
+
+def render_qc_finish_undo_form(case, task, prefix):
+    """Undo a mistaken QC Finish only; do not create an NG or production queue."""
+    if st.session_state.get("user_role") != "admin":
+        return
+    st.info(f"คืนไปรอตรวจ QC: แผน {case['plan_code']} | Drawing {case['drawing_name']}")
+    st.caption("ยกเลิก Finish ของ QC ที่กดผิด เก็บผลและเวลาตรวจเดิมในประวัติ แล้วเริ่มตรวจ QC รอบใหม่ • ไม่เปลี่ยนเป็น NG ไม่เพิ่มรอบแก้ไข และไม่แก้คิวหรือเวลาของฝ่ายผลิต")
+    raw = fetch_flow_rows("tpc_department_work_orders", {"id":"eq."+str(safe_int(task["id"]))})
+    if not isinstance(raw, list) or len(raw)!=1:
+        st.warning("อ่านข้อมูล QC เดิมไม่ครบ กรุณารีเฟรชก่อนคืนคิว")
+        return
+    snapshot = raw[0]
+    if snapshot.get("status") != "✅ เสร็จแล้ว" or snapshot.get("flow_verdict") != "pass":
+        st.warning("สถานะ QC เปลี่ยนแล้ว กรุณารีเฟรชตรวจข้อมูล")
+        return
+    with st.form(f"{prefix}_undo_qc_finish_{case['id']}_{case['cycle']}"):
+        actor = st.text_input("ชื่อผู้บันทึกการคืนคิว QC")
+        reason = st.text_area("เหตุผลที่ยกเลิก Finish QC", placeholder="เช่น กด Finish ผิด Drawing งานนี้ยังไม่ได้ตรวจครบ")
+        confirmed = st.checkbox("ยืนยันว่าเลือก Drawing ถูกต้อง และต้องการยกเลิก Finish เพื่อคืนไปรอตรวจ QC โดยไม่ส่งเป็น NG")
+        submitted = st.form_submit_button("↩️ ยกเลิก Finish ผิด — คืนไปรอตรวจ QC", type="primary")
+    if not submitted:
+        return
+    if st.session_state.get("user_role") != "admin" or not confirmed or not actor.strip() or not reason.strip():
+        st.warning("กรุณาระบุผู้บันทึก เหตุผล และติ๊กยืนยันคืนคิว QC")
+        return
+    payload = {"case_id":case["id"], "expected_cycle":safe_int(case["cycle"]),
+               "expected_accepted_at":case.get("accepted_at"), "plan_code":case["plan_code"],
+               "drawing_name":case["drawing_name"], "task_id":safe_int(snapshot["id"]), "expected_task":snapshot,
+               "actor":actor.strip(), "reason":reason.strip()}
+    try:
+        response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_undo_qc_finish",
+                                 headers=flow_api_headers(write=True), json={"p_data":payload}, timeout=25)
+        if response.status_code!=200 or response.json().get("ok") is not True or response.json().get("status")!="waiting_qc":
+            st.error("ยังคืนคิว QC ไม่สำเร็จ: "+safe_str(response.json().get("message", "กรุณาตรวจการติดตั้ง SQL คืนคิว QC"))+" • รีเฟรชตรวจสถานะก่อนทำซ้ำ")
+            return
+        st.cache_data.clear()
+        st.session_state["_flow_notice"] = "ยกเลิก Finish QC ที่กดผิดแล้ว Drawing กลับไปรอตรวจ QC โดยเก็บประวัติเดิม และไม่เปลี่ยนเป็น NG"
+        st.rerun(scope="app")
+    except (requests.RequestException, ValueError) as exc:
+        st.warning("ยังยืนยันผลไม่ได้ กรุณารีเฟรชตรวจสถานะ QC ก่อนทำซ้ำ: "+safe_str(exc))
+
+
 def render_qc_pass_correction(accepted_cases, prefix):
     if st.session_state.get("user_role") != "admin" or not accepted_cases:
         return
-    with st.expander("↩️ แก้ผล QC ที่กดผ่านผิด → NG ส่งกลับแก้ไข"):
-        st.caption("สำหรับผู้ดูแล: เก็บประวัติผลเดิมและเวลาเดิม ส่งงานไปรอผู้วางแผนจัดคิวแก้ไข ไม่เริ่มงานหรือเปิดเวลาผลิตเดิมใหม่")
+    with st.expander("↩️ แก้ไข QC ที่กด Finish / ผ่านผิด — คืนรอตรวจ QC หรือส่ง NG"):
+        st.caption("สำหรับผู้ดูแล: เลือกคืนรอตรวจ QC เมื่อกด Finish ผิด Drawing หรือเลือกส่ง NG เมื่อชิ้นงานต้องผลิตแก้ไข โดยเก็บประวัติเดิม")
         if not st.checkbox("เปิดเลือกงานที่กด QC ผ่านผิด", key=f"{prefix}_qc_correction_open"):
             return
         plans = sorted({safe_str(c.get("plan_code")) for c in accepted_cases if safe_str(c.get("plan_code"))})
@@ -10353,6 +10397,11 @@ def render_qc_pass_correction(accepted_cases, prefix):
         task = matches.sort_values("id").iloc[-1]
         if task.get("flow_verdict") != "pass" or task.get("status") != "✅ เสร็จแล้ว":
             st.warning("ผล QC เปลี่ยนแล้ว กรุณารีเฟรชก่อนดำเนินการ")
+            return
+        action = st.radio("ต้องการแก้ไขอย่างไร", ["กด Finish ผิด — คืนไปรอตรวจ QC", "ชิ้นงานไม่ผ่าน — เปลี่ยนเป็น NG ส่งกลับผลิตแก้ไข"],
+                          key=f"{prefix}_qc_correction_action_{case_id}")
+        if action == "กด Finish ผิด — คืนไปรอตรวจ QC":
+            render_qc_finish_undo_form(case, task, prefix)
             return
         st.warning(f"กำลังแก้ผล: {case['plan_code']} / {case['drawing_name']} จาก QC ผ่าน เป็น NG รอจัดคิวแก้ไข")
         correction_mode = st.radio("หลังเปลี่ยนผลเป็น NG", ["เลือกเครื่องและส่งเข้าคิวแก้ไขเลย", "ส่งรอผู้วางแผนจัดคิวภายหลัง"],
@@ -10412,6 +10461,7 @@ def flow_event_history_rows(events, steps):
         "waiting_qc": "ส่งเข้าคิวตรวจรับ QC แล้ว",
         "qc_pass": "QC ตรวจผ่าน — งานจบสมบูรณ์",
         "qc_pass_corrected_to_ng": "แก้ผล QC ผ่านที่กดผิด → NG รอจัดคิวแก้ไข",
+        "qc_finish_undone": "ยกเลิก Finish QC ที่กดผิด — คืนไปรอตรวจ QC",
         "qc_fail": "QC ตรวจไม่ผ่าน — รอจัดคิวแก้ไข",
         "plan_rework": "จัดเส้นทางแก้ไขแล้ว",
         "enabled": "เปิดใช้การส่งตรวจ QC",
@@ -10451,6 +10501,11 @@ def flow_event_history_rows(events, steps):
                     summary.append(" → ".join(names))
         elif kind == "edit_pending_processes":
             summary.extend(["ผู้แก้ไข: " + safe_str(details.get("actor")), "เหตุผล: " + safe_str(details.get("reason")), "เก็บเส้นทางและคิวเดิมก่อนแก้ไว้แล้ว"])
+        elif kind == "qc_finish_undone":
+            summary.extend(["ผู้คืนคิว QC: " + safe_str(details.get("actor")), "เหตุผล: " + safe_str(details.get("reason"))])
+            original_qc = details.get("original_qc") or {}
+            summary.append("เวลา QC เดิมที่ยกเลิก: " + flow_display_time(original_qc.get("actual_start")) + " → " + flow_display_time(original_qc.get("actual_finish")))
+            summary.append("คืนรอตรวจ QC ไม่ส่ง NG และไม่เปลี่ยนเวลาผลิต")
         elif kind == "qc_pass_corrected_to_ng":
             summary.append(f"ผู้บันทึกแก้ผล: {safe_str(details.get('actor'))}")
             summary.append(f"เหตุผล/จุด NG: {safe_str(details.get('reason'))}")
@@ -10993,6 +11048,7 @@ def render_flow_installation_downloads(prefix):
         ("แก้ไข/ลบ Process ที่ยังไม่เริ่ม พร้อมปรับคิว", TPC_PROCESS_EDIT_SQL, "TPC_Process_Edit_Setup.sql"),
         ("แก้ผล QC ผ่านที่กดผิด พร้อมจัดคิวแก้ไข", TPC_QC_CORRECTION_SQL, "TPC_QC_Correction_Setup.sql"),
         ("แจ้ง NG สำหรับผู้ปฏิบัติงาน QC", TPC_OPERATOR_NG_SQL, "TPC_Operator_QC_NG_Setup.sql"),
+        ("ยกเลิก Finish QC ผิด และคืนรอตรวจ QC", TPC_QC_UNDO_FINISH_SQL, "TPC_QC_Undo_Finish_Setup.sql"),
         ("เพิ่มขั้นตอนหรือ Process การผลิต และเลือกตำแหน่งคิว", TPC_MISSING_PRODUCTION_SQL, "TPC_Missing_Production_Queue_Setup.sql"),
     ]
     for title, sql, filename in packages:
