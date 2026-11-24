@@ -9963,7 +9963,7 @@ def flow_api_headers(write=False):
 
 @st.cache_data(ttl=5, show_spinner=False)
 def fetch_flow_rows(table, query=None):
-    if table not in {"tpc_flow_settings", "tpc_flow_cases", "tpc_flow_steps", "tpc_flow_events"}:
+    if table not in {"tpc_flow_settings", "tpc_flow_cases", "tpc_flow_steps", "tpc_flow_events", "tpc_department_work_orders"}:
         raise ValueError("ตารางขั้นตอนงานไม่ถูกต้อง")
     rows = []
     while True:
