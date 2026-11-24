@@ -2494,7 +2494,7 @@ def normalize_step_progress(raw_progress, step_name, status="", actual_start=Non
             steps[-1]["finished_at"] = finish_dt.strftime("%Y-%m-%d %H:%M:%S")
         current_index = len(steps) - 1
     result = {"steps": steps, "current_index": current_index}
-    for key in ("schedule_mode", "planned_not_before", "restart_history", "timing_restarted_at", "queue_rank", "machine_time_segments", "machine_cost_history_incomplete", "cancelled_start_history", "yielded_for_urgent", "flow_previous_job_id", "flow_sequence", "flow_total", "flow_waiting"):
+    for key in ("schedule_mode", "planned_not_before", "restart_history", "timing_restarted_at", "queue_rank", "machine_time_segments", "machine_cost_history_incomplete", "cancelled_start_history", "finish_undo_history", "yielded_for_urgent", "flow_previous_job_id", "flow_sequence", "flow_total", "flow_waiting"):
         if key in progress:
             result[key] = progress[key]
     return result
@@ -2508,7 +2508,7 @@ def build_cancel_wrong_start_payload(row, reason, cancelled_at):
     progress = normalize_step_progress(row.get("step_progress"), row.get("step_name"),
                                       row.get("status"), row.get("actual_start"), row.get("actual_finish"))
     steps = progress["steps"]
-    if progress["current_index"] != 0 or row.get("actual_finish") or any(step.get("finished_at") for step in steps):
+    if progress["current_index"] != 0 or row.get("actual_finish") or progress.get("finish_undo_history") or any(step.get("finished_at") for step in steps):
         raise ValueError("มี Step ที่ทำเสร็จแล้ว ต้องให้ผู้ดูแลตรวจสอบ ไม่คืนเวลางานนี้อัตโนมัติ")
     if any(step.get("started_at") for step in steps[1:]) or progress.get("machine_time_segments"):
         raise ValueError("มีเวลาของ Step อื่นหรือประวัติย้ายเครื่อง ต้องให้ผู้ดูแลตรวจสอบ")
@@ -10462,6 +10462,7 @@ def flow_event_history_rows(events, steps):
         "qc_pass": "QC ตรวจผ่าน — งานจบสมบูรณ์",
         "qc_pass_corrected_to_ng": "แก้ผล QC ผ่านที่กดผิด → NG รอจัดคิวแก้ไข",
         "qc_finish_undone": "ยกเลิก Finish QC ที่กดผิด — คืนไปรอตรวจ QC",
+        "shop_finish_undone": "ยกเลิก Finish ผิดหน้าเครื่อง — คืนคิวผลิตเดิม",
         "qc_fail": "QC ตรวจไม่ผ่าน — รอจัดคิวแก้ไข",
         "plan_rework": "จัดเส้นทางแก้ไขแล้ว",
         "enabled": "เปิดใช้การส่งตรวจ QC",
@@ -10501,6 +10502,8 @@ def flow_event_history_rows(events, steps):
                     summary.append(" → ".join(names))
         elif kind == "edit_pending_processes":
             summary.extend(["ผู้แก้ไข: " + safe_str(details.get("actor")), "เหตุผล: " + safe_str(details.get("reason")), "เก็บเส้นทางและคิวเดิมก่อนแก้ไว้แล้ว"])
+        elif kind == "shop_finish_undone":
+            summary.extend(["ผู้คืนคิว: " + safe_str(details.get("actor")), "เหตุผล: " + safe_str(details.get("reason")), "คืน Step " + str(safe_int(details.get("step_index"))+1) + " ที่เครื่อง " + safe_str(details.get("machine"))])
         elif kind == "qc_finish_undone":
             summary.extend(["ผู้คืนคิว QC: " + safe_str(details.get("actor")), "เหตุผล: " + safe_str(details.get("reason"))])
             original_qc = details.get("original_qc") or {}
@@ -11036,6 +11039,71 @@ def render_process_route_editor(case, steps, prefix, *, opened=False):
                 st.error("ยังยืนยันผลไม่ได้ กรุณารีเฟรชตรวจเส้นทางก่อนทำซ้ำ: " + str(exc))
 
 
+TPC_SHOP_UNDO_FINISH_SQL = "-- Admin-only undo of a mistaken shop Finish. Existing work remains on its original job ID.\nbegin;\nalter table public.tpc_department_work_orders add column if not exists qc_production_blocked boolean not null default false,\n add column if not exists qc_released_at timestamptz;\ndo $patch$\ndeclare definition text; needle text:=$needle$begin\n if TG_OP='DELETE' then$needle$;\n replacement text:=$replacement$begin\n -- tpc_shop_finish_undo_v1: only the dedicated transaction may reopen finished production.\n if TG_OP='UPDATE' and old.status like '%เสร็จสิ้น%' and coalesce(current_setting('tpc.shop_finish_undo_job',true),'')=old.id::text then\n  if old.status not like '%เสร็จสิ้น%' or new.status is distinct from '🟧 รอคิวผลิต'\n     or new.actual_finish is not null or new.hold_started_at is not null\n     or (to_jsonb(new)-array['status','actual_finish','hold_started_at','step_progress'])\n        is distinct from (to_jsonb(old)-array['status','actual_finish','hold_started_at','step_progress']) then\n   raise exception 'Invalid shop Finish undo'; end if;\n  return new;\n end if;\n if TG_OP='DELETE' then$replacement$;\nbegin\n definition:=pg_get_functiondef('public.tpc_flow_before_job()'::regprocedure);\n if position('tpc_shop_finish_undo_v1' in definition)=0 then\n  if position(needle in definition)=0 then raise exception 'Production guard differs; stop and review'; end if;\n  execute replace(definition,needle,replacement);\n end if;\nend $patch$;\ncreate or replace function public.tpc_undo_shop_finish(p_data jsonb)\nreturns jsonb language plpgsql security definer set search_path='' set timezone='UTC' as $$\ndeclare j public.cnc_jobs; expected public.cnc_jobs; c public.tpc_flow_cases; route public.tpc_flow_steps;\n qc public.tpc_department_work_orders; other public.cnc_jobs; progress jsonb; steps jsonb; step jsonb; idx integer; n integer;\n stamp text; history jsonb; snapshot jsonb; actor text:=nullif(btrim(p_data->>'actor'),''); reason text:=nullif(btrim(p_data->>'reason'),'');\nbegin\n if actor is null or reason is null or jsonb_typeof(p_data->'expected_job') is distinct from 'object' then raise exception 'Recorder, reason and original job snapshot required'; end if;\n select * into j from public.cnc_jobs where id=(p_data->>'job_id')::bigint;\n if not found then raise exception 'Job not found'; end if;\n -- Lock all jobs in this route in the same order used by production editing, before the case.\n perform id from public.cnc_jobs where id=j.id or (j.flow_case_id is not null and flow_case_id=j.flow_case_id) order by id for update;\n select * into j from public.cnc_jobs where id=j.id;\n select * into expected from jsonb_populate_record(null::public.cnc_jobs,p_data->'expected_job');\n if to_jsonb(j) is distinct from to_jsonb(expected) then raise exception 'Job changed; refresh before undo'; end if;\n if j.actual_start is null or j.hold_started_at is not null then raise exception 'Missing original Start or job is on hold'; end if;\n progress:=coalesce(j.step_progress,'{}'::jsonb);steps:=progress->'steps';\n if steps is null or steps='[]'::jsonb then\n  if j.status not like '%เสร็จสิ้น%' or j.actual_finish is null then raise exception 'No completed Step to undo'; end if;\n  steps:=jsonb_build_array(jsonb_build_object('name',j.step_name,'started_at',j.actual_start,'finished_at',j.actual_finish,'paused_seconds',coalesce(j.paused_seconds,0)));\n  progress:=progress||jsonb_build_object('current_index',0,'steps',steps);\n end if;\n if jsonb_typeof(steps) is distinct from 'array' then raise exception 'Invalid Step progress'; end if;\n n:=jsonb_array_length(steps);idx:=coalesce((progress->>'current_index')::integer,0);\n if idx<0 or idx>=n then raise exception 'Invalid current Step'; end if;\n if j.status like '%เสร็จสิ้น%' then\n  if idx<>n-1 or j.actual_finish is null then raise exception 'Completed job has inconsistent Step data'; end if;\n elsif j.status like '%รอคิว%' then\n  if idx<1 or j.actual_finish is not null or nullif(steps->idx->>'started_at','') is not null then raise exception 'Next Step already started or no previous Finish'; end if;\n  idx:=idx-1;\n else raise exception 'Undo requires completed work or waiting next Step'; end if;\n step:=steps->idx;stamp:=step->>'finished_at';\n if nullif(stamp,'') is null or nullif(step->>'started_at','') is null or stamp::timestamp<(step->>'started_at')::timestamp\n    or stamp::timestamp>(clock_timestamp() at time zone 'Asia/Bangkok') then raise exception 'Invalid original Step Finish'; end if;\n if j.status like '%เสร็จสิ้น%' and stamp::timestamp is distinct from j.actual_finish::timestamp then raise exception 'Step Finish differs from job Finish'; end if;\n if exists(select 1 from jsonb_array_elements(steps) with ordinality x(value,pos) where pos>idx+1 and\n     (nullif(value->>'started_at','') is not null or nullif(value->>'finished_at','') is not null or coalesce((value->>'paused_seconds')::numeric,0)<>0)) then\n  raise exception 'A later Step already has actual work; review before undo'; end if;\n if j.flow_case_id is not null then\n  select * into c from public.tpc_flow_cases where id=j.flow_case_id for update;\n  if not found or c.status not in ('producing','reworking','waiting_qc') then raise exception 'QC passed or route state changed; undo QC Finish first if necessary'; end if;\n  select * into route from public.tpc_flow_steps where job_id=j.id and case_id=c.id for update;\n  if found then\n   if route.cycle<>c.cycle then raise exception 'Cannot reopen a previous production cycle'; end if;\n   if exists(select 1 from public.tpc_flow_steps where case_id=c.id and cycle=c.cycle and sequence<route.sequence and finished_at is null) then raise exception 'Previous Process is not finished'; end if;\n   for other in select job.* from public.tpc_flow_steps rs join public.cnc_jobs job on job.id=rs.job_id\n    where rs.case_id=c.id and rs.cycle=c.cycle and rs.sequence>route.sequence loop\n    if other.status not like '%รอคิว%' or other.actual_start is not null or other.actual_finish is not null or other.hold_started_at is not null\n       or coalesce(other.paused_seconds,0)<>0 or exists(select 1 from jsonb_array_elements(coalesce(other.step_progress->'steps','[]'::jsonb)) v\n          where nullif(v->>'started_at','') is not null or nullif(v->>'finished_at','') is not null)\n       or exists(select 1 from jsonb_array_elements(coalesce(other.step_progress->'machine_time_segments','[]'::jsonb)) v where coalesce((v->>'net_seconds')::numeric,0)>0) then\n     raise exception 'A later Process already started; cannot undo automatically'; end if;\n   end loop;\n  elsif c.source_job_id is distinct from j.id or c.cycle<>0 or exists(select 1 from public.tpc_flow_steps where case_id=c.id) then\n   raise exception 'Linked Process not found; review route';\n  end if;\n  for qc in select * from public.tpc_department_work_orders where flow_case_id=c.id and flow_cycle=c.cycle and department='QC' for update loop\n   if qc.status is distinct from '🟧 รอรับงาน' or qc.actual_start is not null or qc.actual_finish is not null then raise exception 'QC already started; cannot undo production automatically'; end if;\n   update public.tpc_department_work_orders set qc_production_blocked=true where id=qc.id;\n  end loop;\n  if c.status='waiting_qc' then update public.tpc_flow_cases set status=case when c.cycle=0 then 'producing' else 'reworking' end,accepted_at=null where id=c.id; end if;\n  if route.id is not null then update public.tpc_flow_steps set finished_at=null where id=route.id; end if;\n end if;\n snapshot:=to_jsonb(j);snapshot:=jsonb_set(snapshot,'{step_progress}',progress-'finish_undo_history');\n history:=coalesce(progress->'finish_undo_history','[]'::jsonb)||jsonb_build_array(jsonb_build_object('undone_at',clock_timestamp(),'actor',actor,'reason',reason,'step_index',idx,'before',snapshot));\n -- Preserve earned work. The gap from mistaken Finish to the next Start is a pending pause.\n steps:=jsonb_set(steps,array[idx::text],step||jsonb_build_object('finished_at',null,'pending_pause_started_at',stamp));\n if idx+1<n then steps:=jsonb_set(steps,array[(idx+1)::text],(steps->(idx+1))-'pending_pause_started_at'); end if;\n progress:=progress||jsonb_build_object('steps',steps,'current_index',idx,'finish_undo_history',history);\n perform set_config('tpc.shop_finish_undo_job',j.id::text,true);\n update public.cnc_jobs set status='🟧 รอคิวผลิต',actual_finish=null,hold_started_at=null,step_progress=progress where id=j.id;\n perform set_config('tpc.shop_finish_undo_job','',true);\n if c.id is not null then\n  perform public.tpc_flow_sync_case(c.id);\n  insert into public.tpc_flow_events(case_id,cycle,event,details) values(c.id,c.cycle,'shop_finish_undone',jsonb_build_object('job_id',j.id,'machine',j.machine_name,'actor',actor,'reason',reason,'step_index',idx,'original_job',to_jsonb(j)));\n end if;\n return jsonb_build_object('ok',true,'job_id',j.id,'status','🟧 รอคิวผลิต');\nend $$;\nrevoke all on function public.tpc_undo_shop_finish(jsonb) from public,anon,authenticated;\ngrant execute on function public.tpc_undo_shop_finish(jsonb) to service_role;\ncreate or replace function public.tpc_guard_deferred_qc()\nreturns trigger language plpgsql security definer set search_path='' as $$\nbegin\n if old.qc_production_blocked and not new.qc_production_blocked and (\n    not exists(select 1 from public.tpc_flow_cases where id=old.flow_case_id and cycle=old.flow_cycle and status='waiting_qc')\n    or exists(select 1 from public.tpc_flow_steps where case_id=old.flow_case_id and cycle=old.flow_cycle and finished_at is null)) then\n  raise exception 'Cannot release QC before all production steps finish'; end if;\n if (old.qc_production_blocked or new.qc_production_blocked) and\n    (new.status is distinct from '🟧 รอรับงาน' or new.actual_start is not null or new.actual_finish is not null) then\n  raise exception 'Production is incomplete; QC cannot Start or Finish yet'; end if;\n return new;\nend $$;\ndrop trigger if exists tpc_guard_deferred_qc on public.tpc_department_work_orders;\ncreate trigger tpc_guard_deferred_qc before update on public.tpc_department_work_orders\n for each row execute function public.tpc_guard_deferred_qc();\ncreate or replace function public.tpc_release_deferred_qc()\nreturns trigger language plpgsql security definer set search_path='' set timezone='UTC' as $$\nbegin\n if new.status='waiting_qc' and old.status is distinct from new.status and\n    not exists(select 1 from public.tpc_flow_steps where case_id=new.id and cycle=new.cycle and finished_at is null) then\n  update public.tpc_department_work_orders set qc_production_blocked=false,qc_released_at=clock_timestamp()\n   where flow_case_id=new.id and flow_cycle=new.cycle and qc_production_blocked\n     and status='🟧 รอรับงาน' and actual_start is null and actual_finish is null;\n end if;\n return new;\nend $$;\ndrop trigger if exists tpc_release_deferred_qc on public.tpc_flow_cases;\ncreate trigger tpc_release_deferred_qc after update on public.tpc_flow_cases\n for each row execute function public.tpc_release_deferred_qc();\nnotify pgrst,'reload schema';\ncommit;\n"
+
+
+def shop_finish_undo_candidate(job):
+    meta = production_schedule_metadata(job)
+    steps = meta.get("steps") or []
+    if "เสร็จสิ้น" in safe_str(job.get("status")):
+        return bool(job.get("actual_start") and job.get("actual_finish"))
+    idx = safe_int(meta.get("current_index"), 0)
+    return ("รอคิว" in safe_str(job.get("status")) and isinstance(steps, list) and 0<idx<len(steps)
+            and bool(steps[idx-1].get("finished_at")) and not steps[idx].get("started_at"))
+
+
+def render_shop_finish_undo_controls(prefix):
+    if st.session_state.get("user_role") != "admin":
+        return
+    with st.expander("↩️ ยกเลิก Finish ผิดที่หน้าเครื่อง — คืนคิวผลิตเดิม"):
+        if not st.checkbox("เปิดค้นหางานที่กด Finish ผิดหน้าเครื่อง", key=prefix+"_shop_undo_open"):
+            return
+        rows = read_all_job_rows(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/cnc_jobs", get_supabase_headers())
+        candidates = [job for job in rows if shop_finish_undo_candidate(job)]
+        cols = tpc_filter_columns([1,1,2])
+        machine = cols[0].selectbox("เครื่องที่กด Finish ผิด", ["ทุกเครื่อง"]+sorted({safe_str(job.get("machine_name")) for job in candidates}), key=prefix+"_shop_undo_machine")
+        plan = cols[1].selectbox("แผนงานที่กด Finish ผิด", ["ทุกแผนงาน"]+sorted({safe_str(job.get("plan_code")) for job in candidates}), key=prefix+"_shop_undo_plan")
+        search = cols[2].text_input("ค้นหา Drawing ที่กด Finish ผิด", key=prefix+"_shop_undo_search").strip().casefold()
+        candidates = [job for job in candidates if (machine=="ทุกเครื่อง" or job.get("machine_name")==machine)
+                      and (plan=="ทุกแผนงาน" or job.get("plan_code")==plan) and search in safe_str(job.get("drawing_name")).casefold()]
+        candidates.sort(key=lambda job:safe_str(job.get("actual_finish") or job.get("ready_at")), reverse=True)
+        lookup = {safe_int(job["id"]):job for job in candidates}
+        selection_key = prefix+"_shop_undo_id"
+        if st.session_state.get(selection_key) not in lookup:
+            st.session_state[selection_key] = None
+        chosen = st.selectbox("เลือกคิวเดิมที่ต้องคืน", list(lookup), index=None, key=selection_key,
+                              placeholder="เลือกเครื่อง แผน และ Drawing ให้ตรงกับงานที่กดผิด",
+                              format_func=lambda value:f"{lookup[value].get('machine_name')} | แผน {lookup[value].get('plan_code')} | Drawing {lookup[value].get('drawing_name')} | ID {value}")
+        if chosen is None:
+            return
+        job = lookup[chosen]
+        st.info(f"คืนคิวเดิม ID {chosen} | {job.get('machine_name')} | แผน {job.get('plan_code')} | Drawing {job.get('drawing_name')}")
+        st.caption("คืนเป็นรอคิวที่เครื่องเดิมและ Step ที่กดจบผิด รักษาเวลาเริ่มและงานที่ทำไปแล้ว • ช่วงตั้งแต่ Finish ผิดถึงกด Start ต่อไม่นับเป็นเวลาผลิต • ไม่สร้างใบงานใหม่หรือส่ง NG")
+        st.warning("คืนได้เมื่อ Step / Process ถัดไปยังไม่เริ่ม และ QC ยังไม่เริ่มตรวจ หากทำต่อแล้วระบบจะปฏิเสธและไม่ย้อนทับข้อมูล")
+        signature = hashlib.sha256(json.dumps(job,sort_keys=True,default=str).encode()).hexdigest()[:16]
+        with st.form(f"{prefix}_shop_undo_form_{chosen}_{signature}"):
+            actor = st.text_input("ชื่อผู้คืนคิวหน้าเครื่อง")
+            reason = st.text_area("เหตุผลที่ยกเลิก Finish หน้าเครื่อง")
+            confirmed = st.checkbox("ยืนยันคืนคิวเดิมที่เลือกและเก็บเวลาผลิตเดิมไว้ ไม่ใช่การยกเลิก Start")
+            submit = st.form_submit_button("↩️ ยกเลิก Finish ผิด — คืนคิวหน้าเครื่อง", type="primary")
+        if not submit:
+            return
+        if not confirmed or not actor.strip() or not reason.strip():
+            st.warning("กรุณาระบุผู้บันทึก เหตุผล และติ๊กยืนยัน")
+            return
+        try:
+            response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_undo_shop_finish", headers=flow_api_headers(write=True),
+                                     json={"p_data":{"job_id":chosen,"expected_job":job,"actor":actor.strip(),"reason":reason.strip()}}, timeout=40)
+            if response.status_code!=200 or response.json().get("ok") is not True:
+                st.error("ยังคืนคิวไม่สำเร็จ: "+safe_str(response.json().get("message", "กรุณาตรวจการติดตั้ง SQL คืน Finish หน้าเครื่อง"))+" • รีเฟรชตรวจสถานะก่อนทำซ้ำ")
+                return
+            st.cache_data.clear()
+            st.session_state["_flow_notice"] = "ยกเลิก Finish ผิดและคืนคิวเดิมที่หน้าเครื่องแล้ว — รอกด Start ทำต่อ โดยรักษาเวลาผลิตเดิม"
+            st.rerun(scope="app")
+        except (requests.RequestException,ValueError) as exc:
+            st.error("ยังยืนยันผลไม่ได้ กรุณารีเฟรชตรวจคิวเดิมก่อนทำซ้ำ: "+safe_str(exc))
+
+
 def render_flow_installation_downloads(prefix):
     if st.session_state.get("user_role") != "admin":
         return
@@ -11048,6 +11116,7 @@ def render_flow_installation_downloads(prefix):
         ("แก้ไข/ลบ Process ที่ยังไม่เริ่ม พร้อมปรับคิว", TPC_PROCESS_EDIT_SQL, "TPC_Process_Edit_Setup.sql"),
         ("แก้ผล QC ผ่านที่กดผิด พร้อมจัดคิวแก้ไข", TPC_QC_CORRECTION_SQL, "TPC_QC_Correction_Setup.sql"),
         ("แจ้ง NG สำหรับผู้ปฏิบัติงาน QC", TPC_OPERATOR_NG_SQL, "TPC_Operator_QC_NG_Setup.sql"),
+        ("ยกเลิก Finish ผิดหน้าเครื่อง และคืนคิวผลิตเดิม", TPC_SHOP_UNDO_FINISH_SQL, "TPC_Shop_Undo_Finish_Setup.sql"),
         ("ยกเลิก Finish QC ผิด และคืนรอตรวจ QC", TPC_QC_UNDO_FINISH_SQL, "TPC_QC_Undo_Finish_Setup.sql"),
         ("เพิ่มขั้นตอนหรือ Process การผลิต และเลือกตำแหน่งคิว", TPC_MISSING_PRODUCTION_SQL, "TPC_Missing_Production_Queue_Setup.sql"),
     ]
@@ -11091,6 +11160,7 @@ def render_flow_center(jobs=None, *, admin=False, prefix="production"):
                             st.rerun()
             cases = fetch_flow_rows("tpc_flow_cases") or []
             if admin:
+                render_shop_finish_undo_controls(prefix)
                 render_process_route_search(cases, prefix)
                 render_missing_production_controls(cases, prefix)
             if not cases:
