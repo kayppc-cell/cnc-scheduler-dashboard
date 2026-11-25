@@ -6147,6 +6147,123 @@ def delete_waiting_department_work_order(task_id):
     except Exception as exc:
         return False, "ตรวจยืนยันการลบไม่สำเร็จ: " + safe_str(exc)
 
+QC_NON_INSPECTION_WORK_TYPES = frozenset([
+    "Assy ปรับประกอบ", "ตัด Epoxy ทากาว", "เก็บรายละเอียดทำสีตีเส้น",
+    "ทำ Data Sheet", "Laser Mark text", "แยกงานทำสีและงานชุบ",
+])
+
+
+def is_qc_inspection_task(task):
+    """Known support jobs keep ordinary Finish; unknown QC types require an explicit result."""
+    return safe_str(task.get("department")) == "QC" and (
+        bool(safe_str(task.get("flow_case_id"))) or
+        safe_str(task.get("work_type")).strip() not in QC_NON_INSPECTION_WORK_TYPES)
+
+
+def qc_history_result_label(task):
+    if safe_str(task.get("department")) != "QC":
+        return "ไม่เกี่ยวข้องกับการตรวจรับ QC"
+    verdict = safe_str(task.get("flow_verdict"))
+    if verdict == "pass":
+        return "✅ QC ผ่าน"
+    if verdict == "fail":
+        return "🔧 QC ไม่ผ่าน"
+    if not is_qc_inspection_task(task):
+        return "ไม่เกี่ยวข้องกับการตรวจรับ QC"
+    if verdict == "pending" and safe_str(task.get("status")) != "✅ เสร็จแล้ว":
+        return "รอตรวจรับ"
+    return "ไม่พบการบันทึกผลตรวจ"
+
+
+def qc_history_supplement_note(task):
+    audit = task.get("qc_result_audit")
+    if not isinstance(audit, list):
+        return ""
+    entry = next((item for item in reversed(audit) if isinstance(item, dict) and
+                  item.get("action") == "history_supplement"), None)
+    if not entry:
+        return ""
+    at = pd.to_datetime(entry.get("recorded_at"), errors="coerce", utc=True)
+    at_text = at.tz_convert("Asia/Bangkok").strftime("%d/%m/%Y %H:%M") if pd.notna(at) else safe_str(entry.get("recorded_at"))
+    return f"ยืนยันย้อนหลัง {at_text} | {safe_str(entry.get('actor'))} | {safe_str(entry.get('reason'))}"
+
+
+def render_qc_history_supplement(history, prefix):
+    """Use the already-filtered history; never fetch or change a queue on page render."""
+    if st.session_state.get("user_role") != "admin":
+        return
+    candidates = [row for row in history.to_dict("records") if is_qc_inspection_task(row)
+                  and not safe_str(row.get("flow_case_id")) and safe_str(row.get("status")) == "✅ เสร็จแล้ว"
+                  and safe_str(row.get("flow_verdict")) not in ("pass", "fail")
+                  and first_valid_datetime(row.get("actual_finish")) is not None
+                  and not isinstance(row.get("qc_ng_context"), dict)]
+    if not candidates:
+        return
+    with st.expander("📝 ยืนยันผลตรวจ QC เดิมที่ยังไม่มีผลบันทึก"):
+        if not st.checkbox("เปิดยืนยันผลตรวจย้อนหลัง", key=prefix+"_qc_supplement_open"):
+            return
+        lookup = {safe_int(row["id"]): row for row in candidates}
+        selected = st.selectbox("เลือกใบงานตรวจที่ต้องการยืนยันผล", list(lookup),
+            format_func=lambda key: f"ID {key} | {lookup[key].get('plan_code')} | {lookup[key].get('drawing_name')} | {lookup[key].get('work_type')}",
+            key=prefix+"_qc_supplement_task")
+        task = lookup[selected]
+        st.caption("บันทึกผลจากหลักฐานการตรวจจริงเท่านั้น เก็บผู้ยืนยันและเหตุผลในรายงาน • ไม่เปลี่ยนเวลา ไม่คืนคิว และไม่สร้างงานแก้ไข")
+        with st.form(prefix+f"_qc_supplement_{selected}"):
+            verdict = st.radio("ผลตรวจที่ยืนยันจากหลักฐาน", ["ผ่าน", "ไม่ผ่าน"], index=None)
+            actor = st.text_input("ชื่อผู้ยืนยันผลตรวจย้อนหลัง")
+            reason = st.text_area("เหตุผล / หลักฐานที่ใช้ยืนยันผล")
+            confirmed = st.checkbox("ตรวจสอบ Drawing และหลักฐานแล้ว ยืนยันบันทึกผลเพิ่มเติม")
+            submitted = st.form_submit_button("บันทึกผลตรวจย้อนหลัง")
+        if not submitted:
+            return
+        if not confirmed or not actor.strip() or not reason.strip() or verdict is None:
+            st.warning("กรุณาเลือกผล ระบุผู้ยืนยัน หลักฐาน และติ๊กยืนยัน")
+            return
+        fields = ("department", "work_type", "plan_code", "drawing_name", "assignee", "status",
+                  "flow_verdict", "result_note", "actual_start", "actual_finish", "updated_at")
+        data = {"task_id":selected, "expected":operator_json_clean({key:task.get(key) for key in fields}),
+                "verdict":"pass" if verdict == "ผ่าน" else "fail", "actor":actor.strip(), "reason":reason.strip()}
+        try:
+            response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_supplement_qc_result",
+                headers=flow_api_headers(write=True), json={"p_data":data}, timeout=12)
+            result = response.json()
+            if response.status_code != 200 or not isinstance(result, dict) or result.get("ok") is not True:
+                st.error("ยังไม่ยืนยันผลบันทึก กรุณาตรวจว่ารัน TPC_QC_Inspection_Result_Setup.sql แล้ว และตรวจข้อมูลล่าสุดก่อนลองซ้ำ")
+                return
+            fetch_department_work_orders.clear()
+            st.success("บันทึกผลตรวจย้อนหลังพร้อมผู้ยืนยันและเหตุผลแล้ว")
+            st.rerun()
+        except (requests.RequestException, ValueError):
+            st.error("ยังยืนยันผลบันทึกไม่ได้ กรุณาตรวจประวัติล่าสุดก่อนลองซ้ำ")
+
+
+def render_unlinked_qc_inspection(task, finish_callback):
+    """Explicit pass or existing NG route; no network reads until an action requires them."""
+    task_id = safe_int(task.get("id"))
+    if isinstance(task.get("qc_ng_context"), dict) and task.get("qc_ng_context"):
+        render_operator_legacy_qc_ng(task)
+        return
+    verdict = st.radio("ผลตรวจ QC", ["ผ่านตามแบบ", "ไม่ผ่าน — ส่งแก้ไข"], index=None,
+                       key=f"qc_inspection_result_{task_id}")
+    if verdict is None:
+        st.info("เลือกผลตรวจ QC ก่อนบันทึก Finish")
+        return
+    if verdict.startswith("ไม่ผ่าน"):
+        render_operator_legacy_qc_ng(task)
+        return
+    with st.form(f"qc_inspection_pass_{task_id}"):
+        note = st.text_area("ผลตรวจ / หมายเหตุ (ถ้ามี)")
+        confirmed = st.checkbox("ตรวจ Drawing ถูกต้องและตรวจผ่านแล้ว ยืนยัน Finish QC")
+        submitted = st.form_submit_button("✅ QC ผ่าน / Finish", type="primary", use_container_width=True)
+    if submitted:
+        if not confirmed:
+            st.warning("กรุณายืนยันผลตรวจผ่านก่อนบันทึก")
+        elif finish_callback(task_id, {"status":"✅ เสร็จแล้ว", "actual_finish":get_bangkok_str(),
+                                      "result_note":note.strip() or None, "flow_verdict":"pass"}):
+            st.session_state["operator_live_clear_control"] = True
+            st.rerun()
+
+
 def render_department_finished_history(finished_tasks, department, now, allow_write=False):
     """ตารางประวัติสำหรับผู้ควบคุม แสดงใต้ตารางคิวและเลือกลบจากแถวได้โดยตรง"""
     with st.expander(f"✅ ตารางประวัติงานที่เสร็จแล้ว ({len(finished_tasks)} รายการ)", expanded=False):
@@ -6248,10 +6365,9 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
         history_display.insert(status_position, "finish_plan_status", [
             finish_plan_status(row) for _, row in history_shown.iterrows()
         ])
-        if "flow_verdict" in history_shown:
-            history_display["qc_acceptance"] = history_shown["flow_verdict"].map({
-                "pass": "✅ QC ผ่าน", "fail": "🔧 ไม่ผ่าน / ส่งแก้ไข", "pending": "รอตรวจรับ"
-            }).fillna("—")
+        qc_history_records = history_shown.to_dict("records")
+        history_display["qc_acceptance"] = [qc_history_result_label(row) for row in qc_history_records]
+        history_display["qc_result_supplement"] = [qc_history_supplement_note(row) for row in qc_history_records]
         history_display.insert(0, "เลือก", False)
         for date_col in ["planned_start_at", "due_at", "actual_start", "actual_finish"]:
             if date_col in history_display.columns:
@@ -6273,7 +6389,8 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
             column_config={
                 "เลือก": st.column_config.CheckboxColumn("เลือกลบ", width=58),
                 "id": None,
-                "qc_acceptance": st.column_config.TextColumn("ผลตรวจรับ QC", width=150),
+                "qc_acceptance": st.column_config.TextColumn("ผลตรวจรับ QC", width=190),
+                "qc_result_supplement": st.column_config.TextColumn("ยืนยันผลย้อนหลัง / หลักฐาน", width=250),
                 "labor_contributors": st.column_config.TextColumn("ผู้ร่วมทำงาน / ส่งต่อ", width=220),
                 "finish_plan_status": st.column_config.TextColumn("ผลเทียบแผน", width=125),
                 "priority": st.column_config.TextColumn("เร่งด่วน", width=72),
@@ -6299,7 +6416,8 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
                 "priority": "เร่งด่วน", "plan_code": "แผน", "drawing_name": "Drawing",
                 "title": "บริษัทลูกค้า", "planned_start_at": "กำหนดเริ่ม", "due_at": "กำหนดเสร็จ",
                 "actual_start": "เริ่มจริง", "actual_finish": "เสร็จจริง", "finish_plan_status": "ผลเทียบแผน", "actual_work_hours": "เวลาจริง (ชม.)",
-                "estimated_hours": "เวลาประมาณ (ชม.)", "result_note": "หมายเหตุ", "qc_acceptance": "ผลตรวจรับ QC"
+                "estimated_hours": "เวลาประมาณ (ชม.)", "result_note": "หมายเหตุ", "qc_acceptance": "ผลตรวจรับ QC",
+                "qc_result_supplement": "ยืนยันผลย้อนหลัง / หลักฐาน"
             }
             cols = [col for col in labels if col in print_frame.columns]
             sections = []
@@ -6340,6 +6458,8 @@ def render_department_finished_history(finished_tasks, department, now, allow_wr
                 }};
                 </script>
             """, height=46)
+        if department == "QC" and allow_write:
+            render_qc_history_supplement(history_shown, f"{department}_history")
         selected_history_rows = history_editor[
             history_editor.get("เลือก", pd.Series(False, index=history_editor.index)).fillna(False).astype(bool)
         ]
@@ -7938,11 +8058,20 @@ def operator_live_rpc(person, action, task=None, payload=None, target_id=None):
     try:
         timing = prepare_operator_timing_command(person, action, raw, payload or {}, target_id)
         body["p_payload"] = {**(payload or {}), "_chain": timing}
+        qc_inspection_finish = (action == "finish" and is_qc_inspection_task(raw)
+                                and not safe_str(raw.get("flow_case_id")))
+        rpc_name = "tpc_finish_unlinked_qc" if qc_inspection_finish else "tpc_operator_queue_action_v2"
+        if qc_inspection_finish:
+            if (payload or {}).get("flow_verdict") != "pass":
+                st.error("กรุณาระบุผลตรวจผ่าน หรือใช้ขั้นตอนส่ง NG สำหรับงานไม่ผ่าน")
+                return False
+            body["p_expected"]["work_type"] = operator_json_clean(raw.get("work_type"))
         response = requests.post(
-            f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/rpc/tpc_operator_queue_action_v2",
-            headers=get_supabase_headers(), json=body, timeout=12)
+            f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/rpc/{rpc_name}",
+            headers=flow_api_headers(write=True) if qc_inspection_finish else get_supabase_headers(), json=body, timeout=12)
         if response.status_code == 404:
-            st.error("กรุณารันไฟล์ TPC_Operator_Time_Chain_20261029.sql ใน Supabase SQL Editor ก่อนใช้เครื่องมือคิวรุ่นนี้")
+            st.error("กรุณารัน TPC_QC_Inspection_Result_Setup.sql ก่อนบันทึกผลตรวจ QC" if qc_inspection_finish else
+                     "กรุณารันไฟล์ TPC_Operator_Time_Chain_20261029.sql ใน Supabase SQL Editor ก่อนใช้เครื่องมือคิวรุ่นนี้")
             return False
         if response.status_code not in (200, 201):
             try:
@@ -8709,6 +8838,9 @@ def render_department_operator_mode(training=False):
             with op_a2:
                 if not training and safe_str(queue_task.get("flow_case_id")):
                     render_flow_qc_result(queue_task, "operator")
+                    continue
+                if not training and is_qc_inspection_task(queue_task):
+                    render_unlinked_qc_inspection(queue_task, update_department_work_order)
                     continue
                 if not training and safe_str(queue_task.get("department")) == "QC":
                     if render_operator_legacy_qc_ng(queue_task):
