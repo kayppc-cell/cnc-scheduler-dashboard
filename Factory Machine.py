@@ -11925,6 +11925,13 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
         operator_machine_select_key = "training_op_machine_select" if training_active else "op_machine_select_explicit_v2"
         operator_machine_memory_key = "training_shop_machine_remembered" if training_active else "shop_machine_explicit_v2"
         restore_shop_machine(operator_machine_options, operator_machine_select_key, operator_machine_memory_key, require_selection=not training_active)
+        with st.spinner("กำลังโหลดจำนวนคิวของเครื่องจักร..."):
+            df_all = fetch_jobs_from_supabase()
+        machine_queue_counts = {}
+        if not df_all.empty:
+            active_machine_rows = df_all[df_all["สถานะงาน"].isin(
+                ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])]
+            machine_queue_counts = active_machine_rows.groupby("เลือกเครื่องจักร").size().to_dict()
         c_m_sel, c_mode_sel = st.columns([2, 2])
         with c_m_sel:
             selected_m = st.selectbox(
@@ -11933,6 +11940,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
                 index=(operator_machine_options.index(st.session_state[operator_machine_memory_key])
                        if st.session_state.get(operator_machine_memory_key) in operator_machine_options else None),
                 placeholder="กรุณาเลือกเครื่องจักรก่อนดูคิวงาน",
+                format_func=lambda machine_name: f"{machine_name} — มี {machine_queue_counts.get(machine_name, 0)} คิว",
                 key=operator_machine_select_key,
                 on_change=remember_shop_machine,
                 args=(operator_machine_select_key, operator_machine_memory_key),
@@ -11941,13 +11949,7 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
             if selected_m is None:
                 st.info("กรุณาเลือกเครื่องจักรของคุณก่อนดูคิวงานและทำรายการ Start / Finish")
                 st.stop()
-            with st.spinner("กำลังโหลดคิวงานของเครื่องที่เลือก..."):
-                df_all = fetch_jobs_from_supabase()
-            selected_machine_count = 0
-            if not df_all.empty:
-                selected_machine_count = int((df_all["เลือกเครื่องจักร"].eq(selected_m) &
-                    df_all["สถานะงาน"].isin(["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"])).sum())
-            st.caption(f"{selected_m} — มี {selected_machine_count} คิว")
+            st.caption(f"{selected_m} — มี {machine_queue_counts.get(selected_m, 0)} คิว")
         with c_mode_sel:
             operator_mode_key = f"operator_run_mode_{selected_m}"
             if st.session_state.pop("operator_reset_piece_mode", False):
