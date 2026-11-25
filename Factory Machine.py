@@ -1198,12 +1198,14 @@ def render_shop_incoming_context(row, snapshot, forecast):
         st.caption("ตำแหน่งอ้างอิงตามเส้นทางและสถานะที่บันทึกในระบบ ไม่ยืนยันตำแหน่งชิ้นงานจริง เวลาคาดการณ์เปลี่ยนตามคิวและการทำงาน; Start จะพร้อมเมื่อ Process ก่อนหน้าเสร็จจริง")
 
 
-def flow_process_label(row):
+def flow_process_label(row, completion_by_id=None):
     metadata = production_schedule_metadata(row)
     number, total = safe_int(metadata.get("flow_sequence"), 0), safe_int(metadata.get("flow_total"), 0)
     if not number or not total:
         return "—"
-    if flow_job_is_blocked(row):
+    previous = flow_previous_job_id(row)
+    blocked = (bool(previous) and not completion_by_id.get(previous, False)) if completion_by_id is not None else flow_job_is_blocked(row)
+    if blocked:
         return f"{number}/{total} · 🔒 รอรับจาก Process {number-1}"
     if "เสร็จสิ้น" in safe_str(row.get("สถานะงาน")):
         return f"{number}/{total} · ผลิตเสร็จ"
@@ -3310,7 +3312,15 @@ def fetch_jobs_from_supabase():
     st.session_state["_tpc_flow_jobs_snapshot"] = jobs.copy()
     if not jobs.empty:
         jobs = jobs.copy()
-        jobs["Process"] = [flow_process_label(row) for row in jobs.to_dict("records")]
+        records = jobs.to_dict("records")
+        # Build once per fresh snapshot instead of scanning the whole frame per row.
+        completion_by_id = {}
+        for row in records:
+            job_id = safe_int(row.get("ID"))
+            if job_id not in completion_by_id:
+                completion_by_id[job_id] = ("เสร็จสิ้น" in safe_str(row.get("สถานะงาน"))
+                                             and first_valid_datetime(row.get("เสร็จจริง")) is not None)
+        jobs["Process"] = [flow_process_label(row, completion_by_id) for row in records]
     return jobs
 
 
@@ -5986,7 +5996,7 @@ def fetch_department_work_orders(department):
             params = {"select": "*", "department": f"eq.{department}", "order": "id.desc", "limit": 500}
             if last_id is not None:
                 params["id"] = f"lt.{last_id}"
-            res = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+            res = requests.get(endpoint, headers={**get_supabase_headers(), "Prefer": "count=exact"}, params=params, timeout=8)
             if res.status_code == 404:
                 return None
             if res.status_code not in (200, 206):
@@ -6002,6 +6012,8 @@ def fetch_department_work_orders(department):
                     return None
                 rows.append(row)
                 last_id = row_id
+            if response_page_is_last(res, len(page)):
+                return pd.DataFrame(rows)
     except Exception:
         return None
 
@@ -7825,7 +7837,7 @@ def fetch_operator_command_rows(person):
                   "order": "id.asc", "limit": 200}
         if last_id is not None:
             params["id"] = f"gt.{last_id}"
-        response = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        response = requests.get(endpoint, headers={**get_supabase_headers(), "Prefer": "count=exact"}, params=params, timeout=8)
         if response.status_code not in (200, 206):
             raise ValueError("อ่านคิวล่าสุดของผู้ปฏิบัติงานไม่สำเร็จ ยังไม่ส่งคำสั่งบันทึก")
         page = response.json()
@@ -7841,6 +7853,8 @@ def fetch_operator_command_rows(person):
             last_id = task_id
             if operator_person_active(row, person):
                 rows.append(row)
+        if response_page_is_last(response, len(page)):
+            return rows
 
 
 def operator_missing_command_task(person, raw):
