@@ -8551,6 +8551,22 @@ def operator_ng_card_details(task):
     return label, detail
 
 
+def reset_operator_name_selection(training=False):
+    """Reset UI identity only, keeping live and training selections separate."""
+    prefix = "operator_training_explicit_" if training else "operator_explicit_"
+    for key in list(st.session_state):
+        if key.startswith(prefix):
+            st.session_state.pop(key, None)
+    st.session_state.pop("operator_pending_start", None)
+    st.session_state.pop("operator_queue_pick", None)
+
+
+def remember_operator_name(widget_key, memory_key):
+    st.session_state[memory_key] = st.session_state.get(widget_key)
+    st.session_state.pop("operator_pending_start", None)
+    st.session_state.pop("operator_queue_pick", None)
+
+
 def render_department_operator_mode(training=False):
     """หน้าปฏิบัติการแบบคิวการ์ด: ไม่มีตาราง รายงาน KPI หรือตารางประวัติ"""
     fetch_department_work_orders = fetch_training_operator_tasks if training else fetch_operator_live_tasks
@@ -8620,22 +8636,23 @@ def render_department_operator_mode(training=False):
             ((all_assignee == operator_name) & ~all_status.str.contains("เสร็จ|ยกเลิก", regex=True, na=False)).sum()
         )
 
-    if training:
-        remembered_names = st.session_state.get("training_operator_saved_names", {})
-        if st.session_state.get("training_department_operator_name") not in operator_names:
-            remembered_name = remembered_names.get(training_department)
-            st.session_state["training_department_operator_name"] = (
-                remembered_name if remembered_name in operator_names else operator_names[0])
-    elif st.session_state.get("department_operator_name") not in operator_names:
-        remembered_name = st.session_state.get("operator_live_saved_names", {}).get(live_department, st.session_state.get("operator_live_saved_name"))
-        st.session_state["department_operator_name"] = (
-            remembered_name if remembered_name in operator_names else operator_names[0])
+    name_prefix = "operator_training_explicit_" if training else "operator_explicit_"
+    selection_department = training_department if training else live_department
+    if st.session_state.get(name_prefix+"department") != selection_department:
+        reset_operator_name_selection(training=training)
+        st.session_state[name_prefix+"department"] = selection_department
+    name_key = name_prefix+f"name_{selection_department}"
+    memory_key = name_prefix+f"memory_{selection_department}"
+    restore_shop_machine(operator_names, name_key, memory_key, require_selection=True)
     selected_operator = st.selectbox(
-        "เลือกชื่อผู้ปฏิบัติงาน",
-        operator_names,
+        "เลือกชื่อผู้ปฏิบัติงาน", operator_names, index=None,
+        placeholder="กรุณาเลือกชื่อผู้ปฏิบัติงานก่อนดูคิวงาน",
         format_func=lambda name: f"{name} — {active_counts.get(name, 0)} คิว",
-        key="training_department_operator_name" if training else "department_operator_name"
-    )
+        key=name_key, on_change=remember_operator_name, args=(name_key, memory_key))
+    if selected_operator is None:
+        st.info("กรุณาเลือกชื่อของคุณก่อนดูคิวงานและทำรายการ Start / Finish")
+        return
+    st.session_state[memory_key] = selected_operator
     if training:
         st.session_state["training_operator_saved_names"] = {
             **st.session_state.get("training_operator_saved_names", {}), training_department: selected_operator}
@@ -9351,6 +9368,13 @@ def on_main_navigation_change():
         return
     if selected != st.session_state.current_view:
         st.session_state.current_view = selected
+        if selected in ("👤 โหมดผู้ปฏิบัติงาน", "🎓 โหมดฝึกผู้ปฏิบัติงาน"):
+            reset_operator_name_selection(training=selected == "🎓 โหมดฝึกผู้ปฏิบัติงาน")
+        if selected == "🎓 โหมดฝึกหน้าเครื่อง":
+            st.session_state.pop("training_op_machine_select_explicit_v1", None)
+            st.session_state.pop("training_shop_machine_explicit_v1", None)
+            st.session_state.pop("pending_shop_start_confirmation", None)
+            st.session_state.pop("batch_bulk_guard", None)
         if selected == "👷 โหมดหน้าเครื่อง":
             st.session_state.pop("op_machine_select_explicit_v2", None)
             st.session_state.pop("shop_machine_explicit_v2", None)
@@ -12054,9 +12078,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
             return "🟨 พักงานชั่วคราว รอขึ้นงาน"
 
         operator_machine_options = list(TRAINING_MACHINES if training_active else MACHINE_LIST)
-        operator_machine_select_key = "training_op_machine_select" if training_active else "op_machine_select_explicit_v2"
-        operator_machine_memory_key = "training_shop_machine_remembered" if training_active else "shop_machine_explicit_v2"
-        restore_shop_machine(operator_machine_options, operator_machine_select_key, operator_machine_memory_key, require_selection=not training_active)
+        operator_machine_select_key = "training_op_machine_select_explicit_v1" if training_active else "op_machine_select_explicit_v2"
+        operator_machine_memory_key = "training_shop_machine_explicit_v1" if training_active else "shop_machine_explicit_v2"
+        restore_shop_machine(operator_machine_options, operator_machine_select_key, operator_machine_memory_key, require_selection=True)
         with st.spinner("กำลังโหลดจำนวนคิวของเครื่องจักร..."):
             df_all = fetch_jobs_from_supabase()
         machine_queue_counts = {}
