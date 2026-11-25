@@ -5981,18 +5981,29 @@ def get_qc_hourly_rate(assignee):
 def fetch_department_work_orders(department):
     try:
         endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
-        res = requests.get(
-            endpoint, headers=get_supabase_headers(),
-            params={"select": "*", "department": f"eq.{department}", "order": "created_at.desc"},
-            timeout=8
-        )
-        if res.status_code == 404:
-            return None
-        if res.status_code != 200:
-            return pd.DataFrame()
-        return pd.DataFrame(res.json())
+        rows, last_id = [], None
+        while True:
+            params = {"select": "*", "department": f"eq.{department}", "order": "id.desc", "limit": 500}
+            if last_id is not None:
+                params["id"] = f"lt.{last_id}"
+            res = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+            if res.status_code == 404:
+                return None
+            if res.status_code not in (200, 206):
+                return None
+            page = res.json()
+            if not isinstance(page, list):
+                return None
+            if not page:
+                return pd.DataFrame(rows)
+            for row in page:
+                row_id = safe_int(row.get("id"), 0)
+                if row_id <= 0 or (last_id is not None and row_id >= last_id):
+                    return None
+                rows.append(row)
+                last_id = row_id
     except Exception:
-        return pd.DataFrame()
+        return None
 
 def insert_department_work_order(payload):
     try:
@@ -6605,9 +6616,19 @@ def render_people_work_center(department):
 
     tasks = fetch_department_work_orders(department)
     if tasks is None:
-        st.error("ยังไม่พบตาราง tpc_department_work_orders กรุณารันไฟล์ SQL ที่แนบมาก่อนใช้งานโหมดนี้")
+        st.error("ยังอ่านใบงาน QC/Automation ไม่สำเร็จ กรุณาตรวจการเชื่อมต่อและตาราง tpc_department_work_orders ก่อนทำรายการ")
         return
     tasks, templates = split_department_work_order_templates(tasks)
+    all_work_orders = tasks
+    released_tasks = hide_deferred_qc_tasks(tasks)
+    deferred_count = len(tasks) - len(released_tasks)
+    if deferred_count:
+        st.info(f"มี {deferred_count} ใบตรวจที่ยังรอผลิตครบ แสดงแยกจากคิวพร้อมตรวจ")
+        with st.expander("ใบตรวจที่ยังรอผลิต — ยัง Start ไม่ได้"):
+            deferred = tasks.loc[~tasks.index.isin(released_tasks.index)]
+            columns = [name for name in ("id", "plan_code", "drawing_name", "assignee", "status") if name in deferred]
+            st.dataframe(deferred[columns].rename(columns={"id": "ID", "plan_code": "แผนงาน", "drawing_name": "Drawing", "assignee": "ผู้รับผิดชอบ", "status": "สถานะ"}), hide_index=True, use_container_width=True)
+    tasks = released_tasks
     admin_write_allowed = render_department_creation_access(department)
 
     if admin_write_allowed:
@@ -6920,7 +6941,7 @@ def render_people_work_center(department):
                         "queue_requested_start_at": requested_start.strftime("%Y-%m-%d %H:%M:%S") if requested_start else None,
                         "checklist": checklist.strip() or None, "status": "🟧 รอรับงาน"
                     }
-                    if department_work_order_duplicate_exists(tasks, create_payload):
+                    if department_work_order_duplicate_exists(all_work_orders, create_payload):
                         st.warning("⚠️ ไม่ได้สร้างใบงาน เนื่องจากพบคิวงานเดิมที่มีข้อมูลตรงกันอยู่แล้ว กรุณาตรวจสอบตารางคิวงานปัจจุบัน")
                     else:
                         ok, message = insert_department_work_order(create_payload)
@@ -6938,7 +6959,7 @@ def render_people_work_center(department):
     edit_panel = st.container()
 
     if tasks.empty:
-        st.info("ยังไม่มีใบงานในแผนกนี้")
+        st.info("ยังไม่มีคิวพร้อมทำในแผนกนี้ ใบตรวจที่รอผลิตแสดงอยู่ด้านบน" if deferred_count else "ยังไม่มีใบงานในแผนกนี้")
         return
 
     tasks = tasks.copy()
@@ -7512,24 +7533,12 @@ def fetch_training_operator_tasks(department):
 
 def operator_person_active(row, person):
     return (row.get("assignee") == person and row.get("status") in ("🟧 รอรับงาน", "🟦 กำลังทำ", "🟨 พักงาน")
-            and safe_str(row.get("result_note")) != DEPARTMENT_TEMPLATE_MARKER)
+            and safe_str(row.get("result_note")) != DEPARTMENT_TEMPLATE_MARKER
+            and safe_str(row.get("qc_production_blocked"), "").lower() not in ("true", "1"))
 
 
 def fetch_department_person_active_for_schedule(person):
-    endpoint = f"{st.secrets['SUPABASE_URL'].rstrip('/')}/rest/v1/tpc_department_work_orders"
-    rows = []
-    while True:
-        res = requests.get(endpoint, headers=get_supabase_headers(), timeout=8, params={
-            "select": "*", "assignee": f"eq.{person}", "department": "in.(QC,AUTOMATION)",
-            "status": 'in.("🟧 รอรับงาน","🟦 กำลังทำ","🟨 พักงาน")',
-            "order": "id.asc", "limit": 200, "offset": len(rows),
-        })
-        if res.status_code != 200:
-            raise ValueError("อ่านคิวล่าสุดของผู้รับผิดชอบไม่สำเร็จ กรุณาลองใหม่")
-        page = res.json()
-        rows.extend(page)
-        if not page:
-            return rows
+    return fetch_operator_command_rows(person)
 
 
 def department_operator_order(row, position_field="operator_queue_position"):
@@ -7830,7 +7839,7 @@ def fetch_operator_command_rows(person):
                 raise ValueError("ข้อมูลคิวล่าสุดซ้ำหรือไม่ตรงผู้ปฏิบัติงาน ยังไม่ส่งคำสั่งบันทึก")
             seen.add(task_id)
             last_id = task_id
-            if operator_person_active(row, person) and row.get("qc_production_blocked") is not True:
+            if operator_person_active(row, person):
                 rows.append(row)
 
 
@@ -8001,7 +8010,7 @@ def operator_json_clean(value):
 def operator_management_preview(rows, person, action, task_id, target, reason, now, training=False):
     rows = operator_json_clean(rows)
     selected = next((row for row in rows if safe_int(row.get("id"),0)==task_id and row.get("assignee")==person), None)
-    if selected is None or selected.get("status") not in ("🟧 รอรับงาน","🟦 กำลังทำ","🟨 พักงาน"):
+    if selected is None or not operator_person_active(selected, person):
         raise ValueError("คิวงานเปลี่ยนแล้ว กรุณารีเฟรช")
     if not reason.strip():
         raise ValueError("กรุณาเลือกเหตุผล")
@@ -10594,7 +10603,11 @@ TPC_MISSING_PRODUCTION_SQL = "-- Update queue placement for additional original-
 def hide_deferred_qc_tasks(frame):
     if not isinstance(frame, pd.DataFrame) or frame.empty or "qc_production_blocked" not in frame:
         return frame
-    return frame.loc[~frame["qc_production_blocked"].fillna(False).astype(bool)].copy()
+    blocked = frame["qc_production_blocked"].map(lambda value: safe_str(value, "").lower() in ("true", "1"))
+    if "status" in frame:
+        closed = frame["status"].fillna("").astype(str).str.contains("เสร็จ|ยกเลิก", regex=True)
+        blocked &= ~closed
+    return frame.loc[~blocked].copy()
 
 
 def missing_production_waiting_choices(raw_jobs, machine):
@@ -16749,8 +16762,13 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
         refresh_work_calendar()
         qc_tv_tasks = fetch_department_work_orders("QC")
         auto_tv_tasks = fetch_department_work_orders("AUTOMATION")
+        if qc_tv_tasks is None or auto_tv_tasks is None:
+            st.error("ยังอ่านคิว QC/Automation ไม่ครบ จึงยังไม่แสดงสถานะว่าง กรุณาลองอัปเดตอีกครั้ง")
+            return
         qc_tv_tasks, _ = split_department_work_order_templates(qc_tv_tasks)
         auto_tv_tasks, _ = split_department_work_order_templates(auto_tv_tasks)
+        qc_tv_tasks = hide_deferred_qc_tasks(qc_tv_tasks)
+        auto_tv_tasks = hide_deferred_qc_tasks(auto_tv_tasks)
         tv_dept_frames = [
             frame for frame in [qc_tv_tasks, auto_tv_tasks]
             if isinstance(frame, pd.DataFrame) and not frame.empty
@@ -17645,3 +17663,6 @@ if st.session_state.get("user_role") == "admin" and _tpc_performance_slot is not
             st.dataframe(pd.DataFrame(profile_rows), hide_index=True, use_container_width=True)
 
         render_tpc_resource_monitor()
+
+
+
