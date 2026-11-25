@@ -9185,6 +9185,18 @@ nav_options = [
     "🛒 จัดซื้อและต้นทุนแผนงาน"
 ]
 
+def on_main_navigation_change():
+    """Commit the selected page before any pending TV fragment can run."""
+    selected = st.session_state.get("tpc_main_navigation_v2")
+    if selected not in nav_options:
+        return
+    if selected != st.session_state.current_view:
+        st.session_state.current_view = selected
+        st.session_state.pop("_dept_tv_cached_screen_v1", None)
+        if st.query_params.get("view") == "tv-qc-menu":
+            del st.query_params["view"]
+
+
 if standalone_only_mode:
     # URL เฉพาะหน้าต้องอยู่หน้าจอที่กำหนดเสมอ แม้ session เดิมเคยเปิดหน้าอื่น
     if tv_rotation_mode:
@@ -9198,18 +9210,12 @@ if standalone_only_mode:
             if tv_department_only_mode else "📺 จอทีวีแสดงงานแผนกผลิต"
         )
 else:
-    cur_idx = nav_options.index(st.session_state.current_view) if st.session_state.current_view in nav_options else 0
-    selected_tab = st.radio("เลือกมุมมอง:", nav_options, index=cur_idx, horizontal=True, label_visibility="collapsed")
-
-    if selected_tab != st.session_state.current_view:
-        # เมื่อผู้ใช้เปลี่ยนออกจากจอทีวี QC ให้ยกเลิกตัวล็อก refresh แบบมีเมนู
-        if tv_department_menu_refresh_mode:
-            try:
-                st.query_params.clear()
-            except Exception:
-                pass
-        st.session_state.current_view = selected_tab
-        st.rerun()
+    if st.session_state.current_view not in nav_options:
+        st.session_state.current_view = nav_options[0]
+    if st.session_state.get("tpc_main_navigation_v2") != st.session_state.current_view:
+        st.session_state["tpc_main_navigation_v2"] = st.session_state.current_view
+    selected_tab = st.radio("เลือกมุมมอง:", nav_options, key="tpc_main_navigation_v2",
+                            on_change=on_main_navigation_change, horizontal=True, label_visibility="collapsed")
 
 # ---------------------------------------------------------
 # VIEW 1: โหมดหน้าเครื่อง
@@ -16749,10 +16755,10 @@ elif st.session_state.current_view == "🛒 จัดซื้อและต้
     render_purchase_cost_module()
 
 elif st.session_state.current_view == "📺 จอทีวีแสดงงานแผนก QC&Automation":
-    @st.fragment(run_every=1)
+    @st.fragment(run_every=30)
     def render_department_tv_auto_refresh():
         if st.session_state.current_view != "📺 จอทีวีแสดงงานแผนก QC&Automation":
-            return
+            st.rerun(scope="app")
         refresh_cycle_started = tpc_auth_time.monotonic()
         cached_screen = st.session_state.get("_dept_tv_cached_screen_v1")
         if cached_screen and refresh_cycle_started < cached_screen["next_refresh"]:
@@ -17155,7 +17161,7 @@ elif st.session_state.current_view == "📺 จอทีวีแสดงงา
     @st.fragment(run_every=30)
     def render_production_tv_auto_refresh():
         if st.session_state.current_view != "📺 จอทีวีแสดงงานแผนกผลิต":
-            return
+            st.rerun(scope="app")
         refresh_work_calendar()
         df_live = fetch_jobs_from_supabase()
         # ทุกสถานะแสดงเวลาลูกโซ่ปัจจุบัน และเก็บ Baseline เป็นข้อมูลอ้างอิงแยก
@@ -17663,6 +17669,3 @@ if st.session_state.get("user_role") == "admin" and _tpc_performance_slot is not
             st.dataframe(pd.DataFrame(profile_rows), hide_index=True, use_container_width=True)
 
         render_tpc_resource_monitor()
-
-
-
