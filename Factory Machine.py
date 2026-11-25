@@ -4175,7 +4175,7 @@ def build_project_graph_details_table(summary):
     return table.rename(columns={"สิ้นสุด Production": "กำหนดจบ Production", "เริ่มผลิต": "คาดว่าเริ่มผลิต", "จบผลิต": "คาดว่าจะจบผลิต"})
 
 
-def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_only=False):
+def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_only=False, precomputed_chain=None):
     if chart_only:
         read_only = True
     device_mode = get_device_mode()
@@ -4301,7 +4301,12 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
 
     # ใช้เวลาลูกโซ่ชุดเดียวกับตารางสั่งผลิต ไม่ใช้ ready_at ดิบซึ่งอาจอยู่ก่อน
     # วัน/เวลาทำงานจริงและทำให้แท่งกราฟกับขีดวันที่ด้านบนคลาดกันหนึ่งวัน
-    jobs = build_project_active_chain(calc_df)
+    if isinstance(precomputed_chain, pd.DataFrame):
+        jobs = precomputed_chain.copy(deep=True)
+        jobs["_start"] = jobs.get("_chain_start", pd.Series(index=jobs.index, dtype="datetime64[ns]"))
+        jobs["_finish"] = jobs.get("_chain_finish", pd.Series(index=jobs.index, dtype="datetime64[ns]"))
+    else:
+        jobs = build_project_active_chain(calc_df)
 
     # ป้องกันหน้า Project Master ล่มเมื่อ Supabase ส่งชุดข้อมูลว่างหรือชื่อคอลัมน์
     # Drawing ต่างรูปแบบในบางรอบโหลด
@@ -4336,19 +4341,26 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         except (ValueError, requests.RequestException):
             pass  # Missing route/QC data remains explicitly unconfirmed.
     project_now = get_bangkok_now().replace(tzinfo=None)
+    project_all_jobs_by_plan = ({key: group for key, group in calc_df.groupby(
+        calc_df["แผนงาน"].map(normalize_filter_key), sort=False, dropna=False)} if "แผนงาน" in calc_df else {})
+    project_active_jobs_by_plan = {key: group for key, group in jobs.groupby(
+        jobs["แผนงาน"].map(normalize_filter_key), sort=False, dropna=False)}
+    project_machine_records = {
+        key: {machine: group.to_dict("records") for machine, group in plan_jobs.groupby(
+            plan_jobs["เลือกเครื่องจักร"].map(safe_str), sort=False, dropna=False) if machine}
+        for key, plan_jobs in project_active_jobs_by_plan.items()
+    }
     for _, master in master_df.iterrows():
         code = safe_str(master["plan_code"])
         customer_start, customer_due = master["customer_start"], master["customer_due"]
-        all_plan_jobs = calc_df[
-            calc_df["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(code)
-        ].copy() if "แผนงาน" in calc_df.columns else pd.DataFrame()
+        all_plan_jobs = project_all_jobs_by_plan.get(normalize_filter_key(code), calc_df.iloc[0:0]).copy()
         drawing_progress = calculate_plan_drawing_progress(all_plan_jobs, case_statuses=report_cases)
         drawing_status_by_plan[normalize_filter_key(code)] = build_plan_drawing_status_breakdown(all_plan_jobs, report_cases)
         outsourced_plan_jobs = all_plan_jobs[
             all_plan_jobs.get("สถานะงาน", pd.Series(index=all_plan_jobs.index, dtype=str))
             .astype(str).str.contains("จ้างภายนอก", na=False)
         ].copy() if not all_plan_jobs.empty else pd.DataFrame()
-        sub = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(code)].copy()
+        sub = project_active_jobs_by_plan.get(normalize_filter_key(code), jobs.iloc[0:0]).copy()
         valid_starts = [v for v in sub["_start"] if v is not None and not pd.isna(v)]
         valid_finishes = [v for v in sub["_finish"] if v is not None and not pd.isna(v)]
         production_start = min(valid_starts) if valid_starts else None
@@ -4468,32 +4480,22 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
         for j in range(i + 1, len(summary)):
             a, b = summary.iloc[i], summary.iloc[j]
             if a["เริ่ม Production"] < b["สิ้นสุด Production"] and b["เริ่ม Production"] < a["สิ้นสุด Production"]:
-                a_jobs = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(a["แผนงาน"])]
-                b_jobs = jobs[jobs["แผนงาน"].map(normalize_filter_key) == normalize_filter_key(b["แผนงาน"])]
-                a_machines = {
-                    safe_str(value) for value in a_jobs.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna()
-                    if safe_str(value)
-                }
-                b_machines = {
-                    safe_str(value) for value in b_jobs.get("เลือกเครื่องจักร", pd.Series(dtype=str)).dropna()
-                    if safe_str(value)
-                }
+                a_machine_jobs = project_machine_records.get(normalize_filter_key(a["แผนงาน"]), {})
+                b_machine_jobs = project_machine_records.get(normalize_filter_key(b["แผนงาน"]), {})
+                a_machines = set(a_machine_jobs)
+                b_machines = set(b_machine_jobs)
                 shared_machines = sorted(a_machines.intersection(b_machines))
                 machine_overlap_hours = {}
                 collision_drawings = []
                 for machine_name in shared_machines:
-                    machine_a_jobs = a_jobs[
-                        a_jobs["เลือกเครื่องจักร"].map(safe_str) == machine_name
-                    ]
-                    machine_b_jobs = b_jobs[
-                        b_jobs["เลือกเครื่องจักร"].map(safe_str) == machine_name
-                    ]
+                    machine_a_jobs = a_machine_jobs[machine_name]
+                    machine_b_jobs = b_machine_jobs[machine_name]
                     collision_segments = []
-                    for _, a_job in machine_a_jobs.iterrows():
+                    for a_job in machine_a_jobs:
                         a_start, a_finish = a_job.get("_start"), a_job.get("_finish")
                         if a_start is None or a_finish is None or pd.isna(a_start) or pd.isna(a_finish):
                             continue
-                        for _, b_job in machine_b_jobs.iterrows():
+                        for b_job in machine_b_jobs:
                             b_start, b_finish = b_job.get("_start"), b_job.get("_finish")
                             if b_start is None or b_finish is None or pd.isna(b_start) or pd.isna(b_finish):
                                 continue
@@ -5246,7 +5248,7 @@ def render_project_master_dashboard(calc_df, is_admin, read_only=False, chart_on
             '<div class="project-responsive-mobile">' + "".join(mobile_cards) + "</div></div>"
         st.markdown(responsive_project_html, unsafe_allow_html=True)
 
-def render_work_order_readonly(source_df):
+def render_work_order_readonly(source_df, precomputed_chain=None):
     """แสดงใบจ่ายคิวงานสำหรับติดตามเท่านั้น ไม่มีคำสั่งแก้ไข/บันทึก/ลบ"""
     device_mode = get_device_mode()
     mobile_view = device_mode == "mobile"
@@ -5282,7 +5284,18 @@ def render_work_order_readonly(source_df):
     work_df["_baseline_dt"] = work_df["กำหนดพร้อมขึ้นงาน (Baseline)"].apply(parse_flexible_datetime)
     missing_baseline = work_df["_baseline_dt"].isna()
     work_df.loc[missing_baseline, "_baseline_dt"] = work_df.loc[missing_baseline, "วัน-เวลาขึ้นงาน"].apply(parse_flexible_datetime)
-    work_df = calculate_production_chain(work_df, active_only=True)
+    if (isinstance(precomputed_chain, pd.DataFrame) and "ID" in precomputed_chain
+            and precomputed_chain["ID"].is_unique and work_df["ID"].is_unique
+            and set(precomputed_chain["ID"]) == set(work_df["ID"])
+            and {"_chain_start", "_chain_finish"}.issubset(precomputed_chain.columns)):
+        shared_chain = precomputed_chain.copy(deep=True)
+        original_by_id = work_df.set_index("ID")
+        for column in work_df.columns:
+            if column not in shared_chain:
+                shared_chain[column] = shared_chain["ID"].map(original_by_id[column])
+        work_df = shared_chain
+    else:
+        work_df = calculate_production_chain(work_df, active_only=True)
     work_df["_dt_start"] = work_df["_chain_start"]
     work_df["_dt_finish"] = work_df["_chain_finish"]
     work_df["วัน-เวลาขึ้นงาน"] = work_df["_chain_start"]
@@ -9133,11 +9146,11 @@ def remember_shop_machine(widget_key, memory_key):
         st.session_state[memory_key] = value
 
 
-def restore_shop_machine(options, widget_key, memory_key):
+def restore_shop_machine(options, widget_key, memory_key, require_selection=False):
     """Persist machine identity independently from widget lifetime and queue counts."""
     remembered = st.session_state.get(memory_key)
     current = st.session_state.get(widget_key)
-    selected = remembered if remembered in options else current if current in options else options[0]
+    selected = remembered if remembered in options else current if current in options else None if require_selection or not options else options[0]
     st.session_state[widget_key] = selected
     st.session_state[memory_key] = selected
 
@@ -9206,6 +9219,11 @@ def on_main_navigation_change():
         return
     if selected != st.session_state.current_view:
         st.session_state.current_view = selected
+        if selected == "👷 โหมดหน้าเครื่อง":
+            st.session_state.pop("op_machine_select_explicit_v2", None)
+            st.session_state.pop("shop_machine_explicit_v2", None)
+            st.session_state.pop("pending_shop_start_confirmation", None)
+            st.session_state.pop("batch_bulk_guard", None)
         st.session_state.pop("_dept_tv_cached_screen_v1", None)
         if st.query_params.get("view") == "tv-qc-menu":
             del st.query_params["view"]
@@ -11775,6 +11793,24 @@ def dashboard_fragment_snapshot():
     return jobs, calc
 
 
+def tracking_fragment_snapshot(with_chain=False):
+    """Share one immutable read/forecast during a full tracking-page render only."""
+    partial_run = dashboard_is_partial_run()
+    entry = None if partial_run else _tpc_dashboard_run_data.get("tracking")
+    if entry is None:
+        refresh_work_calendar()
+        entry = {"jobs": fetch_jobs_from_supabase().copy(deep=True)}
+        if not partial_run:
+            _tpc_dashboard_run_data["tracking"] = entry
+    jobs = entry["jobs"].copy(deep=True)
+    st.session_state["_tpc_flow_jobs_snapshot"] = jobs.copy(deep=True)
+    if with_chain and "chain" not in entry:
+        required = {"ID", "เลือกเครื่องจักร", "สถานะงาน", "วัน-เวลาขึ้นงาน", "Setup (น.)", "Basic (น.)", "โปรแกรม (น.)"}
+        entry["chain"] = calculate_production_chain(jobs, active_only=True) if required.issubset(jobs.columns) else None
+    chain = entry.get("chain")
+    return jobs, chain.copy(deep=True) if isinstance(chain, pd.DataFrame) else None
+
+
 # Reserve a visible diagnostic panel above the selected page.
 _tpc_performance_slot = st.container() if st.session_state.get("user_role") == "admin" else None
 
@@ -11889,9 +11925,9 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
             return "🟨 พักงานชั่วคราว รอขึ้นงาน"
 
         operator_machine_options = list(TRAINING_MACHINES if training_active else MACHINE_LIST)
-        operator_machine_select_key = "training_op_machine_select" if training_active else "op_machine_select"
-        operator_machine_memory_key = "training_shop_machine_remembered" if training_active else "shop_machine_remembered"
-        restore_shop_machine(operator_machine_options, operator_machine_select_key, operator_machine_memory_key)
+        operator_machine_select_key = "training_op_machine_select" if training_active else "op_machine_select_explicit_v2"
+        operator_machine_memory_key = "training_shop_machine_remembered" if training_active else "shop_machine_explicit_v2"
+        restore_shop_machine(operator_machine_options, operator_machine_select_key, operator_machine_memory_key, require_selection=not training_active)
         machine_queue_counts = {machine_name: 0 for machine_name in operator_machine_options}
         if isinstance(df_all, pd.DataFrame) and not df_all.empty:
             active_machine_statuses = ["🟧 รอคิวผลิต", "🟦 กำลังผลิต", "🟨 พักงาน (รอวัสดุ)"]
@@ -11907,13 +11943,18 @@ elif st.session_state.current_view in ("👷 โหมดหน้าเคร�
             selected_m = st.selectbox(
                 "🏭 เลือกเครื่องจักร / แผนก:",
                 operator_machine_options,
-                index=operator_machine_options.index(st.session_state[operator_machine_memory_key]),
+                index=(operator_machine_options.index(st.session_state[operator_machine_memory_key])
+                       if st.session_state.get(operator_machine_memory_key) in operator_machine_options else None),
+                placeholder="กรุณาเลือกเครื่องจักรก่อนดูคิวงาน",
                 format_func=lambda machine_name: f"{machine_name} — มี {machine_queue_counts.get(machine_name, 0)} คิว",
                 key=operator_machine_select_key,
                 on_change=remember_shop_machine,
                 args=(operator_machine_select_key, operator_machine_memory_key),
             )
             st.session_state[operator_machine_memory_key] = selected_m
+            if selected_m is None:
+                st.info("กรุณาเลือกเครื่องจักรของคุณก่อนดูคิวงานและทำรายการ Start / Finish")
+                st.stop()
             st.caption(f"{selected_m} — มี {machine_queue_counts.get(selected_m, 0)} คิว")
         with c_mode_sel:
             operator_mode_key = f"operator_run_mode_{selected_m}"
@@ -15560,13 +15601,12 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
     def render_tracking_master_fragment():
         if st.session_state.get("current_view") != "📈 ติดตามสถานการณ์ฝ่ายผลิต":
             st.rerun()
-        refresh_work_calendar()
-        df_db = fetch_jobs_from_supabase()
+        df_db, tracking_chain = tracking_fragment_snapshot(with_chain=True)
         with st.expander("🗓️ ดูแผนงาน Production (อ่านอย่างเดียว)", expanded=True):
             if df_db.empty:
                 st.info("ยังไม่มีข้อมูลรายการสั่งผลิตสำหรับแสดงแผนงาน Production")
             else:
-                render_project_master_dashboard(df_db, is_admin=False, read_only=True)
+                render_project_master_dashboard(df_db, is_admin=False, read_only=True, precomputed_chain=tracking_chain)
 
     render_tracking_master_fragment()
 
@@ -15575,10 +15615,9 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
     def render_tracking_queue_fragment():
         if st.session_state.get("current_view") != "📈 ติดตามสถานการณ์ฝ่ายผลิต":
             st.rerun()
-        refresh_work_calendar()
-        df_db = fetch_jobs_from_supabase()
+        df_db, tracking_chain = tracking_fragment_snapshot(with_chain=True)
         with st.expander("📋 ใบจ่ายคิวงานหน้าเครื่อง (ดูอย่างเดียว)", expanded=True):
-            render_work_order_readonly(df_db)
+            render_work_order_readonly(df_db, precomputed_chain=tracking_chain)
 
     render_tracking_queue_fragment()
 
@@ -15586,8 +15625,7 @@ elif st.session_state.current_view == "📈 ติดตามสถานกา
     def render_tracking_analysis_fragment():
         if st.session_state.get("current_view") != "📈 ติดตามสถานการณ์ฝ่ายผลิต":
             st.rerun()
-        refresh_work_calendar()
-        df_db = fetch_jobs_from_supabase()
+        df_db, _ = tracking_fragment_snapshot()
         st.divider()
         st.markdown("### 📊 ผลวิเคราะห์ประสิทธิภาพตาม Drawing")
 
@@ -17658,6 +17696,7 @@ if _tpc_detail_profiler is not None:
                           "จำนวนครั้ง": _calls, "เวลาเฉพาะส่วน (วินาที)": round(_self_time, 3),
                           "เวลารวมงานย่อย (วินาที)": round(_cumulative, 3)})
     st.session_state["_tpc_profile_result"] = sorted(_tpc_rows, key=lambda row: row["เวลารวมงานย่อย (วินาที)"], reverse=True)[:25]
+    st.session_state["_tpc_profile_context"] = {"view": st.session_state.get("current_view"), "at": get_bangkok_now().strftime("%d/%m/%Y %H:%M:%S")}
 
 # Read-only diagnostics, visible to the logged-in administrator on every mode.
 if st.session_state.get("user_role") == "admin" and _tpc_performance_slot is not None:
@@ -17678,8 +17717,11 @@ if st.session_state.get("user_role") == "admin" and _tpc_performance_slot is not
 
         st.button("🔎 วัดรายละเอียดความช้า 1 รอบ", key="tpc_profile_once", on_click=request_tpc_detail_profile)
         profile_rows = st.session_state.get("_tpc_profile_result")
-        if profile_rows:
-            st.caption("ผลจากรอบที่กดวัดรายละเอียด · ตารางนี้อาจเพิ่มภาระขณะวัด · เวลารวมงานย่อยซ้อนกัน ห้ามนำแต่ละแถวมาบวกกัน")
+        profile_context = st.session_state.get("_tpc_profile_context", {})
+        if profile_rows and profile_context.get("view") == st.session_state.get("current_view"):
+            st.caption(f"ผลวัดหน้า {profile_context['view']} · {profile_context.get('at', '')} · การวัดเพิ่มภาระขณะวัด · เวลารวมงานย่อยซ้อนกัน ห้ามนำแต่ละแถวมาบวกกัน")
             st.dataframe(pd.DataFrame(profile_rows), hide_index=True, use_container_width=True)
+        elif profile_rows:
+            st.caption("ผลวัดรายละเอียดเดิมเป็นของหน้าอื่นหรือยังไม่ระบุหน้า กดวัดรายละเอียด 1 รอบเพื่อดูผลของหน้านี้")
 
         render_tpc_resource_monitor()
