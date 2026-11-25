@@ -7806,11 +7806,58 @@ def operator_supervisor_is_unlocked():
             and hmac.compare_digest(str(grant.get("digest", "")), digest))
 
 
+def fetch_operator_command_rows(person):
+    """Read the selected person's complete fresh queue for a write command."""
+    endpoint = st.secrets['SUPABASE_URL'].rstrip('/') + '/rest/v1/tpc_department_work_orders'
+    rows, seen, last_id = [], set(), None
+    while True:
+        params = {"select": "*", "assignee": f"eq.{person}", "department": "in.(QC,AUTOMATION)",
+                  "status": 'in.("🟧 รอรับงาน","🟦 กำลังทำ","🟨 พักงาน")',
+                  "order": "id.asc", "limit": 200}
+        if last_id is not None:
+            params["id"] = f"gt.{last_id}"
+        response = requests.get(endpoint, headers=get_supabase_headers(), params=params, timeout=8)
+        if response.status_code not in (200, 206):
+            raise ValueError("อ่านคิวล่าสุดของผู้ปฏิบัติงานไม่สำเร็จ ยังไม่ส่งคำสั่งบันทึก")
+        page = response.json()
+        if not isinstance(page, list):
+            raise ValueError("ข้อมูลคิวล่าสุดไม่ถูกต้อง ยังไม่ส่งคำสั่งบันทึก")
+        if not page:
+            return rows
+        for row in page:
+            task_id = safe_int(row.get("id"), 0)
+            if task_id <= (last_id or 0) or task_id in seen or row.get("assignee") != person or row.get("status") not in ("🟧 รอรับงาน", "🟦 กำลังทำ", "🟨 พักงาน") or row.get("department") not in ("QC", "AUTOMATION"):
+                raise ValueError("ข้อมูลคิวล่าสุดซ้ำหรือไม่ตรงผู้ปฏิบัติงาน ยังไม่ส่งคำสั่งบันทึก")
+            seen.add(task_id)
+            last_id = task_id
+            if operator_person_active(row, person) and row.get("qc_production_blocked") is not True:
+                rows.append(row)
+
+
+def operator_missing_command_task(person, raw):
+    """Explain a missing queue ID using an uncached identity read; never write."""
+    task_id = safe_int(raw.get("id"), 0)
+    endpoint = st.secrets['SUPABASE_URL'].rstrip('/') + '/rest/v1/tpc_department_work_orders'
+    response = requests.get(endpoint, headers=get_supabase_headers(),
+                            params={"select": "id,assignee,status,qc_production_blocked", "id": f"eq.{task_id}", "limit": 2}, timeout=8)
+    prefix = f"ยังไม่เริ่มงาน ID {task_id}: "
+    if response.status_code not in (200, 206):
+        return prefix + "อ่านสถานะล่าสุดไม่สำเร็จ"
+    records = response.json()
+    if not isinstance(records, list) or len(records) != 1 or safe_int(records[0].get("id"), 0) != task_id:
+        return prefix + "ไม่พบรายการเดียวกันในข้อมูลที่โปรแกรมอ่านได้ กรุณาตรวจฐานข้อมูลและสิทธิ์อ่าน"
+    latest = records[0]
+    if latest.get("assignee") != person:
+        return prefix + "ผู้รับผิดชอบล่าสุดเป็น " + safe_str(latest.get("assignee"), "ยังไม่ระบุ")
+    if latest.get("qc_production_blocked") is True:
+        return prefix + "QC ยังรอผลิตขั้นตอนก่อนหน้าให้ครบ"
+    if latest.get("status") not in ("🟧 รอรับงาน", "🟦 กำลังทำ", "🟨 พักงาน"):
+        return prefix + "สถานะล่าสุดเป็น " + safe_str(latest.get("status"), "ไม่ระบุ")
+    return prefix + "อ่านได้เมื่อค้นด้วย ID แต่ไม่อยู่ในผลคิวล่าสุด ยังไม่บันทึกเพื่อป้องกันคำนวณคิวไม่ครบ"
+
+
 def prepare_operator_timing_command(person, action, raw, payload, target_id):
-    frames = [fetch_operator_live_tasks(department) for department in ("QC", "AUTOMATION")]
-    frames = [frame for frame in frames if not frame.empty]
-    frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    rows = [row for row in frame.to_dict("records") if operator_person_active(row, person)]
+    rows = fetch_operator_command_rows(person)
     snapshot_fields = ("status", "assignee", "department", "actual_start", "actual_finish", "hold_started_at",
                        "paused_seconds", "planned_start_at", "due_at", "estimated_hours", "operator_queue_position", "updated_at")
     snapshots = [{"id": safe_int(row["id"], 0), "expected": {
@@ -7823,7 +7870,7 @@ def prepare_operator_timing_command(person, action, raw, payload, target_id):
     else:
         matches = [row for row in ordered if safe_int(row["id"], 0) == safe_int(raw.get("id"), 0)]
         if len(matches) != 1:
-            raise ValueError("คิวงานเปลี่ยนแล้ว กรุณารีเฟรชก่อนทำรายการ")
+            raise ValueError(operator_missing_command_task(person, raw))
         selected = matches[0]
         if action == "reorder":
             targets = [row for row in ordered if safe_int(row["id"], 0) == target_id]
