@@ -3226,7 +3226,7 @@ def read_all_job_rows(endpoint, headers, filters=None):
     last_id = None
     while True:
         params = dict(filters or {})
-        params.update({"select": "*", "order": "id.asc", "limit": 500})
+        params.update({"select": "*", "order": "id.asc", "limit": 1000})
         if last_id is not None:
             params["id"] = f"gt.{last_id}"
         response = requests.get(endpoint, headers={**headers, "Prefer": "count=exact"}, params=params, timeout=8)
