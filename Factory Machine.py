@@ -11681,6 +11681,112 @@ def build_calendar_comparison_rows(with_ot, without_ot, due_by_plan):
     return sort_calendar_preview_rows(rows)
 
 
+def plan_number_correction_command(action, data=None):
+    """Only explicit tool actions use this service RPC; never fall back to partial REST edits."""
+    response = requests.post(st.secrets["SUPABASE_URL"].rstrip("/")+"/rest/v1/rpc/tpc_plan_number_correction",
+        headers=flow_api_headers(write=True), json={"p_action":action,"p_data":data or {}}, timeout=20)
+    result = response.json()
+    if response.status_code not in (200,201) or not isinstance(result, dict) or result.get("ok") is not True:
+        if response.status_code == 404:
+            raise ValueError("กรุณารัน TPC_Plan_Number_Correction_Setup.sql ก่อนใช้เครื่องมือนี้")
+        message = result.get("message") if isinstance(result, dict) else None
+        raise ValueError(message or "ยังไม่ยืนยันผลบันทึก กรุณาตรวจข้อมูลล่าสุดก่อนลองซ้ำ")
+    return result
+
+
+def render_plan_number_correction():
+    if st.session_state.get("user_role") != "admin":
+        return
+    with st.expander("✏️ แก้เลขแผนเฉพาะ Drawing ที่เลือก", expanded=False):
+        st.caption("เลือก Drawing ได้หลายรายการ เปลี่ยนเลขแผนของงานผลิต เส้นทาง QC และต้นทุนที่ผูก Drawing ให้ตรงกัน • เก็บเลขเดิม ผู้แก้ไข และเหตุผลในประวัติ")
+        if not st.checkbox("เปิดเครื่องมือแก้เลขแผน", key="plan_number_correction_open"):
+            return
+        saved = st.session_state.pop("plan_number_correction_saved", None)
+        if saved:
+            st.success(saved)
+        if st.button("🔄 โหลด / อัปเดตรายการแผน", key="plan_number_correction_load"):
+            try:
+                result = plan_number_correction_command("plans")
+                st.session_state["plan_number_correction_options"] = result["plans"]
+                for key in ("plan_number_correction_source", "plan_number_correction_drawings_source",
+                            "plan_number_correction_drawings", "plan_number_correction_selected", "plan_number_correction_preview"):
+                    st.session_state.pop(key, None)
+            except (ValueError, requests.RequestException) as exc:
+                st.error("โหลดรายการแผนไม่ได้: "+str(exc))
+        options = st.session_state.get("plan_number_correction_options")
+        if options is None:
+            st.info("กดโหลดรายการแผนก่อนเลือก Drawing")
+            return
+        source = st.selectbox("เลขแผนที่คีย์ผิด", options, index=None, key="plan_number_correction_source")
+        if source is None:
+            return
+        if st.session_state.get("plan_number_correction_drawings_source") != source:
+            try:
+                result = plan_number_correction_command("drawings", {"old_plan":source})
+                st.session_state["plan_number_correction_drawings"] = result["drawings"]
+                st.session_state["plan_number_correction_drawings_source"] = source
+                st.session_state.pop("plan_number_correction_selected", None)
+                st.session_state.pop("plan_number_correction_preview", None)
+            except (ValueError, requests.RequestException) as exc:
+                st.error("โหลด Drawing ไม่ได้: "+str(exc))
+                return
+        selected = st.multiselect("Drawing ที่ต้องการแก้เลขแผน", st.session_state.get("plan_number_correction_drawings", []),
+            key="plan_number_correction_selected", max_selections=200)
+        target = st.text_input("เลขแผนที่ถูกต้อง", key="plan_number_correction_target", max_chars=100).strip()
+        selection = (source, target, tuple(sorted(selected)))
+        if st.button("1. ตรวจสอบรายการที่จะเปลี่ยนเลขแผน", key="plan_number_correction_preview_button"):
+            st.session_state.pop("plan_number_correction_preview", None)
+            if not selected or not target or source.strip().casefold() == target.casefold():
+                st.warning("เลือก Drawing และระบุเลขแผนใหม่ที่ต่างจากเดิม")
+            else:
+                try:
+                    result = plan_number_correction_command("preview", {"old_plan":source,"new_plan":target,"drawings":selected})
+                    st.session_state["plan_number_correction_preview"] = {"selection":selection,"result":result,"nonce":uuid.uuid4().hex}
+                except (ValueError, requests.RequestException) as exc:
+                    st.error("ยังตรวจสอบรายการไม่ได้: "+str(exc))
+        preview = st.session_state.get("plan_number_correction_preview", {})
+        if preview.get("selection") != selection:
+            st.session_state.pop("plan_number_correction_preview", None)
+            return
+        result = preview["result"]
+        labels = {"cnc_jobs":"ใบงานผลิต / ประวัติผลิต", "tpc_flow_cases":"เส้นทางผลิต / QC",
+                  "tpc_department_work_orders":"ใบงาน QC / Automation", "cnc_purchase_costs":"ต้นทุนที่ระบุ Drawing",
+                  "cnc_job_events":"เหตุการณ์ของงานผลิต"}
+        st.warning(f"แก้เฉพาะ {len(selected)} Drawing: แผน {source} → {target}")
+        st.write("Drawing: "+", ".join(selected))
+        st.dataframe(pd.DataFrame([{"ข้อมูล":labels.get(table,table),"จำนวนรายการ":count}
+                                 for table,count in result["counts"].items()]), hide_index=True, use_container_width=True)
+        st.caption("ไม่เปลี่ยน ID เครื่องจักร ผู้รับผิดชอบ ลำดับคิว สถานะ เวลา หรือผล QC • Drawing อื่นและกรอบเวลาของแผนทั้งสองไม่เปลี่ยน")
+        if not result.get("destination_master_exists"):
+            st.info("แผนปลายทางยังไม่มีกรอบเวลา Production หากต้องการแสดงใน Project Master ให้ตั้งค่ากรอบเวลาแผนปลายทางเพิ่มเติม")
+        if result.get("shared_costs_unchanged"):
+            st.info(f"ต้นทุนร่วมทั้งแผนที่ไม่ระบุ Drawing {result['shared_costs_unchanged']} รายการจะอยู่แผนเดิม ไม่แบ่งย้ายอัตโนมัติ")
+        token = hashlib.sha256(repr((selection, result["digest"], preview["nonce"])).encode()).hexdigest()[:12]
+        with st.form("plan_number_correction_confirm_"+token):
+            actor = st.text_input("ชื่อผู้แก้ไขเลขแผน")
+            reason = st.text_area("เหตุผลที่แก้ไขเลขแผน")
+            confirmed = st.checkbox("ตรวจเลขแผนและ Drawing ที่เลือกแล้ว ยืนยันแก้เฉพาะรายการนี้")
+            submit = st.form_submit_button("2. ยืนยันบันทึกเลขแผนที่ถูกต้อง", type="primary")
+        if not submit:
+            return
+        if not confirmed or not actor.strip() or not reason.strip():
+            st.warning("ระบุผู้แก้ไข เหตุผล และติ๊กยืนยันก่อนบันทึก")
+            return
+        try:
+            saved = plan_number_correction_command("apply", {"old_plan":source,"new_plan":target,"drawings":selected,
+                "expected_digest":result["digest"],"actor":actor.strip(),"reason":reason.strip()})
+            if saved.get("old_plan") != source or saved.get("new_plan") != target:
+                raise ValueError("ใบตอบรับไม่ตรงกับเลขแผน กรุณาตรวจข้อมูลล่าสุดก่อนทำรายการซ้ำ")
+            st.cache_data.clear()
+            for key in ("plan_number_correction_preview", "plan_number_correction_options", "_tpc_flow_jobs_snapshot"):
+                st.session_state.pop(key, None)
+            st.session_state["plan_number_correction_saved"] = f"แก้เลขแผน {source} → {target} เฉพาะ {len(selected)} Drawing แล้ว พร้อมเก็บประวัติผู้แก้ไข"
+            st.rerun()
+        except (ValueError, requests.RequestException) as exc:
+            st.session_state.pop("plan_number_correction_preview", None)
+            st.error("ยังไม่ยืนยันการแก้เลขแผน: "+str(exc)+" • ตรวจข้อมูลล่าสุดก่อนลองซ้ำ")
+
+
 def render_work_calendar_admin(jobs):
     if st.session_state.get("user_role") != "admin":
         lock_work_calendar()
@@ -13352,6 +13458,7 @@ elif st.session_state.current_view == "📊 แดชบอร์ดภาพร
             if saved_calendar:
                 st.success(saved_calendar)
             if dashboard_tool == "settings":
+                render_plan_number_correction()
                 render_work_calendar_admin(df_db)
                 with st.expander("🛠️ ติดตั้ง / อัปเดตเครื่องมือระบบ", expanded=False):
                     render_flow_installation_downloads("dashboard_settings")
